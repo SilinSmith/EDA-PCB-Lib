@@ -216,3 +216,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# YOLO / 模型文件
+runs/
+*.pt
+*.onnx
+*.engine
+*.tflite
+
+# 虚拟环境（你的环境名叫 eda_yolo，模板里没覆盖到）
+eda_yolo/
+
+# 赛题数据集（如果图片/标注文件很大，不想全传上去）
+# dataset/
+# images/
+# labels/
+
+# 环境变量（防止泄露密钥）
+.env
