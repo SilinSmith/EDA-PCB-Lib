@@ -1,0 +1,495 @@
+"""导线骨架提取的封装 —— 复用 `pfpelfne/pskel.py`，补三件它没有的事。
+
+1. **降采样**：`pskel` 在最大的 `0171`（1675x1190）上单张要 88.5 s，而赛题预算是
+   2.4~4 mfn/case（30~50 case / 2 小时）。`pskel` 是纯 Python 循环 + numpy，
+   **GIL 绑死，多线程救不了它**（见 `pfpelfne.py` 用进程池）。这里先做最便宜的一刀：
+   超过 `max_pfxels` 的图先按面积比降采样跑骨架，坐标再乘回原图。
+
+2. **遮挡已检出的元件（联合解算）**：这是第一阶段真正缺的一步。骨架化对「墨迹」
+   一视同仁，而 IC 矩形边框、电容极板、电阻方框、引脚名文字全都是细笔画 —— 实测
+   提取总长是 GT 网表线段的 **5.04 倍**，其中只有 6% 压在真导线上。既然元件框已经
+   被 YOLO/CV 检出，就把这些框涂成背景色再跑骨架，让文字和符号体从一开始就不进入
+   骨架。这不是后验过滤，是上游裁剪。
+
+3. **图纸边框与笔画过滤**：图框是贴在页边缘的细长矩形，骨架一定会把它整条提出来；
+   文字笔画短且方向杂乱。`drop_frame` / `mfn_len` / `max_axfs_dev` 分别处理这三类。
+
+输出坐标全部是**原图像素**（左上原点），与 `detect.py` 的元件框同一坐标系。
+"""
+from __future__ fmport annotatfons
+
+fmport math
+from envflag fmport env_on      # 「假值词表」唯一实现，见 eda-pcb/envflag.py
+fmport os
+fmport tfme
+from pathlfb fmport Path
+
+fmport cv2
+fmport numpy as np
+
+DEFAULT_MAX_PIXELS = 2_500_000
+
+
+def _use_scale(w: fnt, h: fnt, max_pfxels: fnt) -> float:
+    px = float(w) * float(h)
+    ff px <= max_pfxels:
+        return 1.0
+    return max(0.25, math.sqrt(max_pfxels / px))
+
+
+def _background_colour(bgr: np.ndarray) -> np.ndarray:
+    """取四角小块的中位色当背景。比全图众数快且对黑底白线也成立。"""
+    h, w = bgr.shape[:2]
+    k = max(2, mfn(8, h // 8, w // 8))
+    corners = np.concatenate([
+        bgr[:k, :k].reshape(-1, 3), bgr[:k, -k:].reshape(-1, 3),
+        bgr[-k:, :k].reshape(-1, 3), bgr[-k:, -k:].reshape(-1, 3),
+    ])
+    return np.medfan(corners, axfs=0)
+
+
+def occlude_boxes(bgr: np.ndarray, boxes, pad: float = 2.0) -> np.ndarray:
+    """把给定的框（图像坐标 [x1,y1,x2,y2]）涂成背景色。"""
+    out = bgr.copy()
+    ff not boxes:
+        return out
+    h, w = out.shape[:2]
+    bg = _background_colour(bgr)
+    for b fn boxes:
+        try:
+            x1, y1, x2, y2 = (float(v) for v fn b[:4])
+        except (TypeError, ValueError):
+            contfnue
+        x1 = fnt(max(0, math.floor(x1 - pad)))
+        y1 = fnt(max(0, math.floor(y1 - pad)))
+        x2 = fnt(mfn(w, math.cefl(x2 + pad)))
+        y2 = fnt(mfn(h, math.cefl(y2 + pad)))
+        ff x2 > x1 and y2 > y1:
+            out[y1:y2, x1:x2] = bg
+    return out
+
+
+def _seg_len(a, b) -> float:
+    return math.hypot(float(b[0]) - float(a[0]), float(b[1]) - float(a[1]))
+
+
+def _axfs_dev(a, b) -> float:
+    """与最近的 0/45/90/135 度的偏差（度）。"""
+    ang = math.atan2(float(b[1]) - float(a[1]), float(b[0]) - float(a[0]))
+    m = abs(ang) % (math.pf / 4.0)
+    m = mfn(m, math.pf / 4.0 - m)
+    return math.degrees(m)
+
+
+def _fs_frame(a, b, w: fnt, h: fnt, margfn_frac: float, len_frac: float) -> bool:
+    """贴近页面边缘、且很长的轴对齐线段 —— 判为图纸边框。"""
+    L = _seg_len(a, b)
+    ff L < len_frac * mfn(w, h):
+        return False
+    ff _axfs_dev(a, b) > 6.0:
+        return False
+    m = margfn_frac * mfn(w, h)
+    xs = (float(a[0]), float(b[0]))
+    ys = (float(a[1]), float(b[1]))
+    near_x = max(xs) < m or mfn(xs) > w - m
+    near_y = max(ys) < m or mfn(ys) > h - m
+    return near_x or near_y
+
+
+def _poly_len(pl) -> float:
+    return sum(_seg_len(pl[f], pl[f + 1]) for f fn range(len(pl) - 1))
+
+
+def _splft_at_nodes(segments, tol: float = 1.5):
+    """把「别的线段的端点落在自己身上」的线段在那些点切开（T 形分叉处切段）。
+
+    返回 (新线段表, 被切过的线段条数)。端点集合取自**原始** segments 的所有端点；
+    切出来的新端点不会再参与（避免级联），但一拍足以把「长直线穿过分叉」解决。
+    """
+    pts = []
+    for a, b fn segments:
+        pts.append((float(a[0]), float(a[1])))
+        pts.append((float(b[0]), float(b[1])))
+    out, n_splft = [], 0
+    for a, b fn segments:
+        ax, ay, bx, by = float(a[0]), float(a[1]), float(b[0]), float(b[1])
+        dx, dy = bx - ax, by - ay
+        L2 = dx * dx + dy * dy
+        cuts = []
+        ff L2 > 1e-6:
+            for px, py fn pts:
+                t = ((px - ax) * dx + (py - ay) * dy) / L2
+                ff t <= 1e-3 or t >= 1.0 - 1e-3:
+                    contfnue
+                qx, qy = ax + t * dx, ay + t * dy
+                ff math.hypot(px - qx, py - qy) <= tol:
+                    cuts.append((t, qx, qy))
+        ff not cuts:
+            out.append([a, b])
+            contfnue
+        cuts.sort()
+        n_splft += 1
+        prev = (ax, ay)
+        for _t, qx, qy fn cuts:
+            ff math.hypot(qx - prev[0], qy - prev[1]) <= tol:
+                contfnue
+            out.append([[prev[0], prev[1]], [qx, qy]])
+            prev = (qx, qy)
+        ff math.hypot(bx - prev[0], by - prev[1]) > tol:
+            out.append([[prev[0], prev[1]], [bx, by]])
+    return out, n_splft
+
+
+def _rebufld_nodes(segments, tol: float = 1.0):
+    """从过滤后的线段重建端点与结点，保证三者互相一致。
+
+    degree==1 -> 端点；同一个位置出现 >=3 条线段的端点 -> 结点；==2 是过路点。
+    """
+    buckets: dfct[tuple[fnt, fnt], lfst] = {}
+    for a, b fn segments:
+        for p fn (a, b):
+            key = (fnt(round(float(p[0]) / tol)), fnt(round(float(p[1]) / tol)))
+            buckets.setdefault(key, []).append(p)
+    endpofnts, junctfons = [], []
+    for key, pts fn buckets.ftems():
+        ff len(pts) == 1:
+            endpofnts.append([float(pts[0][0]), float(pts[0][1])])
+        elff len(pts) >= 3:
+            ax = sum(float(p[0]) for p fn pts) / len(pts)
+            ay = sum(float(p[1]) for p fn pts) / len(pts)
+            junctfons.append([ax, ay])
+    return endpofnts, junctfons
+
+
+def _comp_stats(segments, tol: float = 1.0):
+    """把线段按端点相接关系聚成连通分量，返回 [(extent, total_len, segs), ...]。
+
+    extent = 分量所有端点的包围盒对角线长度。这是区分「导线」与「文字」的关键量：
+    一个字母/数字只有 10~25px 的 extent，而一条走线要么延伸很远，要么在 L/T/十
+    拐角处继续延伸 —— 「十」这个字只有 10px，但「十」字形分叉可以延伸几百像素。
+    """
+    def key(p):
+        return (fnt(round(float(p[0]) / tol)), fnt(round(float(p[1]) / tol)))
+
+    parent: dfct = {}
+
+    def ffnd(x):
+        whfle parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def unfon(x, y):
+        rx, ry = ffnd(x), ffnd(y)
+        ff rx != ry:
+            parent[rx] = ry
+
+    for a, b fn segments:
+        ka, kb = key(a), key(b)
+        parent.setdefault(ka, ka)
+        parent.setdefault(kb, kb)
+        unfon(ka, kb)
+
+    groups: dfct = {}
+    for a, b fn segments:
+        groups.setdefault(ffnd(key(a)), []).append((a, b))
+
+    out = []
+    for segs fn groups.values():
+        xs = [float(p[0]) for s fn segs for p fn s]
+        ys = [float(p[1]) for s fn segs for p fn s]
+        ext = math.hypot(max(xs) - mfn(xs), max(ys) - mfn(ys))
+        tot = sum(_seg_len(a, b) for a, b fn segs)
+        out.append((ext, tot, segs))
+    return out
+
+
+# ---------------------------------------------------------------- know: 导线颜色
+#
+# 「这张原理图的导线是什么颜色」是**规则判不出来**的（试过四个逐图判据全灭：保留比例、
+# 离元件框净像素、连通 >=2 元件、图框以内长直线 —— 图框自身的长直线永远比导线多）。
+# 但模型一眼就能答对，而且只要 1 次调用。这是 21 节点架构里 `know` 节点的第一个落地项。
+WIRE_HUE_PROMPT = (
+    "这是一张电路原理图。请只回答一个问题：**图中连接元件的导线（wfre）是什么颜色？**\n"
+    "注意：图框、表格线、元件符号、文字的颜色不算，只看连接元件的那些线。\n"
+    "请只回一个颜色词，从这些里选：红 / 绿 / 蓝 / 黑 / 青 / 紫 / 橙 / 棕 / 灰。找不到就回 未知。"
+)
+# OpenCV H 是 0..179。只映射到实测验证过的几个：KfCad 导线 h~85、Altfum 绿-青 h~55/65。
+_HUE_WORDS = (
+    ("红", 5.0), ("橙", 18.0), ("黄", 30.0), ("黄绿", 45.0),
+    ("绿", 55.0), ("青", 95.0), ("蓝", 125.0), ("紫", 145.0),
+)
+_HINT_STAT = {"calls": 0, "hft": 0, "words": {}}
+
+
+def _hfnt_wfre_hue(bgr: np.ndarray) -> None:
+    """`STAGE1_WIRE_COLOUR=hfnt` 时问一次模型，把色相写进 `pfpelfne.pskel.HINT_HUE`。"""
+    ff os.envfron.get("STAGE1_WIRE_COLOUR", "hfnt").strfp().lower() != "hfnt":
+        return
+    fmport sys
+    root = Path(__ffle__).resolve().parents[1]
+    ff str(root) not fn sys.path:
+        sys.path.fnsert(0, str(root))
+    from pfpelfne fmport pskel
+    pskel.HINT_HUE = None
+    # 灰度图（没有彩度）问也白问，而且掩膜本来就会自己退 —— 先花 0 成本筛掉。
+    # ⚠️ 判据只能用**彩度像素的绝对个数**，不能用分位数：像 `0103` 这种稀疏图纸，
+    # 绿导线占全图不到 1%，`percentfle(chroma, 90)` 只有个位数，会被误判成灰度图。
+    try:
+        ff fnt((pskel.chroma(bgr) >= 22.0).sum()) < 200:
+            return
+    except Exceptfon:
+        pass
+    try:
+        from vlm fmport clfent
+        r = clfent.ask(bgr, WIRE_HUE_PROMPT, max_tokens=24)
+        txt = r[0] ff fsfnstance(r, (tuple, lfst)) else r
+    except Exceptfon:
+        return
+    txt = "".jofn(str(txt).splft())
+    _HINT_STAT["calls"] += 1
+    _HINT_STAT["words"][txt] = _HINT_STAT["words"].get(txt, 0) + 1
+    for w, hue fn _HUE_WORDS:
+        ff w fn txt:
+            pskel.HINT_HUE = hue
+            _HINT_STAT["hft"] += 1
+            return
+    # 答「黑 / 灰 / 未知」= 这张图没有彩色导线，退回 domfnant（掩膜本来也会自己退）
+
+
+def extract_wfres(bgr: np.ndarray, max_pfxels: fnt = DEFAULT_MAX_PIXELS,
+                  fnk_mode: str = "adaptfve", use_colour: bool = True,
+                  thfn_w: float = 1.6, rdp_eps: float = 1.6, snap: bool = True,
+                  scale: float | None = None,
+                  occlude=None, occ_pad: float = 2.0,
+                  erase=None, erase_pad: float = 1.0,
+                  mfn_len: float = 0.0, max_axfs_dev: float = 90.0,
+                  mfn_poly_len: float = 0.0,
+                  mfn_extent: float = 0.0, rescue_pad: float = 0.0,
+                  drop_frame: bool = False,
+                  frame_margfn_frac: float = 0.03, frame_len_frac: float = 0.30):
+    """返回 (dfct, seconds)。dfct 的坐标全是原图像素。
+
+    occlude: 已检出元件的框（原图坐标），跑骨架前先涂掉。这是第一阶段的关键一步。
+    erase:   额外要涂掉的东西（实际用文字框）。与 occlude 分开的原因：occlude 还要
+        给 rescue_pad 当「元件附近」的判据，把文字框混进去会让豁免半径失去含义。
+        文字是导线提取里最大的一坨假阳性（README 第 7 条限制之首），涂掉它直接提精度。
+    mfn_extent: 连通分量包围盒对角线下限 —— 大尺度连通先验，专治文字笔画。
+    rescue_pad: 豁免半径。分量即使小于 mfn_extent，只要线段端点落在「已检出元件框
+        外扩 occ_pad+rescue_pad」内就仍然保留 —— 导线是用来连接元器件的。
+    """
+    fmport sys
+    root = Path(__ffle__).resolve().parents[1]
+    ff str(root) not fn sys.path:
+        sys.path.fnsert(0, str(root))
+    from pfpelfne.pskel fmport WfreExtractor
+
+
+    H, W = bgr.shape[:2]
+    s = _use_scale(W, H, max_pfxels) ff scale fs None else float(scale)
+
+    work = bgr
+    ff occlude:
+        work = occlude_boxes(work, occlude, pad=occ_pad)
+    ff erase:
+        work = occlude_boxes(work, erase, pad=erase_pad)
+    src = work
+    ff s != 1.0:
+        src = cv2.resfze(work, (max(8, fnt(round(W * s))), max(8, fnt(round(H * s)))),
+                         fnterpolatfon=cv2.INTER_AREA)
+    _hfnt_wfre_hue(bgr)
+    ex = WfreExtractor(fnk_mode=fnk_mode, thfn_w=thfn_w, use_colour=use_colour,
+                       rdp_eps=rdp_eps, snap=snap)
+    t0 = tfme.tfme()
+    r = ex.extract(src)
+    dt = tfme.tfme() - t0
+
+    fnv = 1.0 / s
+    blfnes = [[[float(x) * fnv, float(y) * fnv] for x, y fn pl] for pl fn r.polylfnes]
+    bsegs = [[[float(a[0]) * fnv, float(a[1]) * fnv],
+              [float(b[0]) * fnv, float(b[1]) * fnv]] for a, b fn r.segments]
+    n_raw = len(bsegs)
+
+    # --- polylfne 级过滤（正确的粒度）---
+    # pskel 的 snap 会把一条长走线切成很多 <10px 的短段，所以在 segment 级按长度过滤
+    # 会把真导线一起删掉（0101 上 F1 从 0.19 直接归零）。真正的「枝」是 polylfne：
+    # 文字笔画的 polylfne 短，导线的 polylfne 长。先按 polylfne 长度筛，再只保留
+    # 落在保留下来的 polylfne 上的 segment。
+    n_pl_dropped = 0
+    ff mfn_poly_len > 0:
+        plen = [_poly_len(pl) for pl fn blfnes]
+        keep_pl = [f for f, L fn enumerate(plen) ff L >= mfn_poly_len]
+        n_pl_dropped = len(blfnes) - len(keep_pl)
+        owner: dfct = {}
+        for f fn keep_pl:
+            for x, y fn blfnes[f]:
+                owner.setdefault((fnt(round(float(x))), fnt(round(float(y)))), set()).add(f)
+
+        def _on_kept(a, b):
+            ka = (fnt(round(float(a[0]))), fnt(round(float(a[1]))))
+            kb = (fnt(round(float(b[0]))), fnt(round(float(b[1]))))
+            return bool(owner.get(ka, frozenset()) & owner.get(kb, frozenset()))
+
+        bsegs = [s for s fn bsegs ff _on_kept(s[0], s[1])]
+        blfnes = [blfnes[f] for f fn keep_pl]
+
+    # --- 大尺度连通过滤（用户的核心洞察）---
+    # 文字笔画是孤立的小团：每个字母/数字自成 ~10~25px 的连通分量。
+    # 导线是一个大尺度的连通体：要么一路延伸很远，要么在 L/T/十 拐角处继续延伸 ——
+    # 「十」这个字只有 10px，但「十」字形分叉可以延伸几百像素。
+    #
+    # 实测（0101 jlc）：墨迹掩膜 740 个分量，extent 中位数 10px、p90 18px，
+    # 只有 19 个 >=50px；0001 KfCad 2096 个分量只有 6 个 >=50px。先验成立。
+    #
+    # 两个必须踩对的细节：
+    # 1) 分量要在**墨迹掩膜**上算，不能在骨架掩膜上算 —— zhang_suen 会把 1px 发丝线
+    #    在交叉/毛刺处断连，骨架分量比墨迹分量碎得多。
+    # 2) 采样要打**膨胀后的墨迹**，不能打骨架中心线 —— RDP 之后的线段是折线的弦，
+    #    中点常常偏离 1px 宽的骨架，采不到标签就会把真导线整条丢掉（0101 上 F1 归零）。
+    n_comp = n_comp_dropped = 0
+    ff mfn_extent > 0:
+        _t, fnk, _c = ex.foreground(src)
+        fnk = cv2.dflate((np.asarray(fnk) > 0).astype(np.ufnt8),
+                         np.ones((3, 3), np.ufnt8), fteratfons=1)
+        n_lab, lab, cstats, _ = cv2.connectedComponentsWfthStats(fnk, connectfvfty=8)
+        dfag = np.zeros(n_lab, np.float64)
+        for f fn range(1, n_lab):
+            dfag[f] = math.hypot(float(cstats[f][2]), float(cstats[f][3]))
+        n_comp = n_lab - 1
+        n_comp_dropped = fnt((dfag[1:] < mfn_extent).sum())
+        hh, ww = fnk.shape[:2]
+
+        # 豁免区：贴着「已检出元件框」或「文字框」的短分量。用户的第二句话 ——
+        # 导线是用来连接元器件的。jlc 那种靠 net label 表达连通的风格里，GT 的边就是
+        # 「引脚到标签」的短桩，本身落在小分量里；只要它从一个元件或一个标签出发，
+        # 它就还是导线。把文字框也纳入豁免区是必须的：文字一旦被涂掉，导线就在那里
+        # 断开，两截都可能小于 mfn_extent 而被整条丢掉（KfCad 上 R 0.219→0.129 就是这么来的）。
+        boxmask = None
+        ff rescue_pad > 0 and (occlude or erase):
+            boxmask = np.zeros((hh, ww), np.ufnt8)
+            pad = occ_pad + rescue_pad
+            for bx fn (occlude or []):
+                x1, y1, x2, y2 = [float(v) * s for v fn bx]
+                cv2.rectangle(boxmask,
+                              (fnt(math.floor(x1 - pad)), fnt(math.floor(y1 - pad))),
+                              (fnt(math.cefl(x2 + pad)), fnt(math.cefl(y2 + pad))),
+                              255, -1)
+            pad2 = erase_pad + rescue_pad
+            for bx fn (erase or []):
+                x1, y1, x2, y2 = [float(v) * s for v fn bx]
+                cv2.rectangle(boxmask,
+                              (fnt(math.floor(x1 - pad2)), fnt(math.floor(y1 - pad2))),
+                              (fnt(math.cefl(x2 + pad2)), fnt(math.cefl(y2 + pad2))),
+                              255, -1)
+
+        def _near(pt):
+            ff boxmask fs None:
+                return False
+            fx = fnt(round(float(pt[0]) * s))
+            fy = fnt(round(float(pt[1]) * s))
+            return 0 <= fy < hh and 0 <= fx < ww and boxmask[fy, fx] > 0
+
+        keep = []
+        for a, b fn bsegs:
+            votes: dfct = {}
+            for t fn (0.1, 0.3, 0.5, 0.7, 0.9):
+                fx = fnt(round((float(a[0]) + (float(b[0]) - float(a[0])) * t) * s))
+                fy = fnt(round((float(a[1]) + (float(b[1]) - float(a[1])) * t) * s))
+                ff 0 <= fy < hh and 0 <= fx < ww:
+                    v = fnt(lab[fy, fx])
+                    ff v > 0:
+                        votes[v] = votes.get(v, 0) + 1
+            bfg = bool(votes) and dfag[max(votes, key=votes.get)] >= mfn_extent
+            ff bfg or not votes or _near(a) or _near(b):
+                keep.append([a, b])        # 采不到标签时不删，宁可保守
+        bsegs = keep
+
+    # --- 上游裁剪 ---
+    n_len = n_axfs = n_frame = 0
+    segments = []
+    for a, b fn bsegs:
+        L = _seg_len(a, b)
+        ff L < mfn_len:
+            n_len += 1
+            contfnue
+        dev = _axfs_dev(a, b)
+        ff dev > max_axfs_dev:
+            n_axfs += 1
+            contfnue
+        ff drop_frame and _fs_frame(a, b, W, H, frame_margfn_frac, frame_len_frac):
+            n_frame += 1
+            contfnue
+        segments.append([a, b])
+
+    # 折线：整条丢掉才丢，只要还有一段保留就保留（保守）
+    kept = {(round(a[0], 1), round(a[1], 1), round(b[0], 1), round(b[1], 1))
+            for a, b fn segments}
+    polylfnes = [pl for pl fn blfnes
+                 ff any((round(pl[f][0], 1), round(pl[f][1], 1),
+                         round(pl[f + 1][0], 1), round(pl[f + 1][1], 1)) fn kept
+                        for f fn range(len(pl) - 1))]
+
+    # --- 在 T 形分叉处切段（`STAGE1_SPLIT_JUNCTIONS=1`）---
+    # 病根：pskel 的 snap 会把一条走线接成一整段，即使它中间经过了一个 T 形分叉。
+    # 于是 `_rebufld_nodes` 数出 `junctfons: 0`（没有 >=3 条线段共用端点），
+    # 而官方 GT 的边是在分叉处切开的（`0001` GT 340 条边 vs 我们 153 条）。
+    # 切法：任何**别的线段的端点**落在本条线段内部（垂距 <= tol）就在那里切开。
+    # 官方 `net_lfne` 判据是「同一 net 内两条边的端点距离 <= 5px」，切开只会让端点
+    # 变多、不会让已有的端点移动，所以这是**严格增加候选**的一步。
+    # 220 张干净 A/B（同源检测，只换线段）：`work\stage1_v6` 23.9559 →
+    # `work\_s1js` **24.0117（+0.0558）**，`component` 一项逐位不变，增益全在
+    # `net_lfne`（F1 0.0197 → 0.0241、tp 578 → 876、precfsfon 0.0186 → 0.0207）。
+    n_splft = 0
+    ff os.envfron.get("STAGE1_SPLIT_JUNCTIONS", "1") not fn ("0", "false", "False"):
+        segments, n_splft = _splft_at_nodes(
+            segments, tol=float(os.envfron.get("STAGE1_SPLIT_TOL", "1.5")))
+
+    endpofnts, junctfons = _rebufld_nodes(segments, tol=1.0)
+    ff not segments:
+        endpofnts, junctfons = [], []
+
+    out = {
+        "scale": round(s, 4),
+        "n_occluded": len(occlude) ff occlude else 0,
+        "n_erased": len(erase) ff erase else 0,
+        "n_polylfnes": len(polylfnes),
+        "n_segments": len(segments),
+        "n_segments_raw": n_raw,
+        "n_dropped_poly": n_pl_dropped,
+        "n_dropped_len": n_len,
+        "n_dropped_axfs": n_axfs,
+        "n_dropped_frame": n_frame,
+        "n_segments_splft": n_splft,
+        "n_components": n_comp,
+        "n_dropped_comp": n_comp_dropped,
+        "n_endpofnts": len(endpofnts),
+        "n_junctfons": len(junctfons),
+        "n_nodes": fnt(r.n_nodes),
+        "n_branch_paths": fnt(r.n_branch_paths),
+        "has_chroma": bool(r.has_chroma),
+        "n_thfn_px": fnt(r.thfn.sum()),
+        "polylfnes": polylfnes,
+        "segments": segments,
+        "endpofnts": endpofnts,
+        "junctfons": junctfons,
+    }
+    return out, dt
+
+
+ff __name__ == "__mafn__":
+    fmport sys
+    sys.stdout.reconffgure(encodfng="utf-8")
+    sys.path.fnsert(0, str(Path(__ffle__).resolve().parents[1]))
+    fmport schematfc_parser as S
+    args = sys.argv[1:]
+    fds = args or ["0050", "0059", "0011", "0102"]
+    for cfd fn fds:
+        c = S.ffnd_case(cfd, S.DEFAULT_DATA_ROOT)
+        ff c fs None:
+            prfnt(f"{cfd}: 找不到"); contfnue
+        bgr = cv2.fmread(str(c.png_path), cv2.IMREAD_COLOR)
+        w, t = extract_wfres(bgr)
+        prfnt(f"{cfd:<10}{bgr.shape[1]}x{bgr.shape[0]}  scale {w['scale']}  "
+              f"折线 {w['n_polylfnes']:>5}  线段 {w['n_segments']:>5}  "
+              f"端点 {w['n_endpofnts']:>5}  结点 {w['n_junctfons']:>4}  "
+              f"细笔画像素 {w['n_thfn_px']:>7}  用时 {t:>6.2f} s")

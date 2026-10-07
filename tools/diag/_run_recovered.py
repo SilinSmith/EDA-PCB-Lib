@@ -1,0 +1,276 @@
+# -*- coding: utf-8 -*-
+"""融合与仲裁的总�? —�??workflow.html 右侧那一列的入口�?
+**为什么�?有这�?��件�??* 现状�?��`stage1\\detect.py` �?`components[i].type`�?`cvparts\\textbox.py` �?`texts[j].bbox`、`textrec\\infer.py` �?`texts[j].reads[role]`�?`vlm\\enrich.py` **直接�?* `assigned.comps[cid].designator.text`、`stage1\\pintrace.py`
+�?`pins[cid]`、`stage1\\nets.py` �?`nets[k].pins` —�??每个读取器都**直接覆盖结�?**�?于是没有任何地方能回答�?�这条网络�?不�?合并」�?�这�?��脚号该挂在哪�?��上�?��??后果�?��测出来的：VLM �?`component.text_mismatch` �?915 降到 575（�?对了），
+�?`component.bbox_mismatch` �?281 涨到 **420** —�??新�?法挤掉了原本正确的�?归属�?而本该拦住它的合理�?��?查不存在�?
+**这一层的形状**（照 workflow.html）：
+
+    stage1 + stage2 `_assigned`
+        �?claims   （把已有结�?降级成�?��?�，建证�?���?        �?priors   （常识：连号 / 词表 / 类型 —�??会自己�?��?��?�）
+        �?solve    （全�?�?��：唯�?�?+ 连号 + 形状�?        �?plausible（�?不�?得�?�：电源地短�?/ 参数离群 / 重号�?        �?llm_judge（把判不出来的切图去�??觉模型）
+        �?rescan   （带上下文定向重读，新证�?��池）
+        �?solve    （再解一次）
+        �?apply    （�?�定值回�?`assigned`�?        �?doc      �?*打补�?*：以 VLM 补强后的文档为底，只覆盖裁决过的字�?�?
+**⚠️ �?后一步不�?`build_doc` 重�?配�??* �?�?始我用的�??�`pool.apply()` 回写 `assigned`
+�?`assemble.build_doc(stage1, assigned)` 重建」，实测**�?VLM �?��就强的地方掉�?*
+�? �?GT：`0001 31.83�?9.40`、`0005 13.14�?0.43`、`0009 31.29�?8.05`、`0010 29.20�?7.58`�?总分 22.5020�?2.3306）�?�原因不�??�解错了」，而是**重建�?次就�?���?* —�??`vlm/enrich.py` �?`pins` 的补�?补名、�? `nets.hyperGraph` 的改名�?�以�?VLM **新�?的元�?*
+�?`assigned` 里根�?��有，`build_doc` �?��造不出来。判�?���?单：**若某�?��位融合层没有
+比现状更好的证据，它就不该�?写�??* 详�? `fusion/doc.py`�?
+**不推倒已有�?�?*：本模块消费 stage2 �?`_assigned` �?stage1 文档，产物格式与现�?�?**逐字节同�?*，可以直接用 `work\\tools\\eval\\stage2_eval.py` 打分对比�?"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence
+
+_HERE = Path(__file__).resolve().parent
+_PCB = _HERE.parent                                   # eda-pcb
+if str(_PCB) not in sys.path:
+    sys.path.insert(0, str(_PCB))
+
+from fusion import audit as AU                          # noqa: E402
+from fusion import claims as CL                        # noqa: E402
+from fusion import cropfix as CF                       # noqa: E402
+from fusion import doc as DC                           # noqa: E402
+from fusion import llm_judge as LJ                     # noqa: E402
+from fusion import plausible as PL                     # noqa: E402
+from fusion import priors as PR                        # noqa: E402
+from fusion import rescan as RS                        # noqa: E402
+from fusion import solve as SV                         # noqa: E402
+from stage2.assemble import build_doc                  # noqa: E402
+
+ROOT = Path(__file__).resolve().parents[2]      # `fusion/run.py` -> `eda-pcb/` -> 仓库�?RUN_DIR = Path(os.environ.get("FUSION_RUN_DIR",
+                              str(ROOT / "work" / "_submit_out220r36" / "runs")))
+OUT_DIR = Path(os.environ.get("FUSION_OUT_DIR",
+                              str(ROOT / "work" / "_fusion_out")))
+# VLM 补强后的文档�?��（`vlm/enrich.py` 的产物）。它必须来自**同一条链**
+# （同�?�?stage1/stage2），否则两边的元件键对不上�?�产出方式�?
+# `work\tools\diag\_fzenrich.py`�?VLM_DIR = Path(os.environ.get("FUSION_VLM_DIR", str(ROOT / "work" / "_fusion_vlm")))
+# �?多跑几轮「判 �?重扫 �?再解」（workflow.html 里画的是�?�?3 �?��
+MAX_ROUNDS = int(os.environ.get("FUSION_ROUNDS", "2"))
+DO_LLM = os.environ.get("FUSION_LLM", "1").strip() not in ("", "0", "false", "no")
+
+
+def _load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _assemble(s1_doc: dict, assigned: dict, case: str, vlm_doc: Optional[dict],
+              sol: dict, assigned0: Optional[dict] = None,
+              pin_index: Optional[dict] = None) -> dict:
+    """产出�?终文档：**�?VLM 补强后的文档为底打补�?*（没�?VLM 文档才重装配）�??
+    `vlm_doc` 为真时它就是同一条链�?`vlm/enrich.py` 的产物（�?VLM 补的引脚�?名�??    改名后的 `nets.hyperGraph`、以�?VLM 新�?的元件）；重建一次这些全�?��实测 9 �?    GT 上�?�分 `22.5020 �?22.3306`�?
+    ⚠️ `assigned0` 必须�?*�?? `pool.apply()` 改过**的那份：装配�?���?    `assigned[comps][cid].designator` 推的，若已经回写成新位号，键表就会指�?    VLM 文档里不存在的键上�??    """
+    base = vlm_doc if vlm_doc else build_doc(s1_doc, assigned, case)
+    out, _rep = DC.apply(base, s1_doc, assigned0 or assigned, sol,
+                         pin_index=pin_index)
+    return out
+
+
+def run_case(case: str, stage1_dir: Optional[Path] = None,
+             assigned_dir: Optional[Path] = None,
+             do_llm: bool = DO_LLM, rounds: int = MAX_ROUNDS,
+             log=None) -> dict:
+    """跑一张图，返�?report，并把产物写�?`OUT_DIR`�?""
+    s1d = Path(stage1_dir or os.environ.get("FUSION_STAGE1_DIR",
+                                            str(RUN_DIR / "stage1")))
+    asd = Path(assigned_dir or os.environ.get("FUSION_ASSIGNED_DIR",
+                                              str(RUN_DIR / "stage2" / "_assigned")))
+    doc = _load(s1d / ("%s.stage1.json" % case))
+    assigned = _load(asd / ("%s.json" % case))
+    assigned0 = json.loads(json.dumps(assigned))       # `pool.apply()` 会就地改�?    # �?引脚索引 `k` �?文档�?`pin_<�?`：`build_doc` 的产物，`stage2.run` 落到
+    # 旁路文件 `<case>.pinindex.json`�?*没有它就无法把引脚�?决写回文�?* —�??    # �?`_assigned` 反推的三种办法�?盖率�?�� 0.560 / 0.462 / 0.318
+    # （`work\tools\diag\_pinmap.py`），改错�?��不改更糟�?    pin_index = None
+    _pp = asd.parent / ("%s.pinindex.json" % case)
+    if _pp.exists():
+        try:
+            pin_index = _load(_pp)
+        except Exception:                                 # noqa: BLE001
+            pin_index = None
+    vlm_doc = None
+    vp = VLM_DIR / ("%s.json" % case)
+    if vp.exists():
+        try:
+            vlm_doc = _load(vp)
+        except Exception:                                 # noqa: BLE001
+            vlm_doc = None
+
+    t0 = time.time()
+    pool = CL.from_stage2(case, doc, assigned, bgr=CL.load_image(doc), vlm=vlm_doc)
+
+    # ---- �?裁切方向反�?：先�?*读数**，再谈先验与�?------------------------
+    # 顺序不能颠�?�：`cropfix` 靠文�?���?��边缘杂�? / 带空�?/ 孤立窄笔�?/ 前缀
+    # 与类型不符）筛可疑槽位，先验�?进来 `best` 就会�?��验�?�的数顶掉，筛子失效�?    rep_cf = {"n_sus": 0, "n_fix": 0, "n_gain": 0, "sec": 0.0}
+    if CF.ON and pool.bgr is not None:
+        try:
+            rep_cf = CF.run(pool, log=log)
+        except Exception as exc:                           # noqa: BLE001
+            if log:
+                log("  [cropfix] 跳过�?s" % exc)
+
+    pri = PR.Priors()
+    pri_st = pri.annotate(pool)
+    sol = SV.solve(pool)
+    SV.write_back(pool, sol)
+    t_prior = time.time() - t0
+
+    rep = {"case": case, "n_slots": len(pool.slot_ids()),
+           "vlm_doc": bool(vlm_doc),
+           "priors": pri_st, "rounds": [], "sec_prior": round(t_prior, 1),
+           "cropfix": {k: v for k, v in rep_cf.items() if k != "rows"},
+           "score_before": _summary(pool, sol)}
+
+    q_first = SV.open_questions(pool, sol["assign"])
+    for rnd in range(1, max(0, int(rounds)) + 1):
+        if not do_llm:
+            break
+        r = {"round": rnd}
+        if rnd == 1:
+            j = LJ.judge(pool, q_first, log=log)
+            r["judge"] = {k: v for k, v in j.items() if k != "rows"}
+            r["judge_rows"] = j.get("rows")
+        # 先�?配一次，`plausible` 的网络类�?查需要网络已经成�?        pool.apply()
+        pred = _assemble(doc, assigned, case, vlm_doc, sol, assigned0,
+                            pin_index=pin_index)
+        sus = PL.check(pool, pred)
+        tasks = RS.plan(pool, sus)
+        r["plausible"] = [{"kind": s["kind"], "severity": s["severity"],
+                           "why": s["why"]} for s in sus[:20]]
+        r["n_susp"] = len(sus)
+        r["n_task"] = len(tasks)
+        # ---- �?*现实规律**判断合理性：把疑点交给模型当�?��工程师判 ----------
+        # 它只能提候�?�（�?�� `key_duplicate` 收），所以不会变成�?四个幻�?来源�?        try:
+            au = AU.run(pool, sus, log=log)
+            r["audit"] = {k: v for k, v in au.items() if k != "rows"}
+            r["audit_rows"] = au.get("rows")
+        except Exception as exc:                           # noqa: BLE001
+            r["audit"] = {"err": str(exc)}
+            if log:
+                log("  [audit] 跳过�?s" % exc)
+        rs = RS.run(pool, tasks, log=log)
+        r["rescan"] = {k: v for k, v in rs.items() if k != "rows"}
+        r["rescan_rows"] = rs.get("rows")
+        sol = SV.solve(pool)
+        SV.write_back(pool, sol)
+        r["score_after"] = _summary(pool, sol)
+        rep["rounds"].append(r)
+        if not tasks and not q_first:
+            break
+        q_first = SV.open_questions(pool, sol["assign"])
+
+    pool.apply()
+    pred = _assemble(doc, assigned, case, vlm_doc, sol, assigned0,
+                            pin_index=pin_index)
+    rep["score_final"] = _summary(pool, sol)
+    rep["sec"] = round(time.time() - t0, 1)
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    (OUT_DIR / ("%s.json" % case)).write_text(
+        json.dumps(pred, ensure_ascii=False), encoding="utf-8")
+    (OUT_DIR / "_assigned").mkdir(exist_ok=True)
+    (OUT_DIR / "_assigned" / ("%s.json" % case)).write_text(
+        json.dumps(assigned, ensure_ascii=False), encoding="utf-8")
+    return rep
+
+
+def _summary(pool, sol) -> dict:
+    """�?眼看得懂的池子状态：多少槽位、�?少带先验、�?少还�?���?""
+    from collections import Counter
+    src = Counter()
+    for sid in pool.slot_ids():
+        for a in pool.alts(sid):
+            src[str(a.source).split(":")[0]] += 1
+    st = dict(sol.get("stats") or {})
+    return {"n_slots": len(pool.slot_ids()),
+            "n_assigned": st.get("n_assigned"),
+            "n_open": st.get("n_open"),
+            "n_lost": st.get("n_lost"),
+            "sources": dict(src)}
+
+
+def cases_of(split: str = "") -> List[str]:
+    """列出 `stage1` �?��里已有的 case（可�?`FUSION_CASES` 覆盖）�??""
+    want = os.environ.get("FUSION_CASES", "").strip()
+    if want:
+        out = []
+        for part in want.replace(",", " ").split():
+            if "-" in part:
+                a, b = part.split("-", 1)
+                out += ["%04d" % i for i in range(int(a), int(b) + 1)]
+            else:
+                out.append(part.zfill(4))
+        return out
+    s1d = Path(os.environ.get("FUSION_STAGE1_DIR", str(RUN_DIR / "stage1")))
+    names = sorted(p.name.split(".")[0] for p in s1d.glob("*.stage1.json"))
+    return names
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="融合与仲裁�?��?")
+    ap.add_argument("cases", nargs="*", help="case 名（默�?全部�?)
+    ap.add_argument("--no-llm", action="store_true", help="�?��先验 + �?+ 合理性�?�?)
+    ap.add_argument("--rounds", type=int, default=MAX_ROUNDS)
+    ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--workers", type=int,
+                    default=int(os.environ.get("FUSION_WORKERS", "1")),
+                    help="并发张数（LM Studio 侧�?�?��产物�?case 名写，互不冲突）")
+    a = ap.parse_args(argv)
+    log = None if a.quiet else (lambda s: print(s, flush=True))
+
+    names = [c.zfill(4) for c in a.cases] or cases_of()
+    rows = []
+    t0 = time.time()
+
+    def _one(c: str) -> dict:
+        try:
+            return run_case(c, do_llm=not a.no_llm, rounds=a.rounds, log=log)
+        except Exception as e:                        # noqa: BLE001
+            return {"case": c, "error": "%s: %s" % (type(e).__name__, e)}
+
+    nw = max(1, int(a.workers))
+    if nw == 1:
+        for i, c in enumerate(names, 1):
+            if log:
+                log("== [%d/%d] %s" % (i, len(names), c))
+            r = _one(c)
+            if r.get("error") and log:
+                log("   !! %s" % r["error"])
+            rows.append(r)
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        done = 0
+        with ThreadPoolExecutor(max_workers=nw) as ex:
+            futs = [ex.submit(_one, c) for c in names]
+            for fu in as_completed(futs):
+                r = fu.result()
+                done += 1
+                rows.append(r)
+                print("[%d/%d] %s %s" % (done, len(names), r.get("case"),
+                                         ("ERR " + str(r.get("error"))) if r.get("error") else ""),
+                      flush=True)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    # �?**合并**进已有报告，不�?覆盖：�??case 分批跑（后台作业、重跑单张）�?    #   覆盖会�? `_fzrep.py` �?���?后一次的那一�?—�??现场踩过�?    rp = OUT_DIR / "_fusion_report.json"
+    old = []
+    if rp.exists():
+        try:
+            prev = json.loads(rp.read_text(encoding="utf-8"))
+            old = [x for x in (prev.get("cases") or [])
+                   if x.get("case") not in {r.get("case") for r in rows}]
+        except Exception:                                  # noqa: BLE001
+            old = []
+    merged = sorted(old + rows, key=lambda x: str(x.get("case") or ""))
+    rp.write_text(
+        json.dumps({"cases": merged, "wall_s": round(time.time() - t0, 1),
+                    "run_dir": str(RUN_DIR)}, ensure_ascii=False, indent=1),
+        encoding="utf-8")
+    print("完成 %d 张（报告现共 %d 张），用�?%.1f s，产�?%s"
+          % (len(names), len(merged), time.time() - t0, OUT_DIR))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

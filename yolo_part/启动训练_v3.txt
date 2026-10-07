@@ -1,0 +1,90 @@
+========================================================================
+ 训练集_v3 + imgsz 1536 续训 —— 启动命令
+ 生成时间：2026-10-03
+ 起点模型：runs\detect\pcb43_v2_from_best\weights\best.pt
+ 训练集  ：Y:\workspace\EDA\训练集_v3   (1624 张 / 73675 框 / 43 类)
+ 预计耗时：约 1.8 小时（实测 112.8 s/epoch × 60）
+========================================================================
+
+一、命令（复制这一行，在 PowerShell 里粘贴回车即可）
+
+cd Y:\workspace\EDA\eda-pcb\yolo_part
+python train_pcb43.py --model runs\detect\pcb43_v2_from_best\weights\best.pt --data Y:\workspace\EDA\trainset_v3\data.yaml --epochs 60 --batch 4 --imgsz 1536 --optimizer AdamW --lr0 0.0002 --cache disk --name pcb43_v3_im1536
+
+（分两行也可以。脚本用 Path(__file__) 定位资源，在任何目录下跑都行，
+  但 cd 到 yolo_part 目录最省事。python 就用 PATH 上的 3.11，已装好全部依赖。）
+
+
+二、这条命令在做什么，为什么每个参数是这个值
+
+--model runs\detect\pcb43_v2_from_best\weights\best.pt
+    从你刚跑完的那个模型继续。43 类、类名逐字对齐，ultralytics 会整套加载
+    检测头、不做任何 remap（日志会打 Transferred 649/649 items）。
+    ※ 不要用 weights\best_component_*.pt 那些旧存档，它们不是同一血统。
+
+--data Y:\workspace\EDA\trainset_v3\data.yaml
+    新的 v3 集合。相对 v2 的变化只有两点：合成图从 3000 张砍到 1000 张，
+    真实图不变 —— 目的就是腾出算力把 imgsz 从 1024 开到 1536。
+
+--imgsz 1536   ★ 这条是本次的核心
+    v2 那轮用 1024。实测：一张 1675px 宽的图纸送进 1024 的网络要先缩到 0.611×，
+    一个 8×20 px 的电阻到达时只剩 5×12 px。逐类召回对照（原图 vs 1024 原生切片）：
+        r    0.690 → 0.903      c    0.794 → 0.918
+        v    0.771 → 0.843      gnd  0.855 → 0.894
+    而 gnd+v+r+c 占了 val 全部实例的 71%。1536 时缩放是 0.917×，几乎不缩。
+    这就是当前模型最大的一块可回收损失。
+
+--batch 4
+    imgsz 1536 的像素量是 1024 的 2.25 倍，batch 必须相应缩小。
+    实测显存 12.0~12.6 GB / 16 GB，放得下。脚本遇 CUDA OOM 会自动折半重试。
+
+--optimizer AdamW   ★ 不能省
+    脚本默认是 auto，而 auto 会「静默忽略」--lr0：
+        optimizer: 'optimizer=auto' found, ignoring 'lr0=0.0005' ...
+    你不写这一项，下面那个 0.0002 就完全不生效。
+
+--lr0 0.0002
+    比从头训的 0.0005 低。续训时学习率太大，会把起点已经学会的符号形状洗掉。
+
+--cache disk
+    1624 张，缓存已经有了（约 4.8 GB，在 训练集_v3 里），这轮是热的，
+    不会再花 70 秒重建。
+
+--epochs 60
+    实测 112.8 s/epoch（train 1:43 + val 2 s）⇒ 60 轮约 1.8 小时，控制在 2 小时内。
+    续训不需要更多 —— 上一轮的教训就是第 24 轮见顶、之后一路缓降。
+
+
+三、成绩怎么读
+
+    起点：pcb43_v2_from_best 在 val77 上是 mAP50 0.6208。
+    作为参照，我在 v3 上试跑了 3 个 epoch（同样的参数）：mAP50 已经到了 0.642，
+    r 的召回 0.739 → 0.729（P 0.811→0.811），gnd 0.762、v 0.721、c 0.907。
+
+    ※ 必须说清楚的诚实边界：val77 这一批图，这条血统的模型（无论起点还是本次）
+      全都已经见过。所以这里涨的分只能证明「没训坏 + 分辨率红利」，
+      不能当作泛化能力的证据。要一个诚实的泛化数字，得用
+        --model yolo11m.pt   （官方 COCO 权重）从头训一轮做对照。
+
+    脚本跑完会自动再做一次 conf=0.1 的低阈值复验（输出在
+    runs\detect\pcb43_v3_im1536_conf010），那里能看到真实召回率。
+
+
+四、已知天花板（这一轮大概率救不回来的类）
+
+    testpoint   val 94 个实例，两个尺度下 recall 都只有 0.125 / 0.081。
+                它长得和过孔几乎一样，是类别本身难分，不是分辨率问题。
+                它在 train 里只占 0.46% 的框，而且 338 个框里只有 11 张真实图
+                贡献（其余 262 张来自合成器），复制图等于纯记忆，所以没做加权。
+    net_input   recall 0.205，样本太少（train 2655 框 / val 44 个）。
+    net_bidirection / jumper / crystal_4pin / other / pin   val 里只有 1~15 个实例，
+                数字没有统计意义。
+
+
+五、跑完之后
+
+    最优权重：runs\detect\pcb43_v3_im1536\weights\best.pt
+    同时会自动复制一份到：weights\best_component_pcb43_v3_im1536.pt
+    曲线图与混淆矩阵在同目录下（results.png / confusion_matrix.png）。
+
+========================================================================

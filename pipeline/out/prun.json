@@ -1,0 +1,192 @@
+{
+ "cases": [
+  "0025",
+  "0036"
+ ],
+ "variants": {
+  "gt-all": {
+   "cases": 2,
+   "mean_score": 81.2098,
+   "component_f1": 0.71875,
+   "pin_f1": 0.821875,
+   "net_hypergraph_f1": 0.83364,
+   "net_line_f1": 0.992308
+  },
+  "gt-box+pinrules": {
+   "cases": 2,
+   "mean_score": 36.2563,
+   "component_f1": 0.71875,
+   "pin_f1": 0.020408,
+   "net_hypergraph_f1": 0.292517,
+   "net_line_f1": 0.394545
+  },
+  "gt-key+skel": {
+   "cases": 2,
+   "mean_score": 28.406,
+   "component_f1": 0.71875,
+   "pin_f1": 0.020408,
+   "net_hypergraph_f1": 0.180952,
+   "net_line_f1": 0.0
+  },
+  "read-key+skel": {
+   "cases": 2,
+   "mean_score": 0.0,
+   "component_f1": 0.0,
+   "pin_f1": 0.0,
+   "net_hypergraph_f1": 0.0,
+   "net_line_f1": 0.0
+  },
+  "read-key+skel-strict": {
+   "cases": 2,
+   "mean_score": 0.0,
+   "component_f1": 0.0,
+   "pin_f1": 0.0,
+   "net_hypergraph_f1": 0.0,
+   "net_line_f1": 0.0
+  },
+  "read-key+skel-otsu": {
+   "cases": 2,
+   "mean_score": 0.0,
+   "component_f1": 0.0,
+   "pin_f1": 0.0,
+   "net_hypergraph_f1": 0.0,
+   "net_line_f1": 0.0
+  },
+  "read-key+no-nets": {
+   "cases": 2,
+   "mean_score": 0.0,
+   "component_f1": 0.0,
+   "pin_f1": 0.0,
+   "net_hypergraph_f1": 0.0,
+   "net_line_f1": 0.0
+  }
+ },
+ "per_case": {
+  "gt-all": [
+   {
+    "case": "0025",
+    "score": 81.3235,
+    "component": 0.75,
+    "pin": 0.8,
+    "net_hypergraph": 0.8235,
+    "net_line": 1.0
+   },
+   {
+    "case": "0036",
+    "score": 81.0962,
+    "component": 0.6875,
+    "pin": 0.8437,
+    "net_hypergraph": 0.8437,
+    "net_line": 0.9846
+   }
+  ],
+  "gt-box+pinrules": [
+   {
+    "case": "0025",
+    "score": 26.9242,
+    "component": 0.75,
+    "pin": 0.0,
+    "net_hypergraph": 0.0952,
+    "net_line": 0.1091
+   },
+   {
+    "case": "0036",
+    "score": 45.5883,
+    "component": 0.6875,
+    "pin": 0.0408,
+    "net_hypergraph": 0.4898,
+    "net_line": 0.68
+   }
+  ],
+  "gt-key+skel": [
+   {
+    "case": "0025",
+    "score": 25.8333,
+    "component": 0.75,
+    "pin": 0.0,
+    "net_hypergraph": 0.0952,
+    "net_line": 0.0
+   },
+   {
+    "case": "0036",
+    "score": 30.9787,
+    "component": 0.6875,
+    "pin": 0.0408,
+    "net_hypergraph": 0.2667,
+    "net_line": 0.0
+   }
+  ],
+  "read-key+skel": [
+   {
+    "case": "0025",
+    "score": 0.0,
+    "component": 0.0,
+    "pin": 0.0,
+    "net_hypergraph": 0.0,
+    "net_line": 0.0
+   },
+   {
+    "case": "0036",
+    "score": 0.0,
+    "component": 0.0,
+    "pin": 0.0,
+    "net_hypergraph": 0.0,
+    "net_line": 0.0
+   }
+  ],
+  "read-key+skel-strict": [
+   {
+    "case": "0025",
+    "score": 0.0,
+    "component": 0.0,
+    "pin": 0.0,
+    "net_hypergraph": 0.0,
+    "net_line": 0.0
+   },
+   {
+    "case": "0036",
+    "score": 0.0,
+    "component": 0.0,
+    "pin": 0.0,
+    "net_hypergraph": 0.0,
+    "net_line": 0.0
+   }
+  ],
+  "read-key+skel-otsu": [
+   {
+    "case": "0025",
+    "score": 0.0,
+    "component": 0.0,
+    "pin": 0.0,
+    "net_hypergraph": 0.0,
+    "net_line": 0.0
+   },
+   {
+    "case": "0036",
+    "score": 0.0,
+    "component": 0.0,
+    "pin": 0.0,
+    "net_hypergraph": 0.0,
+    "net_line": 0.0
+   }
+  ],
+  "read-key+no-nets": [
+   {
+    "case": "0025",
+    "score": 0.0,
+    "component": 0.0,
+    "pin": 0.0,
+    "net_hypergraph": 0.0,
+    "net_line": 0.0
+   },
+   {
+    "case": "0036",
+    "score": 0.0,
+    "component": 0.0,
+    "pin": 0.0,
+    "net_hypergraph": 0.0,
+    "net_line": 0.0
+   }
+  ]
+ }
+}

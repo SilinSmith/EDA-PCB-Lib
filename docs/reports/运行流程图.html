@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>EDA 赛题六 · 当前运行流程（图论意义的图）</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b24; --line:#2a3240; --fg:#dfe6f0; --dim:#8b98ab;
+    --s1:#3fa9f5; --s2:#7ee081; --s3:#ffb454; --art:#c792ea; --out:#ff6b8b; --cfg:#7f8c9b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:14px/1.55 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  header{padding:22px 28px 12px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 6px;font-size:19px;letter-spacing:.3px}
+  .sub{color:var(--dim);font-size:12.5px}
+  .big{color:#7ee081;font-weight:700}
+  main{padding:14px 20px 60px}
+  .wrap{overflow:auto;border:1px solid var(--line);border-radius:10px;background:#0b0e13}
+  svg{display:block}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin:12px 0 4px;font-size:12.5px;color:var(--dim)}
+  .legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  table{border-collapse:collapse;margin-top:16px;font-size:13px;min-width:760px}
+  th,td{border:1px solid var(--line);padding:6px 10px;text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  th{background:#1b212b;color:#b9c4d4;font-weight:600}
+  .n{color:#ff8fa3}.p{color:#7ee081}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-top:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .card h3{margin:0 0 8px;font-size:14px;color:#b9c4d4}
+  .card ul{margin:0;padding-left:18px;color:var(--dim);font-size:12.8px}
+  .card li{margin:3px 0}
+  code{background:#0b0e13;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:12.2px}
+  .warn{color:#ffb454}
+  .tag{display:inline-block;font-size:11px;padding:0 6px;border-radius:999px;border:1px solid var(--line);color:var(--dim);margin-left:6px}
+</style>
+</head>
+<body>
+<header>
+  <h1>EDA 精英挑战赛 · 赛题六 —— 当前运行流程（有向图）</h1>
+  <div class="sub">
+    220 张官方公开集端到端实测总分 <span class="big">27.3264</span> / 100（官方 Q&amp;A 口径；差的 20 张是 <code>10_GTcase</code> 与 <code>200_train_cases</code> 同名重复、评测器无法消歧）
+    &nbsp;·&nbsp; 端到端产物 <code>work\_submit_out220z</code>（隔离 A/B 产物 <code>work\stage2_v29_fbp</code>）：VLM 四条通道（位号改名 / 逐引脚号与名 / 带「位号一致」门控的「值」/ IC 器件型号）+ <b>兜底键补读位号</b>（<code>desig_fallback</code>，默认 on）；stage3 LLM 通道已接但 0 收益、默认 off
+    &nbsp;·&nbsp; 坐标口径：<b>左下角，y 向上</b>（与官方 ParsedJson 一致）
+    &nbsp;·&nbsp; 提交契约：<code>/output/final_results/&lt;case_name&gt;_Pred.json</code>
+    &nbsp;·&nbsp; 分 split：<code>200_train_cases</code> <b>26.3447</b>（n=200）｜<code>10_GTcase</code> <b>29.8344</b>（n=10）｜<code>10GT</code> <b>49.2931</b>（n=10，ComponentF1 <b>0.9288</b>）
+    &nbsp;·&nbsp; 全流程墙钟 <b>4727 s（78.8 分钟）</b>，2 小时预算仍有 <b>~1.5 倍余量</b>
+    &nbsp;·&nbsp; 另有一项结构修正已默认开：<code>STAGE1_SPLIT_JUNCTIONS=1</code>（T 形分叉处切段）——同一份 stage1 产物上的干净 A/B <b>23.9559 → 24.0117（+0.0558）</b>，<code>component</code> 逐位不变、增益全在 <code>net_line</code>（F1 0.0197 → 0.0241、tp 578 → 876）
+    &nbsp;·&nbsp; 本轮另外三处修复：①<code>textrec\infer.py</code> <b>CTC 解码未按 <code>w//8</code> 截断</b>（批内补白被解码成尾字符，<code>R2 → R2441</code>）——220 张端到端 <b>+0.44</b>；②<code>desig_fallback</code> + <b>分立元件提示词</b> ——<code>DESIG_PROMPT</code> 原本是给 IC 写的，模型看到电容就回 <code>NONE</code>，换成被动元件提示词后 <b>+0.576</b>；③<code>desig_all</code> 再次判负（25.0823 &lt; 25.0946，且调用数 4091→6788）
+  </div>
+</header>
+<main>
+<div class="legend">
+  <span><i style="background:var(--s1)"></i>阶段一 视觉</span>
+  <span><i style="background:var(--s2)"></i>阶段二 文字与装配</span>
+  <span><i style="background:var(--s3)"></i>阶段三 LLM 仲裁</span>
+  <span><i style="background:var(--art)"></i>磁盘产物（图的「点」= 模块 / 文件）</span>
+  <span><i style="background:var(--out)"></i>交付 / 评测</span>
+  <span><i style="background:var(--cfg)"></i>外部注入</span>
+</div>
+
+<div class="wrap"><svg id="g" width="1520" height="1010"></svg></div>
+
+<table>
+  <thead><tr><th>指标</th><th>权重</th><th>F1</th><th>P</th><th>R</th><th>tp</th><th>fp</th><th>fn</th><th>加权贡献</th></tr></thead>
+  <tbody>
+    <tr><td>ComponentF1</td><td>0.30</td><td>0.6222</td><td>0.6368</td><td>0.6382</td><td class="p">5898</td><td class="n">3364</td><td class="n">3343</td><td>18.666</td></tr>
+    <tr><td>PinF1<br><small style="color:#8b949e">只算 box(IC) 的引脚</small></td><td>0.25</td><td>0.0505</td><td>0.0776</td><td>0.0176</td><td class="p">161</td><td class="n">1914</td><td class="n">8996</td><td>1.263</td></tr>
+    <tr><td>NetHypergraphF1</td><td>0.35</td><td>0.2051</td><td>0.3431</td><td>0.1584</td><td class="p">3451</td><td class="n">6607</td><td class="n">18329</td><td>7.179</td></tr>
+    <tr><td>NetLineF1</td><td>0.10</td><td>0.0219</td><td>0.0196</td><td>0.0186</td><td class="p">593</td><td class="n">29637</td><td class="n">31239</td><td>0.219</td></tr>
+    <tr><th>合计</th><th>1.00</th><th colspan="5"></th><th>27.326</th></tr>
+  </tbody>
+</table>
+
+<div class="cards">
+  <div class="card">
+    <h3>这张图上最要紧的三个数</h3>
+    <ul>
+      <li><b>官方 Q&amp;A（2025-10-04）把评分口径整个换了。</b>评测 Q2 原文：<b>「非 box 类型元器件 pin name, pin number 不参与评分」</b>——之前撑起 pinF1 的那 2808 个 tp（r/c/l/gnd 的图章引脚）<b>一分都不算</b>，唯一算分的只有 IC（GT 里 9320 个 box 引脚），我们现在 tp <b>36</b>。</li>
+      <li>评测 Q5 原文：<b>「Vcc和gnd是∅，直接是坐标匹配」</b>，Q6：<b>「GND的序号名字不影响评分」</b>。所以 <code>∅NNN</code> <b>根本不需要被推导出来</b>——它靠 bbox 匹配。这一条直接把 ComponentF1 从 0.1542 抬到 <b>0.5225</b>。</li>
+      <li>数据 Q6 原文：那些 119/115/202 的引脚号 <b>「编号是随机生产的」</b>。这也解释了为什么 <code>net_hypergraph</code> 的 P 只有 0.3282——兜底键元件的引脚号天然对不上，必须在 net 引用里剪掉。</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>已经在起作用的关键旋钮</h3>
+    <ul>
+      <li><code>DROP_UNKEYED=0</code> —— 没读到位号的元件照常输出（键用 <code>pNNN</code> 兜底），靠坐标去配 ∅：<b>+5.61 分</b>（component tp 1747→5077）。</li>
+      <li><code>NET_DROP_UNKEYED=1</code> —— 只把兜底键元件的引用从 net 超图里剪掉，<b>不剪 component</b>：<b>+1.79 分</b>（netH F1 0.1357→0.1862，P 0.1328→0.3254）。</li>
+      <li><code>--texts both</code> —— stage1 与 <code>textseg</code> 两版切法<b>都留着</b>（<code>merge_boxes_both</code>，<code>BOTH_TOL=0.65</code>），交给 <code>assign</code> 打分去选：<b>+0.59 分</b>（union 22.9068 → both 23.5009）。<b>这是默认值。</b></li>
+      <li><code>canon_designator</code> 的形近数字纠正（<code>Rl4→R14</code>）—— 新增 <code>_FIX_DIGIT</code>，前缀贪心对不上时退一步把尾部当数字重解：连同下面两条 <b>+0.167</b>（23.5009 → <b>23.6682</b>）。</li>
+      <li><code>fit_value</code> 拒绝位号形状（<code>C5</code>/<code>R14</code> 不再被 <code>NETNAME_RE</code> 放行当值，<b>+0.138</b> 里的一部分）。</li>
+      <li><code>VALUE_NETNAME=0</code> —— 关掉「网络名当值」（<code>VCC</code>/<code>Vout</code>/<code>SDA1</code> 不再顶替真正的值）：<b>+0.029</b>（tp 5224→5232，text_mismatch 969→961）。</li>
+      <li><code>BOX_PIN_PARTIAL=1</code> —— <code>box</code>(IC) 的引脚号从「一个读废、整颗作废」改成<b>逐引脚回退</b>：<b>+0.288</b>（pin tp 36→69、netH tp 3438→3475、line tp 553→578，<b>component 一个数都没动</b>）。这是当前唯一算分的引脚项（官方评测 Q2）。</li>
+      <li><span class="warn">✗ 反例</span> <code>--texts multi</code>（把「紧框 + 外扩框」两份裁片都留给 <code>assign</code> 挑）<b>实测是负的</b>：23.0447 vs both 23.5009，墙钟还翻倍。机制：<code>assign</code> 的选择还发生在<b>全局位号去重</b>与<b>跨元件抢读</b>上，多出来的裁片会去抢别的位置 —— 候选池不干净时「让打分器挑」不成立。</li>
+      <li><code>FREE_STEAL=1</code> —— 自由文字（<code>d &gt; FAR=40</code>）也进位号「抢读」池：<b>+0.37 分</b>（大 IC 的位号印在框外，过去谁都不要）。</li>
+      <li><code>VALUE_LIKE</code> 门控 —— r/c 的值不含字母/Ω/μ 就写 null：<b>+0.72 分</b>。</li>
+      <li><code>STEAL_R=80</code> 位号抢读 <b>+0.19</b>、<code>VALUE_STEAL_R=40</code> 值兜底 <b>+0.08</b>、<code>PREFIX=strict</code> 前缀矫正。</li>
+      <li><span class="p">✓ 本轮最大的一项</span> <b>VLM 补强（<code>eda-pcb\vlm\</code>）</b>：<code>reasoning_effort:"none"</code>（关思维链的唯一有效开关）之后，同一个裁片上 VLM 比 CRNN 高 <b>+0.25</b>。四条通道各自的独立增量：<b>位号改名</b> +0.012 ｜ <b>逐引脚号/名</b>（每个引脚点裁不对称窗口 + 打红圈 + 8 格拼网格，编号 0.970 / 编号+名称 0.864）<b>+0.55</b> ｜ <b>「值」</b>（读 <code>位号=值</code> 一整行，只采纳「自报位号 == 元件键」的读数）<b>+0.949</b> ｜ <b>IC 器件型号 → <code>Name</code></b>（1021 次调用）<b>+0.541</b>。另外值通道<b>顺手捡位号</b>（只对 <code>pNNN</code> 兜底键生效，零额外调用）再 +0.369。component F1 0.5225 → <b>0.5882</b>、tp 5232 → <b>5846</b>。</li>
+      <li><span class="p">✓ 本轮新增三项</span> <b>①<code>textrec\infer.py</code> CTC 解码没按 <code>w//8</code> 截断</b>：<code>read_many</code> 批内补白到本批最大宽，双向 LSTM 会把补白也解码成尾字符（<code>R2 → R2441</code>、<code>C4 → C44</code>），539 个框里 85.7% 与逐条读不一致；按 <code>w//8</code> 截断后 220 张端到端 <b>+0.44</b>（<code>23.8329 → 24.3976</code>，隔离口径 <code>+0.565</code>）。<b>②兜底键补读位号 <code>desig_fallback</code></b>：<code>pNNN</code> 键永远不可能和 GT 对上，对它补读位号有赚无赔；<b>③<code>DESIG_PROMPT</code> 原本是给 IC 写的</b>（开头「这是…一个元器件（IC / 模块）」），模型看到一颗电容就回 <code>NONE</code>（<code>C6</code>/<code>C16</code> 全废）——新增 <code>PASSIVE_TYPES</code> / <code>DESIG_PROMPT_PASSIVE</code> 后同一批元件读出 <code>C6</code>✓<code>C16</code>✓<code>TP1</code>✓<code>TP2</code>✓，<b>+0.576</b>（<code>24.5185 → 25.0946</code>）。三项叠加：端到端 <b>26.3344 → 27.3264</b>。</li>
+      <li><span class="n">✗</span> <b><code>desig_all</code>（给所有元件重读位号）再次判负</b>：25.0823 &lt; 25.0946，且 <code>desig_calls</code> 4091→6788、墙钟 768 s→2646 s。原因固定——把本来就对的键重读一遍，读错的会把对的改坏。<b>只补兜底键，不要动已有键的元件。</b></li>
+      <li><b>⚠ 已被口径作废：</b><code>PIN_STAMP=1</code> 当初量到 +4.90 分，但它的收益<b>全在非 box 引脚上</b>，现在一分不算（box 引脚 tp 只从 22 变成 36）。</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3 class="warn">图里三个缺口（尚未实现 / 尚未接上）</h3>
+    <ul>
+      <li><span class="warn">⚠</span> <b>文字框切得不够紧（最大的一块 <code>component.text_mismatch</code> 来源）</b>（当前最大的靶子）。<code>work\_textseg_common.py</code> 在 10 张 / 1287 个真值框上量出：<b>CRNN 在真值紧框上原样读就是 0.843</b>，而检出框原样只有 <b>0.19</b>、外扩后最好 <b>0.65</b>。<code>_boxgeom.py</code> 给出了原因：检出框与真值框<b>近乎同心</b>（中心偏移中位 0.02/0.06），差的是<b>尺寸</b> —— 宽只有真值的 <b>0.77</b>、高只有 <b>0.54</b>（91.9% 的框高比 &lt; 0.8、74.3% &lt; 0.6），而且<b>两个方向的偏小比例不一样</b>，所以任何等比放大都补不回来 —— 外扩网格扫描的平台就卡在 0.65（整个平台只起伏 0.03），真值紧框是 0.843。<b>正解是让 <code>cvparts.textseg</code> 直接切出真值尺寸的框，而不是切完再外扩。</b></li>
+      <li><span class="warn">✓</span> <b>打包器已就绪并全量跑通</b>：<code>eda-pcb\submission\agent_system</code> + <code>run.py</code>，<b>220 张端到端实测 4727 s（78.8 分钟，含 VLM 补强；不含则是 617 s）</b>（YOLO→CV→stage2→stage3→VLM→导出），<code>n_stage1_ok / n_stage2_ok / n_stage3_ok / n_exported 全是 220/220</code>，产物 <code>decision_log.json</code>(158 KB，逐 case 日志) + <code>final_results/&lt;case&gt;_Pred.json</code> ×220 + <code>run.log</code> 全部落盘。唯一残留风险是 <code>decision_log.json</code> 的字段定义——官方手册我们手上没有，现写成自描述格式（改 <code>_write_decision</code> 一个函数即可）。</li>
+      <li><span class="warn">⚠</span> <b>引脚有硬天花板，不要再投</b>：<code>_pindbg2.py</code> 把 414 个键匹配上的 box 元件逐引脚量清楚 —— <code>gt_pins 4674 / pred_pins 2105</code>（我们只检出 <b>45%</b>）、<code>缺号 3661</code>、<code>号对上 1013</code>、<code>号对且坐标进 5px 只剩 350</code>。根因是 <b>GT 的 <code>pin_N</code> 后缀常常不是器件引脚号而是数据集内部计数器</b>：<code>0001 U1</code>（RP2350B）68 个号里一半是 <code>391…443</code>；<code>0001 u2</code> 有 <code>pin_A1/pin_B1/pin_RM2</code>；<code>0006 U3</code> 有 <code>pin_99421/pin_H1</code>。<b>这些号图上根本没印，VLM 再好也读不出来。</b></li>
+      <li><span class="warn">⚠</span> <code>edges</code>（线网几何）几乎全错：tp 548 / fp 29991。病灶在 stage1 的 pskel 提线 —— 忽略分组只比几何，GT 的边也只有 0.9%~13.5% 落在 5px 内。**`0001` 实测：GT 340 条边 vs 我们 153 条**（stage1 出 280 个 segment、只有 190 个被网络引用），且 <code>junctions: 0</code>（从不在 T 形分叉处切段），于是我们的段是「更少、更长、位置偏 10~60px」。</li>
+      <li><span class="warn">✓</span> 阶段三 LLM 通道<b>已接通并实测</b>（LM Studio + <code>qwen3.5-9b</code>，批量裁决 + 思维链兜底 + 并发），但 <b>8 张 A/B 显示它在官方口径上 0 收益</b>：<code>off</code> 与 <code>llm</code> 每一项指标逐位相同、diff 改动 0 个字段，而 <code>llm</code> 要 <b>161.7 s/张（220 张 ~10 小时）</b>。根因是结构性的：模型看不到图，提示里唯一的信号就是候选分数，它必然选 argmax——而那正是 <code>assign</code> 已经选的。⇒ <b>默认已改回 <code>off</code></b>，要跑得显式指定。要真正增值必须换成 <b>VLM</b>。</li>
+      <li><span class="warn">⚠</span> <b>引脚号从不在图上读 → 已被 VLM 补强取代</b>：GT 的键是真实引脚号（<code>pin_1/pin_2/pin_445/pin_A1</code>），我们是<b>按位置顺序编的 <code>pin_1..pin_N</code></b>（<code>assemble.py:350-372</code> 的门控要求 OCR 读出的号「全是 1..999 的互不相同整数」，一颗 IC 里有一个读废就整颗退回顺序号）。旧的 <code>PIN_STAMP</code> 只救了 22→36。现在由 <code>vlm/enrich.py</code> 逐引脚读真实号。</li>
+      <li><span class="warn">⚠</span> <code>edges</code>（线网几何）几乎全错：tp 548 / fp 29991。病灶在 stage1 的 pskel 提线 —— 忽略分组只比几何，GT 的边也只有 0.9%~13.5% 落在 5px 内。**`0001` 实测：GT 340 条边 vs 我们 153 条**（stage1 出 280 个 segment、只有 190 个被网络引用），且 <code>junctions: 0</code>（从不在 T 形分叉处切段），于是我们的段是「更少、更长、位置偏 10~60px」。</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>还压在纸上的四件事</h3>
+    <ul>
+      <li><code>box</code> 的 <code>Name</code>（芯片名/partname）几乎全是垃圾：<code>RP2350B→GP1035</code>、<code>W25Q128JVPIM→GND3</code> —— 这解释 <code>component.text_mismatch 1029</code>。</li>
+      <li>GT 里大小写不一致（<code>0001</code> 的 box 键是小写 <code>u2</code>，我们输出 <code>U2</code>）；约 5 条，暂不追。</li>
+      <li><span class="warn">✓ 已修</span> <code>canon_designator</code> 的 <code>Rl4→R14</code> 在 strict 下返回空串（新增 <code>_FIX_DIGIT</code>，现返回 <code>('R14', 0.9)</code>）。</li>
+      <li>CRNN 丢前导 <code>1</code>（<code>100nF→00nF</code>，208 条 d=1）—— 根因其实还是上一条「框不紧」，不是后处理能捞的。</li>
+      <li><b>约 29 张（13%）图上压根没印位号</b>：<code>0003</code> 整张图是未标注导出，5 个 box 元件的位号全印成 <code>U?</code>/<code>J?</code>，连前缀都和 GT 不一致 —— 这一部分是<b>不可重建</b>的死账。</li>
+    </ul>
+  </div>
+</div>
+</main>
+
+<script>
+const NODES = [
+  // ---- 输入
+  {id:"png",  x:30,  y:470, w:150, h:58, c:"cfg", t:"输入", s:"/input/<case>.png\n每张图一个 case"},
+  // ---- 阶段一
+  {id:"yolo", x:225, y:60,  w:172, h:60, c:"s1", t:"YOLO 检测", s:"pcb43_v2_from_best\nimgsz 1600"},
+  {id:"nms",  x:225, y:140, w:172, h:56, c:"s1", t:"NMS 修复", s:"同类 iou 0.6 贪心"},
+  {id:"snap", x:225, y:216, w:172, h:60, c:"s1", t:"图章对齐 snap_box", s:"→ bbox_img（贴章后）\n→ bbox_raw_img（贴章前）"},
+  {id:"cv",   x:225, y:296, w:172, h:56, c:"s1", t:"CV 专类检测", s:"ring3 → testpoint 等"},
+  {id:"hyp",  x:225, y:372, w:172, h:58, c:"s1", t:"多假设 hypo.py", s:"unanimous / fold\nunresolved()"},
+  {id:"wir",  x:225, y:450, w:172, h:62, c:"s1", t:"导线提取（pskel）", s:"polylines→segments\nendpoints / junctions"},
+  {id:"tbx",  x:225, y:532, w:172, h:56, c:"s1", t:"文字框 textbox.py", s:"≈514 框 / 张"},
+  {id:"att",  x:225, y:608, w:172, h:58, c:"s1", t:"附着 / 接线", s:"贪心 + 黄点附着点"},
+  {id:"s1j",  x:440, y:452, w:150, h:78, c:"art", t:"stage1/<case>.json", s:"case / image{h,w}\ncomponents[ ] / texts[ ]\nwires{ } / timing"},
+  {id:"tseg", x:440, y:590, w:150, h:66, c:"s2", t:"cvparts.textseg", s:"当场紧切 + merge_boxes\n（--texts union，默认）"},
+  // ---- 阶段二
+  {id:"crnn", x:635, y:56,  w:186, h:62, c:"s2", t:"CRNN 识别（textrec）", s:"每框 5 种角色模板读\n训练集_v3"},
+  {id:"own",  x:635, y:138, w:186, h:56, c:"s2", t:"归属判定", s:"owned / free\nNEAR=16  FAR=40"},
+  {id:"stl",  x:635, y:214, w:186, h:56, c:"s2", t:"STEAL_R = 80", s:"位号允许抢邻居的框"},
+  {id:"can",  x:635, y:290, w:186, h:60, c:"s2", t:"canon_designator", s:"前缀矫正（PREFIX=strict）\n✓ Rl4→R14 已修（_FIX_DIGIT）"},
+  {id:"ded",  x:635, y:370, w:186, h:56, c:"s2", t:"位号全局去重", s:"同名只留分高者\n（可选 _global_match）"},
+  {id:"val",  x:635, y:446, w:186, h:62, c:"s2", t:"值 / 器件名", s:"VALUE_STEAL_R = 40\nfit_value / fit_partname"},
+  {id:"pin",  x:635, y:528, w:186, h:60, c:"s2", t:"引脚（PIN_STAMP=1）", s:"bbox 中心 ± 20 合成\n1..N 严格门控"},
+  {id:"sm",   x:635, y:608, w:186, h:56, c:"s2", t:"structmatch.py", s:"结构化批量重绑定"},
+  {id:"sl",   x:635, y:684, w:186, h:56, c:"s2", t:"desig_slots / struct_slots", s:"每个元件的全部候选"},
+  {id:"asm",  x:635, y:760, w:186, h:76, c:"s2", t:"assemble.py · build_doc", s:"y → H − y（左下角）\nDROP_UNKEYED\nVALUE_LIKE 门控"},
+  {id:"s2j",  x:880, y:452, w:160, h:78, c:"art", t:"stage2/<case>.json", s:"components{ key:\n  Name/type/value/bbox }\npins{ } / nets{ }"},
+  {id:"asg",  x:880, y:568, w:160, h:66, c:"art", t:"_assigned/<case>.json", s:"comps / desig_slots\nstruct_slots / n_*"},
+  // ---- 阶段三
+  {id:"arb",  x:1095, y:452, w:172, h:78, c:"s3", t:"arbitrate.py", s:"LLM 仲裁（批量+并发）\n默认 off：8 张 A/B 0 收益\nllm 臂 161.7 s/张 ⇒ 10 小时"},
+  {id:"llm",  x:1095, y:336, w:172, h:58, c:"cfg", t:"注入的环境变量", s:"LLM_BASE_URL / API_KEY\nLLM_MODEL / GPU"},
+  // ---- 交付 / 评测
+  {id:"pp",   x:1320, y:400, w:176, h:64, c:"out", t:"final_results/", s:"<case>_Pred.json\n✓ 打包器已就绪"},
+  {id:"dl",   x:1320, y:486, w:176, h:56, c:"out", t:"decision_log.json", s:"✓ 自描述格式\n⚠ 字段待查官方手册"},
+  {id:"vlm",  x:1095, y:548, w:172, h:66, c:"s3", t:"vlm/enrich.py", s:"VLM 补强（五条通道，可关）\n位号 +0.012 ｜ 引脚 +0.55\n值（门控）+0.949 ｜ 型号 +0.541\n兜底键补读 +0.576"},
+  {id:"met",  x:1095, y:640, w:172, h:78, c:"out", t:"metrics.py", s:"四项 F1\n（我们自己逆向实现\n官方评测器未发布）"},
+  {id:"run",  x:1320, y:640, w:176, h:78, c:"out", t:"submission/agent_system", s:"-input /input -output /output\n220 张实测 4727 s（78.8 min）\n（2 小时预算 ~1.5 倍余量）"},
+  {id:"assets", x:1320, y:250, w:176, h:58, c:"cfg", t:"assets.py", s:"权重解析\n环境变量 → 包内相对路径"},
+];
+
+const EDGES = [
+  ["png","yolo",""],["png","wir",""],["png","tbx",""],["png","cv",""],
+  ["yolo","nms",""],["nms","snap",""],["cv","hyp","检测结果"],["snap","hyp","bbox_raw_img"],
+  ["hyp","s1j",""],["wir","s1j",""],["tbx","s1j",""],["att","s1j",""],["wir","att",""],
+  ["s1j","crnn","texts[ ]"],["s1j","own","components[ ]"],["s1j","asm","wires / pins"],
+  ["png","tseg",""],["tseg","crnn","紧框"],
+  ["crnn","own","reads（5 种读法）"],
+  ["own","stl",""],["stl","can",""],["can","ded",""],["ded","val",""],
+  ["val","pin",""],["pin","sm",""],["sm","sl",""],
+  ["ded","sl",""],["val","sl",""],["pin","sl",""],
+  ["sl","arb","候选证据"],["asg","arb",""],
+  ["ded","asm","chosen"],["val","asm",""],["pin","asm",""],
+  ["asm","s2j",""],["asm","asg",""],
+  ["llm","arb",""],
+  ["assets","yolo",""],["assets","crnn",""],
+  ["arb","vlm",""],["vlm","pp",""],["llm","vlm",""],["s2j","pp","（mode=off 时直接落盘）"],["pp","dl",""],["dl","run",""],["run","met",""],
+  ["s2j","met","本地打分"],
+];
+
+const C = {s1:"#3fa9f5", s2:"#7ee081", s3:"#ffb454", art:"#c792ea", out:"#ff6b8b", cfg:"#7f8c9b"};
+const svg = document.getElementById("g");
+const NS = "http://www.w3.org/2000/svg";
+const idx = {};
+NODES.forEach(n => idx[n.id] = n);
+const pos = n => ({x1:n.x, y1:n.y, x2:n.x+n.w, y2:n.y+n.h, cx:n.x+n.w/2, cy:n.y+n.h/2});
+
+function el(t,a){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
+
+// arrow markers
+const defs = el("defs");
+[["ar","#5b6b80"],["ar2","#ff6b8b"]].forEach(([id,c])=>{
+  const m = el("marker",{id:id,viewBox:"0 0 10 10",refX:"9",refY:"5",
+    markerWidth:"7",markerHeight:"7",orient:"auto-start-reverse"});
+  m.appendChild(el("path",{d:"M 0 0 L 10 5 L 0 10 z", fill:c}));
+  defs.appendChild(m);
+});
+svg.appendChild(defs);
+
+// edges
+EDGES.forEach(([a,b,lab])=>{
+  const A = pos(idx[a]), B = pos(idx[b]);
+  let sx, sy, tx, ty, d;
+  if (B.x1 > A.x2 + 12) {                 // 向右
+    sx = A.x2; sy = A.cy; tx = B.x1; ty = B.cy;
+    const mx = (sx+tx)/2;
+    d = `M ${sx} ${sy} C ${mx} ${sy} ${mx} ${ty} ${tx} ${ty}`;
+  } else if (B.cx >= A.x1 && B.cx <= A.x2) { // 正下方
+    sx = A.cx; sy = A.y2; tx = B.cx; ty = B.y1;
+    const my = (sy+ty)/2;
+    d = `M ${sx} ${sy} C ${sx} ${my} ${tx} ${my} ${tx} ${ty}`;
+  } else {                                 // 向左/回绕
+    sx = A.cx; sy = A.y2; tx = B.cx; ty = B.y2;
+    const my = Math.max(sy,ty) + 26;
+    d = `M ${sx} ${sy} C ${sx} ${my} ${tx} ${my} ${tx} ${ty}`;
+  }
+  const warn = lab.indexOf("⚠") >= 0 || a === "pp" || a === "dl";
+  svg.appendChild(el("path",{d:d, fill:"none", stroke: warn ? "#7a4050" : "#33405280",
+    "stroke-width":1.6, "marker-end":`url(#${warn?"ar2":"ar"})`}));
+  if (lab) {
+    let lx, ly;
+    if (ty > sy + 4 && Math.abs(tx - sx) < 8) {      // 纵向边：标签放到 0.35 处，避开终点
+      lx = sx; ly = sy + 0.35 * (ty - sy);
+    } else { lx = (sx + tx) / 2; ly = (sy + ty) / 2 - 5; }
+    const t = el("text",{x:lx, y:ly, fill:"#7f8c9b", "font-size":"11",
+      "text-anchor":"middle", "paint-order":"stroke", stroke:"#0b0e13", "stroke-width":"4"});
+    t.textContent = lab;
+    svg.appendChild(t);
+  }
+});
+
+// nodes
+NODES.forEach(n=>{
+  const g = el("g",{});
+  g.appendChild(el("rect",{x:n.x, y:n.y, width:n.w, height:n.h, rx:9,
+    fill:"#141a23", stroke:C[n.c], "stroke-width":1.6}));
+  g.appendChild(el("rect",{x:n.x, y:n.y, width:4, height:n.h, rx:2, fill:C[n.c]}));
+  const t1 = el("text",{x:n.x+13, y:n.y+19, fill:"#e7eef8", "font-size":"12.6",
+    "font-weight":"600"});
+  t1.textContent = n.t;
+  g.appendChild(t1);
+  n.s.split("\n").forEach((ln,i)=>{
+    const t2 = el("text",{x:n.x+13, y:n.y+36+i*14, fill:"#8593a7", "font-size":"11"});
+    t2.textContent = ln;
+    g.appendChild(t2);
+  });
+  svg.appendChild(g);
+});
+
+// 阶段分区
+const BANDS = [
+  ["阶段一 · 视觉（eda-pcb/stage1 + cvparts）", 205, "#3fa9f5"],
+  ["阶段二 · 文字与装配（eda-pcb/stage2）", 615, "#7ee081"],
+  ["阶段三 · LLM 仲裁（eda-pcb/stage3）", 1075, "#ffb454"],
+];
+BANDS.forEach(([lab,x,c])=>{
+  const t = el("text",{x:x, y:34, fill:c, "font-size":"12.5", "font-weight":"700",
+    "letter-spacing":"0.5"});
+  t.textContent = lab;
+  svg.appendChild(t);
+  svg.insertBefore(t, svg.firstChild);
+});
+const band = el("rect",{x:405, y:44, width:196, height:740, rx:12,
+  fill:"none", stroke:"#2a3240", "stroke-dasharray":"4 5"});
+svg.insertBefore(band, svg.querySelector("g"));
+</script>
+</body>
+</html>

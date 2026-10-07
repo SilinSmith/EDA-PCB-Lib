@@ -217,20 +217,39 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# YOLO / 模型文件
+# ===========================================================================
+# 项目专属规则（EDA 精英挑战赛 · 赛题六：原理图 → JSON）
+# ===========================================================================
+
+# --- 1. 训练产物、推理缓存、下载的 checkpoint：不入库 ---------------------
 runs/
-*.pt
+eda_yolo/
 *.onnx
 *.engine
 *.tflite
+*.cache
 
-# 虚拟环境（你的环境名叫 eda_yolo，模板里没覆盖到）
-eda_yolo/
+# --- 2. 模型权重 -----------------------------------------------------------
+# 默认挡掉所有 *.pt（训练快照动辄几十 MB、且会反复覆盖），
+# 但**放行推理真正需要的那两个** —— `assets.py` 会优先在这两个相对路径找：
+#     weights/pcb43_v2_from_best.pt   YOLO 元件检测（~39 MB）
+#     weights/textrec_best.pt         CRNN 文字识别（~30 MB）
+# 全新 clone 不具备这两个文件时，pipeline 会在 stage1 第一行就 FileNotFoundError，
+# 所以它们必须随仓库提交。其余权重（含 yolo_part/weights/ 下的官方 COCO 权重、
+# 各次训练的 best.pt）一律不入库。
+*.pt
+!weights/pcb43_v2_from_best.pt
+!weights/textrec_best.pt
 
-# 赛题数据集（如果图片/标注文件很大，不想全传上去）
-# dataset/
-# images/
-# labels/
+# --- 3. 数据集：只保留 YAML 配置、类别表与说明文档 -------------------------
+/yolo_part/Dataset*/
+/yolo_part/training_data/images/
+/yolo_part/training_data/labels/
+/yolo_part/weights/
+/textrec/data/
 
-# 环境变量（防止泄露密钥）
-.env
+# --- 4. 本地运行输出 -------------------------------------------------------
+/outputs/
+/submissions/
+/work/
+*.log

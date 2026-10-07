@@ -1,0 +1,375 @@
+================================================================================================
+_gtfaith.py  root=Y:\workspace\EDA\trainset_v3  split=val  conf=0.05 imgsz=1024 判据 corner<=20px
+images=77   类别索引 {'box': 8, 'c': 10, 'gnd': 20, 'l': 22, 'net_input': 29, 'r': 35, 'testpoint': 38, 'v': 40}
+================================================================================================
+
+### 总账
+cls              GT     FN      FN率    pred      FP      精确率
+gnd             546      4     0.7%     666     124    0.814
+v               369     30     8.1%     443     104    0.765
+r               402     13     3.2%     466      77    0.835
+c               420      7     1.7%     431      18    0.958
+testpoint        94     93    98.9%       1       0    1.000
+net_input        44     15    34.1%      48      19    0.604
+box             228      7     3.1%     278      57    0.795
+l                32      0     0.0%      41       9    0.780
+
+### A. FN 重新归类
+cls              FN TRUEMISSCLASSCONFNEAROTHER   DUP   DEADGT
+gnd               4        1        0        3     0        0
+v                30       11       15        3     1        0
+r                13        1        2        4     6        0
+c                 7        0        6        1     0        0
+testpoint        93       75        9        9     0        0
+net_input        15        5        2        7     0        1
+box               7        1        3        2     1        0
+
+### A0. 「同框重复预测」假 FN（模型在同一 GT 位置输出了 >1 个同类框，贪心配对只领走一个）
+cls              重复GT数      其中FN       占该类GT
+v                    3         1        0.3%
+r                    7         6        1.5%
+box                  1         1        0.4%
+
+### A0b. 合并 FN 假阳性账（不只 DUP，还含 DEADGT / 图章扣文字）
+cls              GT      原始FN     不应算FN       修正召回率
+gnd             546         4         0       0.993
+v               369        30         3       0.927
+r               402        13         7       0.985
+c               420         7         0       0.983
+testpoint        94        93         0       0.011
+net_input        44        15         1       0.682
+box             228         7         1       0.974
+l                32         0         0       1.000
+
+### A2. CLASSCONF 汇总：该类的 FN 被模型预测成了哪些**别的**类
+  FN v           15 个类混淆 -> {'gnd': 11, 'c': 3, 'pin': 1}
+  FN r           2 个类混淆 -> {'other': 1, 'gnd': 1}
+  FN c           6 个类混淆 -> {'gnd': 6}
+  FN testpoint   9 个类混淆 -> {'pin': 8, 'jumper': 1}
+  FN net_input   2 个类混淆 -> {'pin': 1, 'gnd': 1}
+  FN box         3 个类混淆 -> {'jumper': 2, 'pin': 1}
+
+### A2b. 类混淆矩阵（行=被漏的 GT 类，列=模型在该位置预测的类，含 conf）
+  v           <- gnd@0.88 x2, gnd@0.63 x1, gnd@0.54 x1, c@0.38 x1, c@0.39 x1, c@0.15 x1, pin@0.06 x1, gnd@0.84 x1, gnd@0.85 x1, gnd@0.87 x1, gnd@0.13 x1, gnd@0.29 x1
+  r           <- other@0.05 x1, gnd@0.43 x1
+  c           <- gnd@0.72 x2, gnd@0.75 x2, gnd@0.73 x1, gnd@0.74 x1
+  testpoint   <- pin@0.15 x1, pin@0.18 x1, pin@0.08 x1, pin@0.06 x1, jumper@0.07 x1, pin@0.14 x1, pin@0.20 x1, pin@0.29 x1, pin@0.22 x1
+  net_input   <- pin@0.36 x1, gnd@0.06 x1
+  box         <- jumper@0.16 x1, jumper@0.32 x1, pin@0.09 x1
+
+### A2c. r → l 专项（owner 判断 1 的核心）
+  r 的 FN 共 13，其中 CLASSCONF=2；预测为 l 的=0
+  r 被预测成的类分布: {'other': 1, 'gnd': 1}
+  l 侧: GT=32 FN=0 pred=41 FP=9；l 的 FP 错误来源={'l': 7, 'switch': 1, 'gnd': 1}
+  l 的 GT 的框尺寸: {(32, 8): 29, (36, 8): 2, (4, 32): 1}
+  r 的 GT 的框尺寸: {(8, 20): 234, (20, 8): 168}
+
+### A3. NEAROTHER（附近有别类预测但既不重合）明细
+  FN gnd         附近预测类: {'box': 2, 'gnd': 1}
+  FN v           附近预测类: {'c': 2, 'pin': 1}
+  FN r           附近预测类: {'r': 4}
+  FN c           附近预测类: {'gnd': 1}
+  FN testpoint   附近预测类: {'gnd': 6, 'pin': 3}
+  FN net_input   附近预测类: {'r': 3, 'net_input': 2, 'box': 2}
+  FN box         附近预测类: {'gnd': 1, 'v': 1}
+
+### A4. DEADGT（框内墨迹<2% 或 外环6px中位<0.02）明细
+  FN net_input   DEADGT=1 ; 前 8 个: 200_train_cases-0027__full[10x5 ink=0.000 ringmed=0.00 ringmean=0.121]
+
+### A1b. 「不该算漏检」的 FN 明细判定（blank=框内零墨 / text=图章扣文字 / zigzag=r 图章扣锯齿笔画 / DUP=同框重复）
+cls             FN     不应算 blank  text zigzag   DUPTRUEMISS
+gnd              4       0     0     0      0     0       1
+v               30       3     0     0      0     1      11
+r               13       7     0     0      0     6       1
+c                7       0     0     0      0     0       0
+testpoint       93       0     0     0      0     0      75
+net_input       15       1     1     0      0     0       5
+box              7       1     0     0      0     1       1
+
+### A1d. r 的 FN 逐框判定（owner 判断 1 的直接证据）
+  img                                          box    kind    ink   fill   游程中位   游程CV       预测
+  200_train_cases-0011__full          205,1668,213,1688CLASSCONF  0.460  0.460    1.0   0.00    other
+  200_train_cases-0011__full          528,1014,548,1022TRUEMISS  0.478  0.478    1.0   0.00        -
+  200_train_cases-0050__full          1612,2530,1620,2550NEAROTHER  0.343  0.343    1.0   0.61        r
+  200_train_cases-0050__full          654,2531,662,2551NEAROTHER  0.308  0.308    1.0   0.76        r
+  200_train_cases-0050__full          1253,2536,1261,2556NEAROTHER  0.386  0.386    1.0   0.63        r
+  200_train_cases-0050__full          773,2531,781,2551NEAROTHER  0.303  0.303    1.0   0.76        r
+  200_train_cases-0190__full          468,380,488,388CLASSCONF  0.262  0.262    2.0   0.74      gnd
+  200_train_cases-0190__t00_00        470,311,490,319     DUP  0.256  0.256    2.0   0.80        r
+  200_train_cases-0190__t00_00        468,380,488,388     DUP  0.275  0.275    2.0   0.69        r
+  200_train_cases-0190__t00_01        304,280,324,288     DUP  0.228  0.228    2.0   0.79        r
+  200_train_cases-0190__t00_01        304,290,324,298     DUP  0.244  0.244    2.0   0.80        r
+  200_train_cases-0190__t00_01        304,311,324,319     DUP  0.256  0.256    2.0   0.79        r
+  200_train_cases-0190__t00_01        302,380,322,388     DUP  0.262  0.262    2.0   0.74        r
+
+### A1c. 按组统计（LEAK = 源图 id 在 train 侧有同源 `synth_` 文件；CLEAN = 真 held-out）
+  -- LEAK 组
+  cls               GT      FN     FN率       不应算  CLASSC  DEADGT
+  gnd              201       2    1.0%         0       0       0
+  v                125      17   13.6%         0       6       0
+  r                181       6    3.3%         0       1       0
+  c                223       7    3.1%         0       6       0
+  testpoint         94      93   98.9%         0       9       0
+  net_input         29      13   44.8%         1       1       1
+  box               79       4    5.1%         1       2       0
+  l                 15       0    0.0%         0       0       0
+  类(pred)         pred      FP  REALFP 近GT<=20
+  gnd               81      81       8      67
+  v                 42      42       1      39
+  r                 36      36       7      23
+  c                 12      12       0      10
+  net_input         13      13       2       4
+  box               37      37      14      12
+  l                  1       1       0       1
+  -- CLEAN 组
+  cls               GT      FN     FN率       不应算  CLASSC  DEADGT
+  gnd              345       2    0.6%         0       0       0
+  v                244      13    5.3%         3       9       0
+  r                221       7    3.2%         7       1       0
+  c                197       0    0.0%         0       0       0
+  net_input         15       2   13.3%         0       1       0
+  box              149       3    2.0%         0       1       0
+  l                 17       0    0.0%         0       0       0
+  类(pred)         pred      FP  REALFP 近GT<=20
+  gnd               43      43       4      37
+  v                 62      62       1      58
+  r                 41      41       0      40
+  c                  6       6       1       3
+  net_input          6       6       0       3
+  box               20      20      12       3
+  l                  8       8       0       7
+
+### A5. 每个类的 GT 框「墨迹/形状签名」全量统计
+  cls             GT     框内中位    框内<2%     外环均值中位      填充率中位      游程数中位     游程CV中位
+  gnd            546    0.095      106      0.019      0.095        1.0       0.75
+  v              369    0.200       11      0.059      0.200        1.0       0.76
+  r              402    0.197      124      0.083      0.197        1.0       0.71
+  c              420    0.084      152      0.065      0.084        0.2       1.15
+  testpoint       94    0.145        5      0.427      0.145        1.0       0.72
+  net_input       44    0.107        5      0.062      0.107        0.0       1.27
+  box            228    0.079        5      0.116      0.079        1.0       0.88
+  l               32    0.153        0      0.065      0.153        1.0       0.77
+
+### A5b. r 的 GT 框形状签名分布（填充率 = 框内暗像素占比）
+  填充率分位: 最小=0.000 10%=0.011 25%=0.012 中位=0.197 75%=0.358 90%=0.386 最大=0.542
+  阈值 0.10: 细笔画(锯齿)=154  实心(矩形体)=248   细笔画尺寸={(20, 8): 87, (8, 20): 67}
+  阈值 0.20: 细笔画(锯齿)=202  实心(矩形体)=200   细笔画尺寸={(20, 8): 119, (8, 20): 83}
+  阈值 0.30: 细笔画(锯齿)=263  实心(矩形体)=139   细笔画尺寸={(20, 8): 159, (8, 20): 104}
+  【交叉表】按尺寸 x 填充率阈值 0.20
+    8x20     n=234  填充率<0.20(细笔画/锯齿)= 83  填充率>=0.20(实心块)=151  填充率中位=0.315
+    20x8     n=168  填充率<0.20(细笔画/锯齿)=119  填充率>=0.20(实心块)= 49  填充率中位=0.024
+
+### A5c. l 与 r 在【同样的 (8,20)/(20,8) 框尺寸】下的填充率对比（判别锯齿 vs 实心体）
+  r   n=402  填充率: 中位=0.197 最小=0.000 最大=0.542  <0.20的=202
+
+### B. FP 重新归类
+cls               FP  NEARMISS CLASSCONF   REALFP
+gnd              124         8       104       12
+v                104         5        97        2
+r                 77         7        63        7
+c                 18         4        13        1
+net_input         19         9         8        2
+box               57        15        16       26
+l                  9         1         8        0
+
+### B2. NEARMISS 距离带宽（最近 GT 的 corner 差）
+  FP gnd         n=8  20~40px=8  40~60px=0  中位=23.3  最大=39.9
+       最近 GT 的类: {'gnd': 6, 'c': 2}
+  FP v           n=5  20~40px=4  40~60px=1  中位=21.1  最大=44.5
+       最近 GT 的类: {'v': 2, 'gnd': 2, 'c': 1}
+  FP r           n=7  20~40px=7  40~60px=0  中位=23.2  最大=30.6
+       最近 GT 的类: {'r': 6, 'net_bidirection': 1}
+  FP c           n=4  20~40px=4  40~60px=0  中位=31.8  最大=40.0
+       最近 GT 的类: {'c': 2, 'v': 1, 'gnd': 1}
+  FP net_input   n=9  20~40px=7  40~60px=2  中位=23.4  最大=59.5
+       最近 GT 的类: {'net_input': 7, 'r': 1, 'net_output': 1}
+  FP box         n=15  20~40px=15  40~60px=0  中位=33.0  最大=39.0
+       最近 GT 的类: {'net_input': 8, 'v': 4, 'r': 2, 'box': 1}
+  FP l           n=1  20~40px=0  40~60px=1  中位=56.1  最大=56.1
+       最近 GT 的类: {'gnd': 1}
+
+### B2b. 每个 FP 的「同类最近 GT」距离（与 NEARMISS 的最近任意类 GT 对比）
+  FP gnd         有同类GT的=120/124  同类距<=20:92  20~40:7  40~60:0  >60:21
+  FP v           有同类GT的=102/104  同类距<=20:92  20~40:2  40~60:0  >60:8
+  FP r           有同类GT的=76/77  同类距<=20:63  20~40:6  40~60:0  >60:7
+  FP c           有同类GT的=18/18  同类距<=20:7  20~40:3  40~60:2  >60:6
+  FP net_input   有同类GT的=17/19  同类距<=20:7  20~40:7  40~60:1  >60:2
+  FP box         有同类GT的=53/57  同类距<=20:3  20~40:1  40~60:1  >60:48
+  FP l           有同类GT的=9/9  同类距<=20:7  20~40:0  40~60:0  >60:2
+
+### B3. REALFP 明细（60px 内没有任何 GT）
+  FP gnd         REALFP=12  最高 conf: 200_train_cases-0011__t00_00 conf=0.78 18x18, 200_train_cases-0050__t02_01 conf=0.49 21x20, 200_train_cases-0101__t00_01 conf=0.47 4x15, 200_train_cases-0011__t00_00 conf=0.35 13x13, 200_train_cases-0011__full conf=0.18 27x31, 200_train_cases-0176__t00_01 conf=0.14 5x20, 200_train_cases-0176__t00_01 conf=0.14 4x14, 200_train_cases-0011__full conf=0.14 34x33, 200_train_cases-0176__t00_01 conf=0.08 4x17, 200_train_cases-0050__t01_05 conf=0.07 21x9
+  FP v           REALFP=2  最高 conf: 200_train_cases-0166__t00_01 conf=0.72 4x10, 200_train_cases-0011__t02_01 conf=0.05 4x11
+  FP r           REALFP=7  最高 conf: 200_train_cases-0050__t03_03 conf=0.63 8x25, 200_train_cases-0050__t02_03 conf=0.63 8x24, 200_train_cases-0011__t02_02 conf=0.52 20x8, 200_train_cases-0050__t03_03 conf=0.13 8x27, 200_train_cases-0050__t03_04 conf=0.07 9x5, 200_train_cases-0050__full conf=0.06 19x27, 200_train_cases-0050__full conf=0.06 60x41
+  FP c           REALFP=1  最高 conf: 200_train_cases-0101__t00_01 conf=0.49 4x19
+  FP net_input   REALFP=2  最高 conf: 200_train_cases-0011__t00_02 conf=0.43 30x13, 200_train_cases-0011__full conf=0.30 55x17
+  FP box         REALFP=26  最高 conf: 200_train_cases-0029__t00_01 conf=0.96 91x60, 200_train_cases-0029__t00_01 conf=0.96 91x59, 200_train_cases-0029__t00_01 conf=0.95 91x90, 200_train_cases-0176__t00_01 conf=0.95 39x70, 200_train_cases-0101__t00_01 conf=0.93 59x129, 200_train_cases-0101__t00_00 conf=0.93 216x382, 200_train_cases-0029__t00_00 conf=0.82 23x121, 200_train_cases-0166__t00_01 conf=0.76 9x70, 200_train_cases-0011__t00_04 conf=0.60 239x273, 200_train_cases-0050__t01_01 conf=0.53 34x26
+
+================================================================================================
+### B1. r 的漏检位置上，模型预测了什么类
+r: GT=402  FN=13  预测总数=466  FP=77
+  漏检位置的预测构成: {'DUP(同类重复预测)': 6, 'r': 4, 'other': 1, '(完全无预测)': 1, 'gnd': 1}
+  其中 DUP=6（同框重复预测，**不应算漏检**）, CLASSCONF(别的类)=2, TRUEMISS=1, DEADGT=0, NEAROTHER=4
+  其中预测为 l 的: 0 / 13 = 0.0%（owner 判断 1 的检验点）
+  修正后 r 的真实漏检 = 13 - 7(不应算) = 6，修正召回率 = 0.985
+  有预测的 12 个，conf 降序前 25:
+     conf=0.825  预测=r            kind=DUP       同框同类重复=2  GT框=20x8  img=200_train_cases-0190__t00_01
+     conf=0.802  预测=r            kind=DUP       同框同类重复=3  GT框=20x8  img=200_train_cases-0190__t00_00
+     conf=0.777  预测=r            kind=DUP       同框同类重复=1  GT框=20x8  img=200_train_cases-0190__t00_01
+     conf=0.745  预测=r            kind=DUP       同框同类重复=1  GT框=20x8  img=200_train_cases-0190__t00_00
+     conf=0.685  预测=r            kind=DUP       同框同类重复=1  GT框=20x8  img=200_train_cases-0190__t00_01
+     conf=0.685  预测=r            kind=DUP       同框同类重复=2  GT框=20x8  img=200_train_cases-0190__t00_01
+     conf=0.477  预测=r            kind=NEAROTHER 同框同类重复=0  GT框=8x20  img=200_train_cases-0050__full
+     conf=0.429  预测=gnd          kind=CLASSCONF 同框同类重复=1  GT框=20x8  img=200_train_cases-0190__full
+     conf=0.426  预测=r            kind=NEAROTHER 同框同类重复=0  GT框=8x20  img=200_train_cases-0050__full
+     conf=0.374  预测=r            kind=NEAROTHER 同框同类重复=0  GT框=8x20  img=200_train_cases-0050__full
+     conf=0.202  预测=r            kind=NEAROTHER 同框同类重复=0  GT框=8x20  img=200_train_cases-0050__full
+     conf=0.054  预测=other        kind=CLASSCONF 同框同类重复=0  GT框=8x20  img=200_train_cases-0011__full
+  [对照] r 的 GT 被正确配对 vs 漏: 见总账；l 的 GT=32 FN=0 pred=41 FP=9
+  漏掉的 r 尺寸: bw 中位=20 [8..20]  bh 中位=8 [8..20]
+  分布在 5 张图; top8: {'200_train_cases-0050__full': 4, '200_train_cases-0190__t00_01': 4, '200_train_cases-0011__full': 2, '200_train_cases-0190__t00_00': 2, '200_train_cases-0190__full': 1}
+  框内墨迹占比: 中位=0.275 最小=0.228 最大=0.478  低于2%的=0
+
+================================================================================================
+### B2. fp_r 每个预测的最近 GT 类与 corner 距离
+fp_r 共 77 个
+  归类: NEARMISS=7 CLASSCONF=63 REALFP=7
+  最近 GT 的类分布: {'r': 73, 'net_bidirection': 1, 'c': 1, 'block': 1, 'box': 1}
+  最近 GT corner 距离: <=20px(有重合)=63  20~40=7  40~60=0  >60=7
+  最近【同类 r】GT 距离: <=20px=63  20~40=6  40~60=0  >60=7  无同类GT=1
+  明细（conf 降序，前 30）: img | conf | 预测框 | 最近GT类 | corner | 最近同类r | corner
+     200_train_cases-0121__full           0.808  19x7  近GT=r              13.3  近r=r     13.3
+     200_train_cases-0176__t00_01         0.799  19x7  近GT=r              30.6  近r=r     30.6
+     200_train_cases-0190__full           0.794  19x7  近GT=r               1.9  近r=r     1.9
+     200_train_cases-0050__t03_03         0.634  8x25  近GT=r             118.0  近r=r     118.0
+     200_train_cases-0050__t02_03         0.632  8x24  近GT=r             118.0  近r=r     118.0
+     200_train_cases-0190__t00_01         0.597  14x6  近GT=r               3.2  近r=r     3.2
+     200_train_cases-0121__full           0.594  19x8  近GT=r              12.2  近r=r     12.2
+     200_train_cases-0011__t02_02         0.519  20x8  近GT=c             366.3  近r=None  -
+     200_train_cases-0190__full           0.513  19x8  近GT=r               0.7  近r=r     0.7
+     200_train_cases-0190__t00_00         0.498  14x6  近GT=r               3.7  近r=r     3.7
+     200_train_cases-0050__full           0.477  26x61  近GT=r              22.8  近r=r     22.8
+     200_train_cases-0176__t00_01         0.434  22x11  近GT=r               6.5  近r=r     6.5
+     200_train_cases-0050__full           0.426  25x56  近GT=r              21.7  近r=r     21.7
+     200_train_cases-0176__full           0.403  25x8  近GT=r               5.2  近r=r     5.2
+     200_train_cases-0190__t00_00         0.395  13x7  近GT=r               3.6  近r=r     3.6
+     200_train_cases-0050__full           0.374  26x57  近GT=r              22.9  近r=r     22.9
+     200_train_cases-0190__t00_00         0.367  5x14  近GT=r               3.6  近r=r     3.6
+     200_train_cases-0176__t00_01         0.361  22x9  近GT=r               3.8  近r=r     3.8
+     200_train_cases-0190__t00_01         0.360  14x7  近GT=r               3.9  近r=r     3.9
+     200_train_cases-0176__t00_00         0.333  24x8  近GT=r               5.4  近r=r     5.4
+     200_train_cases-0050__full           0.318  27x52  近GT=r              19.2  近r=r     19.2
+     10_GTcase-0037-Datasheet__full       0.284  8x23  近GT=r               7.7  近r=r     7.7
+     200_train_cases-0190__t00_00         0.279  7x13  近GT=r               3.9  近r=r     3.9
+     200_train_cases-0050__full           0.273  24x39  近GT=r              15.2  近r=r     15.2
+     200_train_cases-0190__t00_00         0.256  12x5  近GT=r               6.5  近r=r     6.5
+     10_GTcase-0037-Datasheet__full       0.241  7x22  近GT=r               4.3  近r=r     4.3
+     200_train_cases-0176__t00_01         0.216  22x10  近GT=r               2.9  近r=r     2.9
+     200_train_cases-0050__full           0.202  20x62  近GT=r              28.7  近r=r     28.7
+     10_GTcase-0037-Datasheet__full       0.202  8x17  近GT=r              11.4  近r=r     11.4
+     200_train_cases-0176__t00_00         0.198  22x10  近GT=r               3.4  近r=r     3.4
+
+================================================================================================
+### B3. fn_net_input 的 GT 框
+net_input: GT=44  FN=15  pred=48  FP=19
+  尺寸: bw 中位=30 [10..30]   bh 中位=10 [5..30]
+  尺寸直方(2px归并, 前12): {(30, 10): 12, (10, 10): 1, (10, 4): 1, (10, 30): 1}
+  框内墨迹占比: 中位=0.132 最小=0.000 最大=0.232  <2%的=2(13.3%)
+  外环6px墨迹: 均值中位=0.072 最小=0.022 最大=0.198 ; 中位判据=0 的个数=15/15
+  归类: {'NEAROTHER': 7, 'TRUEMISS': 5, 'CLASSCONF': 2, 'DEADGT': 1}
+  所在图 (7 张): 200_train_cases-0027__full x7, 200_train_cases-0027__t00_00 x2, 200_train_cases-0027__t00_01 x2, 200_train_cases-0011__full x1, 200_train_cases-0011__t01_00 x1, 200_train_cases-0023__full x1, 200_train_cases-0064__full x1
+  逐框明细:
+     200_train_cases-0011__full           box=(328,1074,358,1084) 30x10  ink=0.132 ring=0.000  预测=net_input conf=0.105
+     200_train_cases-0011__t01_00         box=(328,306,358,316) 30x10  ink=0.132 ring=0.000  预测=无
+     200_train_cases-0023__full           box=(688,58,718,68) 30x10  ink=0.232 ring=0.000  预测=无
+     200_train_cases-0027__full           box=(558,0,568,11) 10x11  ink=0.098 ring=0.000  预测=pin conf=0.358
+     200_train_cases-0027__full           box=(436,0,446,5) 10x5  ink=0.000 ring=0.000  预测=无
+     200_train_cases-0027__full           box=(106,175,136,185) 30x10  ink=0.003 ring=0.000  预测=net_input conf=0.176
+     200_train_cases-0027__full           box=(709,188,739,198) 30x10  ink=0.141 ring=0.000  预测=box conf=0.246
+     200_train_cases-0027__full           box=(152,435,182,445) 30x10  ink=0.161 ring=0.000  预测=r conf=0.793
+     200_train_cases-0027__full           box=(784,448,814,458) 30x10  ink=0.026 ring=0.000  预测=box conf=0.477
+     200_train_cases-0027__full           box=(678,479,708,489) 30x10  ink=0.129 ring=0.000  预测=无
+     200_train_cases-0027__t00_00         box=(152,435,182,445) 30x10  ink=0.176 ring=0.000  预测=r conf=0.779
+     200_train_cases-0027__t00_00         box=(678,479,708,489) 30x10  ink=0.141 ring=0.000  预测=无
+     200_train_cases-0027__t00_01         box=(137,435,167,445) 30x10  ink=0.176 ring=0.000  预测=r conf=0.761
+     200_train_cases-0027__t00_01         box=(663,479,693,489) 30x10  ink=0.129 ring=0.000  预测=无
+     200_train_cases-0064__full           box=(581,395,591,425) 10x30  ink=0.032 ring=0.000  预测=gnd conf=0.056
+
+### 每图 FN/FP 计数（FN+FP>0）
+  10_GTcase-0037-Datasheet__full         gt=13   pred=23   fn=3   fp=13
+  200_train_cases-0002__full             gt=12   pred=13   fn=1   fp=2
+  200_train_cases-0002__t00_00           gt=11   pred=12   fn=1   fp=2
+  200_train_cases-0002__t00_01           gt=10   pred=11   fn=1   fp=2
+  200_train_cases-0011__full             gt=61   pred=70   fn=23  fp=32
+  200_train_cases-0011__t00_00           gt=9    pred=6    fn=6   fp=3
+  200_train_cases-0011__t00_01           gt=6    pred=3    fn=4   fp=1
+  200_train_cases-0011__t00_02           gt=10   pred=12   fn=3   fp=5
+  200_train_cases-0011__t00_03           gt=11   pred=14   fn=5   fp=8
+  200_train_cases-0011__t00_04           gt=11   pred=11   fn=5   fp=5
+  200_train_cases-0011__t01_00           gt=14   pred=6    fn=9   fp=1
+  200_train_cases-0011__t01_01           gt=8    pred=9    fn=0   fp=1
+  200_train_cases-0011__t01_02           gt=10   pred=14   fn=1   fp=5
+  200_train_cases-0011__t01_03           gt=9    pred=15   fn=2   fp=8
+  200_train_cases-0011__t01_04           gt=9    pred=12   fn=2   fp=5
+  200_train_cases-0011__t02_00           gt=11   pred=6    fn=6   fp=1
+  200_train_cases-0011__t02_01           gt=12   pred=13   fn=0   fp=1
+  200_train_cases-0011__t02_02           gt=11   pred=16   fn=0   fp=5
+  200_train_cases-0011__t02_03           gt=4    pred=5    fn=1   fp=2
+  200_train_cases-0011__t02_04           gt=4    pred=5    fn=1   fp=2
+  200_train_cases-0023__full             gt=12   pred=12   fn=2   fp=2
+  200_train_cases-0026__full             gt=29   pred=39   fn=1   fp=11
+  200_train_cases-0027__full             gt=45   pred=54   fn=9   fp=18
+  200_train_cases-0027__t00_00           gt=44   pred=60   fn=4   fp=20
+  200_train_cases-0027__t00_01           gt=45   pred=55   fn=4   fp=14
+  200_train_cases-0029__full             gt=36   pred=37   fn=1   fp=2
+  200_train_cases-0029__t00_00           gt=35   pred=38   fn=0   fp=3
+  200_train_cases-0029__t00_01           gt=33   pred=37   fn=1   fp=5
+  200_train_cases-0047__full             gt=31   pred=32   fn=0   fp=1
+  200_train_cases-0050__full             gt=102  pred=130  fn=32  fp=60
+  200_train_cases-0050__t00_00           gt=7    pred=10   fn=3   fp=6
+  200_train_cases-0050__t00_01           gt=14   pred=14   fn=3   fp=3
+  200_train_cases-0050__t00_02           gt=12   pred=11   fn=1   fp=0
+  200_train_cases-0050__t00_03           gt=9    pred=7    fn=3   fp=1
+  200_train_cases-0050__t00_04           gt=7    pred=3    fn=4   fp=0
+  200_train_cases-0050__t00_05           gt=4    pred=2    fn=3   fp=1
+  200_train_cases-0050__t01_00           gt=13   pred=9    fn=7   fp=3
+  200_train_cases-0050__t01_01           gt=12   pred=10   fn=5   fp=3
+  200_train_cases-0050__t01_02           gt=10   pred=9    fn=3   fp=2
+  200_train_cases-0050__t01_03           gt=21   pred=20   fn=4   fp=3
+  200_train_cases-0050__t01_04           gt=11   pred=7    fn=7   fp=3
+  200_train_cases-0050__t01_05           gt=5    pred=6    fn=2   fp=3
+  200_train_cases-0050__t02_00           gt=12   pred=11   fn=3   fp=2
+  200_train_cases-0050__t02_01           gt=11   pred=10   fn=2   fp=1
+  200_train_cases-0050__t02_02           gt=8    pred=10   fn=0   fp=2
+  200_train_cases-0050__t02_03           gt=11   pred=12   fn=0   fp=1
+  200_train_cases-0050__t02_04           gt=9    pred=9    fn=1   fp=1
+  200_train_cases-0050__t02_05           gt=1    pred=2    fn=0   fp=1
+  200_train_cases-0050__t03_00           gt=9    pred=10   fn=0   fp=1
+  200_train_cases-0050__t03_03           gt=4    pred=7    fn=0   fp=3
+  200_train_cases-0050__t03_04           gt=5    pred=6    fn=0   fp=1
+  200_train_cases-0064__full             gt=16   pred=22   fn=1   fp=7
+  200_train_cases-0101__full             gt=67   pred=73   fn=2   fp=8
+  200_train_cases-0101__t00_00           gt=61   pred=75   fn=2   fp=16
+  200_train_cases-0101__t00_01           gt=51   pred=66   fn=2   fp=17
+  200_train_cases-0117__full             gt=89   pred=92   fn=0   fp=3
+  200_train_cases-0117__t00_00           gt=81   pred=88   fn=0   fp=7
+  200_train_cases-0117__t00_01           gt=71   pred=75   fn=0   fp=4
+  200_train_cases-0121__full             gt=45   pred=55   fn=1   fp=11
+  200_train_cases-0127__full             gt=38   pred=43   fn=3   fp=8
+  200_train_cases-0127__t00_00           gt=37   pred=43   fn=2   fp=8
+  200_train_cases-0127__t00_01           gt=37   pred=43   fn=3   fp=9
+  200_train_cases-0151__full             gt=66   pred=69   fn=0   fp=3
+  200_train_cases-0151__t00_00           gt=66   pred=71   fn=0   fp=5
+  200_train_cases-0151__t00_01           gt=51   pred=58   fn=0   fp=7
+  200_train_cases-0163__full             gt=55   pred=55   fn=4   fp=4
+  200_train_cases-0166__full             gt=122  pred=129  fn=0   fp=7
+  200_train_cases-0166__t00_00           gt=105  pred=109  fn=0   fp=4
+  200_train_cases-0166__t00_01           gt=101  pred=110  fn=0   fp=9
+  200_train_cases-0176__full             gt=49   pred=56   fn=0   fp=7
+  200_train_cases-0176__t00_00           gt=49   pred=53   fn=0   fp=4
+  200_train_cases-0176__t00_01           gt=37   pred=48   fn=0   fp=11
+  200_train_cases-0190__full             gt=95   pred=95   fn=4   fp=4
+  200_train_cases-0190__t00_00           gt=90   pred=112  fn=6   fp=28
+  200_train_cases-0190__t00_01           gt=85   pred=102  fn=8   fp=25
+
+[dump] work\tools\diag\_gtfaith_v3val.json

@@ -1,0 +1,102 @@
+================================================================
+ 赛题六 · 元器件检测器训练 —— 启动命令
+ 生成时间：2026-10-03
+ 训练集：Y:\workspace\EDA\训练集_v2  （train 3624 / val 77 / test 10）
+================================================================
+
+【一、直接复制这一段到 PowerShell 里执行】
+
+cd Y:\workspace\EDA\eda-pcb\yolo_part
+
+python train_pcb43.py `
+  --model runs\detect\pcb43_yolo11m_im1024-2\weights\best.pt `
+  --data  Y:\workspace\EDA\trainset_v2\data.yaml `
+  --epochs 120 --batch 12 --imgsz 1024 `
+  --optimizer AdamW --lr0 0.0002 --cache disk `
+  --name pcb43_v2_from_best
+
+
+【二、如果上面那段因为反引号换行出问题，用这个单行版】
+
+cd Y:\workspace\EDA\eda-pcb\yolo_part
+python train_pcb43.py --model runs\detect\pcb43_yolo11m_im1024-2\weights\best.pt --data Y:\workspace\EDA\trainset_v2\data.yaml --epochs 120 --batch 12 --imgsz 1024 --optimizer AdamW --lr0 0.0002 --cache disk --name pcb43_v2_from_best
+
+
+================================================================
+【执行前必读：四个参数都不能省】
+================================================================
+
+1) --optimizer AdamW   ★最容易踩的坑★
+   不写这个参数，默认值是 auto，而 auto 会 **静默忽略 --lr0**。
+   日志里会出现这样一句（不是报错，是提示）：
+     optimizer: 'optimizer=auto' found, ignoring 'lr0=0.0002' and
+     'momentum=0.937' and determining best 'optimizer', 'lr0' ...
+   也就是说你写的学习率根本没生效。上次实测 auto 自己选的是
+   AdamW(lr=0.000213)，恰好接近我们想用的值，但那是巧合。
+   写死它，这件事才是确定的。
+
+2) --lr0 0.0002   ★必须比从头训练低★
+   从头训练用的是 0.0005。这次是接着之前的模型训，学习率必须降下来，
+   否则会把已经学会的东西洗掉。0.0005 -> 0.0002 是安全区间。
+
+3) --cache disk
+   3624 张图按 1024 分辨率缓存大约 11 GB。内存不够就一定要写盘。
+   （如果内存足够大，可以用 --cache ram，会更快。）
+
+4) --model runs\detect\pcb43_yolo11m_im1024-2\weights\best.pt
+   这是上次真正训练完成的那一轮（22:27 那次）的最优权重。
+   它是在干净 COCO 权重上从头训出来的，mAP50 0.6049。
+   ★不要用 weights\ 目录下的任何 best_component_*.pt 旧文件。★
+   特别是 best_component_DO_NOT_USE_pcb43_6ep_leaked_start.pt，
+   那个是数据泄漏的产物，名字里已经写了 DO_NOT_USE。
+
+
+================================================================
+【为什么是"重开"而不是 --resume】
+================================================================
+训练集整个换了。上次你跑到第 3 个 epoch 的那次（mAP50 到 0.6485）
+吃的是旧版合成图，那 3000 张已经全部重新生成过，图和标签都不一样了。
+所以上次的 checkpoint 没有续训价值，重开即可。
+那次跑出来的目录在 runs\detect\pcb43_best_im1024，可以删掉。
+
+
+================================================================
+【关于成绩怎么读 —— 说实话的部分】
+================================================================
+· 起点：旧模型在 val 77 上 mAP50 = 0.6106 / mAP50-95 = 0.3746
+  （换尺重测过，和上次报的 0.6049 只差 0.006，可以直接比）
+· 这次是**接着训**，val 77 这个验证集它已经见过了。
+  所以训出来的 mAP 只能说明"没被训坏"，**不能证明泛化变好**。
+· 想要一个诚实的泛化数字，唯一的办法是从官方 COCO 权重从头训：
+     --model weights\yolo11m.pt
+  但那样就没有"接着学"的加速了，代价是 200 轮从头来。
+· 测试集 10 张 10GT 对这个模型**不干净**（它的训练数据里见过其中 8 张
+  的切片），所以 10GT 上的高分是记忆，不要当成绩写进报告。
+
+· 监控方式：训练会在 runs\detect\pcb43_v2_from_best\ 下落盘。
+  看 results.csv 或者 results.png。
+  最直接的是看 runs\detect\pcb43_v2_from_best\weights\best.pt 的更新时间。
+
+
+================================================================
+【训练完成后会自动做的事】
+================================================================
+脚本跑完会：
+ 1) 把 best.pt 复制一份到 weights\best_component_pcb43_v2_from_best.pt
+ 2) 用 conf=0.1 的低阈值在同一个 val 上再验一次，输出到
+    runs\detect\pcb43_v2_from_best_conf010\
+
+【如果显存不够（CUDA out of memory）】
+脚本会自动把 batch 减半重试，最多重试 4 次，不用手动干预。
+如果一直失败，手动改成 --batch 6 或 --batch 4。
+
+
+================================================================
+【环境确认】
+================================================================
+python  = K:\python\311\python.exe（PATH 上的那个）
+ultralytics 8.4.117 / torch 2.13.0+cu130 / RTX 4080 16GB
+项目 venv：Y:\workspace\EDA\eda-pcb\eda_yolo\Scripts\python.exe（ultralytics 8.4.165）
+两套都能跑，脚本自己会检查依赖，缺了会自动切到 venv。
+
+详细的数据集说明见：Y:\workspace\EDA\训练集_v2\README.md

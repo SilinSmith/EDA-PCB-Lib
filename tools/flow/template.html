@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>EDA 赛题六 · 工作流编辑器</title>
+<style>
+:root{--bg:#0d1117;--panel:#111820;--bor:#2b3543;--fg:#c9d1d9;--dim:#7d8590;--acc:#58a6ff}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+  font:12.5px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;overflow:hidden}
+#app{display:grid;grid-template-columns:212px 1fr 286px;grid-template-rows:46px 1fr;height:100%}
+#top{grid-column:1/4;display:flex;align-items:center;gap:8px;padding:0 12px;
+  background:var(--panel);border-bottom:1px solid var(--bor)}
+#top b{font-size:13px}
+#top .sp{flex:1}
+button{background:#1b2430;color:var(--fg);border:1px solid var(--bor);border-radius:5px;
+  padding:5px 10px;font:inherit;cursor:pointer}
+button:hover{background:#243040;border-color:#3d4b5c}
+button.pri{background:#1f6feb;border-color:#1f6feb;color:#fff}
+button.pri:hover{background:#2b7ef5}
+#left,#right{background:var(--panel);overflow-y:auto;padding:10px}
+#left{border-right:1px solid var(--bor)}
+#right{border-left:1px solid var(--bor)}
+h4{margin:10px 0 6px;font-size:11px;letter-spacing:.08em;color:var(--dim);text-transform:uppercase}
+h4:first-child{margin-top:2px}
+.pitem{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:5px;
+  cursor:pointer;border:1px solid transparent;margin-bottom:3px}
+.pitem:hover{background:#1b2430;border-color:var(--bor)}
+.dotc{width:8px;height:8px;border-radius:2px;flex:none}
+.nlist{margin:0;padding:0;list-style:none}
+.nlist li{padding:3px 6px;border-radius:4px;cursor:pointer;font-size:11.5px}
+.nlist li:hover{background:#1b2430}
+.lab{color:var(--dim);font-size:11px}
+input,select,textarea{width:100%;background:#0d1117;color:var(--fg);border:1px solid var(--bor);
+  border-radius:5px;padding:4px 6px;font:inherit}
+textarea{resize:vertical;min-height:170px}
+.row{margin-bottom:7px}
+.row>span{display:block;color:var(--dim);font-size:11px;margin-bottom:2px}
+#canvas{position:relative;overflow:hidden;background:
+  linear-gradient(#151b24 1px,transparent 1px) 0 0/24px 24px,
+  linear-gradient(90deg,#151b24 1px,transparent 1px) 0 0/24px 24px,var(--bg);
+  cursor:grab}
+#canvas.drag{cursor:grabbing}
+#world{position:absolute;left:0;top:0;transform-origin:0 0}
+#links{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+#links path.hit{stroke:transparent;stroke-width:14;fill:none;pointer-events:stroke;cursor:pointer}
+#links path.wire{fill:none;stroke-width:1.8;pointer-events:none}
+#links path.wire.sel{stroke:#fff!important;stroke-width:3}
+.node{position:absolute;background:#131a23;border:1px solid var(--bor);border-radius:7px;
+  box-shadow:0 2px 10px #0007;user-select:none}
+.node.sel{border-color:#fff;box-shadow:0 0 0 1px #fff,0 2px 14px #000a}
+.node .hd{display:flex;align-items:center;gap:6px;padding:5px 8px;border-bottom:1px solid var(--bor);
+  border-left:4px solid var(--acc);border-radius:6px 6px 0 0;cursor:move;font-weight:600;font-size:12px}
+.node .bd{padding:6px 8px 8px}
+.node .sub{color:var(--dim);font-size:10.5px;line-height:1.35;margin-bottom:5px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ports{display:flex;justify-content:space-between;gap:6px}
+.col{display:flex;flex-direction:column;gap:2px;min-width:0}
+.col.out{align-items:flex-end}
+.port{display:flex;align-items:center;gap:4px;font-size:10.5px;color:#9aa5b1;white-space:nowrap;
+  max-width:100%;overflow:hidden}
+.port .dot{width:9px;height:9px;border-radius:50%;background:#30404f;border:1px solid #4a5b6d;
+  flex:none;cursor:crosshair}
+.port.out .dot{order:2}
+.port:hover .dot{background:#58a6ff;border-color:#58a6ff}
+.port .t{overflow:hidden;text-overflow:ellipsis}
+.params{margin-top:5px;display:flex;flex-wrap:wrap;gap:3px}
+.prm{background:#1b2430;border:1px solid var(--bor);border-radius:4px;padding:0 4px;
+  font-size:10px;color:#9aa5b1;font-family:ui-monospace,Consolas,monospace}
+.kbadge{font-size:9px;padding:0 4px;border-radius:3px;border:1px solid;line-height:14px}
+#hint{position:absolute;left:10px;bottom:8px;color:var(--dim);font-size:11px;
+  background:#0d1117cc;padding:3px 8px;border-radius:5px;pointer-events:none}
+#insp .empty{color:var(--dim);font-size:11.5px;padding:6px 0}
+.kv{display:grid;grid-template-columns:1fr 1fr 22px;gap:3px;margin-bottom:3px}
+.kv button{padding:1px 5px;font-size:11px}
+#dlg{position:fixed;inset:0;background:#000a;display:none;align-items:center;justify-content:center;z-index:9}
+#dlg.on{display:flex}
+#dlg .box{background:var(--panel);border:1px solid var(--bor);border-radius:8px;padding:14px;
+  width:min(760px,90vw);max-height:80vh;display:flex;flex-direction:column;gap:8px}
+#dlg textarea{flex:1;min-height:340px;font-family:ui-monospace,Consolas,monospace;font-size:11px}
+.tag{font-size:10px;padding:1px 6px;border-radius:9px;border:1px solid var(--bor);color:var(--dim)}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <b>EDA 赛题六 · 工作流</b>
+    <span id="gname" class="lab"></span>
+    <span class="tag" id="stat"></span>
+    <span class="tag" id="ver" title="这个数字是 graph.json 的指纹；文件一改它就变"></span>
+    <span class="sp"></span>
+    <button onclick="fit()">适应窗口</button>
+    <button onclick="tidy()">整理布局</button>
+    <button onclick="showChanges()">改动说明</button>
+    <button onclick="showJSON()">导出 JSON</button>
+    <button onclick="importJSON()">导入 JSON</button>
+    <button onclick="resetAll()">还原基线</button>
+  </div>
+
+  <div id="left">
+    <h4>加节点</h4>
+    <div id="palette"></div>
+    <h4>节点列表</h4>
+    <ul class="nlist" id="nlist"></ul>
+  </div>
+
+  <div id="canvas">
+    <div id="world">
+      <svg id="links" width="9000" height="6000"></svg>
+      <div id="nodes"></div>
+    </div>
+    <div id="hint">滚轮缩放 · 空白处拖动平移 · 拖节点的圆点到另一个圆点连线 · 选中后按 Delete 删除</div>
+  </div>
+
+  <div id="right"><div id="insp"></div></div>
+</div>
+
+<div id="dlg"><div class="box">
+  <b id="dlgtitle"></b>
+  <textarea id="dlgtext" spellcheck="false"></textarea>
+  <div style="display:flex;gap:8px;justify-content:flex-end">
+    <button class="pri" onclick="copyDlg()">复制</button>
+    <button onclick="closeDlg()">关闭</button>
+  </div>
+</div></div>
+
+<script type="application/json" id="graphdata">__GRAPH__</script>
+<script>
+const BASE = JSON.parse(document.getElementById('graphdata').textContent);
+/* 存盘键里带上基线指纹：只要 graph.json 一改，指纹就变，旧存盘自动失效。
+   （早先版本用固定键，结果重新 build 后浏览器还在读上一次的 localStorage，
+     看到的永远是旧图 —— 这个坑记在 README 里。） */
+const FP = (function(s){ let h=5381; for(let i=0;i<s.length;i++) h=((h<<5)+h+s.charCodeAt(i))>>>0;
+                        return h.toString(36); })(JSON.stringify(BASE));
+const LSKEY = 'eda_flow_v1:' + FP;
+let G = load();
+let sel = null;            // {type:'node'|'link', id}
+let view = {x:40, y:20, k:0.78};
+let dragNode = null, dragLink = null, panning = null;
+
+function load(){
+  try{
+    // 清掉所有旧指纹的存盘，免得它们继续被误读
+    for(let i=localStorage.length-1;i>=0;i--){
+      const k = localStorage.key(i);
+      if(k && k.indexOf('eda_flow_v1')===0 && k!==LSKEY) localStorage.removeItem(k);
+    }
+    const s = localStorage.getItem(LSKEY);
+    if(s) return JSON.parse(s);
+  }catch(e){}
+  return JSON.parse(JSON.stringify(BASE));
+}
+function save(){ try{ localStorage.setItem(LSKEY, JSON.stringify(G)); }catch(e){} }
+function resetAll(){
+  if(!confirm('丢弃所有改动，还原成这个文件的基线（'+ (BASE.name||'') +'）？')) return;
+  try{ localStorage.removeItem(LSKEY); }catch(e){}
+  G = JSON.parse(JSON.stringify(BASE));
+  sel = null; renderAll(); fit();
+}
+const groupById = id => (G.groups.find(g=>g.id===id)||{color:'#8b949e',title:id});
+const nodeById  = id => G.nodes.find(n=>n.id===id);
+
+/* ---------- 渲染 ---------- */
+function renderAll(){ renderNodes(); renderLinks(); renderPalette(); renderList(); renderInsp(); renderStat(); save(); }
+
+function renderStat(){
+  const d = diff();
+  document.getElementById('gname').textContent = G.name || '';
+  document.getElementById('stat').textContent =
+    G.score!=null ? ('基线 '+G.score+' ｜ ') : '';
+  const parts = [];
+  if(d.addNodes.length)   parts.push('+'+d.addNodes.length+' 节点');
+  if(d.delNodes.length)   parts.push('−'+d.delNodes.length+' 节点');
+  if(d.addLinks.length)   parts.push('+'+d.addLinks.length+' 连线');
+  if(d.delLinks.length)   parts.push('−'+d.delLinks.length+' 连线');
+  document.getElementById('stat').textContent += parts.length ? ('已改：'+parts.join(' ')) : '未改动';
+}
+
+function renderNodes(){
+  const box = document.getElementById('nodes');
+  box.innerHTML = '';
+  for(const n of G.nodes){
+    const g = groupById(n.group);
+    const el = document.createElement('div');
+    el.className = 'node' + (sel && sel.type==='node' && sel.id===n.id ? ' sel':'');
+    el.id = 'nd_'+n.id;
+    el.style.cssText = 'left:'+n.x+'px;top:'+n.y+'px;width:'+(n.w||210)+'px';
+    const ins  = (n.ins||[]), outs = (n.outs||[]);
+    const kc = {exec:'#3fb950',param:'#d29922',data:'#58a6ff',new:'#f85149',cand:'#f85149',dead:'#6e7681'}[n.kind]||'#8b949e';
+    const kn = {exec:'现在有',param:'标尺',data:'数据',new:'★要新写',cand:'候选',dead:'停用'}[n.kind]||n.kind;
+    let h = '<div class="hd" style="border-left-color:'+g.color+'">'
+      + '<span class="kbadge" style="color:'+kc+';border-color:'+kc+'">'+kn+'</span>'
+      + '<span>'+esc(n.title)+'</span></div><div class="bd">';
+    if(n.sub) h += '<div class="sub">'+esc(n.sub)+'</div>';
+    h += '<div class="ports"><div class="col in">'
+      + ins.map(p=>'<div class="port in" data-node="'+n.id+'" data-port="'+p.id+'" data-dir="in">'
+          + '<span class="dot"></span><span class="t">'+esc(p.label||p.id)+'</span></div>').join('')
+      + '</div><div class="col out">'
+      + outs.map(p=>'<div class="port out" data-node="'+n.id+'" data-port="'+p.id+'" data-dir="out">'
+          + '<span class="t">'+esc(p.label||p.id)+'</span><span class="dot"></span></div>').join('')
+      + '</div></div>';
+    if(n.params && n.params.length)
+      h += '<div class="params">' + n.params.map(p=>'<span class="prm">'+esc(p[0])+'='+esc(p[1])+'</span>').join('') + '</div>';
+    h += '</div>';
+    el.innerHTML = h;
+    box.appendChild(el);
+  }
+  applyView();
+  bindNodeEvents();
+}
+
+function renderLinks(){
+  const svg = document.getElementById('links');
+  let s = '<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" '
+        + 'markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5b6d"/></marker></defs>';
+  for(const L of G.links){
+    const a = portPos(L.from, 'out'), b = portPos(L.to, 'in');
+    if(!a || !b) continue;
+    const d = curve(a,b);
+    const col = L.kind==='ctrl' ? '#d29922' : '#4a5b6d';
+    const isSel = sel && sel.type==='link' && sel.id === linkId(L);
+    s += '<path class="hit" data-link="'+linkId(L)+'" d="'+d+'"></path>';
+    s += '<path class="wire'+(isSel?' sel':'')+'" d="'+d+'" stroke="'+col+'" marker-end="url(#ah)"></path>';
+  }
+  svg.innerHTML = s;
+  svg.querySelectorAll('path.hit').forEach(p=>{
+    p.onclick = ev=>{ ev.stopPropagation(); sel={type:'link', id:p.dataset.link}; renderAll(); };
+  });
+}
+
+function curve(a,b){
+  const dx = Math.max(38, Math.abs(b.x-a.x)*0.5);
+  return 'M'+a.x+','+a.y+' C'+(a.x+dx)+','+a.y+' '+(b.x-dx)+','+b.y+' '+b.x+','+b.y;
+}
+
+function portPos(ref, dir){
+  const [nid, pid] = ref.split('.');
+  const el = document.querySelector('.port[data-node="'+nid+'"][data-port="'+pid+'"]');
+  const n = nodeById(nid);
+  if(!el || !n) return null;
+  return {x: n.x + (dir==='out' ? (n.w||210) : 0), y: n.y + el.offsetTop + el.offsetHeight/2};
+}
+
+function renderPalette(){
+  const box = document.getElementById('palette');
+  const kinds = [['exec','现在就有'],['new','★ 要新写'],['param','标尺/参数'],
+                 ['data','数据产物'],['dead','已停用']];
+  box.innerHTML = kinds.map(([k,label])=>{
+    const c = {exec:'#3fb950',param:'#d29922',data:'#58a6ff',new:'#f85149',dead:'#6e7681'}[k];
+    return '<div class="pitem" onclick="addNode(\''+k+'\')">'
+      + '<span class="dotc" style="background:'+c+'"></span>'+label+'</div>';
+  }).join('')
+  + '<div class="pitem" onclick="addFromList()" style="margin-top:6px;color:#58a6ff">'
+  + '＋ 从已有候选节点里加</div>';
+}
+
+function renderList(){
+  const ul = document.getElementById('nlist');
+  ul.innerHTML = G.nodes.map(n=>{
+    const c = groupById(n.group).color;
+    return '<li onmouseenter="hl(\''+n.id+'\',1)" onmouseleave="hl(\''+n.id+'\',0)" '
+      + 'onclick="sel={type:\'node\',id:\''+n.id+'\'};renderAll();focusNode(\''+n.id+'\')">'
+      + '<span style="color:'+c+'">■</span> '+esc(n.title)+'</li>';
+  }).join('');
+}
+function hl(id,on){ const e=document.getElementById('nd_'+id); if(e) e.style.outline = on?'2px solid #58a6ff':''; }
+
+function renderInsp(){
+  const box = document.getElementById('insp');
+  if(!sel){ box.innerHTML = '<div class="empty">点一个节点或一条连线看详情。<br><br>'
+    + '这个页面是<b>可编辑</b>的：拖节点、拖圆点连线、按 Delete 删除、'
+    + '改完点「改动说明」把变更贴回给我，我按新流程改代码。</div>'; return; }
+  if(sel.type==='link'){
+    const L = G.links.find(x=>linkId(x)===sel.id);
+    if(!L){ sel=null; return renderInsp(); }
+    box.innerHTML = '<h4>连线</h4>'
+      + '<div class="row"><span>从</span><input value="'+esc(L.from)+'" oninput="setLink(\'from\',this.value)"></div>'
+      + '<div class="row"><span>到</span><input value="'+esc(L.to)+'" oninput="setLink(\'to\',this.value)"></div>'
+      + '<div class="row"><span>类型</span><select onchange="setLink(\'kind\',this.value)">'
+      + ['data','ctrl'].map(k=>'<option value="'+k+'"'+(L.kind===k?' selected':'')+'>'+k+'</option>').join('')
+      + '</select></div>'
+      + '<button onclick="delLink()">删除这条连线</button>';
+    return;
+  }
+  const n = nodeById(sel.id); if(!n){ sel=null; return renderInsp(); }
+  const gs = G.groups.map(g=>'<option value="'+g.id+'"'+(n.group===g.id?' selected':'')+'>'+esc(g.title)+'</option>').join('');
+  const ks = ['exec','new','param','data','dead'];
+  box.innerHTML = '<h4>节点</h4>'
+    + f('标题','title',n.title) + f('副标题','sub',n.sub||'')
+    + '<div class="row"><span>种类</span><select onchange="setNode(\'kind\',this.value)">'
+      + ks.map(k=>'<option value="'+k+'"'+(n.kind===k?' selected':'')+'>'+k+'</option>').join('') + '</select></div>'
+    + '<div class="row"><span>分组</span><select onchange="setNode(\'group\',this.value)">'+gs+'</select></div>'
+    + f('代码位置','file',n.file||'')
+    + '<div class="row"><span>说明</span><textarea oninput="setNode(\'note\',this.value)">'+esc(n.note||'')+'</textarea></div>'
+    + '<h4>参数</h4><div id="prms"></div><button onclick="addParam()">＋ 参数</button>'
+    + '<h4>端口</h4>'
+    + '<div class="row"><span>输入（每行一个 id|标签）</span><textarea oninput="setPorts(\'ins\',this.value)">'
+      + esc((n.ins||[]).map(p=>p.id+'|'+(p.label||'')).join('\n')) + '</textarea></div>'
+    + '<div class="row"><span>输出</span><textarea oninput="setPorts(\'outs\',this.value)">'
+      + esc((n.outs||[]).map(p=>p.id+'|'+(p.label||'')).join('\n')) + '</textarea></div>'
+    + '<button onclick="delNode()" style="color:#f85149">删除这个节点</button>';
+  const pb = document.getElementById('prms');
+  pb.innerHTML = (n.params||[]).map((p,i)=>'<div class="kv">'
+    + '<input value="'+esc(p[0])+'" oninput="setParam('+i+',0,this.value)">'
+    + '<input value="'+esc(p[1])+'" oninput="setParam('+i+',1,this.value)">'
+    + '<button onclick="delParam('+i+')">×</button></div>').join('') || '<div class="lab">无</div>';
+}
+function f(label,key,val){
+  return '<div class="row"><span>'+label+'</span><input value="'+esc(val)+'" oninput="setNode(\''+key+'\',this.value)"></div>';
+}
+function setNode(k,v){ const n=nodeById(sel.id); if(n){ n[k]=v; renderNodes(); renderList(); save(); renderStat(); } }
+function setPorts(k,v){
+  const n=nodeById(sel.id); if(!n) return;
+  n[k] = v.split('\n').map(s=>s.trim()).filter(Boolean).map(s=>{
+    const i = s.indexOf('|'); return i<0 ? {id:s,label:s} : {id:s.slice(0,i).trim(),label:s.slice(i+1).trim()};
+  });
+  renderNodes(); renderLinks();
+}
+function setParam(i,j,v){ const n=nodeById(sel.id); if(n&&n.params&&n.params[i]){ n.params[i][j]=v; renderNodes(); save(); } }
+function addParam(){ const n=nodeById(sel.id); if(!n) return; (n.params=n.params||[]).push(['键','值']); renderInsp(); renderNodes(); }
+function delParam(i){ const n=nodeById(sel.id); if(n&&n.params){ n.params.splice(i,1); renderInsp(); renderNodes(); save(); } }
+function setLink(k,v){ const L=G.links.find(x=>linkId(x)===sel.id); if(L){ L[k]=v; renderLinks(); save(); } }
+function delLink(){ G.links = G.links.filter(x=>linkId(x)!==sel.id); sel=null; renderAll(); }
+function delNode(){
+  const id = sel.id;
+  if(!confirm('删除节点「'+nodeById(id).title+'」及其所有连线？')) return;
+  G.nodes = G.nodes.filter(n=>n.id!==id);
+  G.links = G.links.filter(l=>l.from.split('.')[0]!==id && l.to.split('.')[0]!==id);
+  sel=null; renderAll();
+}
+function linkId(L){ return L.from+'>'+L.to; }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* ---------- 交互 ---------- */
+function applyView(){
+  document.getElementById('world').style.transform =
+    'translate('+view.x+'px,'+view.y+'px) scale('+view.k+')';
+}
+function bindNodeEvents(){
+  document.querySelectorAll('.node').forEach(el=>{
+    el.onclick = ev=>{ ev.stopPropagation(); sel={type:'node', id:el.id.slice(3)}; renderAll(); };
+    el.querySelector('.hd').onmousedown = ev=>{
+      ev.stopPropagation();
+      const n = nodeById(el.id.slice(3));
+      dragNode = {n, sx:ev.clientX, sy:ev.clientY, ox:n.x, oy:n.y};
+      document.getElementById('canvas').classList.add('drag');
+    };
+  });
+  document.querySelectorAll('.port .dot').forEach(d=>{
+    d.onmousedown = ev=>{
+      ev.stopPropagation(); ev.preventDefault();
+      const p = d.parentElement;
+      dragLink = {node:p.dataset.node, port:p.dataset.port, dir:p.dataset.dir,
+                  x:ev.clientX, y:ev.clientY};
+    };
+    d.onmouseup = ev=>{
+      if(!dragLink) return;
+      ev.stopPropagation();
+      const p = d.parentElement;
+      finishLink(dragLink, {node:p.dataset.node, port:p.dataset.port, dir:p.dataset.dir});
+    };
+  });
+}
+function finishLink(a,b){
+  dragLink = null;
+  if(a.dir === b.dir) return;
+  const from = a.dir==='out' ? a : b;
+  const to   = a.dir==='out' ? b : a;
+  const f = from.node+'.'+from.port, t = to.node+'.'+to.port;
+  if(from.node === to.node) return;
+  if(G.links.some(l=>l.from===f && l.to===t)) return;
+  G.links.push({from:f, to:t, kind:'data'});
+  renderLinks(); save(); renderStat();
+}
+const cv = document.getElementById('canvas');
+cv.addEventListener('mousedown', ev=>{
+  if(ev.target !== cv && !ev.target.closest('#world') ) return;
+  if(ev.target.closest('.node') || ev.target.closest('path.hit')) return;
+  sel = null; renderAll();
+  panning = {sx:ev.clientX, sy:ev.clientY, ox:view.x, oy:view.y};
+  cv.classList.add('drag');
+});
+window.addEventListener('mousemove', ev=>{
+  if(dragNode){
+    dragNode.n.x = dragNode.ox + (ev.clientX-dragNode.sx)/view.k;
+    dragNode.n.y = dragNode.oy + (ev.clientY-dragNode.sy)/view.k;
+    const el = document.getElementById('nd_'+dragNode.n.id);
+    el.style.left = dragNode.n.x+'px'; el.style.top = dragNode.n.y+'px';
+    renderLinks();
+  } else if(panning){
+    view.x = panning.ox + (ev.clientX-panning.sx);
+    view.y = panning.oy + (ev.clientY-panning.sy);
+    applyView();
+  } else if(dragLink){
+    drawTemp(ev);
+  }
+});
+window.addEventListener('mouseup', ()=>{
+  if(dragNode || panning){ save(); renderStat(); }
+  dragNode = null; panning = null; dragLink = null;
+  cv.classList.remove('drag');
+  const t = document.getElementById('tmpwire'); if(t) t.remove();
+});
+function drawTemp(ev){
+  const svg = document.getElementById('links');
+  let t = document.getElementById('tmpwire');
+  if(!t){ t = document.createElementNS('http://www.w3.org/2000/svg','path');
+    t.id='tmpwire'; t.setAttribute('stroke','#58a6ff');
+    t.setAttribute('stroke-width','2'); t.setAttribute('fill','none');
+    t.setAttribute('stroke-dasharray','5 4'); svg.appendChild(t); }
+  const r = cv.getBoundingClientRect();
+  const wx = (ev.clientX - r.left - view.x)/view.k;
+  const wy = (ev.clientY - r.top  - view.y)/view.k;
+  const a = portPos(dragLink.node+'.'+dragLink.port, dragLink.dir);
+  if(!a) return;
+  t.setAttribute('d', dragLink.dir==='out' ? curve(a,{x:wx,y:wy}) : curve({x:wx,y:wy},a));
+}
+cv.addEventListener('wheel', ev=>{
+  ev.preventDefault();
+  const r = cv.getBoundingClientRect();
+  const mx = ev.clientX-r.left, my = ev.clientY-r.top;
+  const k2 = Math.min(2.4, Math.max(0.16, view.k * (ev.deltaY<0 ? 1.12 : 1/1.12)));
+  view.x = mx - (mx-view.x)*(k2/view.k);
+  view.y = my - (my-view.y)*(k2/view.k);
+  view.k = k2; applyView();
+}, {passive:false});
+window.addEventListener('keydown', ev=>{
+  if(ev.target.tagName==='INPUT'||ev.target.tagName==='TEXTAREA') return;
+  if((ev.key==='Delete'||ev.key==='Backspace') && sel){
+    ev.preventDefault();
+    if(sel.type==='link') delLink(); else delNode();
+  }
+});
+
+function fit(){
+  const ns = G.nodes; if(!ns.length) return;
+  let x1=1e9,y1=1e9,x2=-1e9,y2=-1e9;
+  for(const n of ns){ x1=Math.min(x1,n.x); y1=Math.min(y1,n.y);
+    x2=Math.max(x2,n.x+(n.w||210)); y2=Math.max(y2,n.y+230); }
+  const r = cv.getBoundingClientRect();
+  const k = Math.min(2, Math.max(0.16, Math.min((r.width-60)/(x2-x1), (r.height-60)/(y2-y1))));
+  view.k = k; view.x = 30 - x1*k; view.y = 30 - y1*k; applyView();
+}
+function focusNode(id){
+  const n = nodeById(id); if(!n) return;
+  const r = cv.getBoundingClientRect();
+  view.x = r.width/2 - (n.x + (n.w||210)/2)*view.k;
+  view.y = r.height/2 - (n.y+120)*view.k;
+  applyView();
+}
+function tidy(){
+  const cols = {};
+  for(const g of G.groups) cols[g.id] = {x:40 + G.groups.indexOf(g)*360, y:90};
+  for(const n of G.nodes){
+    const c = cols[n.group] || (cols[n.group] = {x:40,y:90});
+    n.x = c.x; n.y = c.y; c.y += 236;
+  }
+  renderAll(); fit();
+}
+
+/* ---------- 候选节点 ---------- */
+function addFromList(){
+  const used = new Set(G.nodes.map(n=>n.id));
+  const avail = BASE.nodes.filter(n=>!used.has(n.id));
+  if(!avail.length) return alert('基线里的节点都已经在画布上了。');
+  const names = avail.map((n,i)=>(i+1)+'. '+n.title);
+  const s = prompt('加哪个？\n'+names.join('\n'), '1');
+  const i = parseInt(s,10)-1;
+  if(!isNaN(i) && avail[i]) insertNode(JSON.parse(JSON.stringify(avail[i])));
+}
+function addNode(kind){
+  const title = prompt('新节点标题：','新节点');
+  if(!title) return;
+  const g = G.groups.find(x=>x.id==='cand') || G.groups[0];
+  insertNode({id:'n_'+Date.now().toString(36), group:g.id, kind:kind, title:title,
+    sub:'', x:300, y:760, w:220, file:'', ins:[{id:'in',label:'输入'}],
+    outs:[{id:'out',label:'输出'}], params:[], note:''});
+}
+function insertNode(n){
+  const c = cv.getBoundingClientRect();
+  n.x = Math.round((c.width/2 - view.x)/view.k - 110);
+  n.y = Math.round((c.height/2 - view.y)/view.k - 60);
+  G.nodes.push(n); sel={type:'node', id:n.id}; renderAll(); focusNode(n.id);
+}
+
+/* ---------- 导入导出 / 差异 ---------- */
+function diff(){
+  const bn = new Map(BASE.nodes.map(n=>[n.id,n])), cn = new Map(G.nodes.map(n=>[n.id,n]));
+  const bl = new Map(BASE.links.map(l=>[linkId(l),l])), cl = new Map(G.links.map(l=>[linkId(l),l]));
+  return {
+    addNodes: G.nodes.filter(n=>!bn.has(n.id)).map(n=>n.title),
+    delNodes: BASE.nodes.filter(n=>!cn.has(n.id)).map(n=>n.title),
+    addLinks: G.links.filter(l=>!bl.has(linkId(l))).map(l=>l.from+' → '+l.to),
+    delLinks: BASE.links.filter(l=>!cl.has(linkId(l))).map(l=>l.from+' → '+l.to),
+    chgNodes: G.nodes.filter(n=>bn.has(n.id) && JSON.stringify(n)!==JSON.stringify(bn.get(n.id)))
+                     .map(n=>n.title)
+  };
+}
+function changesText(){
+  const d = diff(), L = [];
+  L.push('# 工作流改动（相对基线：'+BASE.name+'，'+BASE.score+' 分）');
+  L.push('');
+  if(!d.addNodes.length && !d.delNodes.length && !d.addLinks.length && !d.delLinks.length && !d.chgNodes.length){
+    L.push('（无改动）'); return L.join('\n');
+  }
+  if(d.addNodes.length){ L.push('## 新增节点'); d.addNodes.forEach(x=>L.push('- '+x)); L.push(''); }
+  if(d.delNodes.length){ L.push('## 删除节点'); d.delNodes.forEach(x=>L.push('- '+x)); L.push(''); }
+  if(d.addLinks.length){ L.push('## 新增连线'); d.addLinks.forEach(x=>L.push('- '+x)); L.push(''); }
+  if(d.delLinks.length){ L.push('## 删除连线'); d.delLinks.forEach(x=>L.push('- '+x)); L.push(''); }
+  if(d.chgNodes.length){ L.push('## 改过内容的节点'); d.chgNodes.forEach(x=>L.push('- '+x)); L.push(''); }
+  L.push('## 画布上全部节点（按分组）');
+  for(const g of G.groups){
+    const ns = G.nodes.filter(n=>n.group===g.id);
+    if(!ns.length) continue;
+    L.push(''); L.push('### '+g.title);
+    for(const n of ns) L.push('- ['+n.kind+'] '+n.title+(n.sub?(' — '+n.sub):''));
+  }
+  L.push(''); L.push('## 全部连线');
+  G.links.forEach(l=>L.push('- '+l.from+' → '+l.to));
+  return L.join('\n');
+}
+function showChanges(){ openDlg('改动说明（贴回给我）', changesText()); }
+function showJSON(){ openDlg('graph.json（导出后可让我读）', JSON.stringify(G,null,1)); }
+function importJSON(){
+  const s = prompt('把 graph.json 全文粘进来：');
+  if(!s) return;
+  try{ G = JSON.parse(s); sel=null; renderAll(); fit(); }catch(e){ alert('JSON 解析失败：'+e.message); }
+}
+function openDlg(t,txt){
+  document.getElementById('dlgtitle').textContent = t;
+  document.getElementById('dlgtext').value = txt;
+  document.getElementById('dlg').classList.add('on');
+  document.getElementById('dlgtext').select();
+}
+function closeDlg(){ document.getElementById('dlg').classList.remove('on'); }
+function copyDlg(){
+  const t = document.getElementById('dlgtext');
+  t.select(); document.execCommand('copy');
+  navigator.clipboard && navigator.clipboard.writeText(t.value).catch(()=>{});
+}
+window.addEventListener('resize', applyView);
+
+document.getElementById('ver').textContent =
+  'v' + FP + ' · ' + G.nodes.length + ' 节点 / ' + G.links.length + ' 连线';
+renderAll(); fit();
+</script>
+</body>
+</html>

@@ -1,0 +1,122 @@
+{
+ "10gt": [
+  {
+   "case": "1",
+   "path": "Y:\\workspace\\EDA\\eda-pcb\\yolo_part\\Dataset(waitforpreprocess)\\10GT\\1\\1.png",
+   "size": [
+    1478,
+    1202
+   ],
+   "bytes": 405131,
+   "md5": "fd30e6efa2adb695ba52d3f2b05a924a"
+  },
+  {
+   "case": "2",
+   "path": "Y:\\workspace\\EDA\\eda-pcb\\yolo_part\\Dataset(waitforpreprocess)\\10GT\\2\\2.png",
+   "size": [
+    2063,
+    1116
+   ],
+   "bytes": 283119,
+   "md5": "7be87f7118e7649f3dca4ed92fb3f554"
+  },
+  {
+   "case": "3",
+   "path": "Y:\\workspace\\EDA\\eda-pcb\\yolo_part\\Dataset(waitforpreprocess)\\10GT\\3\\3.png",
+   "size": [
+    2247,
+    1195
+   ],
+   "bytes": 300536,
+   "md5": "25fbc8d4aaa3ed2420b3f49684a7e255"
+  },
+  {
+   "case": "4",
+   "path": "Y:\\workspace\\EDA\\eda-pcb\\yolo_part\\Dataset(waitforpreprocess)\\10GT\\4\\4.png",
+   "size": [
+    1849,
+    1032
+   ],
+   "bytes": 325734,
+   "md5": "0a2896db639634ccdb0d01888a5e0725"
+  },
+  {
+   "case": "5",
+   "path": "Y:\\workspace\\EDA\\eda-pcb\\yolo_part\\Dataset(waitforpreprocess)\\10GT\\5\\5.png",
+   "size": [
+    2057,
+    1096
+   ],
+   "bytes": 354491,
+   "md5": "4944e8e401f27d4baadbc6106347cd87"
+  },
+  {
+   "case": "6",
+   "path": "Y:\\workspace\\EDA\\eda-pcb\\yolo_part\\Dataset(waitforpreprocess)\\10GT\\6\\6.png",
+   "size": [
+    2186,
+    1110
+   ],
+   "bytes": 534162,
+   "md5": "f4d478ec52a6f777d619aa68b1b4ad57"
+  },
+  {
+   "case": "7",
+   "path": "Y:\\workspace\\EDA\\eda-pcb\\yolo_part\\Dataset(waitforpreprocess)\\10GT\\7\\7.png",
+   "size": [
+    2202,
+    1003
+   ],
+   "bytes": 398448,
+   "md5": "8a7a91c71c4eeed815d0c030bd51d519"
+  },
+  {
+   "case": "8",
+   "path": "Y:\\workspace\\EDA\\eda-pcb\\yolo_part\\Dataset(waitforpreprocess)\\10GT\\8\\8.png",
+   "size": [
+    2229,
+    1192
+   ],
+   "bytes": 292125,
+   "md5": "c5e1df13e4f966674387c6a51e98c595"
+  },
+  {
+   "case": "9",
+   "path": "Y:\\workspace\\EDA\\eda-pcb\\yolo_part\\Dataset(waitforpreprocess)\\10GT\\9\\9.png",
+   "size": [
+    2222,
+    1199
+   ],
+   "bytes": 239173,
+   "md5": "41051f9836840ae609585cf62a9aeb03"
+  },
+  {
+   "case": "10",
+   "path": "Y:\\workspace\\EDA\\eda-pcb\\yolo_part\\Dataset(waitforpreprocess)\\10GT\\10\\10.png",
+   "size": [
+    2200,
+    1017
+   ],
+   "bytes": 396881,
+   "md5": "79af0d29ce8bd4c7c3e29328620b25c1"
+  }
+ ],
+ "pool": 210,
+ "size_candidates": 0,
+ "identical_hits": [],
+ "contaminated_cases": [],
+ "clean_cases": [
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "7",
+  "8",
+  "9",
+  "10"
+ ],
+ "present_in": {},
+ "verdict": "0/10 10GT sheets are duplicates of already-trained files."
+}
