@@ -146,6 +146,27 @@ python work\tools\diag\_ocroracle.py --out work\_fast_out_reg9 --cases 1,2,3,4,5
 否则网络分不动；② 匹配要在 `assign_components` + `rewrite_keys` **之后**做，
 不然预测的元件键和 GT 对不上，点匹配全是空的。
 
+### 上界告诉你「值多少」，**不等于**「一行开关就能拿到」
+
+`_ocroracle.py` 说的是**上帝视角**的天花板。把「某条策略丢掉的 N 个东西」说成
+「改一行就能拿回来」是**两个不同的命题**，必须单独 A/B。本轮就有一个反面教材：
+
+- 官方 9 张缺的 45 根 IC 引脚里 **23 根是「号已读对、名字没读到 ⇒ `stage2/assemble.py:759`
+  的 `BOX_PIN_NEED_NAME` 整条不发」**。看起来这是「改一行开关白拿 23 根」。
+- 真去量：`tools/diag/_gateab.py`（**用已落盘的 `runs/stage1` + `runs/stage2/_assigned`
+  重跑 `assemble.build_doc`，改模块全局切开关 ⇒ 纯 CPU、不占 GPU、不重跑 OCR**），
+  再 `tools/eval/stage2_eval.py work\_gate_ab\{on,off}`：
+  **官方 9 张 52.6510 → 52.4987（−0.15，判负）**，`pin.name_mismatch` **16→41**、
+  `pin.extra` 6→11，而 tp **一根没多**（34→34）；换来的只有 `net_hypergraph` +0.030。
+  机制：关了闸门，多发的引脚名字只能回退成**引脚号本身**，官方档的 GT 引脚名 86.5% 是真信号名。
+- 而**全量 220 张反而是 +0.10**（26.0962 → 26.1978）—— 派生档的引脚名常常本来就是数字。
+  ⇒ 这类开关的效果**是分档相关的**，只在一档上量会得出相反的结论。
+
+**「离线单变量 A/B」这个手法值得记下来**：`assemble.build_doc(stage1, assigned, case)`
+的两个输入**都写在盘上**，而装配开关都是**模块级全局、在函数里按调用时读**
+⇒ `assemble.BOX_PIN_NEED_NAME = False` 就能切，不用碰 GPU 和 OCR。
+能这么做的开关要优先用这种方式量（秒级、可以和别的长跑并行）。
+
 ### 提示词改动必须回读「模型到底收到了什么」
 
 「把上下文拼进 prompt」这类改动，**分不变也可能是真的生效了**（模型看到了但答案没变）。
@@ -394,6 +415,14 @@ $env:FUSION_LLM='0'               # 关 LLM 裁决
 | **GT 引脚名有多少是真信号名** / **我们产出的 `pinname` 有多少只是引脚号** | `tools/diag/_gtpinname_stat.py` / `tools/diag/_pinname_stat.py` |
 | **GT 引脚点离元件框有多远**（判「框内硬门槛」是不是根本错） | `tools/diag/_gtpinplace.py` |
 | **GT 引脚点附近有没有我们的文字、文字在框内还是框外** | `tools/diag/_pinlabel.py --n 60` |
+| **GT 引脚点是文字框心吗 / 在 bbox 边线上吗**（两个假说都证伪） | `tools/diag/_pintext.py --run --split --n` |
+| **引脚槽位的原始结构**（`number`/`name` 的 `{text, conf, box}`） | `tools/diag/_pinslot.py <case>` |
+| **官方档的引脚键形状**（10GT 全是纯数字） | `tools/diag/_gtpin10.py --show 4` |
+| **缺号三分账**（策略 / OCR / 检测） | `tools/diag/_pinledger.py --run --split --show` |
+| **按位置对账引脚号与名的读法**（完全对 / 读错 / 空 / 截断） | `tools/diag/_ocrstat.py --run --split --n --show` |
+| **读法全对的写实上界**（上帝视角改写再打分） | `tools/diag/_ocroracle.py --out <产物> --cases …` |
+| **装配开关的离线单变量 A/B**（不占 GPU、不重跑 OCR） | `tools/diag/_gateab.py --run <产物> [--all]` → `tools/eval/stage2_eval.py work\_gate_ab\{on,off}` |
+| **引脚邻域肉眼核对**（十字位置、号在框外上方、名在框内） | `tools/diag/_pincropgt.py` |
 
 ---
 
