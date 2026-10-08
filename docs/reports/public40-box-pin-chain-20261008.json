@@ -1,0 +1,1875 @@
+{
+  "schema": "eda-pcb-public40-box-pin-chain-condensed-v1",
+  "audited_candidate": "a15fb9f",
+  "date": "2026-10-08",
+  "evidence_boundary": "Actual scorer counts unchanged. One-to-one bbox/point matching is a diagnostic oracle; it is not a score or a recoverability claim. Public40 labels are derived; visually uninspected identity mismatches are not assumed algorithm-recoverable. New verification20 labels are never accessed.",
+  "source_manifest": {
+    "workspace_relative": "output/eda-pcb-score-20261008/public-validation40-manifest.json",
+    "sha256": "6c00473dbdd2c696e6a212d41a66afb78680f4d662084b22fc43dda50b89480e"
+  },
+  "evaluator": {
+    "repo_relative": "schematic_parser/metrics.py",
+    "sha256": "c4888ad700d94c39adfb17d59671b931f1c791e52ee4fb4b3fad4dfed358f8bd",
+    "config": {
+      "bbox_tol": 20.0,
+      "pin_tol": 5.0,
+      "line_tol": 5.0,
+      "bbox_mode": "corners",
+      "bbox_iou_min": 0.5,
+      "net_mode": "micro",
+      "compare_text": true,
+      "line_unordered": true,
+      "unkeyed_match": "gt",
+      "coord_gate": 40.0,
+      "coord_type_penalty": 10000.0,
+      "pin_box_only": true,
+      "canon_types": true
+    },
+    "official_scorer_used": false
+  },
+  "diagnostic_association": {
+    "frame_gate": "max corner error <=20 OR IoU>=0.5; one-to-one Hungarian; box type preferred",
+    "point_gates_px": [
+      5,
+      12
+    ],
+    "point_preference": "<=5 association before <=12 association",
+    "actual_predictions_rewritten": false,
+    "independent5and12_index_disagreements": 13
+  },
+  "summaries": {
+    "baseline": {
+      "gt_box_components": 146,
+      "gt_box_pins": 1492,
+      "exact_pin_counts": {
+        "tp": 32,
+        "fp": 170,
+        "fn": 1460
+      },
+      "mean_pin_f1": 0.062317075,
+      "mean_score": 23.12414,
+      "final_status_counts": {
+        "number_absent": 1357,
+        "name_mismatch": 82,
+        "position_mismatch": 21,
+        "tp": 32
+      },
+      "exclusive_upstream_counts": {
+        "local_identity_missing_or_wrong": 906,
+        "assigned_number_absent": 32,
+        "assigned_number_wrong": 79,
+        "contact_offset5_to12": 121,
+        "no_contact_within12": 293,
+        "frame_missing": 2,
+        "assembly_dropped": 4,
+        "tp": 32,
+        "assigned_name_wrong": 12,
+        "assigned_name_absent": 11
+      },
+      "component_identity_counts": {
+        "key_absent": 99,
+        "local_correct": 42,
+        "key_exists_on_another_frame": 5
+      },
+      "pin_identity_counts": {
+        "key_absent": 875,
+        "local_correct": 584,
+        "key_exists_on_another_frame": 33
+      },
+      "frame_coverage": {
+        "strict_corners20": 141,
+        "missing": 1,
+        "iou_only": 4
+      },
+      "nonexclusive": {
+        "contact_matched5": 438,
+        "contact_matched12": 937,
+        "contact5_number_correct": 111,
+        "contact5_number_and_name_correct": 59,
+        "contact5_number_and_name_correct_local_identity": 36
+      }
+    },
+    "a15": {
+      "gt_box_components": 146,
+      "gt_box_pins": 1492,
+      "exact_pin_counts": {
+        "tp": 32,
+        "fp": 169,
+        "fn": 1460
+      },
+      "mean_pin_f1": 0.062317075,
+      "mean_score": 23.7289975,
+      "final_status_counts": {
+        "number_absent": 1357,
+        "name_mismatch": 82,
+        "position_mismatch": 21,
+        "tp": 32
+      },
+      "exclusive_upstream_counts": {
+        "local_identity_missing_or_wrong": 906,
+        "assigned_number_absent": 32,
+        "assigned_number_wrong": 79,
+        "contact_offset5_to12": 121,
+        "no_contact_within12": 293,
+        "frame_missing": 2,
+        "assembly_dropped": 4,
+        "tp": 32,
+        "assigned_name_wrong": 12,
+        "assigned_name_absent": 11
+      },
+      "component_identity_counts": {
+        "key_absent": 99,
+        "local_correct": 42,
+        "key_exists_on_another_frame": 5
+      },
+      "pin_identity_counts": {
+        "key_absent": 875,
+        "local_correct": 584,
+        "key_exists_on_another_frame": 33
+      },
+      "frame_coverage": {
+        "strict_corners20": 141,
+        "missing": 1,
+        "iou_only": 4
+      },
+      "nonexclusive": {
+        "contact_matched5": 438,
+        "contact_matched12": 937,
+        "contact5_number_correct": 111,
+        "contact5_number_and_name_correct": 59,
+        "contact5_number_and_name_correct_local_identity": 36
+      }
+    }
+  },
+  "retention_model_vs_cached_mismatches": 0,
+  "earlier_unnamed_consumed_number": {
+    "raw_events_per_arm": 108,
+    "matched_gt_number_and_name_and_point5_and_local_identity_direct_recoveries": 0
+  },
+  "direct_position_mismatches": [
+    {
+      "case": "public_0056",
+      "gt_component": "U1",
+      "gt_pin": "pin_2",
+      "gt_name": "VCC",
+      "gt_point": [
+        2195.0,
+        2182.0
+      ],
+      "gt_point_img": [
+        2195.0,
+        1114.0
+      ],
+      "final_pin": {
+        "pinname": "VCC",
+        "point": {
+          "x": 2211.6,
+          "y": 2180.5
+        }
+      },
+      "final_point_distance": 16.667633305301536,
+      "frame_id": "c0000",
+      "frame_source": "yolo",
+      "frame_iou": 0.9803686899109895,
+      "frame_max_corner_error": 2.4899999999997817,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0000",
+          "raw_index": 9,
+          "raw_point_img": [
+            2211.6,
+            1115.5
+          ],
+          "number": {
+            "text": "2",
+            "conf": 0.9993562077164024,
+            "box": [
+              2188.0,
+              1094.0,
+              2200.0,
+              1111.0
+            ]
+          },
+          "name": {
+            "text": "VCC",
+            "conf": 0.9537481578427699,
+            "box": [
+              2245.0,
+              1104.0,
+              2293.0,
+              1123.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0056",
+      "gt_component": "U1",
+      "gt_pin": "pin_4",
+      "gt_name": "COMP",
+      "gt_point": [
+        2195.0,
+        1975.0
+      ],
+      "gt_point_img": [
+        2195.0,
+        1321.0
+      ],
+      "final_pin": {
+        "pinname": "COMP",
+        "point": {
+          "x": 2211.6,
+          "y": 1973.5
+        }
+      },
+      "final_point_distance": 16.667633305301536,
+      "frame_id": "c0000",
+      "frame_source": "yolo",
+      "frame_iou": 0.9803686899109895,
+      "frame_max_corner_error": 2.4899999999997817,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0000",
+          "raw_index": 11,
+          "raw_point_img": [
+            2211.6,
+            1322.5
+          ],
+          "number": {
+            "text": "4",
+            "conf": 0.9995998553786518,
+            "box": [
+              2188.0,
+              1300.0,
+              2200.0,
+              1317.0
+            ]
+          },
+          "name": {
+            "text": "COMP",
+            "conf": 0.9406733130507454,
+            "box": [
+              2245.0,
+              1311.0,
+              2315.0,
+              1330.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0056",
+      "gt_component": "U1",
+      "gt_pin": "pin_5",
+      "gt_name": "GND",
+      "gt_point": [
+        2547.0,
+        1622.0
+      ],
+      "gt_point_img": [
+        2547.0,
+        1674.0
+      ],
+      "final_pin": {
+        "pinname": "GND",
+        "point": {
+          "x": 2531.5,
+          "y": 1621.7
+        }
+      },
+      "final_point_distance": 15.50290295396317,
+      "frame_id": "c0000",
+      "frame_source": "yolo",
+      "frame_iou": 0.9803686899109895,
+      "frame_max_corner_error": 2.4899999999997817,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0000",
+          "raw_index": 4,
+          "raw_point_img": [
+            2531.5,
+            1674.3
+          ],
+          "number": {
+            "text": "5",
+            "conf": 0.8942102723104846,
+            "box": [
+              2543.0,
+              1654.0,
+              2555.0,
+              1672.0
+            ]
+          },
+          "name": {
+            "text": "GND",
+            "conf": 0.989927437405228,
+            "box": [
+              2446.0,
+              1665.0,
+              2497.0,
+              1684.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0087",
+      "gt_component": "U24",
+      "gt_pin": "pin_22",
+      "gt_name": "P22",
+      "gt_point": [
+        1188.0,
+        601.0
+      ],
+      "gt_point_img": [
+        1188.0,
+        569.0
+      ],
+      "final_pin": {
+        "pinname": "P22",
+        "point": {
+          "x": 1207.0,
+          "y": 603.5
+        }
+      },
+      "final_point_distance": 19.1637678967368,
+      "frame_id": "c0004",
+      "frame_source": "yolo",
+      "frame_iou": 0.9752531840668448,
+      "frame_max_corner_error": 6.410000000000025,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0004",
+          "raw_index": 28,
+          "raw_point_img": [
+            1207.0,
+            566.5
+          ],
+          "number": {
+            "text": "22",
+            "conf": 0.9784791471832245,
+            "box": [
+              1201.0,
+              563.0,
+              1211.0,
+              570.0
+            ]
+          },
+          "name": {
+            "text": "P22",
+            "conf": 0.985502717319694,
+            "box": [
+              1225.0,
+              566.0,
+              1241.0,
+              573.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0087",
+      "gt_component": "U24",
+      "gt_pin": "pin_33",
+      "gt_name": "P33",
+      "gt_point": [
+        1188.0,
+        521.0
+      ],
+      "gt_point_img": [
+        1188.0,
+        649.0
+      ],
+      "final_pin": {
+        "pinname": "P33",
+        "point": {
+          "x": 1393.0,
+          "y": 413.5
+        }
+      },
+      "final_point_distance": 231.47624068141423,
+      "frame_id": "c0004",
+      "frame_source": "yolo",
+      "frame_iou": 0.9752531840668448,
+      "frame_max_corner_error": 6.410000000000025,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0004",
+          "raw_index": 108,
+          "raw_point_img": [
+            1393.0,
+            756.5
+          ],
+          "number": {
+            "text": "33",
+            "conf": 0.6399501817566772,
+            "box": [
+              1391.0,
+              753.0,
+              1401.0,
+              760.0
+            ]
+          },
+          "name": {
+            "text": "P33",
+            "conf": 0.6644670092027526,
+            "box": [
+              1359.0,
+              756.0,
+              1375.0,
+              763.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0087",
+      "gt_component": "U23",
+      "gt_pin": "pin_20",
+      "gt_name": "P20",
+      "gt_point": [
+        342.0,
+        781.0
+      ],
+      "gt_point_img": [
+        342.0,
+        389.0
+      ],
+      "final_pin": {
+        "pinname": "P20",
+        "point": {
+          "x": 363.3,
+          "y": 781.0
+        }
+      },
+      "final_point_distance": 21.30000000000001,
+      "frame_id": "c0003",
+      "frame_source": "yolo",
+      "frame_iou": 0.9888331525325772,
+      "frame_max_corner_error": 1.0900000000000318,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0003",
+          "raw_index": 24,
+          "raw_point_img": [
+            363.3,
+            389.0
+          ],
+          "number": {
+            "text": "20",
+            "conf": 0.986547981918881,
+            "box": [
+              356.0,
+              382.0,
+              366.0,
+              390.0
+            ]
+          },
+          "name": {
+            "text": "P20",
+            "conf": 0.9740466843524106,
+            "box": [
+              380.0,
+              386.0,
+              396.0,
+              393.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "GT_designator_printed_confirmed"
+    },
+    {
+      "case": "public_0087",
+      "gt_component": "U23",
+      "gt_pin": "pin_21",
+      "gt_name": "P21",
+      "gt_point": [
+        342.0,
+        771.0
+      ],
+      "gt_point_img": [
+        342.0,
+        399.0
+      ],
+      "final_pin": {
+        "pinname": "P21",
+        "point": {
+          "x": 363.3,
+          "y": 769.5
+        }
+      },
+      "final_point_distance": 21.352751579129105,
+      "frame_id": "c0003",
+      "frame_source": "yolo",
+      "frame_iou": 0.9888331525325772,
+      "frame_max_corner_error": 1.0900000000000318,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0003",
+          "raw_index": 25,
+          "raw_point_img": [
+            363.3,
+            400.5
+          ],
+          "number": {
+            "text": "21",
+            "conf": 0.9962446996823321,
+            "box": [
+              356.0,
+              392.0,
+              366.0,
+              400.0
+            ]
+          },
+          "name": {
+            "text": "P21",
+            "conf": 0.9567074928651185,
+            "box": [
+              380.0,
+              396.0,
+              396.0,
+              403.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "GT_designator_printed_confirmed"
+    },
+    {
+      "case": "public_0087",
+      "gt_component": "U23",
+      "gt_pin": "pin_22",
+      "gt_name": "P22",
+      "gt_point": [
+        342.0,
+        761.0
+      ],
+      "gt_point_img": [
+        342.0,
+        409.0
+      ],
+      "final_pin": {
+        "pinname": "P22",
+        "point": {
+          "x": 363.3,
+          "y": 758.5
+        }
+      },
+      "final_point_distance": 21.446211786700243,
+      "frame_id": "c0003",
+      "frame_source": "yolo",
+      "frame_iou": 0.9888331525325772,
+      "frame_max_corner_error": 1.0900000000000318,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0003",
+          "raw_index": 26,
+          "raw_point_img": [
+            363.3,
+            411.5
+          ],
+          "number": {
+            "text": "22",
+            "conf": 0.9960630732378782,
+            "box": [
+              356.0,
+              402.0,
+              366.0,
+              410.0
+            ]
+          },
+          "name": {
+            "text": "P22",
+            "conf": 0.9887133275827374,
+            "box": [
+              380.0,
+              406.0,
+              396.0,
+              413.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "GT_designator_printed_confirmed"
+    },
+    {
+      "case": "public_0138",
+      "gt_component": "U5",
+      "gt_pin": "pin_4",
+      "gt_name": "IN+",
+      "gt_point": [
+        577.0,
+        515.0
+      ],
+      "gt_point_img": [
+        577.0,
+        330.0
+      ],
+      "final_pin": {
+        "pinname": "IN+",
+        "point": {
+          "x": 582.2,
+          "y": 520.0
+        }
+      },
+      "final_point_distance": 7.2138755187486066,
+      "frame_id": "c0003",
+      "frame_source": "yolo",
+      "frame_iou": 0.9915056903633167,
+      "frame_max_corner_error": 0.2699999999999818,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0003",
+          "raw_index": 1,
+          "raw_point_img": [
+            582.2,
+            325.0
+          ],
+          "number": {
+            "text": "4",
+            "conf": 0.9988255006412927,
+            "box": [
+              572.0,
+              322.0,
+              576.0,
+              330.0
+            ]
+          },
+          "name": {
+            "text": "IN+",
+            "conf": 0.7357657662150897,
+            "box": [
+              557.0,
+              317.0,
+              566.0,
+              324.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0138",
+      "gt_component": "U1",
+      "gt_pin": "pin_4",
+      "gt_name": "IN+",
+      "gt_point": [
+        572.0,
+        775.0
+      ],
+      "gt_point_img": [
+        572.0,
+        70.0
+      ],
+      "final_pin": {
+        "pinname": "IN+",
+        "point": {
+          "x": 577.0,
+          "y": 780.0
+        }
+      },
+      "final_point_distance": 7.0710678118654755,
+      "frame_id": "c0002",
+      "frame_source": "yolo",
+      "frame_iou": 0.9965099039605992,
+      "frame_max_corner_error": 0.10000000000002274,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0002",
+          "raw_index": 0,
+          "raw_point_img": [
+            577.0,
+            65.0
+          ],
+          "number": {
+            "text": "4",
+            "conf": 0.9988255006412927,
+            "box": [
+              567.0,
+              62.0,
+              571.0,
+              70.0
+            ]
+          },
+          "name": {
+            "text": "IN+",
+            "conf": 0.7357657662150897,
+            "box": [
+              552.0,
+              57.0,
+              561.0,
+              64.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0011",
+      "gt_component": "U3",
+      "gt_pin": "pin_3",
+      "gt_name": "VSS",
+      "gt_point": [
+        2656.0,
+        1982.0
+      ],
+      "gt_point_img": [
+        2656.0,
+        298.0
+      ],
+      "final_pin": {
+        "pinname": "VSS",
+        "point": {
+          "x": 2656.5,
+          "y": 1950.5
+        }
+      },
+      "final_point_distance": 31.50396800404673,
+      "frame_id": "c0003",
+      "frame_source": "yolo",
+      "frame_iou": 0.9821789331238828,
+      "frame_max_corner_error": 1.2600000000002183,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0003",
+          "raw_index": 7,
+          "raw_point_img": [
+            2656.5,
+            329.5
+          ],
+          "number": {
+            "text": "3",
+            "conf": 0.9214128512074832,
+            "box": [
+              2635.0,
+              276.0,
+              2645.0,
+              295.0
+            ]
+          },
+          "name": {
+            "text": "VSS",
+            "conf": 0.9811538640429358,
+            "box": [
+              2690.0,
+              321.0,
+              2738.0,
+              340.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0011",
+      "gt_component": "U3",
+      "gt_pin": "pin_8",
+      "gt_name": "VSS",
+      "gt_point": [
+        2656.0,
+        1951.0
+      ],
+      "gt_point_img": [
+        2656.0,
+        329.0
+      ],
+      "final_pin": {
+        "pinname": "VSS",
+        "point": {
+          "x": 2656.5,
+          "y": 1920.5
+        }
+      },
+      "final_point_distance": 30.504098085339287,
+      "frame_id": "c0003",
+      "frame_source": "yolo",
+      "frame_iou": 0.9821789331238828,
+      "frame_max_corner_error": 1.2600000000002183,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0003",
+          "raw_index": 6,
+          "raw_point_img": [
+            2656.5,
+            359.5
+          ],
+          "number": {
+            "text": "8",
+            "conf": 0.6522372032114422,
+            "box": [
+              2634.0,
+              306.0,
+              2645.0,
+              324.0
+            ]
+          },
+          "name": {
+            "text": "VSS",
+            "conf": 0.9812450717398241,
+            "box": [
+              2690.0,
+              351.0,
+              2738.0,
+              370.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0015",
+      "gt_component": "U1",
+      "gt_pin": "pin_1",
+      "gt_name": "TS",
+      "gt_point": [
+        268.0,
+        439.0
+      ],
+      "gt_point_img": [
+        268.0,
+        82.0
+      ],
+      "final_pin": {
+        "pinname": "TS",
+        "point": {
+          "x": 273.7,
+          "y": 438.5
+        }
+      },
+      "final_point_distance": 5.721887800367975,
+      "frame_id": "c0001",
+      "frame_source": "yolo",
+      "frame_iou": 0.9900568722581741,
+      "frame_max_corner_error": 0.4700000000000273,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0001",
+          "raw_index": 2,
+          "raw_point_img": [
+            273.7,
+            82.5
+          ],
+          "number": {
+            "text": "1",
+            "conf": 0.9998091823398811,
+            "box": [
+              276.0,
+              70.0,
+              280.0,
+              80.0
+            ]
+          },
+          "name": {
+            "text": "TS",
+            "conf": 0.9404095434817185,
+            "box": [
+              236.0,
+              78.0,
+              253.0,
+              89.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0015",
+      "gt_component": "U1",
+      "gt_pin": "pin_2",
+      "gt_name": "OUT",
+      "gt_point": [
+        268.0,
+        487.0
+      ],
+      "gt_point_img": [
+        268.0,
+        34.0
+      ],
+      "final_pin": {
+        "pinname": "OUT",
+        "point": {
+          "x": 273.7,
+          "y": 486.5
+        }
+      },
+      "final_point_distance": 5.721887800367975,
+      "frame_id": "c0001",
+      "frame_source": "yolo",
+      "frame_iou": 0.9900568722581741,
+      "frame_max_corner_error": 0.4700000000000273,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0001",
+          "raw_index": 1,
+          "raw_point_img": [
+            273.7,
+            34.5
+          ],
+          "number": {
+            "text": "2",
+            "conf": 0.9997136220984884,
+            "box": [
+              275.0,
+              22.0,
+              282.0,
+              32.0
+            ]
+          },
+          "name": {
+            "text": "OUT",
+            "conf": 0.9940172487436987,
+            "box": [
+              225.0,
+              30.0,
+              254.0,
+              41.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0015",
+      "gt_component": "U1",
+      "gt_pin": "pin_6",
+      "gt_name": "VIN",
+      "gt_point": [
+        130.0,
+        487.0
+      ],
+      "gt_point_img": [
+        130.0,
+        34.0
+      ],
+      "final_pin": {
+        "pinname": "VIN",
+        "point": {
+          "x": 122.6,
+          "y": 486.5
+        }
+      },
+      "final_point_distance": 7.416872656315469,
+      "frame_id": "c0001",
+      "frame_source": "yolo",
+      "frame_iou": 0.9900568722581741,
+      "frame_max_corner_error": 0.4700000000000273,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0001",
+          "raw_index": 7,
+          "raw_point_img": [
+            122.6,
+            34.5
+          ],
+          "number": {
+            "text": "6",
+            "conf": 0.8045633061947387,
+            "box": [
+              115.0,
+              21.0,
+              122.0,
+              31.0
+            ]
+          },
+          "name": {
+            "text": "VIN",
+            "conf": 0.9949260839614488,
+            "box": [
+              143.0,
+              30.0,
+              165.0,
+              41.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0038",
+      "gt_component": "U5",
+      "gt_pin": "pin_4",
+      "gt_name": "VSS",
+      "gt_point": [
+        312.0,
+        83.0
+      ],
+      "gt_point_img": [
+        312.0,
+        263.0
+      ],
+      "final_pin": {
+        "pinname": "VSS",
+        "point": {
+          "x": 305.9,
+          "y": 82.0
+        }
+      },
+      "final_point_distance": 6.181423784210259,
+      "frame_id": "c0000",
+      "frame_source": "yolo",
+      "frame_iou": 0.9833621003211479,
+      "frame_max_corner_error": 0.8600000000000136,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0000",
+          "raw_index": 2,
+          "raw_point_img": [
+            305.9,
+            264.0
+          ],
+          "number": {
+            "text": "4",
+            "conf": 0.9996753793030045,
+            "box": [
+              290.0,
+              235.0,
+              319.0,
+              276.0
+            ]
+          },
+          "name": {
+            "text": "VSS",
+            "conf": 0.9694930226492601,
+            "box": [
+              326.0,
+              259.0,
+              357.0,
+              272.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0038",
+      "gt_component": "U5",
+      "gt_pin": "pin_5",
+      "gt_name": "SDA",
+      "gt_point": [
+        465.0,
+        83.0
+      ],
+      "gt_point_img": [
+        465.0,
+        263.0
+      ],
+      "final_pin": {
+        "pinname": "SDA",
+        "point": {
+          "x": 472.8,
+          "y": 82.0
+        }
+      },
+      "final_point_distance": 7.863841300535011,
+      "frame_id": "c0000",
+      "frame_source": "yolo",
+      "frame_iou": 0.9833621003211479,
+      "frame_max_corner_error": 0.8600000000000136,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0000",
+          "raw_index": 5,
+          "raw_point_img": [
+            472.8,
+            264.0
+          ],
+          "number": {
+            "text": "5",
+            "conf": 0.9801173740955019,
+            "box": [
+              472.0,
+              246.0,
+              484.0,
+              264.0
+            ]
+          },
+          "name": {
+            "text": "SDA",
+            "conf": 0.9912662260401685,
+            "box": [
+              419.0,
+              259.0,
+              452.0,
+              272.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0038",
+      "gt_component": "U5",
+      "gt_pin": "pin_8",
+      "gt_name": "VDD",
+      "gt_point": [
+        465.0,
+        190.0
+      ],
+      "gt_point_img": [
+        465.0,
+        156.0
+      ],
+      "final_pin": {
+        "pinname": "VDD",
+        "point": {
+          "x": 472.8,
+          "y": 191.0
+        }
+      },
+      "final_point_distance": 7.863841300535011,
+      "frame_id": "c0000",
+      "frame_source": "yolo",
+      "frame_iou": 0.9833621003211479,
+      "frame_max_corner_error": 0.8600000000000136,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0000",
+          "raw_index": 6,
+          "raw_point_img": [
+            472.8,
+            155.0
+          ],
+          "number": {
+            "text": "8",
+            "conf": 0.99384778427383,
+            "box": [
+              474.0,
+              140.0,
+              482.0,
+              153.0
+            ]
+          },
+          "name": {
+            "text": "VDD",
+            "conf": 0.967495288505251,
+            "box": [
+              418.0,
+              152.0,
+              451.0,
+              164.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0077",
+      "gt_component": "U15",
+      "gt_pin": "pin_2",
+      "gt_name": "GND",
+      "gt_point": [
+        3435.0,
+        1555.0
+      ],
+      "gt_point_img": [
+        3435.0,
+        1954.0
+      ],
+      "final_pin": {
+        "pinname": "GND",
+        "point": {
+          "x": 3434.2,
+          "y": 1579.6
+        }
+      },
+      "final_point_distance": 24.613004692641567,
+      "frame_id": "c0002",
+      "frame_source": "yolo",
+      "frame_iou": 0.9833190737293708,
+      "frame_max_corner_error": 1.8099999999999454,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0002",
+          "raw_index": 3,
+          "raw_point_img": [
+            3434.2,
+            1929.4
+          ],
+          "number": {
+            "text": "2",
+            "conf": 0.9995765096094261,
+            "box": [
+              3448.0,
+              1932.0,
+              3459.0,
+              1949.0
+            ]
+          },
+          "name": {
+            "text": "GND",
+            "conf": 0.9877435764899678,
+            "box": [
+              3355.0,
+              1945.0,
+              3404.0,
+              1963.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0093",
+      "gt_component": "U1",
+      "gt_pin": "pin_20",
+      "gt_name": "GND",
+      "gt_point": [
+        365.0,
+        75.0
+      ],
+      "gt_point_img": [
+        365.0,
+        535.0
+      ],
+      "final_pin": {
+        "pinname": "GND",
+        "point": {
+          "x": 374.8,
+          "y": 75.0
+        }
+      },
+      "final_point_distance": 9.800000000000011,
+      "frame_id": "c0001",
+      "frame_source": "yolo",
+      "frame_iou": 0.9795268965482369,
+      "frame_max_corner_error": 2.479999999999997,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0001",
+          "raw_index": 23,
+          "raw_point_img": [
+            374.8,
+            535.0
+          ],
+          "number": {
+            "text": "20",
+            "conf": 0.9370620735754447,
+            "box": [
+              368.0,
+              527.0,
+              377.0,
+              534.0
+            ]
+          },
+          "name": {
+            "text": "GND",
+            "conf": 0.9809341034549349,
+            "box": [
+              393.0,
+              531.0,
+              413.0,
+              539.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    },
+    {
+      "case": "public_0146",
+      "gt_component": "U1",
+      "gt_pin": "pin_2",
+      "gt_name": "IN",
+      "gt_point": [
+        406.0,
+        429.0
+      ],
+      "gt_point_img": [
+        406.0,
+        195.0
+      ],
+      "final_pin": {
+        "pinname": "IN",
+        "point": {
+          "x": 415.4,
+          "y": 428.5
+        }
+      },
+      "final_point_distance": 9.413288479590943,
+      "frame_id": "c0000",
+      "frame_source": "yolo",
+      "frame_iou": 0.985957411858009,
+      "frame_max_corner_error": 0.6399999999999864,
+      "local_identity_correct": true,
+      "emitted_sources": [
+        {
+          "cid": "c0000",
+          "raw_index": 8,
+          "raw_point_img": [
+            415.4,
+            195.5
+          ],
+          "number": {
+            "text": "2",
+            "conf": 0.9985567924311392,
+            "box": [
+              415.0,
+              187.0,
+              421.0,
+              196.0
+            ]
+          },
+          "name": {
+            "text": "IN",
+            "conf": 0.7827554606414078,
+            "box": [
+              431.0,
+              191.0,
+              445.0,
+              200.0
+            ]
+          }
+        }
+      ],
+      "annotation_evidence": "not_visually_inspected"
+    }
+  ],
+  "duplicate_representatives": [
+    {
+      "case": "public_0129",
+      "cid": "c0002",
+      "gt_component": "U1",
+      "gt_pin": "pin_2",
+      "gt_name": "2",
+      "gt_point_img": [
+        266.0,
+        202.0
+      ],
+      "candidate_representatives": [
+        {
+          "raw_index": 2,
+          "raw_point_img": [
+            262.4,
+            182.0
+          ],
+          "gt_point_distance": 20.321417273408866,
+          "number": {
+            "text": "2",
+            "conf": 0.9995663854968585,
+            "box": [
+              252.0,
+              191.0,
+              259.0,
+              201.0
+            ]
+          },
+          "name": {
+            "text": "R1",
+            "conf": 0.5126309958264696,
+            "box": [
+              237.0,
+              168.0,
+              257.0,
+              181.0
+            ]
+          },
+          "pinindex": "pin_2"
+        },
+        {
+          "raw_index": 3,
+          "raw_point_img": [
+            262.4,
+            201.5
+          ],
+          "gt_point_distance": 3.634556369077272,
+          "number": {
+            "text": "2",
+            "conf": 0.9985931665282842,
+            "box": [
+              253.0,
+              192.0,
+              260.0,
+              202.0
+            ]
+          },
+          "name": {
+            "text": "2",
+            "conf": 0.9990114219466008,
+            "box": [
+              236.0,
+              200.0,
+              243.0,
+              210.0
+            ]
+          },
+          "pinindex": null
+        }
+      ],
+      "crop": {
+        "case": "public_0129",
+        "gt_key": "U1",
+        "png_source": "0129-jlc.png",
+        "png_sha256": "217e5234660a4f12692a4bc07d9b3baf583d36b35e847a16f4e1c5119e91dd1b",
+        "crop_box_img": [
+          92,
+          43,
+          370,
+          380
+        ],
+        "crop_path": "public_0129_U1_duplicate.png",
+        "gt_bbox": [
+          212.0,
+          961.0,
+          250.0,
+          1058.0
+        ],
+        "gt_component": {
+          "Name": "U1",
+          "type": "box",
+          "value": null,
+          "bbox": [
+            212.0,
+            961.0,
+            250.0,
+            1058.0
+          ]
+        }
+      }
+    },
+    {
+      "case": "public_0077",
+      "cid": "c0001",
+      "gt_component": "U12",
+      "gt_pin": "pin_8",
+      "gt_name": "GND",
+      "gt_point_img": [
+        1054.0,
+        1435.0
+      ],
+      "candidate_representatives": [
+        {
+          "raw_index": 1,
+          "raw_point_img": [
+            1053.0,
+            1208.0
+          ],
+          "gt_point_distance": 227.00220263248548,
+          "number": {
+            "text": "8",
+            "conf": 0.47458392629401996,
+            "box": [
+              1066.0,
+              1187.0,
+              1077.0,
+              1204.0
+            ]
+          },
+          "name": {
+            "text": "VOUT",
+            "conf": 0.9526582855342569,
+            "box": [
+              956.0,
+              1198.0,
+              1020.0,
+              1217.0
+            ]
+          },
+          "pinindex": "pin_8"
+        },
+        {
+          "raw_index": 5,
+          "raw_point_img": [
+            1053.0,
+            1436.5
+          ],
+          "gt_point_distance": 1.8027756377319946,
+          "number": {
+            "text": "8",
+            "conf": 0.9637176502356463,
+            "box": [
+              1066.0,
+              1416.0,
+              1077.0,
+              1433.0
+            ]
+          },
+          "name": {
+            "text": "GND",
+            "conf": 0.9920369277174743,
+            "box": [
+              970.0,
+              1428.0,
+              1021.0,
+              1447.0
+            ]
+          },
+          "pinindex": null
+        }
+      ],
+      "crop": {
+        "case": "public_0077",
+        "gt_key": "U12",
+        "png_source": "0077-Datasheet.png",
+        "png_sha256": "0c2a1fc95f285c7ce6e9064a52c3c610332c46029b5bc3b1c8d5db6b002286d1",
+        "crop_box_img": [
+          607,
+          1031,
+          1161,
+          1585
+        ],
+        "crop_path": "public_0077_U12_duplicate.png",
+        "gt_bbox": [
+          727.0,
+          2044.0,
+          1041.0,
+          2358.0
+        ],
+        "gt_component": {
+          "Name": "TPS259474ARPWR",
+          "type": "box",
+          "value": null,
+          "bbox": [
+            727.0,
+            2044.0,
+            1041.0,
+            2358.0
+          ]
+        }
+      }
+    },
+    {
+      "case": "public_0077",
+      "cid": "c0000",
+      "gt_component": "U13",
+      "gt_pin": "pin_1",
+      "gt_name": "VIN",
+      "gt_point_img": [
+        1743.0,
+        1206.0
+      ],
+      "candidate_representatives": [
+        {
+          "raw_index": 3,
+          "raw_point_img": [
+            2058.6,
+            1408.0
+          ],
+          "gt_point_distance": 374.70970096862976,
+          "number": {
+            "text": "1",
+            "conf": 0.5759704148485069,
+            "box": [
+              2048.0,
+              1402.0,
+              2065.0,
+              1414.0
+            ]
+          },
+          "name": {
+            "text": "F",
+            "conf": 0.9283432508828828,
+            "box": [
+              2000.0,
+              1399.0,
+              2027.0,
+              1416.0
+            ]
+          },
+          "pinindex": "pin_1"
+        },
+        {
+          "raw_index": 8,
+          "raw_point_img": [
+            1747.3,
+            1207.0
+          ],
+          "gt_point_distance": 4.414748010928779,
+          "number": {
+            "text": "1",
+            "conf": 0.9998059649340285,
+            "box": [
+              1731.0,
+              1186.0,
+              1737.0,
+              1203.0
+            ]
+          },
+          "name": {
+            "text": "VIN",
+            "conf": 0.9887535094469819,
+            "box": [
+              1780.0,
+              1198.0,
+              1816.0,
+              1215.0
+            ]
+          },
+          "pinindex": null
+        }
+      ],
+      "crop": {
+        "case": "public_0077",
+        "gt_key": "U13",
+        "png_source": "0077-Datasheet.png",
+        "png_sha256": "0c2a1fc95f285c7ce6e9064a52c3c610332c46029b5bc3b1c8d5db6b002286d1",
+        "crop_box_img": [
+          1640,
+          1031,
+          2166,
+          1613
+        ],
+        "crop_path": "public_0077_U13_duplicate.png",
+        "gt_bbox": [
+          1760.0,
+          2016.0,
+          2046.0,
+          2358.0
+        ],
+        "gt_component": {
+          "Name": "TPS562202DRLR",
+          "type": "box",
+          "value": null,
+          "bbox": [
+            1760.0,
+            2016.0,
+            2046.0,
+            2358.0
+          ]
+        }
+      }
+    },
+    {
+      "case": "public_0160",
+      "cid": "c0002",
+      "gt_component": "U19",
+      "gt_pin": "pin_5",
+      "gt_name": "LX",
+      "gt_point_img": [
+        670.0,
+        135.0
+      ],
+      "candidate_representatives": [
+        {
+          "raw_index": 3,
+          "raw_point_img": [
+            668.0,
+            171.0
+          ],
+          "gt_point_distance": 36.05551275463989,
+          "number": {
+            "text": "5",
+            "conf": 0.706071611582656,
+            "box": [
+              676.0,
+              168.0,
+              680.0,
+              175.0
+            ]
+          },
+          "name": {
+            "text": "EN",
+            "conf": 0.9701113919278068,
+            "box": [
+              684.0,
+              172.0,
+              696.0,
+              179.0
+            ]
+          },
+          "pinindex": "pin_5"
+        },
+        {
+          "raw_index": 5,
+          "raw_point_img": [
+            668.0,
+            135.0
+          ],
+          "gt_point_distance": 2.0,
+          "number": {
+            "text": "5",
+            "conf": 0.9805996091379516,
+            "box": [
+              676.0,
+              128.0,
+              680.0,
+              135.0
+            ]
+          },
+          "name": {
+            "text": "LX",
+            "conf": 0.8915298214448047,
+            "box": [
+              684.0,
+              132.0,
+              695.0,
+              139.0
+            ]
+          },
+          "pinindex": null
+        }
+      ],
+      "crop": {
+        "case": "public_0160",
+        "gt_key": "U19",
+        "png_source": "0160-jlc.png",
+        "png_sha256": "e2f95bf58f35220f90fc8a4b6912c64059816c148add38d29d02f5df7858f4fb",
+        "crop_box_img": [
+          560,
+          0,
+          860,
+          315
+        ],
+        "crop_path": "public_0160_U19_duplicate.png",
+        "gt_bbox": [
+          680.0,
+          650.0,
+          740.0,
+          730.0
+        ],
+        "gt_component": {
+          "Name": "SY7069ADC",
+          "type": "box",
+          "value": null,
+          "bbox": [
+            680.0,
+            650.0,
+            740.0,
+            730.0
+          ]
+        }
+      }
+    }
+  ],
+  "visual_spotchecks": [
+    {
+      "case": "public_0003",
+      "gt_key": "U4",
+      "observation": "printed_placeholder_U_question_not_GT_U4",
+      "purposive_nonrepresentative": true,
+      "source_split": "200_train_cases",
+      "source_case": "0003",
+      "png_name": "0003-Altium Designer.png",
+      "png_sha256": "241b4d57961df16e354901cf83532fa5ee67b6732db8ac75c54eceb6b8f081cf",
+      "gt_name": "0003-Altium Designer_target_named.json",
+      "gt_sha256": "ed68dc86d8d77e115afdfc6e27912268b7f7f230e85654b8e1adf7bc3ed5e346"
+    },
+    {
+      "case": "public_0031",
+      "gt_key": "U1",
+      "observation": "GT_designator_absent_in_full_PNG",
+      "purposive_nonrepresentative": true,
+      "source_split": "200_train_cases",
+      "source_case": "0031",
+      "png_name": "0031-Datasheet.png",
+      "png_sha256": "c3c346ddd4cf8c514c78b49baa93f5887f89f877b2d944563f5a630434ba8cc8",
+      "gt_name": "0031-Datasheet_target_named.json",
+      "gt_sha256": "53a1ac8246c839ccf1b498349a9113c2ae662385274ca633cbfe3a48a5d1d36c"
+    },
+    {
+      "case": "public_0048",
+      "gt_key": "U1",
+      "observation": "GT_designator_absent_in_full_PNG",
+      "purposive_nonrepresentative": true,
+      "source_split": "200_train_cases",
+      "source_case": "0048",
+      "png_name": "0048-Datasheet.png",
+      "png_sha256": "fb21187dabed02b3f815fd6b70c472ccd33582e4f0b06d7525b150a28a9520a2",
+      "gt_name": "0048-Datasheet_target_named.json",
+      "gt_sha256": "84652525ef1d48f25f13face7dd06da8cd7e778a01dc2d6acc14eee123b4f587"
+    },
+    {
+      "case": "public_0087",
+      "gt_key": "U23",
+      "observation": "GT_designator_printed_confirmed",
+      "purposive_nonrepresentative": true,
+      "source_split": "200_train_cases",
+      "source_case": "0087",
+      "png_name": "0087-KiCad.png",
+      "png_sha256": "44d7aaa16fbb10790d63a544ed94661f8e59ebf72af76b624802867b44ecf3bd",
+      "gt_name": "0087-KiCad_target_named.json",
+      "gt_sha256": "5975c96eec0c4b58152b52065cffaedddcd8aa9068af5b85c58feef5201b05d5"
+    },
+    {
+      "case": "public_0129",
+      "gt_key": "U1",
+      "observation": "GT_designator_printed_confirmed",
+      "purposive_nonrepresentative": true,
+      "source_split": "200_train_cases",
+      "source_case": "0129",
+      "png_name": "0129-jlc.png",
+      "png_sha256": "217e5234660a4f12692a4bc07d9b3baf583d36b35e847a16f4e1c5119e91dd1b",
+      "gt_name": "0129-jlc_target_named.json",
+      "gt_sha256": "a57a1f79443e5eaa9ead77b17037a3c587a5f8cff25dd69ed5ae311c65fc3d39"
+    },
+    {
+      "case": "public_0077",
+      "gt_key": "U12",
+      "observation": "GT_designator_printed_confirmed",
+      "purposive_nonrepresentative": true,
+      "source_split": "200_train_cases",
+      "source_case": "0077",
+      "png_name": "0077-Datasheet.png",
+      "png_sha256": "0c2a1fc95f285c7ce6e9064a52c3c610332c46029b5bc3b1c8d5db6b002286d1",
+      "gt_name": "0077-Datasheet_target_named.json",
+      "gt_sha256": "87d7d097c81e6378796b26a46a976bbeb6c307108bc5520d5fc5ce4aa59a5d0c"
+    },
+    {
+      "case": "public_0077",
+      "gt_key": "U13",
+      "observation": "GT_designator_printed_confirmed",
+      "purposive_nonrepresentative": true,
+      "source_split": "200_train_cases",
+      "source_case": "0077",
+      "png_name": "0077-Datasheet.png",
+      "png_sha256": "0c2a1fc95f285c7ce6e9064a52c3c610332c46029b5bc3b1c8d5db6b002286d1",
+      "gt_name": "0077-Datasheet_target_named.json",
+      "gt_sha256": "87d7d097c81e6378796b26a46a976bbeb6c307108bc5520d5fc5ce4aa59a5d0c"
+    },
+    {
+      "case": "public_0160",
+      "gt_key": "U19",
+      "observation": "GT_designator_printed_confirmed",
+      "purposive_nonrepresentative": true,
+      "source_split": "200_train_cases",
+      "source_case": "0160",
+      "png_name": "0160-jlc.png",
+      "png_sha256": "e2f95bf58f35220f90fc8a4b6912c64059816c148add38d29d02f5df7858f4fb",
+      "gt_name": "0160-jlc_target_named.json",
+      "gt_sha256": "0fda543a48ade08c862466a14cd0af220c9cb0ef9df4523eeb2cf7680c9c250f"
+    }
+  ],
+  "full_evidence_workspace_relative": "output/eda-pcb-score2-20261008",
+  "new_verification20_labels_read": false
+}

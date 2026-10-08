@@ -67,6 +67,7 @@ DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "0")
 # 采信号撞，就用它；否则用位置号补，并避开已经用掉的号。**严格弱于全对**（全对时
 # 两者输出相同），但把「71 对 1 错」从「全错」救回「71 对」。
 BOX_PIN_PARTIAL = env_on("STAGE2_BOX_PIN_PARTIAL", "1")
+BOX_PIN_DUPLICATE_BEST = env_on("STAGE2_BOX_PIN_DUPLICATE_BEST", "1")
 
 # `STAGE2_BOX_PIN_DROP_UNREAD`：`box`(IC) 元件里**没读出号、靠位置补出来**的引脚桩
 # 不再写进引脚表（也不进网络），而不是给它发明一个位置号（`8`/`9`/…）。
@@ -498,6 +499,47 @@ def merge_by_label(nets: Dict[str, dict]) -> Dict[str, dict]:
 
 
 # ---------------------------------------------------------------------------
+def _pin_read_quality(rec: dict) -> Optional[float]:
+    """Rank complete OCR reads; this product is not a calibrated probability."""
+    values = []
+    for role in ("number", "name"):
+        try:
+            conf = float((rec.get(role) or {})["conf"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(conf) or not 0.0 <= conf <= 1.0:
+            return None
+        values.append(conf)
+    return values[0] * values[1]
+
+
+def _box_number_winners(raw: Sequence[dict]) -> Dict[int, int]:
+    """Choose one existing contact per read number without joining their nets.
+
+    A complete later read may replace a complete earlier read when both have
+    usable confidence and the later number/name pair ranks higher. An unnamed
+    first read still consumes its number, preserving the existing output filter.
+    Equal or unknown quality preserves the original first-wins behavior.
+    """
+    winners: Dict[int, int] = {}
+    for i, r in enumerate(raw):
+        n = r["num"]
+        v = int(n) if n and n.isdigit() else 0
+        if not 1 <= v <= 999:
+            continue
+        prev = winners.get(v)
+        if prev is None:
+            winners[v] = i
+            continue
+        old = raw[prev]
+        quality, old_quality = r.get("quality"), old.get("quality")
+        if (BOX_PIN_DUPLICATE_BEST and r["nm"] and old["nm"]
+                and quality is not None and old_quality is not None
+                and quality > old_quality):
+            winners[v] = i
+    return winners
+
+
 def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     img = stage1.get("image") or {}
     H = float(img.get("h") or 0.0)
@@ -578,7 +620,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             rec = pinfo.get(k) or pinfo.get(str(k)) or {}
             num = ((rec.get("number") or {}).get("text") or "").strip()
             nm = ((rec.get("name") or {}).get("text") or "").strip()
-            raw.append({"num": num, "nm": nm})
+            raw.append({"num": num, "nm": nm, "quality": _pin_read_quality(rec)})
         # **结构期望**（2025-10 按官方 Q&A 重定）。
         #
         # 旧口径下这里有一条「OCR 必须交出完整的 1..N 排列才采信」的门控，理由是
@@ -628,13 +670,15 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         _anykept = True
         if not ok:
             if ctype == "box" and BOX_PIN_PARTIAL:
-                # 逐引脚：读出来的号只要是 1..999 的整数、没跟别人撞，就采信；
-                # 其余用位置号补，并避开已用掉的号（保证键不撞）。
+                # Duplicate OCR numbers may come from different physical pins.
+                # Select the best complete read; do not alias the discarded
+                # contact into the winner's network.
                 used, tmp = set(), list(nums)
                 kept = [False] * len(tmp)
+                winners = _box_number_winners(raw)
                 for i, n in enumerate(tmp):
                     v = int(n) if (n and n.isdigit()) else 0
-                    if 1 <= v <= 999 and v not in used:
+                    if 1 <= v <= 999 and winners.get(v) == i:
                         used.add(v)
                         kept[i] = True
                     else:

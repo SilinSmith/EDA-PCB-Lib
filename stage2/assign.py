@@ -766,6 +766,12 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             alts.append((sc, {"text": txt, "canon": can, "conf": conf,
                               "box": list(t["bbox"]), "d": t["d"],
                               "fit": fid, "box_i": t.get("_i", -1)}))
+        # A nearby observed digit is stronger than inventing one from letters
+        # (for example an internal UD pin label digitized into U0).
+        if any(sc >= 0.02 and info["d"] <= near
+               and any(ch.isdigit() for ch in info["text"]) for sc, info in alts):
+            alts = [(sc, info) for sc, info in alts
+                    if any(ch.isdigit() for ch in info["text"])]
         alts.sort(key=lambda x: -x[0])
         if os.environ.get("STAGE2_DBG_CID") == cid:
             print("[dbg-alts] cid=%s -> %s" % (cid, [
