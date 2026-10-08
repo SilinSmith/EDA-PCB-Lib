@@ -200,7 +200,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "输入 PNG + 坐标系",
    "sub": "每 case 一张图 + 可选 GT；坐标 y 向上（已实测无歧义）",
    "x": 40,
-   "y": 2048,
+   "y": 2105,
    "w": 280,
    "file": "submission/run.py",
    "ins": [],
@@ -237,7 +237,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "① 符号检测",
    "sub": "YOLO + CV 复核 / 去多假设：元件符号的框与类型",
    "x": 432,
-   "y": 2292,
+   "y": 2349,
    "w": 280,
    "file": "stage1/detect.py + stage1/bigic.py",
    "ins": [
@@ -287,7 +287,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "② 文字区域定位",
    "sub": "cvparts/textbox.py：只定位「哪里有字」，不识别",
    "x": 432,
-   "y": 1568,
+   "y": 1625,
    "w": 280,
    "file": "cvparts/textbox.py",
    "ins": [
@@ -391,7 +391,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "④ CRNN 识别",
    "sub": "textrec：5 角色 CRNN+CTC；颜色即语义（绿线/暗红框/蓝位号/黑脚号）",
    "x": 1216,
-   "y": 1370,
+   "y": 1427,
    "w": 280,
    "file": "textrec/infer.py",
    "ins": [
@@ -456,7 +456,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "⑤ LLM / VLM 读取",
    "sub": "qwen3.5-9b：位号 / 值 / 器件型号 / 逐引脚号名 —— 只是证据源之一，不是终审",
    "x": 432,
-   "y": 1141,
+   "y": 1198,
    "w": 280,
    "file": "vlm/enrich.py（753 行）",
    "ins": [
@@ -515,7 +515,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "⑥ 导线与结点",
    "sub": "wires.py 提线 + 在 junction 处切段",
    "x": 432,
-   "y": 1832,
+   "y": 1889,
    "w": 280,
    "file": "stage1/wires.py",
    "ins": [
@@ -568,7 +568,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "⑦ 引脚点",
    "sub": "pintrace.py 从元件框向外打射线找导线",
    "x": 1216,
-   "y": 1967,
+   "y": 2024,
    "w": 280,
    "file": "stage1/pintrace.py",
    "ins": [
@@ -616,7 +616,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "⑧ 初始网络",
    "sub": "nets.py 连通分量 → hyperGraph",
    "x": 2000,
-   "y": 1668,
+   "y": 1725,
    "w": 280,
    "file": "stage1/nets.py",
    "ins": [
@@ -670,7 +670,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★ 常识与先验表",
    "sub": "priors.py 的六类先验 + 三条闸（逐条列在下面）",
    "x": 40,
-   "y": 974,
+   "y": 1031,
    "w": 300,
    "file": "fusion/priors.py（911 行）",
    "ins": [],
@@ -737,7 +737,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★ 证据池",
    "sub": "claims.py：候选池是所有裁决的唯一入口；但 pin.* 出不了文档",
    "x": 2392,
-   "y": 1585,
+   "y": 1642,
    "w": 300,
    "file": "fusion/claims.py（744 行）",
    "ins": [
@@ -813,7 +813,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★ 约束求解",
    "sub": "solve.py：贪心+增广路；零候选槽位永远问不到 LLM",
    "x": 2784,
-   "y": 1808,
+   "y": 1865,
    "w": 300,
    "file": "fusion/solve.py（470 行）",
    "ins": [
@@ -864,7 +864,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 全局合理性检查（结构）",
    "sub": "这个电路讲不讲得通？违反电气/拓扑常识的地方就是要找的错误点",
    "x": 3176,
-   "y": 1506,
+   "y": 1563,
    "w": 300,
    "file": "fusion/plausible.py",
    "ins": [
@@ -918,7 +918,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 字符串合理性修正（内容）",
    "sub": "器件型号/位号明显读错一个字符时，用命名规律修回来",
    "x": 2784,
-   "y": 1482,
+   "y": 1539,
    "w": 300,
    "file": "（已证否）fixstr.py",
    "ins": [
@@ -968,7 +968,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★ 冲突与缺口",
    "sub": "两个来源不一致的 / 违反约束的 / 读不出来的",
    "x": 3568,
-   "y": 1541,
+   "y": 1598,
    "w": 300,
    "file": "fusion/solve.py + fusion/plausible.py",
    "ins": [
@@ -1014,7 +1014,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ LLM 判断 + 定位 + 排序",
    "sub": "llm_judge.py：只做候选二选一，安全的中性；真正限制是问不到该问的",
    "x": 3960,
-   "y": 1330,
+   "y": 1387,
    "w": 300,
    "file": "fusion/llm_judge.py（484 行）",
    "ins": [
@@ -1079,7 +1079,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★ 按优先级定向重扫",
    "sub": "rescan.py：重扫必须带已确认的上下文，否则只是把同一个问题再问一遍",
    "x": 4744,
-   "y": 1673,
+   "y": 1730,
    "w": 300,
    "file": "fusion/rescan.py（336 行）",
    "ins": [
@@ -1129,7 +1129,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★ 迭代控制",
    "sub": "新证据回池 → 再解，直到收敛或到轮数上限",
    "x": 5136,
-   "y": 1688,
+   "y": 1745,
    "w": 300,
    "file": "fusion/run.py:145-181",
    "ins": [
@@ -1176,7 +1176,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 请求合并与预算闸门",
    "sub": "请求合并：引脚网格已合并（4025→1051）；值通道拼图实测判负",
    "x": 40,
-   "y": 2362,
+   "y": 2419,
    "w": 280,
    "file": "vlm/enrich.py",
    "ins": [],
@@ -1227,7 +1227,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "装配官方格式",
    "sub": "assemble.py：坐标在这层翻转；但 num_of 没导出 ⇒ 引脚裁决回不去键",
    "x": 3176,
-   "y": 1848,
+   "y": 1905,
    "w": 260,
    "file": "stage2/assemble.py（960 行）",
    "ins": [
@@ -1270,7 +1270,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "导出最终结果",
    "sub": "run.py:380-400：四层静默降级，导出成功的张数不区分来自哪一层",
    "x": 3568,
-   "y": 1857,
+   "y": 1914,
    "w": 260,
    "file": "submission/run.py:380-400",
    "ins": [
@@ -1315,7 +1315,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "官方标尺 metrics.py",
    "sub": "官方标尺：加权 F1 之和，不在管线里；一笔 mismatch 亏三处",
    "x": 3960,
-   "y": 1983,
+   "y": 2040,
    "w": 260,
    "file": "schematic_parser/metrics.py",
    "ins": [
@@ -1369,7 +1369,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 裁切方向反馈",
    "sub": "cropfix.py：唯一「LLM 引导重框+重识别」；安全但惰性，生产默认关",
    "x": 1608,
-   "y": 855,
+   "y": 912,
    "w": 280,
    "file": "fusion/cropfix.py（456 行）",
    "ins": [
@@ -1430,7 +1430,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 现实规律判断（电学合理性）",
    "sub": "audit.py：问的是「电学上成不成立」，只提候选不改结论",
    "x": 4352,
-   "y": 1309,
+   "y": 1366,
    "w": 300,
    "file": "fusion/audit.py（588 行）",
    "ins": [
@@ -1540,8 +1540,8 @@ textarea{resize:vertical;min-height:170px}
      "_desigassoc：91.3% 的缺失引脚在全部 cid 的候选表倒排里都查不到"
     ],
     [
-     "顺带要修",
-     "claims.py:611 用 pinpts.get(cid)，而 doc['pins'] 的键是位号 ⇒ 引脚取景框恒为 None"
+     "顺带要修（已核对：**不是 bug，不用改**）",
+     "旧记录说 claims.py 用 pinpts.get(cid)，而 doc['pins'] 的键是位号 ⇒ 取景框恒 None。**实测否证**（work/tools/diag/_pinbox.py）：融合层读的是 stage1 文档，它的 pins **就是按 cid** 键（case 1/4/7/10 = 22/22、25/25、24/24、30/30 命中，113/90/67/85 个点全是真坐标；拿位号当键命中 **0**）。照旧记录去「修」反而会**引入** bug"
     ]
    ],
    "note": "**进度：⚠ 未落地（融合层这一半没做；`vlm/enrich.py` 那一半已做）**\n\n**用户 m23186 原话**：『我探测到了 box 元件，那么肯定要围绕他的 box 展开 pin 和文字的扫描。这也是为什么需要融合层：统筹各种资源引导其他的子调度。』\n\n**已经做了的那一半**：`eda-pcb/vlm/enrich.py:213 read_designator` —— 把元件 `bbox` 换成图像坐标、外扩 `desig_margin`（60px，失败 ×2.2）裁片、问模型；`read_pins` 每 8 格拼图。这是**证据源**层的围绕 box 扫描。\n\n**没做的那一半（本节点）**：融合层**建完池子之后，不会再围绕任何元件框新建取景框**。\n实测接线（全 fusion 目录 grep `set_region|grow_region|\\.region\\(`）：\n- `set_region` / `grow_region` 的**全部**调用点都在 `claims.from_stage2` 里（`claims.py:497 / 570 / 575 / 597 / 630 / 647`）；\n- 其余只是**读**：`audit.py:270`、`cropfix.py:292`、`llm_judge.py:285/413`、`rescan.py:211`、`solve.py:351`。\n\n⇒ 一个 `desig_slots` 为空的元件**没有 `comp.<cid>.key` 槽位**，于是：\n1. 没有取景框 ⇒ `llm_judge`/`rescan`/`cropfix`/`audit` **四个模块全部跳过它**；\n2. 就算给它建了槽位，`solve.open_questions`（`solve.py:347 if second is None: continue`）**也问不到它**（零候选）。\n\n**这条缺口有多大（220 张实测）**\n| 层面 | 可回收 | 脚本 |\n|---|---|---|\n| 融合层「候选择优」（正确键在该元件**自己**的候选表里） | **6.0%** 引脚 | `_desigcand2.py` / `_desigassoc.py` |\n| 融合层「跨元件重归属」（纯交换 **0** 个） | **2.7%** 引脚 | `_desigassoc.py` |\n| 重新读邻域**全部** stage1 文字框能读出正确键 | **6.0%**（38/629） | `_icread2.py` |\n| ⇒ 剩下 **94%**：位号文字根本没进文字框集合 | 融合层无解 | `_icread2.py` + `_desigdetect.py` |\n\n拆开看 629 颗 / 5210 个没配上的 GT 引脚：\n**50 颗 / 623 引脚**（R0，连重叠元件都没有）｜**418 颗 / 2915 引脚（56.0%）**：重叠元件的 `desig_slots` **是空的**｜\n**152 颗 / 1484 引脚（28.5%）**：有候选但**全错**｜**9 颗 / 188 引脚（3.6%）**：正确位号**就在候选表里**却输了选择｜\n**4 颗 / 82 引脚（1.6%）**：键只差大小写（GT `u2` vs 我方 `U2`，`metrics.py:311 for key in set(gc) & set(pc)` 是精确字符串匹配）。\n\n**该补的三件事**\n1. 对**每个**元件（尤其 `type == \"box\"`）无条件建 `comp.<cid>.key` 槽位 + 取景框（本体外扩，`REGION_MIN=120` 兜底）；\n2. 给「零候选」槽位一条**去问一遍**的路径 —— 现在 `open_questions` 的 `if second is None: continue` 把它挡死了，\n   要么给一条「没有读数」的哨兵候选，要么给 `open_questions` 加一条 `not alts` 的分支；\n3. 顺带修 `claims.py:611-614`：`pinpts.get(cid)` 用的是 `cid`，而 `doc[\"pins\"]` 的键是**位号**（`U3`）不是 `cid`（`c0003`）\n   ⇒ 永远 `None` ⇒ **每个引脚取景框都是 `box=None`**（`claims.py:630-633`），引脚槽位拿不到图。\n\n⚠ 与 `pin` 通道的关系：即使修好取景框，**引脚裁决依然进不了交付文档**（`doc.apply` 只认 `comp.*`，见 `pool` 节点），\n而 `build_doc` 没有导出 `num_of` ⇒ 映射回 `pin_<N>` 键也做不了。**所以 boxscan 的第一优先级是位号，不是引脚。**",
@@ -1562,7 +1562,7 @@ textarea{resize:vertical;min-height:170px}
     "**改造前的缺口（存档）**：`claims.from_stage2` 第 1 节只遍历 `assigned[\"desig_slots\"]` ⇒ 零候选元件**连槽位都没有**，`llm_judge`/`rescan`/`cropfix`/`audit` 四个模块全部跳过它。220 张实测：629 颗没配上的 GT IC 里 **418 颗（56.0%）** 的重叠元件 `desig_slots` 是空的",
     "★ **2026-10 实测修正（`work/tools/diag/_boxgap.py`）**：① 在 **VLM 开着**的那一版里其实**已经达成** —— `_add_vlm` 让 `comp.<cid>.key` 槽位覆盖 **82/83（0001）、12/12（0002）、22/22（case 1）**，只剩 0001 的 `c0048` 一颗；**但 VLM 关掉后这条路径整个消失**（comp F1 0.9403 → 0.7682）⇒ ① 在**无 VLM 口径**下重新变成真缺口",
     "★ **`pin.*` 槽位恒为 0 不是 bug**：`claims.py` 的 `pool.add(..., keep=False)` 是**故意**的（注释记录试过 `keep=True` 反而 28.4973→27.6871），只留 `set_region` 的 **260** 个框等 `1..N` 先验补 ⇒ ② 要问的对象是**引脚号读数**这一路，不是位号",
-    "★ **旧记录的 ③ 是错的**：`claims.py` 的 `pinpts` 来自 `doc`，而融合层的 `doc` 是 `runs/stage1/<case>.stage1.json`（`fusion/run.py:180`）—— 那份文档里 `pins` 的键**就是 `cid`**（0001：83 键 / 与 `components[].id` 交集 **83/83**）。只有 `runs/stage2/<case>.json` 的 `pins` 才以**位号**为键。实测「取景框为 None 的引脚 = **0**」⇒ **引脚取景框一直是正常的**",
+    "★★ **旧记录的 ③ 经复核是错的，而且照它改会引入 bug**（`work/tools/diag/_pinbox.py`）：融合层的 `doc` 是 `runs/stage1/<case>.stage1.json`（`fusion/run.py:186`），那份文档的 `pins` 键**就是 `cid`** —— case 1/4/7/10 = **22/22、25/25、24/24、30/30** 命中，且 **113/90/67/85 个点全是真坐标**；反过来拿位号当键命中 **0**。只有 `runs/stage2/<case>.json` 的 `pins` 才以位号为键。⇒ **引脚取景框一直是正常的，①②才是真缺口**",
     "取景框构成（0001，共 **445** 个）：`comp.key: 83` ｜ `comp.partname: 25` ｜ `comp.value: 34` ｜ `pin.name: 142` ｜ `pin.number: 118` ｜ `netlabel: 43`",
     "★ 即使修好取景框，**引脚裁决仍进不了交付文档** ⇒ **boxscan 的第一优先级是位号，不是引脚**"
    ]
@@ -1574,7 +1574,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 独家归属（一个东西只有一个主人）",
    "sub": "争同一个位置的主张者 → 只留一个；判负者降权并入，不销毁",
    "x": 824,
-   "y": 2851,
+   "y": 2965,
    "w": 300,
    "file": "cvparts/own.py",
    "ins": [
@@ -1683,7 +1683,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "⑦b 引脚列枚举（格点补脚）",
    "sub": "pincol.py：按引脚列等距格点补出漏检的脚，再交给并网",
    "x": 1608,
-   "y": 1883,
+   "y": 1940,
    "w": 280,
    "file": "stage1/pincol.py",
    "ins": [
@@ -1743,7 +1743,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 引脚号候选：归属 + 沿边对齐",
    "sub": "assign.py / structmatch.py：谁贴在这颗元件上，以及号怎么排",
    "x": 1608,
-   "y": 1406,
+   "y": 1463,
    "w": 300,
    "file": "stage2/assign.py · stage2/structmatch.py",
    "ins": [
@@ -1802,7 +1802,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★ IC 不补位置号",
    "sub": "priors.py：稀疏封装号是印出来的，位置先验会覆盖它",
    "x": 1608,
-   "y": 2339,
+   "y": 2396,
    "w": 300,
    "file": "fusion/priors.py",
    "ins": [
@@ -1845,7 +1845,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ GT 保真度检查（自造 GT 会骗你）",
    "sub": "在派生档上调参前先量 GT 保真度：80.3% 的失配数学上不可赢",
    "x": 4352,
-   "y": 1859,
+   "y": 1916,
    "w": 300,
    "file": "work/tools/diag/_desigsrc.py · _boxkey.py · _desigabsent.py",
    "ins": [

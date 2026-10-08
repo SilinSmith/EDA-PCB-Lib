@@ -1,6 +1,6 @@
 # 诊断手册：怎么量，以及为什么这么量
 
-> 全部脚本索引见 `TOOLS.md`（482 个，自动生成）。
+> 全部脚本索引见 `TOOLS.md`（483 个，自动生成）。
 > 本文只讲**方法**：拿到一个笼统的「某项失分」，怎么把它拆到可行动的最小单元。
 
 ---
@@ -56,6 +56,17 @@ python -c "import json;d=json.load(open(r'work\_fast_out_<名>\runs\fusion\_fusi
 同一份报告里还有 `rounds[*].judge_rows`（每一问的 `slot/ans/res/mode`）—— `res` 是
 `agree_top / agree_alt / new / reject / agree_prior / empty`，`mode` 是
 `choose / read / **free**`（`free` 就是 boxscan 的自由读数）。**看不到行就等于没问。**
+
+### 旧记录里的「要修」也要先复核
+
+**审计报告里的「这里有个 bug」四个字不等于这里真有 bug。** boxscan 节点的待办第 ③ 条写着
+「`claims.py` 用 `pinpts.get(cid)`，而 `doc["pins"]` 的键是位号 ⇒ 引脚取景框恒为 None」。
+拿 `tools/diag/_pinbox.py` 一量：融合层读的是 `runs/stage1/<case>.stage1.json`，那份文档的
+`pins` **就是按 `cid`** 键的（case 1/4/7/10 = 22/22、25/25、24/24、30/30 命中，
+113/90/67/85 个点全是真坐标），反过来拿位号当键**命中 0**。只有 `runs/stage2/<case>.json`
+的 `pins` 才以位号为键 —— 旧记录把两份文档搞混了。**照它去改会直接引入一个 bug。**
+
+⇒ 动手前先用一行脚本把「症状」复现出来；**复现不出来就不是 bug**。
 
 ---
 

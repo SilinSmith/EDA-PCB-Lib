@@ -250,7 +250,7 @@ BULLETS = {
  "**改造前的缺口（存档）**：`claims.from_stage2` 第 1 节只遍历 `assigned[\"desig_slots\"]` ⇒ 零候选元件**连槽位都没有**，`llm_judge`/`rescan`/`cropfix`/`audit` 四个模块全部跳过它。220 张实测：629 颗没配上的 GT IC 里 **418 颗（56.0%）** 的重叠元件 `desig_slots` 是空的",
   "★ **2026-10 实测修正（`work/tools/diag/_boxgap.py`）**：① 在 **VLM 开着**的那一版里其实**已经达成** —— `_add_vlm` 让 `comp.<cid>.key` 槽位覆盖 **82/83（0001）、12/12（0002）、22/22（case 1）**，只剩 0001 的 `c0048` 一颗；**但 VLM 关掉后这条路径整个消失**（comp F1 0.9403 → 0.7682）⇒ ① 在**无 VLM 口径**下重新变成真缺口",
   "★ **`pin.*` 槽位恒为 0 不是 bug**：`claims.py` 的 `pool.add(..., keep=False)` 是**故意**的（注释记录试过 `keep=True` 反而 28.4973→27.6871），只留 `set_region` 的 **260** 个框等 `1..N` 先验补 ⇒ ② 要问的对象是**引脚号读数**这一路，不是位号",
-  "★ **旧记录的 ③ 是错的**：`claims.py` 的 `pinpts` 来自 `doc`，而融合层的 `doc` 是 `runs/stage1/<case>.stage1.json`（`fusion/run.py:180`）—— 那份文档里 `pins` 的键**就是 `cid`**（0001：83 键 / 与 `components[].id` 交集 **83/83**）。只有 `runs/stage2/<case>.json` 的 `pins` 才以**位号**为键。实测「取景框为 None 的引脚 = **0**」⇒ **引脚取景框一直是正常的**",
+  "★★ **旧记录的 ③ 经复核是错的，而且照它改会引入 bug**（`work/tools/diag/_pinbox.py`）：融合层的 `doc` 是 `runs/stage1/<case>.stage1.json`（`fusion/run.py:186`），那份文档的 `pins` 键**就是 `cid`** —— case 1/4/7/10 = **22/22、25/25、24/24、30/30** 命中，且 **113/90/67/85 个点全是真坐标**；反过来拿位号当键命中 **0**。只有 `runs/stage2/<case>.json` 的 `pins` 才以位号为键。⇒ **引脚取景框一直是正常的，①②才是真缺口**",
   "取景框构成（0001，共 **445** 个）：`comp.key: 83` ｜ `comp.partname: 25` ｜ `comp.value: 34` ｜ `pin.name: 142` ｜ `pin.number: 118` ｜ `netlabel: 43`",
  "★ 即使修好取景框，**引脚裁决仍进不了交付文档** ⇒ **boxscan 的第一优先级是位号，不是引脚**",
 ],
@@ -369,7 +369,7 @@ PARAMS = {
   ["卡在哪", "solve.open_questions 要求两个不同值的候选，零候选槽位永远问不到"],
   ["实测缺口", "629 颗没配上的 GT IC 中 418 颗 (56.0%) 的重叠元件 desig_slots 是空的"],
   ["实测缺口", "_desigassoc：91.3% 的缺失引脚在全部 cid 的候选表倒排里都查不到"],
-  ["顺带要修", "claims.py:611 用 pinpts.get(cid)，而 doc['pins'] 的键是位号 ⇒ 引脚取景框恒为 None"],
+  ["顺带要修（已核对：**不是 bug，不用改**）", "旧记录说 claims.py 用 pinpts.get(cid)，而 doc['pins'] 的键是位号 ⇒ 取景框恒 None。**实测否证**（work/tools/diag/_pinbox.py）：融合层读的是 stage1 文档，它的 pins **就是按 cid** 键（case 1/4/7/10 = 22/22、25/25、24/24、30/30 命中，113/90/67/85 个点全是真坐标；拿位号当键命中 **0**）。照旧记录去「修」反而会**引入** bug"],
 ],
 "export": [
   ["契约", "final_results/"],
