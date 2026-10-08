@@ -1,6 +1,6 @@
 # 诊断手册：怎么量，以及为什么这么量
 
-> 全部脚本索引见 `TOOLS.md`（483 个，自动生成）。
+> 全部脚本索引见 `TOOLS.md`（487 个，自动生成）。
 > 本文只讲**方法**：拿到一个笼统的「某项失分」，怎么把它拆到可行动的最小单元。
 
 ---
@@ -67,6 +67,68 @@ python -c "import json;d=json.load(open(r'work\_fast_out_<名>\runs\fusion\_fusi
 的 `pins` 才以位号为键 —— 旧记录把两份文档搞混了。**照它去改会直接引入一个 bug。**
 
 ⇒ 动手前先用一行脚本把「症状」复现出来；**复现不出来就不是 bug**。
+
+### 「这个开关开着」不等于「这条路被执行过」
+
+本轮最贵的一次误判：`llm_judge` 节点从立项起就写着「给 LLM **整表上下文**」，
+`SHEET_ON` 默认 `1`、`_sheet_image`/`_known_designators`/`judge_sheet` 全都是为它写的
+（`fusion/llm_judge.py`），**但 `judge()` 里的入口是 `if mode == "sheet" and SHEET_ON:`，
+而 `MODE` 的默认值是 `"auto"`** ⇒ 那条路**一次都没跑过**，默认配置下每次都是逐题一张小图 + A/B。
+「没有上下文环境」这句话因此有了**代码级坐标**，而不是一句感觉。
+
+**怎么才发现**：不是读代码读出来的，是**把报告里的开关字段打出来**——
+`work/_fast_out_*/runs/fusion/_fusion_report.json` 的 `rounds[0].judge` 里有
+`'mode': 'auto'`、`'ctx': True/False`、`'n_ctx_slot': 0`、`'n_q'`、`'n_agree_top'` 这些计数。
+
+⇒ 两条可复用的尺子：
+
+1. **凡「A/B 没差别」或「这条新路好像没用」，先证明它被执行了。** 在报告里加一个
+   `rep["mode"]` / `rep["ctx"]` / `rep["n_ctx_slot"]` 这样的计数字段，然后在
+   `--no-vlm` 单张上把 `judge` 那一行整个打出来：
+   ```powershell
+   python tools\diag\_jrep.py --case 1 --out work\_fast_out_ctxA   # 打 rounds[].judge 全部字段
+   ```
+2. **默认值 ≠ 生效值。** `SHEET_ON=1` 是「允许」，`MODE` 才是「选择」。凡是
+   双开关（允许 + 选择）的模块，两个都要看。
+
+### 提示词改动必须回读「模型到底收到了什么」
+
+「把上下文拼进 prompt」这类改动，**分不变也可能是真的生效了**（模型看到了但答案没变）。
+所以除了分数，还要看 `judge_rows[].raw` —— 上下文生效的直接证据在**原始回答**里：
+
+```powershell
+python tools\diag\_jrep.py --case 1 --out work\_fast_out_ctxA --rows
+```
+
+本轮实测：`ctx=1` 时 **12/12 行都有 `依据=…`**（`raw` 里带解释），`ctx=0` 时 **0/12**。
+分差则是官方 9 张 **53.27 vs 52.48（+0.79）**。**两样都要，一样都不能省**：
+只报分数会说不清为什么变，只报 `why` 会说不清值不值。
+
+### 「我改了这个文件」不等于「改的是被读的那个文件」
+
+同一个形状的误判再犯一次：**仓库里有同名文件的副本，而构建读的不是我改的那份**。
+
+| 脚本 / 产物 | 真正被读的那份 | 容易改错的那份 |
+|---|---|---|
+| `_wfbullets.py` | **`work\flow\_wfbullets.py`**（`work\tools\diag\_wfbuild.py:30` 先 `sys.path.insert(0, FLOW)` 再 `import _wfbullets`） | `eda-pcb\tools\diag\_wfbullets.py`（仓库快照） |
+| `_wfhead.py` | **`work\tools\diag\_wfhead.py`**（它的 `_find("../../flow/workflow.html", "workflow.html")` 只有在 `work\tools\diag\` 下才解析得到 `work\flow\workflow.html`；从 `eda-pcb\tools\diag\` 跑会直接 SystemExit） | `eda-pcb\tools\diag\_wfhead.py` |
+| `workflow.html` | `work\flow\workflow.html` 生成后**复制**到 `eda-pcb\docs\workflow.html` | — |
+
+**症状**：改完重建，输出文件**大小一模一样**（228599 B → 228599 B）—— 这就是最好的证据。
+**尺子**：
+
+```powershell
+python -c "import sys; sys.path.insert(0,'work/flow'); import _wfbullets as W; print(W.__file__)"
+Get-FileHash work\flow\_wfbullets.py, eda-pcb\tools\diag\_wfbullets.py   # 两份必须一致
+```
+
+⇒ 规矩：**先打印「被 import 的到底是哪个路径」**，再把两份同步成逐字节一致。
+（反过来也有价值：`work\flow\` 那份是本会话**维护中**的版本，`eda-pcb\` 那份常常是旧的；
+不要凭「我上次改过」推断哪份新，要比 hash。）
+
+**同坑的变体：替换脚本必须能被重复执行。** `_patch8.py` 的 `batch` 那条替换，
+新文本里**包含了旧文本**（徽标行 + 原样那一行）⇒ 对同一文件跑第二次又多插了一行徽标。
+⇒ 字面替换要么保证 `new` 不含完整的 `old`，要么先查标记再替换。
 
 ---
 
@@ -213,6 +275,12 @@ $env:FUSION_LLM='0'               # 关 LLM 裁决
 | **`own.assign` 全局一对一离线重跑 + GT 裁决** | `tools/diag/_ownasgn.py --gt --show` |
 | **GND 系引脚在 GT 里到底几条网** | `tools/diag/_gndnet.py` |
 | **`net_line` 边能不能配上 GT（端点距离）** | `tools/diag/_nledge.py --case N --net net_9` |
+| **融合层 `rounds[].judge` 的全部开关与计数**（开关到底生没生效） | `tools/diag/_jrep.py --out <产物目录> [--rows] [--case N]`；多臂对比用 `--cmp A B C` |
+| **融合层读的 `doc["pins"]` 是按 `cid` 还是按位号键** | `tools/diag/_pinbox.py` |
+| **每个 `kind='new'`（★要新写）节点的 note/bullets/params 全文** | `tools/diag/_wfnew.py [--all] [<id>…]` |
+| **改 workflow 节点的徽标（`kind`）** | `tools/diag/_wfkind.py --list` / `--set exec <ids…>` / `--set dead --all-new`（默认 dry-run，`--write` 才落盘） |
+| **改 `name`/`note`（长 JSON 字符串，别手改）** | `tools/diag/_wfhead.py --write`（**必须在 `_wfbuild.py --write` 之前**） |
+| **按字面子串替换文件内容**（绕开 PowerShell 引号地狱） | `python -c "import sys;sys.path.insert(0,'work/tools/diag');from _subst import subst;subst(path,[(old,new)])"` |
 
 ---
 

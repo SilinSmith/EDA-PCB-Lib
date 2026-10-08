@@ -272,6 +272,12 @@ def gap_fill(pool, cands, assign, stats=None) -> int:
             own_read = bool(b) and _is_read(str(getattr(b, "source", "") or ""))
             sc = min(base, own - 0.01) if own_read else base
             if sc <= 0.0:
+                # ★ **不要再让它静默**：`own_read` 为真且 `own < 0` 时（已有候选被
+                #   判成「读错了」，分数为负），`min(base, own-0.01)` 也是负的，
+                #   于是这个槽位整条补洞失效 —— 表现为「`FUSION_GAP_FILL=1` 却像
+                #   没开」。行为本身是保守的（负分 = 有反证，不该覆盖），但必须
+                #   留下计数，否则下次又要在 `stats` 里翻半天。
+                st["gap_skip_negative"] = int(st.get("gap_skip_negative", 0)) + 1
                 continue
             have_v = {v for v, _s, _src in cands.get(sid) or []}
             for n in holes:

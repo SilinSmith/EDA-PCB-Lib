@@ -307,10 +307,31 @@ def judge(pool, questions: Optional[Sequence[dict]] = None,
         return {"skipped": True, "reason": "FUSION_JUDGE=0"}
     qs = list(questions if questions is not None else
               SV.open_questions(pool, assign or {}))
-    if mode == "sheet" and SHEET_ON:
-        # 整表一次请求：给模型的是**整个待裁决集合的拼图 + 全局位号约束**。
-        return judge_sheet(pool, qs, limit=min(limit, SHEET_MAX), client=client,
-                           log=log)
+    # ★★ `MODE` 默认是 `auto`，而原来只有 `mode == "sheet"` 才走整表 —— **于是那条
+    #    「整表上下文」的路（`SHEET_ON` 默认开、`_sheet_image`/`_known_designators`
+    #    全是为它写的）从来就没有被执行过**：默认配置下每次都是逐题一张小图。
+    #    现在 `auto` 也会在**硬题数 ≥ `SHEET_MIN`** 时走整表（`SHEET_MIN` 设很大
+    #    就等于退回老行为，供 A/B）。
+    hard = [q for q in qs if not q.get("free")]
+    use_sheet = (mode == "sheet") or (mode == "auto" and SHEET_ON
+                                      and len(hard) >= SHEET_MIN)
+    if use_sheet and SHEET_ON:
+        rep = judge_sheet(pool, hard, limit=min(limit, SHEET_MAX), client=client,
+                          log=log)
+        # 整表模式排不了「零候选」的自由读数题（没有 A/B 可摆），单独补一轮逐题问。
+        free = [q for q in qs if q.get("free")]
+        if free:
+            rep2 = judge(pool, free, assign=assign, mode="read", limit=len(free),
+                         client=client, log=log)
+            rep.setdefault("rows", []).extend(rep2.get("rows") or [])
+            for k, v in rep2.items():
+                if k == "rows" or k == "mode":
+                    continue
+                if isinstance(v, (int, float)) and isinstance(rep.get(k), (int, float)):
+                    rep[k] = rep[k] + v
+            rep["n_free_asked"] = rep2.get("n_asked", 0)
+            rep["mode"] = "sheet+free"
+        return rep
     bgr = load_image(pool)
     rep = {"mode": mode, "n_q": len(qs), "n_asked": 0, "n_answered": 0,
            "n_new": 0, "n_agree_top": 0, "n_agree_alt": 0, "n_other": 0,
@@ -319,6 +340,11 @@ def judge(pool, questions: Optional[Sequence[dict]] = None,
     if bgr is None:
         rep["error"] = "读不到图（pool.doc.image.path 解析失败）"
         return rep
+    # ★ 上下文块要用的两样东西只算一次：可疑项索引（`plausible`）与全局已定位号。
+    sus_idx = _sus_index(pool, log=log) if CTX else {}
+    confirmed = _known_designators(pool, qs) if CTX else ""
+    rep["ctx"] = bool(CTX and (sus_idx or confirmed))
+    rep["n_ctx_slot"] = len(sus_idx)
 
     for q in qs[:max(0, int(limit))]:
         sid = q["slot"]
@@ -344,6 +370,12 @@ def judge(pool, questions: Optional[Sequence[dict]] = None,
         else:
             prompt = PROMPT % KIND_HINT[kind_of(sid)]
             crop_mode = None
+        # ★★ 把规格要求的五样东西挂上去（`CTX=0` 时退化成老行为）。
+        ctx = context_block(pool, sid, sus_idx=sus_idx, confirmed=confirmed)
+        if ctx:
+            prompt = prompt + "\n\n供你判断的上下文：\n" + ctx
+        if CTX and CTX_WHY:
+            prompt = prompt + WHY_INSTR
         # ★ 不给**没有读数**的位号槽位出题。
         #
         # 这类槽位的 top 是装配层的占位键（`p002`）、alt 是 `prior:run_inwindow`
@@ -368,6 +400,10 @@ def judge(pool, questions: Optional[Sequence[dict]] = None,
         row = {"slot": sid, "raw": raw.strip()[:60], "ans": ans, "sec": round(dt, 1),
                "top": (q.get("top") or {}).get("value"), "alt": (q.get("alt") or {}).get("value"),
                "mode": "free" if is_free else ("choose" if use_choose else "read")}
+        # ★ 第四件事「给依据」：模型另外给的那一行，只进证据与报告，不参与取答案。
+        why = _why_of(raw)
+        if why:
+            row["why"] = why
         if not ans:
             row["res"] = "empty"
             rep["rows"].append(row)
@@ -431,7 +467,10 @@ def _settle(pool, q, ans, raw, dt, reg, row, rep, log=None) -> dict:
              source="vlm:judge",
              evidence={"原样": (raw or "").strip()[:120],
                        "取景框": (reg.to_dict()["box"] if reg is not None else None),
-                       "耗时": round(dt, 1), "分数倍数": mult},
+                       "耗时": round(dt, 1), "分数倍数": mult,
+                       # ★ 「给依据」—— 第四件事。没有它，模型的判断既没法复核也没法拒。
+                       "依据": (row.get("why") or _why_of(raw) or "")[:200],
+                       "上下文": bool(CTX)},
              question=pool.hy.slots[sid].question if sid in pool.hy.slots else "",
              meta=dict(pool.meta.get(sid) or {}))
     known = {str(a.value) for a in pool.alts(sid)}
@@ -452,6 +491,227 @@ def _settle(pool, q, ans, raw, dt, reg, row, rep, log=None) -> dict:
         log("  %-18s top=%-8s alt=%-8s -> vlm=%-8s [%s]" % (
             sid, row.get("top"), row.get("alt"), ans, row["res"]))
     return row
+
+
+# ======================================================================
+# ★★ 上下文块 —— 规格要求模型拿到的五样东西
+# ======================================================================
+# `workflow.html` 的 `llm_judge` 节点写明了它的**上下文**该是什么：
+#     类型 + 已定位号 + 邻居读数 + 冲突内容 + 违规约束
+# 以及它该做的**四件事**：判合理性 / 定错误点 / 排重扫优先级 / 给依据。
+#
+# 而这正是 owner m25661 说的「**你根本就没有准备可以好好判断的上下文环境**」：
+# 原来每道题只切一小块像素、再摆两个候选（`PROMPT_ALT`），模型看不到类型、
+# 看不到同一颗元件别的字段、看不到旁边那几颗是什么、看不到自己这张图上已经
+# 定下来的位号、更看不到 `plausible` 已经算出来的冲突与违规。**只有一块像素和
+# 两个字符串的局面下，「模型没用」这个结论是不成立的 —— 它压根没被判过。**
+#
+# 这一节把上面五样东西拼成一段文字，挂到 `judge()`（逐题）与 `judge_sheet()`
+# （整表）的提示词上。默认**开**（`FUSION_JUDGE_CTX=0` 关，供 A/B）。
+CTX = env_on("FUSION_JUDGE_CTX", "1")
+# 让模型在答案之后另起一行给一句依据（`依据=...`）。`clean_answer` 只取第一行，
+# 所以这一行**不会**污染答案本身；它只进证据与报告，供人复核。
+CTX_WHY = env_on("FUSION_JUDGE_WHY", "1")
+# 邻居最多提几颗
+CTX_NB = int(os.environ.get("FUSION_JUDGE_CTX_NB", "6"))
+# 上下文块的字数上限（提示词预算是硬约束）
+CTX_MAXCH = int(os.environ.get("FUSION_JUDGE_CTX_MAXCH", "2400"))
+# ⚠ 可疑项的**严重度下限**。`plausible` 的 `value_outlier` 只有 0.25，它自己的
+#   `hint` 就写着「电源滤波电容本来就比旁路电容大两个量级 ⇒ **可能是真设计**」——
+#   把这种弱信号当「违规」塞给模型会让它去改本来对的值。只放 ≥0.5 的进去
+#   （`key_duplicate` 0.70 / `key_type_mismatch` 0.56 / 网络类 0.60/0.90）。
+CTX_SEV = float(os.environ.get("FUSION_JUDGE_CTX_SEV", "0.5"))
+CTX_SUS_MAX = int(os.environ.get("FUSION_JUDGE_CTX_SUS", "2"))
+WHY_INSTR = "\n最后另起一行写 `依据=<一句话说明你怎么看出来的>`（只写这一行，不要展开）。"
+# 整表模式：依据写在**同一行**的答案后面（整表一行的排版不能被打乱）
+WHY_SHEET = ("\n每行可以在答案后面追一句 `依据=<…>`，例如 `3:B 依据=左侧那格印的是 C12`。"
+             "不想写就不写。")
+_WHY_RE = re.compile(r"(?:依据|WHY)\s*[=:：]\s*(.+)")
+
+
+def _split_why(txt: str) -> Tuple[str, str]:
+    """把 `A 依据=xxx` 拆成 `("A", "xxx")`（拆不出依据时第二项为 ""）。"""
+    t = str(txt or "")
+    m = _WHY_RE.search(t)
+    if not m:
+        return t, ""
+    return (t[:m.start()] + t[m.end():]), m.group(1).strip().strip("*` ")[:160]
+
+
+def _cid_of(sid: str) -> Optional[str]:
+    p = (sid or "").split(".")
+    return p[1] if len(p) > 2 and p[0] == "comp" else None
+
+
+def _components(pool) -> Dict[str, dict]:
+    return {c.get("id"): c for c in (pool.doc.get("components") or []) if c.get("id")}
+
+
+def _ctype_of(pool, sid: str) -> str:
+    """★ 上下文第 1 样：**类型**。它决定「这个位号符不符合这颗元件的命名习惯」。"""
+    m = pool.meta.get(sid) or {}
+    if m.get("type"):
+        return str(m["type"])
+    cid = _cid_of(sid)
+    if not cid:
+        return ""
+    c = _components(pool).get(cid) or {}
+    if c.get("type"):
+        return str(c["type"])
+    a = (pool.assigned.get("comps") or {}).get(cid) or {}
+    return str(a.get("type") or "")
+
+
+def _read_field(pool, cid: str, field: str) -> str:
+    """这颗元件上某个字段**读出来的**值（只认读来源，且不是占位符）。"""
+    sid = "comp.%s.%s" % (cid, field)
+    b = pool.best(sid)
+    if b is None or not _is_read(getattr(b, "source", "")):
+        return ""
+    if PLACEHOLDER.match(str(b.value)):
+        return ""
+    return str(b.value)
+
+
+def _siblings(pool, sid: str, want: str) -> str:
+    """★ 上下文第 3 样的一半：**同一颗元件上别的字段**读成了什么。
+
+    这是最值钱的一条：`U1` 读成 `U3` 的时候，同一颗上的 `partname` 是 `USB_D+`，
+    就能一眼看出这颗根本不是 `U*` 而是连接器。
+    """
+    cid = _cid_of(sid)
+    if not cid:
+        return ""
+    out = []
+    for f in ("key", "partname", "value"):
+        if f == want:
+            continue
+        v = _read_field(pool, cid, f)
+        if v:
+            out.append("%s=%s" % (f, v))
+    return " ".join(out)
+
+
+def _neighbors(pool, sid: str, n: Optional[int] = None) -> str:
+    """★ 上下文第 3 样的一半：**空间近邻**那几颗元件各是什么。
+
+    位号是**全图唯一**的，所以「旁边那个 `C2` 是不是已经被别人占了」必须让模型
+    看见 —— 逐题模式看不到，整表模式也只有一张已经确定的清单。
+    """
+    cid = _cid_of(sid)
+    if not cid:
+        return ""
+    comps = _components(pool)
+    me = CL._box4((comps.get(cid) or {}).get("bbox_img")
+                  or (comps.get(cid) or {}).get("bbox"))
+    if me is None:
+        return ""
+    mx, my = (me[0] + me[2]) / 2.0, (me[1] + me[3]) / 2.0
+    rows = []
+    for other, c in comps.items():
+        if other == cid:
+            continue
+        b = CL._box4(c.get("bbox_img") or c.get("bbox"))
+        if b is None:
+            continue
+        d = ((b[0] + b[2]) / 2.0 - mx) ** 2 + ((b[1] + b[3]) / 2.0 - my) ** 2
+        k = _read_field(pool, other, "key")
+        ct = str(c.get("type") or "")
+        if not k and not ct:
+            continue
+        rows.append((d, "%s%s%s" % (k or "?", "/" + ct if ct else "",
+                                    "(%s)" % _read_field(pool, other, "value")
+                                    if _read_field(pool, other, "value") else "")))
+    rows.sort(key=lambda r: r[0])
+    n = CTX_NB if n is None else int(n)
+    return " ".join(r[1] for r in rows[:max(0, n)])
+
+
+def _sus_index(pool, sus: Optional[Sequence[dict]] = None,
+               log=None) -> Dict[str, List[dict]]:
+    """★ 上下文第 4、5 样：**冲突内容 + 违规约束**（`plausible.check` 的产出）。
+
+    它本来就是给 `rescan` 排优先级用的（`{kind, severity, why, slots, nets, hint,
+    need_llm}`），但**从来没有进过给模型的提示词** —— 于是模型只能从像素猜，
+    而这些「位号重号 / 类型不符 / 参数离群 / 网络类违规」正是它最该知道的。
+    """
+    if sus is None:
+        try:
+            from fusion import plausible as PL
+            sus = PL.check(pool)
+        except Exception as exc:                           # noqa: BLE001
+            if log is not None:
+                log("  [ctx] plausible 取不到：%s" % exc)
+            sus = []
+    idx: Dict[str, List[dict]] = {}
+    for it in sus or []:
+        if float(it.get("severity") or 0.0) < CTX_SEV:
+            continue
+        if it.get("need_llm") is False:
+            continue
+        for s in (it.get("slots") or []):
+            idx.setdefault(s, []).append(it)
+    # 严重度高的排前面（`plausible` 已经按它排过序，这里再保证一次）
+    for s in idx:
+        idx[s].sort(key=lambda d: -float(d.get("severity") or 0.0))
+    return idx
+
+
+def context_block(pool, sid: str, sus_idx: Optional[dict] = None,
+                  confirmed: Optional[str] = None) -> str:
+    """把「类型 + 已定位号 + 邻居读数 + 冲突内容 + 违规约束」拼成一段文字。"""
+    if not CTX:
+        return ""
+    lines: List[str] = []
+    ct = _ctype_of(pool, sid)
+    if ct:
+        lines.append("元件类型：%s" % ct)
+    sib = _siblings(pool, sid, sid.split(".")[-1])
+    if sib:
+        lines.append("同一颗元件上别的字段读数：%s" % sib)
+    nb = _neighbors(pool, sid)
+    if nb:
+        lines.append("邻近元件：%s" % nb)
+    if confirmed:
+        lines.append(confirmed.strip())
+    for it in (sus_idx or {}).get(sid, [])[:max(1, CTX_SUS_MAX)]:
+        lines.append("⚠ 已被判可疑（%s）：%s ⇒ %s"
+                     % (it.get("kind"), (it.get("why") or "").strip(),
+                        (it.get("hint") or "").strip()))
+    if not lines:
+        return ""
+    return "\n".join(lines)[:max(200, CTX_MAXCH)]
+
+
+def context_lines(pool, items, sus_idx: Optional[dict] = None) -> str:
+    """整表模式的**逐格上下文** —— 一行一格，插在候选清单里。"""
+    if not CTX:
+        return ""
+    out = []
+    for k, (q, _reg) in enumerate(items):
+        sid = q["slot"]
+        bits = []
+        ct = _ctype_of(pool, sid)
+        if ct:
+            bits.append("类型=%s" % ct)
+        nb = _neighbors(pool, sid, 4)
+        if nb:
+            bits.append("邻近=%s" % nb)
+        for it in (sus_idx or {}).get(sid, [])[:1]:
+            bits.append("可疑=%s(%s)" % (it.get("kind"), (it.get("why") or "")[:70]))
+        out.append("%d: ｜%s" % (k, " ｜".join(bits)) if bits else "%d: ｜（无额外上下文）" % k)
+    return "\n".join(out)
+
+
+def _why_of(raw: str) -> str:
+    """从模型的回答里抽出 `依据=...` 那一行（不参与取答案）。"""
+    if not raw:
+        return ""
+    for ln in str(raw).splitlines():
+        m = _WHY_RE.search(ln)
+        if m:
+            return m.group(1).strip().strip("*` ")[:160]
+    return ""
 
 
 def resolve_again(pool, rep=None) -> dict:
@@ -479,14 +739,21 @@ SHEET_ON = env_on("FUSION_JUDGE_SHEET", "1")
 SHEET_CELL = int(os.environ.get("FUSION_JUDGE_CELL", "260"))
 SHEET_COLS = int(os.environ.get("FUSION_JUDGE_COLS", "3"))
 SHEET_MAX = int(os.environ.get("FUSION_JUDGE_SHEET_MAX", "36"))
+# `auto` 模式下硬题数 ≥ 这个值才走整表。**默认关**（设成很大的数）—— 见
+# `judge()` 里的长注释：整表路径实测在 4 张上 −1.07（case 7 59.62 → 55.32，
+# 元件 0.9167 → 0.8333）。要复现就 `FUSION_JUDGE_MODE=sheet`。
+SHEET_MIN = int(os.environ.get("FUSION_JUDGE_SHEET_MIN", "9999"))
 
 SHEET_PROMPT = (
     "这是一张电路图上的 %d 个待确认标注，排成 %d 列的拼图，每格左上角有编号 `#k`。\n"
     "请只看每个格子**正中央**那个字符串，逐行回答，格式严格为 `k:A` 或 `k:B`；\n"
     "若两个候选都不对，回答 `k:OTHER 你看到的原文`。\n"
+    "下面是每格的候选，以及这一格的**额外上下文**（元件类型 / 邻近元件 / "
+    "已被判可疑的原因）。位号在一张图上**唯一**，所以「邻近元件」里的号都已经被别人用了，"
+    "不要重复选。请结合上下文判断，不要只看像素。\n"
     "候选：\n%s\n"
     "%s"
-    "不要解释，不要输出别的行列。"
+    "不要输出别的行列。"
 )
 SHEET_LINE = re.compile(r"^#?\s*(\d{1,3})\s*[:：.、]\s*(.*)$")
 
@@ -596,7 +863,16 @@ def judge_sheet(pool, questions=None, limit: int = SHEET_MAX, client=None,
     cand = "\n".join("%d: A=%s / B=%s" % (k, (q.get("top") or {}).get("value"),
                                           (q.get("alt") or {}).get("value"))
                      for k, (q, _r) in enumerate(items))
+    # ★★ 逐格上下文：类型 / 邻近元件 / 可疑原因（规格的「邻居读数 + 冲突内容 +
+    #    违规约束」）。位号是全图唯一的，模型必须知道旁边那颗是不是已经被占了。
+    sus_idx = _sus_index(pool, log=log) if CTX else {}
+    ctx_lines = context_lines(pool, items, sus_idx=sus_idx)
+    if ctx_lines:
+        cand = cand + "\n每格的额外上下文（类型/邻近元件/已判可疑）：\n" + ctx_lines
+    rep["ctx"] = bool(CTX and ctx_lines)
     prompt = SHEET_PROMPT % (len(items), SHEET_COLS, cand, _known_designators(pool, qs))
+    if CTX and CTX_WHY:
+        prompt = prompt + WHY_SHEET
     ask = client or _client_ask()
     try:
         txt, dt = ask(sheet, prompt, timeout=float(os.environ.get("FUSION_SHEET_TIMEOUT",
@@ -607,20 +883,27 @@ def judge_sheet(pool, questions=None, limit: int = SHEET_MAX, client=None,
     rep["n_asked"] = 1
     rep["sec"] = round(float(dt), 1)
     got: Dict[int, str] = {}
+    whys: Dict[int, str] = {}
     for ln in (txt or "").splitlines():
         m = SHEET_LINE.match(ln.strip())
         if not m:
             continue
         k = int(m.group(1))
         if 0 <= k < len(items):
-            got[k] = m.group(2).strip().strip("*` ")
+            body, wy = _split_why(m.group(2).strip().strip("*` "))
+            got[k] = body.strip().strip("*` ")
+            if wy:
+                whys[k] = wy
     rep["n_raw"] = len(got)
+    rep["n_why"] = len(whys)
     for k, ans in got.items():
         q, reg = items[k]
         sid = q["slot"]
         top, alt = (q.get("top") or {}).get("value"), (q.get("alt") or {}).get("value")
         row = {"slot": sid, "raw": ans[:60], "ans": ans, "sec": rep["sec"],
                "top": top, "alt": alt, "mode": "sheet"}
+        if whys.get(k):
+            row["why"] = whys[k]
         up = ans.upper()
         if up.startswith("A") and len(up) <= 3:
             ans = str(top)

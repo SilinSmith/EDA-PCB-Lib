@@ -157,9 +157,9 @@ textarea{resize:vertical;min-height:170px}
 
 <script type="application/json" id="graphdata">
 {
- "name": "目标架构 · 证据层 → 约束求解 → 迭代重扫（实测：官方 10GT 9 张 58.63 / 派生 19 张 36.35 · 交付口径 VLM auto + fusion on · 同一批官方 9 张在本会话起点是 44.16）",
+ "name": "目标架构 · 证据层 → 约束求解 → 迭代重扫（实测：官方 10GT 9 张 58.63 / 派生 19 张 36.35 · 交付口径 VLM auto + fusion on · **关掉 LLM 轮还是 58.63，逐位相同**）",
  "score": null,
- "note": "**★ 第七批（本会话后续）**\n\n**交付口径成绩：官方 `10GT` 9 张 44.16 → 58.63、派生 19 张 34.69 → 36.35**\n（`tools/eval/fast.py`，不加 `--no-vlm`、不设任何 `$env:` ⇒ VLM `auto` + `-fusion on` + `-mode off`）。\n\n| # | 改了什么 | 文件 | 官方 9 | 派生 19 | 结论 |\n|---|---|---|---|---|---|\n| 5 | 引脚号裁片**描边剔除**（绿色 no-connect 叉与数字同框被读成 `K4`/`L14`） | `stage2/text.py` | 56.71 → **57.54** | 35.39 → **35.75** | 采纳，只对 `pin_number,pin_name` |\n| 6 | 导线端点**同网吸附**（`STAGE2_EDGE_SNAP=20`，只吸近似垂直的邻居） | `stage2/assemble.py` | 57.54 → **58.63** | 35.75 → **36.35** | 采纳，增量全在 netL |\n| 7 | 形状惩罚真的改分（`FUSION_SHAPE_W`） | `fusion/priors.py` | 0 | −0.57 | **判负**，默认回 0.0 |\n| 8 | boxscan（给零候选元件建框去问一遍） | `fusion/claims.py` | −0.01 | +0.05 | **判负**，默认回 0 |\n| 9 | `own.assign` 全局一对一归属（`STAGE2_OWN_ASSIGN`） | `stage2/assign.py` | 0 | 0 | **零效果**，默认 0 |\n| 10 | GND 系引脚并成一条网 | — | — | — | **证伪**（官方 GT 不这么编码） |\n\n**★ 第七批的方法学（比上表更值钱）**\n1. **「A/B 有差别」不等于「你改的那条分支生效了」。** boxscan 第一版实测有差，\n   但把 `_fusion_report.json` 的 `notes` 打出来才看到每张只建了 1 个槽位 ——\n   分差是那 1 颗元件的读数对错，不是 boxscan 整体的效果。改完先证明分支执行了、\n   执行了几次，再解释分差。\n2. **对照臂必须配对口径。** boxscan 在 VLM 开着时基本是 no-op\n   （`_add_vlm` 已把 `comp.<cid>.key` 覆盖到 82/83、12/12、22/22），只能在\n   `--no-vlm` + `FUSION_LLM=1` 这个口径量；交付口径的 58.63 / 36.35 是另一张表。\n3. **归属类改动可能先天没有空间。** `own.assign` 端到端两档**逐位相同**，\n   因为 `owned` 本来就是一份划分 —— 一对一不变式**改造前就成立**。\n   先量天花板（`tools/diag/_ownasgn.py --headroom --gt`：官方 9 张 124 颗里\n   读对 104 / 空 11 / 错 9，而这 20 颗失配里只有 **1 颗**的候选池里已有正确读法），\n   再决定要不要改。\n4. **一个数字可以在两种跑法下不同。** 曾出现同参数下 9 张单跑 51.06 vs\n   19 张合跑的子集 51.74（差 <1 分）。**小于 ~1 分的差值采信前必须重复测量**\n   （本轮 `reg9` 与 `reg19` 印出的 10GT 子集已逐位一致）。\n5. **改默认值之前先看它有没有被执行。** `fusion/run.py` 的 `_fusion_report.json`\n   原先只在它自己的 `main()` 里落盘，而真实提交路径直接调 `run_case` ⇒\n   提交产物里**根本没有逐轮明细**。已在 `submission/run.py` 补上，并在\n   `fusion/run.py` 的 `rep` 里加了 `notes`。\n\n---\n\n**★ 第六批（本会话 2026-10-07）的四项改动与一条方法学**\n\n本会话把官方 `10GT` 的 9 张从 **44.16 拉到 56.71（+12.55）**，派生 19 张 34.77 → 35.39。\n四次改动全部落在**证据层与归属层**，方向是一致的：**用「形状/拓扑关系」替换「距离」当闸门。**\n\n| # | 改了什么 | 文件 | 官方 9 | 派生 19 |\n|---|---|---|---|---|\n| 1 | 稀疏封装引脚号不再被位置先验覆盖（`FUSION_BOX_PIN_PRIOR=0`） | `fusion/priors.py` | 44.16 → **53.41** | — |\n| 2 | 并网改看「端点微越过 + 不平行」（规则 5，`STAGE1_WIRE_OVER=12`，`WIRE_TOL` 回退 1.5） | `stage1/labels.py` · `stage1/nets.py` | 55.73 → **56.31** | 34.69 → **35.23** |\n| 3 | 文字归属改量「框到框」而不是「文字中心到框」（`STAGE2_OWN_BBOX=1`） | `stage2/assign.py` | 56.31 → **56.45** | 34.69 → **35.28** |\n| 4 | 引脚号候选的沿边衰减加快（`STAGE2_PINNUM_DECAY` 20 → 10） | `stage2/assign.py` | 56.45 → **56.71** | 35.28 → **35.39** |\n\n**★ 方法学（本会话踩出来的，比上面四条更值钱）**\n1. **`--no-vlm` 值 5.2 分。** 同一份代码、只差一个开关，均值 29.93 vs 24.73；`component_f1`\n   0.6483 vs 0.5260。**两批实验绝对不能同表比**。凡报数字先写清 VLM 是开是关。\n2. **共用输出目录会让诊断漂移。** `work/_fast_out` 每次跑都被覆盖，同一条命令隔一次跑就能得到\n   57 与 60 两个「未匹配元件数」。现在一律用 `fast.py --out <名>` 起独立目录。\n3. **自造的 GT 会骗你。** `10GT`（竞赛格式）box 键对上 **21/21 = 100%**；派生 `200_train_cases`\n   按画图工具是 `jlc` 46.6% / `Altium` 35.3% / `Datasheet` **21.2%** / `other` **7.3%**。\n   594 个未对上的 box 里 **80.3% 数学上不可赢**（占位符 294 · GT 里压根没这个键 183）。\n   在派生档上追分 = 对着噪声调参。详见 `reports/GT保真度与位号上限.md` 与「GT 保真度检查」节点。\n\n---\n\n**用户 m23186 的架构批评（本轮任务的直接来源）**：『你要坚持把整个大局做出来才能得到显著的性能增益……你要核对一下你现在用了什么算法什么思路，以及总的流程，所有的业务逻辑到底是怎么样的。』\n\n**★ 第五批审计的三条硬结论**\n1. **LLM 确实在引导重新框选与重新识别 —— 但它被默认配置关掉了。**\n   唯一一处是 `fusion/cropfix.py`（LLM 定方向 → 阶梯扩框 → 裁新图 → LLM 重读 → 自洽性采纳）。\n   而 `submission/run.py:356-357` 在默认 `-fusion on` 时把 `FUSION_CROPFIX` 与 `FUSION_LLM` 都置 `0`\n   ⇒ **交上去的那一份里融合层的 LLM 轮一次都没跑**。220 张上 `-fusion on`（无 LLM 轮）= 28.4200，\n   与不融合的 VLM 补强 28.4133 只差 **+0.007** —— 这就是「略微上升所以看不出价值」的原因。\n2. **LLM 能输出自己的读数**：`vlm:judge 1.5` / `vlm:cropfix 1.25` / `vlm:audit 1.30` / `vlm:fix 1.25` /\n   `vlm:rescan 1.2` / `vlm:enrich 1.15`，**全部以候选身份回池，没有一条直接改文档**（这是对的，别改）。\n3. **有两块「写了但不通」**：`doc.apply` 只认 `comp.*.key/value/partname` ⇒ **`pin.*` 与 `netlabel.*` 的裁决进不了交付文档**；\n   `stage2/assemble.py` 的 `num_of` 没导出 ⇒ 引脚号连映射回去都做不了。两块都画在下面对应节点的【第五批·审计】里。\n\n**★ 生产链的实测事实**：`_submit_out220r36` 的 `stage2` = `stage3` = `final_results` **逐字节相同**（MD5 `28F99796`）= **25.9861**；\n带 VLM 补强的 `work\\_fusion_vlm` = **28.4133**。**同一份 stage2，补强 +2.43 分，生产链没交。**\n\n\n---\n\n**★★ 第六批（本会话）在 `note` 顶部，此处以下为历史批次记录。**\n",
+ "note": "**★ 第八批：把 19 个「★要新写」逐个对账，并给 LLM 补上下文**\n\n19 个 `kind='new'` 徽标逐个读代码对账（不是信进度叙述）。结论：\n**16 个是「早就落地、只是徽标没改」**（`know` `pool` `solve` `plausible` `conflict` `llm_judge`\n`rescan` `iterate` `cropfix` `audit` `own` `ev_bridge` `pincol` `ownnum` `boxpinprior` `gtcheck`），\n**3 个是「量过、判负/证否」**（`fixstr` `batch` `boxscan`）—— 已全部去掉「要新写」徽标。\n\n| # | 改了什么 | 文件 | 量出来的结果 | 结论 |\n|---|---|---|---|---|\n| 1 | **LLM 上下文块**（类型 / 同件别的字段 / 邻近元件 / 已定位号 / 已判可疑，+ 要求回一句 `依据=`） | `fusion/llm_judge.py` | VLM 关时官方 9 张 **52.48 → 53.27（+0.79）** | 采纳，默认开 |\n| 2 | **整表裁决（contact sheet）真的被执行** | `fusion/llm_judge.py` | 4 张 **59.62 → 55.32（−1.07）**，且更慢（160.5 s vs 83.6 s） | **判负**，`SHEET_MIN=9999` 默认关 |\n| 3 | **交付口径三臂**：LLM 关 / LLM 开 / LLM 开+上下文 | `fusion/run.py` | 三个臂**全是 58.63 且逐位相同** | LLM 轮在交付口径下值 **0.00**，却要 **+1.8 h/220 张** |\n| 4 | `judge` / `rescan` 各自包 `try` | `fusion/run.py` | `judge` 一抛异常该 case 原本**一份融合产物都没有** | 采纳 |\n| 5 | 收敛判据用**本轮结束**的题面（`FUSION_CONV_EXACT=1`） | `fusion/run.py` | case 1 实为 `n_q_next 15`，旧判据看的是上一轮 | 采纳 |\n| 6 | 位号取景框取**最高分**那个（`FUSION_REGION_TOPK=1`） | `fusion/claims.py` | `stage2` 从不保证 `desig_slots` 按分降序 | 采纳 |\n| 7 | `solve.gap_fill` 的负分跳过**留计数** | `fusion/solve.py` | 原为静默 `continue` | 采纳（只加计数） |\n\n**★ 第八批的方法学（比上表更值钱）**\n\n1. **「开关开着」不等于「这条路被执行过」。** `SHEET_ON` 默认 `1`、`_sheet_image` /\n   `_known_designators` / `judge_sheet` 全是为整表写的，**但入口是\n   `if mode == \"sheet\" and SHEET_ON:`，而 `MODE` 默认 `\"auto\"`** ⇒ 那条路一次都没跑过。\n   「没有上下文环境」这句话因此有了代码级坐标。**默认值 ≠ 生效值**：双开关（允许 + 选择）\n   两个都要看。尺子：`python tools/diag/_jrep.py --out <产物目录> [--rows]`。\n2. **提示词改动必须回读「模型到底收到了什么」。** 分不变也可能是真的生效了。\n   `ctx=1` 时 **12/12 行都有 `依据=…`**，`ctx=0` 时 **0/12**。只报分数说不清为什么变，\n   只报 `why` 说不清值不值 —— **两样都要**。\n3. **「LLM 有没有用」必须先给它上下文，再问。** 本轮第一次给出有前提的答案：\n   在 VLM `auto` 的交付口径下，整个 LLM 轮 **+0.00**（三臂逐位相同）；在 VLM 关时 **+0.79**。\n   ⇒ 它是在**没有 VLM** 时的补强，不是交付口径的增量。\n4. **审计报告里的「这里有个 bug」四个字不等于这里真有 bug。** 一份审计说\n   `claims.py` 的 `pinpts.get(cid)` 与 `doc[\"pins\"]` 的键对不上；实测\n   `_pinbox.py`：融合读的是 **stage1** 文档，`pins` 按 `cid` 记（case 1 = 22/22/22 全中），\n   按**位号**记键的是 **stage2** 文档 —— 审计把两份文档搞混了，\n   照它改**反而会引入 bug**。**复现不出来就不是 bug。**\n5. **一个「零效果」的改动，先问它有没有可赢空间。** `own.assign` 端到端逐位相同，\n   因为一对一不变式**改造前就成立**；官方 9 张 124 颗里失配 20 颗，而其中只有\n   **1 颗**的候选池里有正确读法。先量天花板，再决定动不动手。\n\n---\n\n**★ 第七批（本会话后续）**\n\n**交付口径成绩：官方 `10GT` 9 张 44.16 → 58.63、派生 19 张 34.69 → 36.35**\n（`tools/eval/fast.py`，不加 `--no-vlm`、不设任何 `$env:` ⇒ VLM `auto` + `-fusion on` + `-mode off`）。\n\n| # | 改了什么 | 文件 | 官方 9 | 派生 19 | 结论 |\n|---|---|---|---|---|---|\n| 5 | 引脚号裁片**描边剔除**（绿色 no-connect 叉与数字同框被读成 `K4`/`L14`） | `stage2/text.py` | 56.71 → **57.54** | 35.39 → **35.75** | 采纳，只对 `pin_number,pin_name` |\n| 6 | 导线端点**同网吸附**（`STAGE2_EDGE_SNAP=20`，只吸近似垂直的邻居） | `stage2/assemble.py` | 57.54 → **58.63** | 35.75 → **36.35** | 采纳，增量全在 netL |\n| 7 | 形状惩罚真的改分（`FUSION_SHAPE_W`） | `fusion/priors.py` | 0 | −0.57 | **判负**，默认回 0.0 |\n| 8 | boxscan（给零候选元件建框去问一遍） | `fusion/claims.py` | −0.01 | +0.05 | **判负**，默认回 0 |\n| 9 | `own.assign` 全局一对一归属（`STAGE2_OWN_ASSIGN`） | `stage2/assign.py` | 0 | 0 | **零效果**，默认 0 |\n| 10 | GND 系引脚并成一条网 | — | — | — | **证伪**（官方 GT 不这么编码） |\n\n**★ 第七批的方法学（比上表更值钱）**\n1. **「A/B 有差别」不等于「你改的那条分支生效了」。** boxscan 第一版实测有差，\n   但把 `_fusion_report.json` 的 `notes` 打出来才看到每张只建了 1 个槽位 ——\n   分差是那 1 颗元件的读数对错，不是 boxscan 整体的效果。改完先证明分支执行了、\n   执行了几次，再解释分差。\n2. **对照臂必须配对口径。** boxscan 在 VLM 开着时基本是 no-op\n   （`_add_vlm` 已把 `comp.<cid>.key` 覆盖到 82/83、12/12、22/22），只能在\n   `--no-vlm` + `FUSION_LLM=1` 这个口径量；交付口径的 58.63 / 36.35 是另一张表。\n3. **归属类改动可能先天没有空间。** `own.assign` 端到端两档**逐位相同**，\n   因为 `owned` 本来就是一份划分 —— 一对一不变式**改造前就成立**。\n   先量天花板（`tools/diag/_ownasgn.py --headroom --gt`：官方 9 张 124 颗里\n   读对 104 / 空 11 / 错 9，而这 20 颗失配里只有 **1 颗**的候选池里已有正确读法），\n   再决定要不要改。\n4. **一个数字可以在两种跑法下不同。** 曾出现同参数下 9 张单跑 51.06 vs\n   19 张合跑的子集 51.74（差 <1 分）。**小于 ~1 分的差值采信前必须重复测量**\n   （本轮 `reg9` 与 `reg19` 印出的 10GT 子集已逐位一致）。\n5. **改默认值之前先看它有没有被执行。** `fusion/run.py` 的 `_fusion_report.json`\n   原先只在它自己的 `main()` 里落盘，而真实提交路径直接调 `run_case` ⇒\n   提交产物里**根本没有逐轮明细**。已在 `submission/run.py` 补上，并在\n   `fusion/run.py` 的 `rep` 里加了 `notes`。\n\n---\n\n**★ 第六批（本会话 2026-10-07）的四项改动与一条方法学**\n\n本会话把官方 `10GT` 的 9 张从 **44.16 拉到 56.71（+12.55）**，派生 19 张 34.77 → 35.39。\n四次改动全部落在**证据层与归属层**，方向是一致的：**用「形状/拓扑关系」替换「距离」当闸门。**\n\n| # | 改了什么 | 文件 | 官方 9 | 派生 19 |\n|---|---|---|---|---|\n| 1 | 稀疏封装引脚号不再被位置先验覆盖（`FUSION_BOX_PIN_PRIOR=0`） | `fusion/priors.py` | 44.16 → **53.41** | — |\n| 2 | 并网改看「端点微越过 + 不平行」（规则 5，`STAGE1_WIRE_OVER=12`，`WIRE_TOL` 回退 1.5） | `stage1/labels.py` · `stage1/nets.py` | 55.73 → **56.31** | 34.69 → **35.23** |\n| 3 | 文字归属改量「框到框」而不是「文字中心到框」（`STAGE2_OWN_BBOX=1`） | `stage2/assign.py` | 56.31 → **56.45** | 34.69 → **35.28** |\n| 4 | 引脚号候选的沿边衰减加快（`STAGE2_PINNUM_DECAY` 20 → 10） | `stage2/assign.py` | 56.45 → **56.71** | 35.28 → **35.39** |\n\n**★ 方法学（本会话踩出来的，比上面四条更值钱）**\n1. **`--no-vlm` 值 5.2 分。** 同一份代码、只差一个开关，均值 29.93 vs 24.73；`component_f1`\n   0.6483 vs 0.5260。**两批实验绝对不能同表比**。凡报数字先写清 VLM 是开是关。\n2. **共用输出目录会让诊断漂移。** `work/_fast_out` 每次跑都被覆盖，同一条命令隔一次跑就能得到\n   57 与 60 两个「未匹配元件数」。现在一律用 `fast.py --out <名>` 起独立目录。\n3. **自造的 GT 会骗你。** `10GT`（竞赛格式）box 键对上 **21/21 = 100%**；派生 `200_train_cases`\n   按画图工具是 `jlc` 46.6% / `Altium` 35.3% / `Datasheet` **21.2%** / `other` **7.3%**。\n   594 个未对上的 box 里 **80.3% 数学上不可赢**（占位符 294 · GT 里压根没这个键 183）。\n   在派生档上追分 = 对着噪声调参。详见 `reports/GT保真度与位号上限.md` 与「GT 保真度检查」节点。\n\n---\n\n**用户 m23186 的架构批评（本轮任务的直接来源）**：『你要坚持把整个大局做出来才能得到显著的性能增益……你要核对一下你现在用了什么算法什么思路，以及总的流程，所有的业务逻辑到底是怎么样的。』\n\n**★ 第五批审计的三条硬结论**\n1. **LLM 确实在引导重新框选与重新识别 —— 但它被默认配置关掉了。**\n   唯一一处是 `fusion/cropfix.py`（LLM 定方向 → 阶梯扩框 → 裁新图 → LLM 重读 → 自洽性采纳）。\n   而 `submission/run.py:356-357` 在默认 `-fusion on` 时把 `FUSION_CROPFIX` 与 `FUSION_LLM` 都置 `0`\n   ⇒ **交上去的那一份里融合层的 LLM 轮一次都没跑**。220 张上 `-fusion on`（无 LLM 轮）= 28.4200，\n   与不融合的 VLM 补强 28.4133 只差 **+0.007** —— 这就是「略微上升所以看不出价值」的原因。\n2. **LLM 能输出自己的读数**：`vlm:judge 1.5` / `vlm:cropfix 1.25` / `vlm:audit 1.30` / `vlm:fix 1.25` /\n   `vlm:rescan 1.2` / `vlm:enrich 1.15`，**全部以候选身份回池，没有一条直接改文档**（这是对的，别改）。\n3. **有两块「写了但不通」**：`doc.apply` 只认 `comp.*.key/value/partname` ⇒ **`pin.*` 与 `netlabel.*` 的裁决进不了交付文档**；\n   `stage2/assemble.py` 的 `num_of` 没导出 ⇒ 引脚号连映射回去都做不了。两块都画在下面对应节点的【第五批·审计】里。\n\n**★ 生产链的实测事实**：`_submit_out220r36` 的 `stage2` = `stage3` = `final_results` **逐字节相同**（MD5 `28F99796`）= **25.9861**；\n带 VLM 补强的 `work\\_fusion_vlm` = **28.4133**。**同一份 stage2，补强 +2.43 分，生产链没交。**\n\n\n---\n\n**★★ 第六批（本会话）在 `note` 顶部，此处以下为历史批次记录。**\n",
  "groups": [
   {
    "id": "in",
@@ -200,7 +200,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "输入 PNG + 坐标系",
    "sub": "每 case 一张图 + 可选 GT；坐标 y 向上（已实测无歧义）",
    "x": 40,
-   "y": 2105,
+   "y": 2126,
    "w": 280,
    "file": "submission/run.py",
    "ins": [],
@@ -666,11 +666,11 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "know",
    "group": "kn",
-   "kind": "new",
+   "kind": "exec",
    "title": "★ 常识与先验表",
    "sub": "priors.py 的六类先验 + 三条闸（逐条列在下面）",
    "x": 40,
-   "y": 1031,
+   "y": 982,
    "w": 300,
    "file": "fusion/priors.py（911 行）",
    "ins": [],
@@ -724,7 +724,7 @@ textarea{resize:vertical;min-height:170px}
     "⑥ **位号形状闸**：`desig_shape_ok` —— 黑名单 `DESIG_RAW_BAD`、纯字母 `DESIG_RAW_LET`、长度上限 `DESIG_RAW_MAX=8`",
     "★ **三条闸（全局纪律）**：**读数是证据，先验 / 连号 / 裁决只是形状** —— 形状可以帮**读不出号**的槽位补号，**不能把已经读出来的号改掉**，也不能借 VLM 的嘴给先验造的数加冕",
     "★ **用户 m12359 的 GND 先验：已实测证伪，不做**（`work/tools/diag/_gndnet.py`）—— GT 里「引脚名属于 GND 系」的那些成员**大多数根本不在同一条 net 里**：case 1 是 7 个 1 条、case 2 是 4 个 4 条、case 4 是 3 个 3 条、case 8 是 2 个 2 条、case 0086 是 7 个 5 条、case 0001 是 5 个 4 条、case 0042 是 9 个 2 条、case 10 是 2 个 2 条。⇒ 那句是**电气真理，但官方 GT 不这么编码**，按它并网是**负向**操作",
-    "⚠ `Priors.load()` 无调用者、`fusion/priors.json` **不存在** ⇒ 词表扩展从未启用",
+    "⚠ `Priors.load()` 无调用者、`fusion/priors.json` **不存在** ⇒ 词表扩展从未启用（**已复核**：`grep -r Priors.load eda-pcb` 零调用点；且 `pin_name_shape`/`value_shape` 用的是**模块级** `PIN_NAME_SET`，而 `Priors.load()` 填的是**实例字段** `self.pin_names` ⇒ 两者不通，接了也是 no-op。**不做**：可赢空间只有官方 9 张约 8 个引脚）",
     "★ **形状惩罚原来是个静默 no-op**（`priors.py` 只写 `ev['形状分']` 与 `st['shape_pen']`，**不动 `a.score`**）—— **已修成可用的机制，但 A/B 判负，默认关**：新增 `FUSION_SHAPE_W`（**默认 0.0**）与 `FUSION_SHAPE_FLOOR`（默认 0.35），`k = FLOOR + (1-FLOOR)·f` 后 `a.score *= (1-W) + W·k` 并**重排 `alts`**（`best()` 是 `alts[0]`，不重排会返回分更低那个）。**只降不升**（`f=1 → ×1`）",
     "★ **实测（`--no-vlm` + `FUSION_LLM=0`，归档 `work/_fast_base/{sw0,sw35,sw100,sw0_19,sw100_19}.json`）**：官方 10GT 9 张上 `W=0` / `0.35` / `1.0` **逐位相同**（51.06）⇒ 对 10GT 毫无影响；19 张档 `W=1.0` **30.16**（pin 0.1841 / netH 0.2539）vs `W=0` **30.73**（pin 0.1974 / netH 0.2599），tp 引脚 36→42、网络 204→211 ⇒ **压分反而掉 0.57**（形状分低的候选里有用的是「分数低但对」的那些）。⇒ 机制保留、**默认取 0**",
     "⚠ **踩坑**：同一环境同一参数，`sw0`（9 张单跑）= **51.06**，而 `sw0_19`（19 张合跑）报的 10GT 子集 = **51.74** —— **小于约 1 分的差值在采信前必须重复测量**"
@@ -733,11 +733,11 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "pool",
    "group": "fz",
-   "kind": "new",
+   "kind": "exec",
    "title": "★ 证据池",
    "sub": "claims.py：候选池是所有裁决的唯一入口；但 pin.* 出不了文档",
    "x": 2392,
-   "y": 1642,
+   "y": 1621,
    "w": 300,
    "file": "fusion/claims.py（744 行）",
    "ins": [
@@ -801,19 +801,19 @@ textarea{resize:vertical;min-height:170px}
     "`set_region`(`:231` 覆盖语义) / `grow_region`(`:242`) / `apply`(`:311`) / `_add_vlm`(`:398`) / `from_stage2`(`:503`)",
     "★★ **`doc.apply` 只处理 `comp.<cid>.key/.value/.partname`**（`doc.py:156`、`:184-205`）⇒ **`pin.*` 与 `netlabel.*` 的裁决根本进不了交付文档**（只落旁路 `OUT_DIR/_assigned/<case>.json`）",
     "★★ ⇒ **融合层整条引脚通道对交付文档贡献为 0**",
-    "⚠ `claims.py:616-629` 的 `keep=False` 让 stage2 的 OCR 引脚读数被**整条丢弃**（`priors.py:700 b = pool.best(sid)` 永远 `None`）⇒ 「先验补空位」被打成「**先验全覆盖**」",
-    "⚠ `:590 score=_f(d.get('score'),1.0)` 缺分数给**满分**，同族 `:551` 给 0.0",
+    "✅ `claims.py:616-629` 的 `keep=False` 让 stage2 的 OCR 引脚读数被**整条丢弃**（`priors.py:700 b = pool.best(sid)` 永远 `None`）⇒ 「先验补空位」被打成「**先验全覆盖**」—— **复核：这不是缺口**，`keep=True` 会让 220 张 28.4973→**27.6871**（pin 0.0821→0.0783、netH 0.2163→**0.1966**），注释在 `:739-746`",
+    "✅ `:590 score=_f(d.get('score'),1.0)` 缺分数给**满分**，同族 `:551` 给 0.0 —— **已修**（注释在 `:694-699`）",
     "⚠ `:544-550` 形状闸两种模式语义相反：`PR.SHAPE_SCORE` 默认空 ⇒ **整条删除候选**；设了 env 变成「保留并压分」"
    ]
   },
   {
    "id": "solve",
    "group": "fz",
-   "kind": "new",
+   "kind": "exec",
    "title": "★ 约束求解",
    "sub": "solve.py：贪心+增广路；零候选槽位永远问不到 LLM",
    "x": 2784,
-   "y": 1865,
+   "y": 1851,
    "w": 300,
    "file": "fusion/solve.py（470 行）",
    "ins": [
@@ -851,8 +851,8 @@ textarea{resize:vertical;min-height:170px}
     "`fusion/solve.py`（**470 行**），入口 `solve(pool, do_gap=True)`(`:277`)",
     "★ `match` 是**贪心 + 增广路**（`:167-178`，增广递归 `:135-150`），**不是 Hungarian**",
     "常量：`OPEN_MARGIN=0.10` ｜ `MAX_OPEN=24` ｜ `GAP_MIN_RUN=4` ｜ `GAP_MIN_COVER=0.45` ｜ `GAP_SCORE=0.90` ｜ `MAX_CANDS=8`",
-    "⚠ `write_back`(`:376`) **无条件覆盖**既有裁决（`hypo.py:156-159` 没有 `resolved()` 守卫）⇒ **最后一次 write_back 赢**，来源标记被改写成 `solve:...` ⇒ **归因失真**",
-    "⚠ `gap_fill`(`:258-260`) 在**负分槽位**整条静默失效（`if sc <= 0.0: continue`）",
+    "⚠ `write_back`(`:376`) **无条件覆盖**既有裁决（`hypo.py:156-159` 没有 `resolved()` 守卫）⇒ **最后一次 write_back 赢**，来源标记被改写成 `solve:...` ⇒ **归因失真**（**未改**：只影响诊断归因、不影响分数；要改得动 `hypo.py` 的 `resolved()` 守卫）",
+    "⚠ `gap_fill`(`:258-260`) 在**负分槽位**整条静默失效（`if sc <= 0.0: continue`）—— **已加计数** `st['gap_skip_negative']`，保守行为保留但不再静默",
     "★ `open_questions`(`:322-364`) **要求槽位至少两个不同值的候选**（`:337 if not alts: continue`、`:347 if second is None: continue`）⇒ **零候选槽位永远问不到 LLM** = 「box 引导重扫」缺的那一环",
     "局部贪心的代价（10GT case 1）：`C151–C156` 最左那颗没检出，位号被贪心分给右边 ⇒ 中心距 **115~117px**，`C154`/`C158` missing。验证 `python work\\tools\\diag\\_caserows.py 1 C15`"
    ]
@@ -860,7 +860,7 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "plausible",
    "group": "fz",
-   "kind": "new",
+   "kind": "exec",
    "title": "★★ 全局合理性检查（结构）",
    "sub": "这个电路讲不讲得通？违反电气/拓扑常识的地方就是要找的错误点",
    "x": 3176,
@@ -914,11 +914,11 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "fixstr",
    "group": "fz",
-   "kind": "new",
+   "kind": "dead",
    "title": "★★ 字符串合理性修正（内容）",
    "sub": "器件型号/位号明显读错一个字符时，用命名规律修回来",
    "x": 2784,
-   "y": 1539,
+   "y": 1525,
    "w": 300,
    "file": "（已证否）fixstr.py",
    "ins": [
@@ -953,7 +953,7 @@ textarea{resize:vertical;min-height:170px}
    ],
    "note": "**进度：⛔ 已证否（保持）** —— 前提被测量否掉，见下。（`fixstr.py` 不存在，且**前提被测量否掉**，见下）。\n\n**用户 m12477 原话**：『内容上：假如有一个元件扫出来叫 `STC12O5A6OS2`，那么根据 LLM 的经验很明显这应该是 `STC12C5A60S2`，纯粹是识别错了。』\n这条**现在完全没有**。它是纯内容层的纠错，和结构无关，所以单独一个节点。\n**必须“带依据”**，不能瞎猜：`STC12O5A6OS2 → STC12C5A60S2` 的依据是 ①`STC12C5A60S2` 是一个真实存在的型号家族；②`O↔0`、`O↔C` 是 OCR 高频混淆。如果只是『看起来像』没有依据，就不该改 —— 官方口径是**字符串严格匹配**（`10k` 和 `10K` 是不同的字符串），改错比不改更亏。\n**注意别越界**：官方 Q&A Q9 明确『电容 `uF`/`μF` **以图片为准**』⇒ **绝对不做单位归一化**（`100nF` 不许写成 `0.1uF`），这条是踩过的坑。\n\n**⛔ 已实测：这条通道的前提在 `Name` 上不成立（判负，别按这个方向写代码）。** 对 220 张里**键匹配上的 425 个 IC 元件**（`work\\_submit_out220z`）统计我们的 `Name` 与 GT `Name` 的编辑距离：**对不上 193 个（0.454）**，距离分布是 `4→43 个`、`1→37`、`3→17`、`6→15`、`5→14`、`12→10`、`2→9` —— **众数是 4，不是 1**；而『距离 ≤2 且差异字符落在混淆表（`O↔0 I↔1 S↔5 B↔8 Z↔2 G↔6`）里的』是 **0 个**。最常见的替换是 `6↔8`（10+6 次）、`F↔P`（3 次）—— 那是**另一种形状混淆**，而且距离大到 4/6/12 说明模型读的是**另一个元件的型号**或另一行，不是「错一个字符」。\n⇒ **`STC12O5A6OS2 → STC12C5A60S2` 这个现象真实存在，但不是我们数据里的主要错误模式**。改错比不改更亏（官方是字符串严格匹配，`10k` ≠ `10K`），所以 `fixstr` **降级为「等有真实依据（同图重复出现的多数票 / 已知型号表）时再做」**，优先级挪到 `plausible` 之后。\n要复跑这个测量：见 `eda-pcb\\vlm\\README.md` 的「`fixstr` 的前提被证否」一节。\n\n【第三批】 **融合层落地实测（9 张 GT 子集，`work\\tools\\eval\\stage2_eval.py`）**\n- `stage2`（无 VLM）**19.9804**｜VLM 补强 **22.5020**｜融合（重装配）22.3306｜**融合（补丁式）22.5136**。\n- 加三条闸后逐级抬升：补洞不许盖过读数 → **22.7299**；先验不许盖过读数 → **22.9943**；LLM 裁决加闸 → **22.9943**（不再掉分）。\n- 结论：**融合层现在是「净 +0.49 over VLM、9 张零回归」**。\n- ★ 三条闸是同一条原理的三种写法：**读数是证据，先验/连号/裁决只是形状** —— 形状可以帮**读不出号**的槽位补号，不能把已经读出来的号改掉，也不能借 VLM 的嘴给先验造的数加冕。\n- ★ 另一条：**位号在「键」上不在 `Name` 里**（`assemble.build_doc:534-538`，阻容的 `Name` 就是键），照着 `Name` 读位号会把 VLM 的改名整个丢掉。\n- 文件：`eda-pcb/fusion/` 下 `claims.py`/`priors.py`/`solve.py`/`llm_judge.py`/`plausible.py`/`rescan.py`/`run.py`/`doc.py`。**最终文档不再 `build_doc` 重装配，而是以 VLM 补强文档为底打补丁**（`doc.apply`）—— 重建一次就丢 `enrich` 对 `pins` 的补号/补名与它新增的元件。\n\n\n【第四批】 **融合层 220 张全量实测 + 接线（当前状态）**\n- 分数阶梯（同一把尺，220 张，`work\\tools\\eval\\stage2_eval.py`）：纯 `stage2` **25.9861** → VLM 补强 **28.4133** → 融合·首测 27.8939 → **融合·修 `Name` 顶位号后 28.4200** ✅（+0.0067，不降分）。\n- 融合层总耗时 **220 张 620 s**（`--workers 8` + `FUSION_LLM=0 FUSION_CROPFIX=0`）；带 LLM 轮每张约 50 s（LM Studio 串行化）⇒ 220 张约 4 小时，**已放弃全量 LLM 轮**。\n- ★★ **已接进生产链** `eda-pcb/submission/run.py`：新增 `-fusion/--fusion {off,on,llm}`，**默认 `on`**；导出段的优先序改成 **`fuse_dir > s3v_dir > s3_dir > s2_dir`**。端到端冒烟 3 张墙钟 22.8 s，`final_results/*_Pred.json` 与 `runs/fusion/*.json` **MD5 逐字节相同**、与 `runs/stage3` 不同 ⇒ 接线生效。\n- 两个**真 bug**（都已修）：① `eda-pcb/cvparts/hypo.py` 的 `Slot.add` 合并同值候选后**不重排**，而 `best()` 就是 `alts[0]` ⇒ 分数涨了名次没动，正确读法被埋；② `eda-pcb/fusion/claims.py` 的 `_add_vlm` 拿 `Name` 顶位号，而 `priors.DESIG_RE`**器件型号与位号同形**（`MRF521`/`MAX232`/`BCM2835` 全命中）⇒ case 0036 把带 7 个引脚的 `U1` 改名成 `MRF521`，一张掉 16.7 分。改判据为「**只有当前键是占位符 `pNNN` 或无键时才允许 `Name` 顶位号**」。\n- 失败的消融（已回退，不要再试）：把 `priors` 分支 (b) `prior:run_free` 的 `score = best * 0.95` 改成「正分打折 / 非正分再低 0.01 / 过 `_cap`」⇒ **28.4200 → 28.3137（−0.11）**。该先验是**净帮忙**的：它造的「图上没有的号」在 `solve` 的连号竞争里替别的槽位守住了位置。\n- ★ 三条天花板（**融合层已到顶**）：① 融合层候选择优可回收 **6.0%** 缺失引脚；② 跨元件重归属 **2.7%**（纯交换 0）；③ 重读邻域全部 stage1 文字框只读出 **6.0%**（38/629）。⇒ **位号缺口 94% 是「位号文字根本没进文字框集合」，要动的是 `stage1` 的文字检测/分割。**\n- ★ 另一条独立发现：**`_submit_out220r36` 那条链交上去的就是纯 stage2（25.9861）** —— `runs/stage2` = `runs/stage3` = `final_results/*_Pred.json` 三份 MD5 逐字节相同，`run.log` 里完全没有 VLM 段（是用 `-vlm off` 跑的）。**单独把 `-vlm-name` 打开就值 +2.43 分。**\n",
    "bullets": [
-    "⛔ **已证否（保持）** —— `fixstr.py` **不存在**",
+    "⛔ **徽标已改「停用」** ｜ **已证否（保持）** —— `fixstr.py` **不存在**",
     "★ **官方口径是字符串严格匹配**（`10k` ≠ `10K`）⇒ 改错比不改更亏",
     "⛔ **官方 Q&A Q9**：电容 `uF`/`μF` 以图片为准 ⇒ **绝对不做单位归一化**",
     "实测（220 张里键匹配上的 **425 个 IC 元件**的 `Name`）：**对不上 193 个 = 45.4%**，编辑距离**众数是 4**（不是 1）",
@@ -964,7 +964,7 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "conflict",
    "group": "fz",
-   "kind": "new",
+   "kind": "exec",
    "title": "★ 冲突与缺口",
    "sub": "两个来源不一致的 / 违反约束的 / 读不出来的",
    "x": 3568,
@@ -1010,11 +1010,11 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "llm_judge",
    "group": "fz",
-   "kind": "new",
+   "kind": "exec",
    "title": "★★ LLM 判断 + 定位 + 排序",
-   "sub": "llm_judge.py：只做候选二选一，安全的中性；真正限制是问不到该问的",
+   "sub": "llm_judge.py：候选二选一 + **上下文块（官方 9 张 +0.79）**；整表判负",
    "x": 3960,
-   "y": 1387,
+   "y": 1142,
    "w": 300,
    "file": "fusion/llm_judge.py（484 行）",
    "ins": [
@@ -1069,13 +1069,21 @@ textarea{resize:vertical;min-height:170px}
     "`_admit`(`:202-240`) 的 `mult`：形状不合 → **0.0** ｜ 前缀与类型不符 → ×`MISMATCH_W=0.30` ｜ 否则 1.0",
     "三级实测：自由读数 **22.2291 (−0.765)** → 候选二选一 22.4965 → `+跳过占位符` **22.9943**（与 no-LLM 一致，耗时 **70.7s → 6.2s**）⇒ **安全的中性**",
     "★ 真正限制是**问不到该问的**：`solve.open_questions` 要求两个不同值 ⇒ 零候选被挡；`MAX_OPEN=24` 又让引脚槽位挤占 `comp.*` 名额",
-    "⚠ 它**不产生新框**，只把切法在 `tight`(`FUSION_JUDGE_CROP`) 之间切"
+    "⚠ 它**不产生新框**，只把切法在 `tight`(`FUSION_JUDGE_CROP`) 之间切",
+    "★★ **上下文块（2025-10 新增，`FUSION_JUDGE_CTX` 默认 `1`）** —— 原判「没有上下文环境」的**代码级原因**有三条，已全部修掉：",
+    "　① 提示词里**只有裁片 + A/B 两个字符串**。现补 `context_block()`（`llm_judge.py:511` 起）：**元件类型 / 同一颗元件上别的字段的读数 / 邻近元件（按 `bbox_img` 中心距离取前 `CTX_NB=6`）/ 图上已确定的位号（`_known_designators`）/ ⚠已被判可疑的原因（`plausible.check` 里 `severity ≥ CTX_SEV=0.5`）**，上限 `CTX_MAXCH=2400` 字",
+    "　② **「给依据」这一件事从来没做过**：现加 `WHY_INSTR`（逐题）/`WHY_SHEET`（整表）要求模型另起一行写 `依据=<一句话>`，`_WHY_RE`/`_split_why` 拆出来写进 `row['why']`，并落进证据池（`evidence['依据']`）",
+    "　③ **`judge()` 的整表路由是死的**：`MODE` 默认 `auto`，而原来只有 `mode == 'sheet'` 才走 `judge_sheet` ⇒ 那条**为「整表上下文」写的路（`_sheet_image`/`_known_designators`）从来没被执行过**。现已接通（`auto` 且硬题数 ≥ `SHEET_MIN` 也走整表）",
+    "**实测（官方 9 张，`--no-vlm` + `FUSION_LLM=1`，只切 `FUSION_JUDGE_CTX`）**：**开 53.27 / 关 52.48 ⇒ +0.79**，逐张 **case 5 +1.65、case 7 +2.50、case 8 +3.00，其余 6 张逐位相同、无一张变差**（元件 0.7682→0.7928、导线 0.1674→0.1732、tp 元件 167→172 / 导线 135→139）。归档 `work/_fast_base/{ctxA,ctxB}.json`",
+    "　代价：case 1 单张墙钟 **27.3 s → 37.3 s**（judge 自身 7.2 → 11.1 s）⇒ 约 **+10 s/张**、220 张约 **+37 min**",
+    "⛔ **整表（contact sheet）判负**：4 张实测 **55.32 vs 59.62**（sheet 更差 −1.07，case 7 元件 0.9167 → 0.8333、tp 元件 74 → 72），且更慢（160.5 s vs 83.6 s）⇒ 默认 **关**（`FUSION_JUDGE_SHEET_MIN=9999`），要试就 `FUSION_JUDGE_MODE=sheet`。归档 `work/_fast_base/{sheet1,sheet0}.json`",
+    "⚠ 上下文里的「冲突内容」在 **round 1 基本是空的**（`n_ctx_slot: 0`）：`judge` 跑在 `pool.apply()`/`plausible.check(pool, pred)` **之前**，而 `solve` 已经把重号解掉了 ⇒ 真正吃到的是**类型 / 同件其他字段 / 邻近元件 / 已定位号**这四样"
    ]
   },
   {
    "id": "rescan",
    "group": "fz",
-   "kind": "new",
+   "kind": "exec",
    "title": "★ 按优先级定向重扫",
    "sub": "rescan.py：重扫必须带已确认的上下文，否则只是把同一个问题再问一遍",
    "x": 4744,
@@ -1125,11 +1133,11 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "iterate",
    "group": "fz",
-   "kind": "new",
+   "kind": "exec",
    "title": "★ 迭代控制",
    "sub": "新证据回池 → 再解，直到收敛或到轮数上限",
    "x": 5136,
-   "y": 1745,
+   "y": 1710,
    "w": 300,
    "file": "fusion/run.py:145-181",
    "ins": [
@@ -1165,18 +1173,18 @@ textarea{resize:vertical;min-height:170px}
     "收敛判据 = 无新证据 / 约束全满足 / 没有任务也没有新问题",
     "预算：现管线 220 张 **4727 s（78.8 min）**，2 小时预算还剩约 **1.5 倍**余量",
     "VLM 位号调用 4094 次、耗时 **3916 s** ⇒ 重扫必须**只打低置信项**",
-    "⚠ `run.py:179-180 if not tasks and not q_first: break` 检查的是**上一轮**的 `q_first`（只在 `:181` 更新）",
-    "⚠ `run.py:150 j = LJ.judge(...)` **不在任何 try 里**（对照 `:164-171 AU.run` 包了 try）⇒ 抛异常则该 case **一份融合产物都没有**"
+    "✅ **已修（`FUSION_CONV_EXACT` 默认 `1`）**：收敛判据改成**用本轮结束时的题面** —— `q_next = SV.open_questions(pool, sol['assign'])`，`q_hard` 从 `q_next` 里挑，`if not tasks and not q_hard: break`，`q_first = q_next`。报告里多记 `n_q_next`。现在「第 2 轮到底跑不跑」在报告里可查，不用再靠实跑猜",
+    "✅ **已修**：`LJ.judge` 与 `RS.run` **各自包进 try**（`r['judge']={'err':...}` / `r['rescan']={'err':...}` + `log('[judge] 跳过：%s')`）。原来 `judge` 一抛异常，该 case **一份融合产物都没有**"
    ]
   },
   {
    "id": "batch",
    "group": "cost",
-   "kind": "new",
+   "kind": "dead",
    "title": "★★ 请求合并与预算闸门",
    "sub": "请求合并：引脚网格已合并（4025→1051）；值通道拼图实测判负",
    "x": 40,
-   "y": 2419,
+   "y": 2440,
    "w": 280,
    "file": "vlm/enrich.py",
    "ins": [],
@@ -1210,6 +1218,7 @@ textarea{resize:vertical;min-height:170px}
    ],
    "note": "**进度：⚠ 部分落地（值通道拼图已写、默认关）**\n**用户 m12477 原话**：『你需要优化一下 API 提交，因为现在你跑一次测试我的模型就要回复几万条请求，能不能稍微合并一下请求之类的，当然是出于省 token 之类的考虑，如果这样没有带来额外的开销就算了。』\n**现在的请求账**（`work\\_submit_out220z` 那次的日志）：位号 **4094** ＋ 引脚网格 **1051** ＋ 值 **3492** ＋ 型号 **1021** ＝ **9658 次 / 220 张 ≈ 44 次/张**。\n**已经合并过的先例**：引脚通道本来就是 8 格拼一张网格问（**4025 个引脚 → 1051 次**），说明这条路走得通。值/位号/型号目前都是**一格一次请求**。\n**预估**：值/位号/型号 按 4~8 格拼图 ⇒ 总请求 **9658 → ≈3350（−65%）**；对应的墙钟收益很大（VLM 段 3916 s ≈ 0.4 s/次 × 9658 次），能腾出预算给上面那个循环。\n⚠️ **但这是「请求数」的收益，不是「token 数」的收益** —— 总像素基本不变，省的是每次请求的固定开销（提示词重复、连接开销、模型预热）。所以别指望账单按比例降。\n⚠️ **风险**：拼图会让**每一格变小**，而值通道对裁片尺寸**极其敏感**（`100nF` 尾巴被切掉 margin 25 时只有 0.212，margin 80 才 0.9423）。所以 `batch` 的输出必须能被 `ev_vlm` 接受或拒绝，**每格精度掉超过 1 个百分点就不做**。\n⚠️ 用户也说了『如果这样没有带来额外的开销就算了』⇒ **先拿 30 张 A/B**，请求数下降且总分不降才采纳。\n\n**★★ 已做完并实测（值通道，2025 那一轮）：判负，默认关。** `vlm/enrich.py` 里已落地 `VALUE_PROMPT_GRID` / `parse_valgrid` / `read_values`，CLI `-vlm-value-batch / -vlm-value-side / -vlm-value-cols / -vlm-value-refill`（默认 `1` = 关）。隔离测量脚本 `work\\tools\\diag\\_valbatch.py`（官方 `assign_components` 键匹配成功、GT 是 r/c、GT `value` 非空、预测有 bbox 的 84 个样本）：\n`batch=1` 覆盖 **62/84 = 0.7381**（写回精度 0.9841，84 次调用）｜`batch=6` side 520 margin 80 覆盖 47/84 = 0.5595（0.9792，**20 次 = −76%**）｜`batch=6` margin 45 side 640 覆盖 53/84 = 0.6310（0.9138，21 次）。\n**判读**：拼图**不伤「已写回值的精度」**（0.984→0.979），伤的是**覆盖率**（−0.12~−0.18）—— 2×3 网格里每格 margin 80 的裁片会和邻格重叠，模型把**邻格的位号**报给了本格的值，被「位号一致」门控挡掉；收 margin 到 45 能让覆盖回来一点，但写回精度从 0.979 掉到 0.914。\n⇒ **调用省 75%，代价是丢 12~18 个百分点的写对率**，而这些正是要换 tp 的 ⇒ **判负**。`value_refill`（没答出来的格子退回逐格补问）救不了：被门控挡掉的格子 `out[i][1] is not None`，不会触发补问。\n**剩下的可合并对象**：位号 4094 / 型号 1021 —— 都是**单点读数、裁片本来就小**，要单独 A/B（建议先量型号，只有 1021 次且 `read_name` 只要第一行）。\n\n【第五批·审计】请求量实测（220 张）：位号 4094 / 值 3492 / 引脚网格 1051 / 型号 1021 ≈ **9658 次**。\n值通道拼图（`VALUE_PROMPT_GRID` 每格 `#i: C12=100nF`）已实现但**默认关**（`value_batch=1`）——\n因为拼图会让**每格分辨率下降**，而值通道对裁片尺寸极敏感（margin 25 → 0.212 vs margin 80 → 0.942）\n⇒ 必须先 A/B 证明每格精度不掉再打开。\n⚠ `enrich.py` **没有任何磁盘/内存缓存**，重跑重复全部 HTTP。\n",
    "bullets": [
+    "⛔ **徽标已改「停用」**（本会话 19 个「★要新写」逐个对账）：值通道拼图已实测判负（见下），位号 / 型号的合并**还没量** ⇒ 不实现。用户口径是「如果这样没有带来额外的开销就算了」",
     "`vlm/enrich.py`；请求账：位号 4094 + **引脚网格 1051** + 值 3492 + 型号 1021 = **9658 次 / 220 张 ≈ 44 次/张**",
     "★ **已合并的先例**：引脚通道本来就是 **8 格拼一张网格**（**4025 个引脚 → 1051 次**）",
     "⛔ **值通道拼图已实测：判负，默认关**（`-vlm-value-batch` 默认 `1` = 关）",
@@ -1315,7 +1324,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "官方标尺 metrics.py",
    "sub": "官方标尺：加权 F1 之和，不在管线里；一笔 mismatch 亏三处",
    "x": 3960,
-   "y": 2040,
+   "y": 2285,
    "w": 260,
    "file": "schematic_parser/metrics.py",
    "ins": [
@@ -1365,7 +1374,7 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "cropfix",
    "group": "ev",
-   "kind": "new",
+   "kind": "exec",
    "title": "★★ 裁切方向反馈",
    "sub": "cropfix.py：唯一「LLM 引导重框+重识别」；安全但惰性，生产默认关",
    "x": 1608,
@@ -1426,7 +1435,7 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "audit",
    "group": "fz",
-   "kind": "new",
+   "kind": "exec",
    "title": "★★ 现实规律判断（电学合理性）",
    "sub": "audit.py：问的是「电学上成不成立」，只提候选不改结论",
    "x": 4352,
@@ -1484,14 +1493,14 @@ textarea{resize:vertical;min-height:170px}
     "★ **它只提候选，不改结论**：`FIX` ① 仅 `key_duplicate` 时作 `vlm:audit`(1.30) 写回（`:413-417`）② 其余**当 `cropfix` 的方向提示重裁一次**，只有图像给更好读数才收成 `vlm:fix`(1.25)（`:430-434`）",
     "★ 不这么做，`audit` 就变成**第四个幻觉来源**",
     "实测 `case 0001` 10 条 30 s **全 `suspect`**（`15pF与周围0.1uF电容参数差异巨大，极可能是识别错误。`）—— `FIX` 是**工程偏好不是「我读错了」** ⇒ 重裁无增益（`n_fix=0`），9 张上 `cropfix`+`audit` 合计**恰好中性**",
-    "⚠ `run.py:150 j = LJ.judge(...)` **不在任何 try 里** ⇒ 抛异常则该 case **一份融合产物都没有**",
+    "✅ `run.py:150 j = LJ.judge(...)` **不在任何 try 里** ⇒ 抛异常则该 case **一份融合产物都没有** —— **已修**（见 `iterate` 条目）",
     "⚠ `run.py:71 VLM_DIR` 默认 `work\\_fusion_vlm`，**与 submission 用的 `runs\\stage3_vlm` 不是同一目录**且**无同链校验**"
    ]
   },
   {
    "id": "boxscan",
    "group": "fz",
-   "kind": "new",
+   "kind": "dead",
    "title": "★★ 围绕元件 box 的重扫（融合层缺的那一环）",
    "sub": "已实现①建取景框+②零候选问路，实测打平偏负（−0.01 / +0.05）⇒ 默认关",
    "x": 824,
@@ -1546,7 +1555,7 @@ textarea{resize:vertical;min-height:170px}
    ],
    "note": "**进度：⚠ 未落地（融合层这一半没做；`vlm/enrich.py` 那一半已做）**\n\n**用户 m23186 原话**：『我探测到了 box 元件，那么肯定要围绕他的 box 展开 pin 和文字的扫描。这也是为什么需要融合层：统筹各种资源引导其他的子调度。』\n\n**已经做了的那一半**：`eda-pcb/vlm/enrich.py:213 read_designator` —— 把元件 `bbox` 换成图像坐标、外扩 `desig_margin`（60px，失败 ×2.2）裁片、问模型；`read_pins` 每 8 格拼图。这是**证据源**层的围绕 box 扫描。\n\n**没做的那一半（本节点）**：融合层**建完池子之后，不会再围绕任何元件框新建取景框**。\n实测接线（全 fusion 目录 grep `set_region|grow_region|\\.region\\(`）：\n- `set_region` / `grow_region` 的**全部**调用点都在 `claims.from_stage2` 里（`claims.py:497 / 570 / 575 / 597 / 630 / 647`）；\n- 其余只是**读**：`audit.py:270`、`cropfix.py:292`、`llm_judge.py:285/413`、`rescan.py:211`、`solve.py:351`。\n\n⇒ 一个 `desig_slots` 为空的元件**没有 `comp.<cid>.key` 槽位**，于是：\n1. 没有取景框 ⇒ `llm_judge`/`rescan`/`cropfix`/`audit` **四个模块全部跳过它**；\n2. 就算给它建了槽位，`solve.open_questions`（`solve.py:347 if second is None: continue`）**也问不到它**（零候选）。\n\n**这条缺口有多大（220 张实测）**\n| 层面 | 可回收 | 脚本 |\n|---|---|---|\n| 融合层「候选择优」（正确键在该元件**自己**的候选表里） | **6.0%** 引脚 | `_desigcand2.py` / `_desigassoc.py` |\n| 融合层「跨元件重归属」（纯交换 **0** 个） | **2.7%** 引脚 | `_desigassoc.py` |\n| 重新读邻域**全部** stage1 文字框能读出正确键 | **6.0%**（38/629） | `_icread2.py` |\n| ⇒ 剩下 **94%**：位号文字根本没进文字框集合 | 融合层无解 | `_icread2.py` + `_desigdetect.py` |\n\n拆开看 629 颗 / 5210 个没配上的 GT 引脚：\n**50 颗 / 623 引脚**（R0，连重叠元件都没有）｜**418 颗 / 2915 引脚（56.0%）**：重叠元件的 `desig_slots` **是空的**｜\n**152 颗 / 1484 引脚（28.5%）**：有候选但**全错**｜**9 颗 / 188 引脚（3.6%）**：正确位号**就在候选表里**却输了选择｜\n**4 颗 / 82 引脚（1.6%）**：键只差大小写（GT `u2` vs 我方 `U2`，`metrics.py:311 for key in set(gc) & set(pc)` 是精确字符串匹配）。\n\n**该补的三件事**\n1. 对**每个**元件（尤其 `type == \"box\"`）无条件建 `comp.<cid>.key` 槽位 + 取景框（本体外扩，`REGION_MIN=120` 兜底）；\n2. 给「零候选」槽位一条**去问一遍**的路径 —— 现在 `open_questions` 的 `if second is None: continue` 把它挡死了，\n   要么给一条「没有读数」的哨兵候选，要么给 `open_questions` 加一条 `not alts` 的分支；\n3. 顺带修 `claims.py:611-614`：`pinpts.get(cid)` 用的是 `cid`，而 `doc[\"pins\"]` 的键是**位号**（`U3`）不是 `cid`（`c0003`）\n   ⇒ 永远 `None` ⇒ **每个引脚取景框都是 `box=None`**（`claims.py:630-633`），引脚槽位拿不到图。\n\n⚠ 与 `pin` 通道的关系：即使修好取景框，**引脚裁决依然进不了交付文档**（`doc.apply` 只认 `comp.*`，见 `pool` 节点），\n而 `build_doc` 没有导出 `num_of` ⇒ 映射回 `pin_<N>` 键也做不了。**所以 boxscan 的第一优先级是位号，不是引脚。**",
    "bullets": [
-    "★★ **2026-10：①②两条都实现了，实测「打平偏负」⇒ `FUSION_BOXSCAN` 默认 `0`**（代码保留，`=1` 可复现每一臂）",
+    "⛔ **徽标已改「停用」** ｜ ★★ **2026-10：①②两条都实现了，实测「打平偏负」⇒ `FUSION_BOXSCAN` 默认 `0`**（代码保留，`=1` 可复现每一臂）",
     "① 对每个 `type` **不在 `NO_DESIGNATOR` 里**、又没有取景框的元件建 `comp.<cid>.key` 槽位 + 本体取景框（`claims.py` 第 **1b** 节）；② 给「零候选」槽位一条**去问一遍**的路径（`solve.open_questions` 的 `not alts` 分支 + `FUSION_OPEN_FREEFORM`，`FREEFORM_MAX=8` 单独限量）",
     "②的切图**必须是 `window`**（`llm_judge` 走 `PROMPT_FREE`）：`tight` 只切本体，会把印在本体外的位号切掉",
     "**A/B 口径**：`--no-vlm` + `$env:FUSION_LLM='1'`（VLM 开着时 ① 是 no-op、② 要 LLM 轮真跑，只有这个口径量得到 boxscan）。同口径配对对照：**官方 9 张 `52.48 → 52.47`（−0.01）｜派生 19 张 `31.32 → 31.37`（+0.05）** ⇒ 不满足「两档都赚」门槛",
@@ -1570,7 +1579,7 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "own",
    "group": "fz",
-   "kind": "new",
+   "kind": "exec",
    "title": "★★ 独家归属（一个东西只有一个主人）",
    "sub": "争同一个位置的主张者 → 只留一个；判负者降权并入，不销毁",
    "x": 824,
@@ -1624,7 +1633,7 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "ev_bridge",
    "group": "ev",
-   "kind": "new",
+   "kind": "exec",
    "title": "⑥b 并网的形状判据（规则 5）",
    "sub": "labels.py:_overshoot_unions：端点微越过目标段 + 不平行才并",
    "x": 824,
@@ -1679,7 +1688,7 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "pincol",
    "group": "ev",
-   "kind": "new",
+   "kind": "exec",
    "title": "⑦b 引脚列枚举（格点补脚）",
    "sub": "pincol.py：按引脚列等距格点补出漏检的脚，再交给并网",
    "x": 1608,
@@ -1739,7 +1748,7 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "ownnum",
    "group": "fz",
-   "kind": "new",
+   "kind": "exec",
    "title": "★★ 引脚号候选：归属 + 沿边对齐",
    "sub": "assign.py / structmatch.py：谁贴在这颗元件上，以及号怎么排",
    "x": 1608,
@@ -1798,7 +1807,7 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "boxpinprior",
    "group": "kn",
-   "kind": "new",
+   "kind": "exec",
    "title": "★ IC 不补位置号",
    "sub": "priors.py：稀疏封装号是印出来的，位置先验会覆盖它",
    "x": 1608,
@@ -1841,7 +1850,7 @@ textarea{resize:vertical;min-height:170px}
   {
    "id": "gtcheck",
    "group": "out",
-   "kind": "new",
+   "kind": "exec",
    "title": "★★ GT 保真度检查（自造 GT 会骗你）",
    "sub": "在派生档上调参前先量 GT 保真度：80.3% 的失配数学上不可赢",
    "x": 4352,

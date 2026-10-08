@@ -6,14 +6,14 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **265** 个开关。
+共 **274** 个开关。
 
 ## 目录
 
 - [stage1](#stage1)（77）
 - [stage2](#stage2)（58）
 - [stage3](#stage3)（2）
-- [fusion](#fusion)（94）
+- [fusion](#fusion)（103）
 - [vlm](#vlm)（11）
 - [textrec](#textrec)（13）
 - [cvparts](#cvparts)（6）
@@ -186,7 +186,7 @@
 |---|---|---|
 | `AXIS_CHAR_CAL` | — | `fusion/axis.py:133` |
 | `AXIS_CHAR_SIG` | — | `fusion/axis.py:130` |
-| `FUSION_ASSIGNED_DIR` | `str(RUN_DIR / "stage2" / "_assigned"` | `fusion/run.py:184` |
+| `FUSION_ASSIGNED_DIR` | `str(RUN_DIR / "stage2" / "_assigned"` | `fusion/run.py:188` |
 | `FUSION_AUDIT` | `"1"` | `fusion/audit.py:76` |
 | `FUSION_AUDIT_FULLW` | `"880"` | `fusion/audit.py:77` |
 | `FUSION_AUDIT_KINDS` | `"net_short,net_rail_merge,key_duplicate,key_type_mismatch,va` | `fusion/audit.py:82` |
@@ -195,10 +195,11 @@
 | `FUSION_AUDIT_REREAD` | `"1"` | `fusion/audit.py:74` |
 | `FUSION_AUDIT_SCORE` | `"1.30"` | `fusion/audit.py:68` |
 | `FUSION_AXIS` | `"1"` | `fusion/axis.py:87` |
-| `FUSION_BASE` | `"ours"` | `fusion/run.py:125` |
+| `FUSION_BASE` | `"ours"` | `fusion/run.py:129` |
 | `FUSION_BOXSCAN` | `"0"` | `fusion/claims.py:117` |
 | `FUSION_BOX_PIN_PRIOR` | `"0"` | `fusion/priors.py:135` |
-| `FUSION_CASES` | `""` | `fusion/run.py:344` |
+| `FUSION_CASES` | `""` | `fusion/run.py:371` |
+| `FUSION_CONV_EXACT` | `"1"` | `fusion/run.py:91` |
 | `FUSION_CROPFIX` | `"1"` | `fusion/cropfix.py:61` |
 | `FUSION_CROPFIX_LADDER` | `"0.5,1.0,2.0,4.0"` | `fusion/cropfix.py:54` |
 | `FUSION_CROPFIX_MAX` | `"24"` | `fusion/cropfix.py:57` |
@@ -224,21 +225,28 @@
 | `FUSION_ITERATE_WIN` | `"in_win"` | `fusion/iterate.py:60` |
 | `FUSION_ITER_GAP` | `"2"` | `fusion/iterate.py:288` |
 | `FUSION_JUDGE` | `"1"` | `fusion/llm_judge.py:71` |
-| `FUSION_JUDGE_CELL` | `"260"` | `fusion/llm_judge.py:479` |
-| `FUSION_JUDGE_COLS` | `"3"` | `fusion/llm_judge.py:480` |
+| `FUSION_JUDGE_CELL` | `"260"` | `fusion/llm_judge.py:739` |
+| `FUSION_JUDGE_COLS` | `"3"` | `fusion/llm_judge.py:740` |
 | `FUSION_JUDGE_CROP` | `"tight"` | `fusion/llm_judge.py:73` |
+| `FUSION_JUDGE_CTX` | `"1"` | `fusion/llm_judge.py:511` |
+| `FUSION_JUDGE_CTX_MAXCH` | `"2400"` | `fusion/llm_judge.py:518` |
+| `FUSION_JUDGE_CTX_NB` | `"6"` | `fusion/llm_judge.py:516` |
+| `FUSION_JUDGE_CTX_SEV` | `"0.5"` | `fusion/llm_judge.py:523` |
+| `FUSION_JUDGE_CTX_SUS` | `"2"` | `fusion/llm_judge.py:524` |
 | `FUSION_JUDGE_MAX` | `"64"` | `fusion/llm_judge.py:65` |
 | `FUSION_JUDGE_MISMATCH` | `"0.30"` | `fusion/llm_judge.py:75` |
 | `FUSION_JUDGE_MODE` | `"auto"` | `fusion/llm_judge.py:135` |
 | `FUSION_JUDGE_OTHER` | `"1"` | `fusion/llm_judge.py:136` |
 | `FUSION_JUDGE_SCALE` | `os.environ.get("VLM_SCALE", "4"` | `fusion/llm_judge.py:63` |
-| `FUSION_JUDGE_SHEET` | `"1"` | `fusion/llm_judge.py:478` |
-| `FUSION_JUDGE_SHEET_MAX` | `"36"` | `fusion/llm_judge.py:481` |
+| `FUSION_JUDGE_SHEET` | `"1"` | `fusion/llm_judge.py:738` |
+| `FUSION_JUDGE_SHEET_MAX` | `"36"` | `fusion/llm_judge.py:741` |
+| `FUSION_JUDGE_SHEET_MIN` | `"9999"` | `fusion/llm_judge.py:745` |
+| `FUSION_JUDGE_WHY` | `"1"` | `fusion/llm_judge.py:514` |
 | `FUSION_LLM` | `"1"` | `fusion/run.py:87` |
 | `FUSION_LLM_SCORE` | `"1.5"` | `fusion/llm_judge.py:45` |
 | `FUSION_MAX_CANDS` | `"8"` | `fusion/solve.py:73` |
 | `FUSION_MAX_OPEN` | `"24"` | `fusion/solve.py:49` |
-| `FUSION_MERGE_PIN_MIN` | `"8"` | `fusion/run.py:154` |
+| `FUSION_MERGE_PIN_MIN` | `"8"` | `fusion/run.py:158` |
 | `FUSION_MIN_NET_PINS` | `"2"` | `fusion/plausible.py:57` |
 | `FUSION_OPEN_FREEFORM` | `"1"` | `fusion/solve.py:71` |
 | `FUSION_OPEN_FREEFORM_MAX` | `"8"` | `fusion/solve.py:60` |
@@ -253,6 +261,7 @@
 | `FUSION_READ_SUB` | `"0.05"` | `fusion/priors.py:280` |
 | `FUSION_REGION_MIN` | `"120"` | `fusion/claims.py:80` |
 | `FUSION_REGION_PAD` | `"24"` | `fusion/claims.py:78` |
+| `FUSION_REGION_TOPK` | `"1"` | `fusion/claims.py:122` |
 | `FUSION_REPAIR_PENALTY` | `"0.85"` | `fusion/priors.py:223` |
 | `FUSION_RESCAN_CROP` | `"window"` | `fusion/rescan.py:42` |
 | `FUSION_RESCAN_MAX` | `"12"` | `fusion/rescan.py:40` |
@@ -268,15 +277,15 @@
 | `FUSION_SHAPE_GATE` | `"1"` | `fusion/priors.py:122` |
 | `FUSION_SHAPE_SCORE` | `""` | `fusion/priors.py:124` |
 | `FUSION_SHAPE_W` | `"0.0"` | `fusion/priors.py:164` |
-| `FUSION_SHEET_OUT` | `r"Y:\workspace\EDA\work\preview\_judge_sheet.png"` | `fusion/llm_judge.py:589` |
-| `FUSION_SHEET_TIMEOUT` | `"300"` | `fusion/llm_judge.py:602` |
-| `FUSION_STAGE1_DIR` | `str(RUN_DIR / "stage1"` *(2 处)* | `fusion/run.py:182` |
+| `FUSION_SHEET_OUT` | `r"Y:\workspace\EDA\work\preview\_judge_sheet.png"` | `fusion/llm_judge.py:856` |
+| `FUSION_SHEET_TIMEOUT` | `"300"` | `fusion/llm_judge.py:878` |
+| `FUSION_STAGE1_DIR` | `str(RUN_DIR / "stage1"` *(2 处)* | `fusion/run.py:186` |
 | `FUSION_TOP_WINDOWS` | `"3"` | `fusion/priors.py:225` |
 | `FUSION_VALUE_MIN_N` | `"4"` | `fusion/plausible.py:55` |
 | `FUSION_VALUE_RATIO` | `"4.0"` | `fusion/plausible.py:53` |
 | `FUSION_VLM_DIR` | `r"Y:\workspace\EDA\work\_fusion_vlm"` *(2 处)* | `fusion/audit.py:556` |
 | `FUSION_VLM_SCORE` | `"1.15"` | `fusion/claims.py:71` |
-| `FUSION_WORKERS` | `"1"` | `fusion/run.py:366` |
+| `FUSION_WORKERS` | `"1"` | `fusion/run.py:393` |
 | `VLM_TIMEOUT` | `"600"` *(3 处)* | `fusion/audit.py:75` |
 
 <a id="vlm"></a>

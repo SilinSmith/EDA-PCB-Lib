@@ -85,6 +85,10 @@ from envflag import env_on                       # noqa: E402  (唯一权威假�
 #   220 张约 +1.8 h），而那两张图上两臂的 `*_Pred.json` **MD5 逐字节相同**。
 #   改默认值前先读 `submission\run.py` 里 owner m25661 那段决定。
 DO_LLM = env_on("FUSION_LLM", "1")
+# ★ 收敛判据用「本轮结束时的题面」还是「本轮开始时的题面」（见下面 round loop 里
+#   的长注释）。`0` = 老行为（判据慢一轮，几乎总会跑满 `MAX_ROUNDS`），保留它只是
+#   为了让那次 A/B 的两条臂都能逐字节复现。
+CONV_EXACT = env_on("FUSION_CONV_EXACT", "1")
 
 
 def _load(path: Path) -> dict:
@@ -254,9 +258,17 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
             break
         r = {"round": rnd}
         if rnd == 1:
-            j = LJ.judge(pool, q_first, log=log)
-            r["judge"] = {k: v for k, v in j.items() if k != "rows"}
-            r["judge_rows"] = j.get("rows")
+            # ★★ 这里原本**没有 try**：`LJ.judge` 一抛异常，整个 case 就一份融合产物
+            #   都没有（对照 `AU.run` 在下面就是包了 try 的）。LLM 是**增强**，
+            #   不是前置条件 —— 它挂了也要把「先验 + 求解」这一层的结果交出去。
+            try:
+                j = LJ.judge(pool, q_first, log=log)
+                r["judge"] = {k: v for k, v in j.items() if k != "rows"}
+                r["judge_rows"] = j.get("rows")
+            except Exception as exc:                       # noqa: BLE001
+                r["judge"] = {"err": str(exc)}
+                if log:
+                    log("  [judge] 跳过：%s" % exc)
         # 先装配一次，`plausible` 的网络类检查需要网络已经成型
         pool.apply()
         pred = _assemble(doc, assigned, case, vlm_doc, sol, assigned0,
@@ -277,20 +289,35 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
             r["audit"] = {"err": str(exc)}
             if log:
                 log("  [audit] 跳过：%s" % exc)
-        rs = RS.run(pool, tasks, log=log)
-        r["rescan"] = {k: v for k, v in rs.items() if k != "rows"}
-        r["rescan_rows"] = rs.get("rows")
+        try:
+            rs = RS.run(pool, tasks, log=log)
+            r["rescan"] = {k: v for k, v in rs.items() if k != "rows"}
+            r["rescan_rows"] = rs.get("rows")
+        except Exception as exc:                           # noqa: BLE001
+            r["rescan"] = {"err": str(exc)}
+            if log:
+                log("  [rescan] 跳过：%s" % exc)
         sol = SV.solve(pool)
         SV.write_back(pool, sol)
         r["score_after"] = _summary(pool, sol)
         rep["rounds"].append(r)
+        # ★★ 收敛判据：**必须用这一轮结束时的题面**。
+        #
+        #   原来这里是 `if not tasks and not q_hard: break`，而 `q_hard` 是从
+        #   **循环开始时**的 `q_first` 算的（`q_first` 只在循环体最后才重新赋值）——
+        #   于是判据永远慢一轮：第 1 轮把题全解掉了，第 2 轮照样空跑（而第 2 轮
+        #   其实只跑 plausible/audit/rescan，`judge` 只在 rnd==1 调）。
+        #   代价是每张图多一次装配 + 一次 `plausible` + 一次 VLM 审计。
         # ★ boxscan 的自由读数题（`q["free"]`，零候选槽位）**不参与收敛判据**：它是
         #   「补问一遍」，不是「还没定」。否则每张图都会因为多了几道零候选题而永远
         #   跑满 `MAX_ROUNDS`，把「多跑一轮」的成本算到 boxscan 头上。
-        q_hard = [q for q in q_first if not q.get("free")]
+        q_next = SV.open_questions(pool, sol["assign"])
+        q_hard = [q for q in (q_next if CONV_EXACT else q_first)
+                  if not q.get("free")]
+        r["n_q_next"] = len(q_next)
         if not tasks and not q_hard:
             break
-        q_first = SV.open_questions(pool, sol["assign"])
+        q_first = q_next
 
     pool.apply()
     # ---- ⓪.9 定向回传：按 pincol 的格点窗问一次 VLM 的**引脚名** ------------

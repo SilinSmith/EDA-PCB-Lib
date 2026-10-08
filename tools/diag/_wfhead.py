@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""改写 workflow.html 内嵌 graphdata 的 `name` 与 `note` 开头（第七批）。
+"""改写 workflow.html 内嵌 graphdata 的 `name` 与 `note` 开头（第八批）。
 
 用法：
     python work\\tools\\diag\\_wfhead.py            # 预演
@@ -33,42 +33,46 @@ PAT = re.compile(r'(<script type="application/json" id="graphdata">\s*)(.*?)(\s*
 
 NAME = ("目标架构 · 证据层 → 约束求解 → 迭代重扫"
         "（实测：官方 10GT 9 张 58.63 / 派生 19 张 36.35 · 交付口径 VLM auto + fusion on · "
-        "同一批官方 9 张在本会话起点是 44.16）")
+        "**关掉 LLM 轮还是 58.63，逐位相同**）")
 
-BLOCK = """**★ 第七批（本会话后续）**
+BLOCK = """**★ 第八批：把 19 个「★要新写」逐个对账，并给 LLM 补上下文**
 
-**交付口径成绩：官方 `10GT` 9 张 44.16 → 58.63、派生 19 张 34.69 → 36.35**
-（`tools/eval/fast.py`，不加 `--no-vlm`、不设任何 `$env:` ⇒ VLM `auto` + `-fusion on` + `-mode off`）。
+19 个 `kind='new'` 徽标逐个读代码对账（不是信进度叙述）。结论：
+**16 个是「早就落地、只是徽标没改」**（`know` `pool` `solve` `plausible` `conflict` `llm_judge`
+`rescan` `iterate` `cropfix` `audit` `own` `ev_bridge` `pincol` `ownnum` `boxpinprior` `gtcheck`），
+**3 个是「量过、判负/证否」**（`fixstr` `batch` `boxscan`）—— 已全部去掉「要新写」徽标。
 
-| # | 改了什么 | 文件 | 官方 9 | 派生 19 | 结论 |
-|---|---|---|---|---|---|
-| 5 | 引脚号裁片**描边剔除**（绿色 no-connect 叉与数字同框被读成 `K4`/`L14`） | `stage2/text.py` | 56.71 → **57.54** | 35.39 → **35.75** | 采纳，只对 `pin_number,pin_name` |
-| 6 | 导线端点**同网吸附**（`STAGE2_EDGE_SNAP=20`，只吸近似垂直的邻居） | `stage2/assemble.py` | 57.54 → **58.63** | 35.75 → **36.35** | 采纳，增量全在 netL |
-| 7 | 形状惩罚真的改分（`FUSION_SHAPE_W`） | `fusion/priors.py` | 0 | −0.57 | **判负**，默认回 0.0 |
-| 8 | boxscan（给零候选元件建框去问一遍） | `fusion/claims.py` | −0.01 | +0.05 | **判负**，默认回 0 |
-| 9 | `own.assign` 全局一对一归属（`STAGE2_OWN_ASSIGN`） | `stage2/assign.py` | 0 | 0 | **零效果**，默认 0 |
-| 10 | GND 系引脚并成一条网 | — | — | — | **证伪**（官方 GT 不这么编码） |
+| # | 改了什么 | 文件 | 量出来的结果 | 结论 |
+|---|---|---|---|---|
+| 1 | **LLM 上下文块**（类型 / 同件别的字段 / 邻近元件 / 已定位号 / 已判可疑，+ 要求回一句 `依据=`） | `fusion/llm_judge.py` | VLM 关时官方 9 张 **52.48 → 53.27（+0.79）** | 采纳，默认开 |
+| 2 | **整表裁决（contact sheet）真的被执行** | `fusion/llm_judge.py` | 4 张 **59.62 → 55.32（−1.07）**，且更慢（160.5 s vs 83.6 s） | **判负**，`SHEET_MIN=9999` 默认关 |
+| 3 | **交付口径三臂**：LLM 关 / LLM 开 / LLM 开+上下文 | `fusion/run.py` | 三个臂**全是 58.63 且逐位相同** | LLM 轮在交付口径下值 **0.00**，却要 **+1.8 h/220 张** |
+| 4 | `judge` / `rescan` 各自包 `try` | `fusion/run.py` | `judge` 一抛异常该 case 原本**一份融合产物都没有** | 采纳 |
+| 5 | 收敛判据用**本轮结束**的题面（`FUSION_CONV_EXACT=1`） | `fusion/run.py` | case 1 实为 `n_q_next 15`，旧判据看的是上一轮 | 采纳 |
+| 6 | 位号取景框取**最高分**那个（`FUSION_REGION_TOPK=1`） | `fusion/claims.py` | `stage2` 从不保证 `desig_slots` 按分降序 | 采纳 |
+| 7 | `solve.gap_fill` 的负分跳过**留计数** | `fusion/solve.py` | 原为静默 `continue` | 采纳（只加计数） |
 
-**★ 第七批的方法学（比上表更值钱）**
-1. **「A/B 有差别」不等于「你改的那条分支生效了」。** boxscan 第一版实测有差，
-   但把 `_fusion_report.json` 的 `notes` 打出来才看到每张只建了 1 个槽位 ——
-   分差是那 1 颗元件的读数对错，不是 boxscan 整体的效果。改完先证明分支执行了、
-   执行了几次，再解释分差。
-2. **对照臂必须配对口径。** boxscan 在 VLM 开着时基本是 no-op
-   （`_add_vlm` 已把 `comp.<cid>.key` 覆盖到 82/83、12/12、22/22），只能在
-   `--no-vlm` + `FUSION_LLM=1` 这个口径量；交付口径的 58.63 / 36.35 是另一张表。
-3. **归属类改动可能先天没有空间。** `own.assign` 端到端两档**逐位相同**，
-   因为 `owned` 本来就是一份划分 —— 一对一不变式**改造前就成立**。
-   先量天花板（`tools/diag/_ownasgn.py --headroom --gt`：官方 9 张 124 颗里
-   读对 104 / 空 11 / 错 9，而这 20 颗失配里只有 **1 颗**的候选池里已有正确读法），
-   再决定要不要改。
-4. **一个数字可以在两种跑法下不同。** 曾出现同参数下 9 张单跑 51.06 vs
-   19 张合跑的子集 51.74（差 <1 分）。**小于 ~1 分的差值采信前必须重复测量**
-   （本轮 `reg9` 与 `reg19` 印出的 10GT 子集已逐位一致）。
-5. **改默认值之前先看它有没有被执行。** `fusion/run.py` 的 `_fusion_report.json`
-   原先只在它自己的 `main()` 里落盘，而真实提交路径直接调 `run_case` ⇒
-   提交产物里**根本没有逐轮明细**。已在 `submission/run.py` 补上，并在
-   `fusion/run.py` 的 `rep` 里加了 `notes`。
+**★ 第八批的方法学（比上表更值钱）**
+
+1. **「开关开着」不等于「这条路被执行过」。** `SHEET_ON` 默认 `1`、`_sheet_image` /
+   `_known_designators` / `judge_sheet` 全是为整表写的，**但入口是
+   `if mode == "sheet" and SHEET_ON:`，而 `MODE` 默认 `"auto"`** ⇒ 那条路一次都没跑过。
+   「没有上下文环境」这句话因此有了代码级坐标。**默认值 ≠ 生效值**：双开关（允许 + 选择）
+   两个都要看。尺子：`python tools/diag/_jrep.py --out <产物目录> [--rows]`。
+2. **提示词改动必须回读「模型到底收到了什么」。** 分不变也可能是真的生效了。
+   `ctx=1` 时 **12/12 行都有 `依据=…`**，`ctx=0` 时 **0/12**。只报分数说不清为什么变，
+   只报 `why` 说不清值不值 —— **两样都要**。
+3. **「LLM 有没有用」必须先给它上下文，再问。** 本轮第一次给出有前提的答案：
+   在 VLM `auto` 的交付口径下，整个 LLM 轮 **+0.00**（三臂逐位相同）；在 VLM 关时 **+0.79**。
+   ⇒ 它是在**没有 VLM** 时的补强，不是交付口径的增量。
+4. **审计报告里的「这里有个 bug」四个字不等于这里真有 bug。** 一份审计说
+   `claims.py` 的 `pinpts.get(cid)` 与 `doc["pins"]` 的键对不上；实测
+   `_pinbox.py`：融合读的是 **stage1** 文档，`pins` 按 `cid` 记（case 1 = 22/22/22 全中），
+   按**位号**记键的是 **stage2** 文档 —— 审计把两份文档搞混了，
+   照它改**反而会引入 bug**。**复现不出来就不是 bug。**
+5. **一个「零效果」的改动，先问它有没有可赢空间。** `own.assign` 端到端逐位相同，
+   因为一对一不变式**改造前就成立**；官方 9 张 124 颗里失配 20 颗，而其中只有
+   **1 颗**的候选池里有正确读法。先量天花板，再决定动不动手。
 
 ---
 
@@ -85,8 +89,8 @@ def main():
     old_name = d.get("name") or ""
     d["name"] = NAME
     note = d.get("note") or ""
-    if "★ 第七批" in note:
-        print("note 里已经有第七批，跳过插入（只改 name）")
+    if "★ 第八批" in note:
+        print("note 里已经有第八批，跳过插入（只改 name）")
     else:
         d["note"] = BLOCK + note
     print("name:")

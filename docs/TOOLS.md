@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **483** 个脚本。
+共 **487** 个脚本。
 
 
 <a id="data"></a>
@@ -65,7 +65,7 @@
 
 <a id="diag"></a>
 
-## `tools/diag/`（375 个脚本）
+## `tools/diag/`（379 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -211,6 +211,7 @@
 | `_inkband` | 89 | 量「墨迹高度 g / 标注框高度 H」的稳定性。 |
 | `_inkdiag` | 143 | 归一的逐条诊断：把 val 拆成「归一几乎没动框」和「归一大幅改了框」两组， |
 | `_inkvis` | 117 | 对照：同一个框，左＝现行裁剪（框 + PAD_X/Y_FRAC），右＝墨迹归一后的裁剪。 |
+| `_jrep` | 95 | 把 `_fusion_report.json` 里 LLM 轮（`rounds[].judge`）的**开关与计数**整行打出来。 |
 | `_jsdump` | 9 |  |
 | `_judgedbg` | 79 | LLM 裁决的取景/提示词 A/B：同一个槽位，看模型到底吃到了什么、答出了什么。 |
 | `_judgeprobe` | 46 | 跑一次融合层并把它内部的 log 全打出来（看 LLM 轮到底做了什么）。 |
@@ -372,6 +373,7 @@
 | `_stale` | 12 |  |
 | `_stampshape` | 152 | 图章形状勘察：官方 GT 的每类 bbox 到底是「正方形」还是「长方形」。 |
 | `_stubfill` | 139 | Could geometric *pin stubs* fill the pins that have no wire attached? |
+| `_subst` | 48 | 按「字面子串」替换文件内容（避开 PowerShell 引号地狱）。 |
 | `_symcmp` | 12 |  |
 | `_symdbg` | 13 |  |
 | `_symdbg2` | 19 |  |
@@ -426,11 +428,13 @@
 | `_weld_selftest` | 110 | 方向性桥接（stage1.labels._weld_unions / wire_groups 规则 3）的合成自检。 |
 | `_weldprobe` | 151 | 量「方向性桥接（规则 3 `weld`）」被哪一道闸门卡住。 |
 | `_wfbuild` | 533 | 重建 workflow.html：要点清单 + 按数据流分带布局 + CSS/JS 补丁（阅读面板/分层 tidy）。 |
-| `_wfbullets` | 388 | workflow.html 的第二轮内容：每个节点的「要点清单」（正面可见）。 |
+| `_wfbullets` | 397 | workflow.html 的第二轮内容：每个节点的「要点清单」（正面可见）。 |
 | `_wfdump` | 19 |  |
 | `_wfextract` | 19 |  |
-| `_wfhead` | 108 | 改写 workflow.html 内嵌 graphdata 的 `name` 与 `note` 开头（第七批）。 |
+| `_wfhead` | 112 | 改写 workflow.html 内嵌 graphdata 的 `name` 与 `note` 开头（第八批）。 |
+| `_wfkind` | 93 | 改 `workflow.html` 里节点的 `kind`（徽标），用 `json` 模块安全改写内嵌 graphdata。 |
 | `_wfmd` | 20 |  |
+| `_wfnew` | 76 | 把 workflow.html 里 kind='new'（★ 要新写）的节点的 note + bullets 全文倒出来， |
 | `_wfnodes` | 38 | 看 workflow.html 里指定节点的 file / note / params（用法：python _wfnodes.py [id ...]）。 |
 | `_wfpeek` | 20 |  |
 | `_wfsize` | 12 |  |

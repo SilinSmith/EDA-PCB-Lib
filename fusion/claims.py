@@ -116,6 +116,11 @@ REGION_MIN = float(os.environ.get("FUSION_REGION_MIN", "120"))
 # ⇒ 代码保留（`FUSION_BOXSCAN=1` 可复现每一臂），**默认 0**。
 BOXSCAN = env_on("FUSION_BOXSCAN", "0")
 
+# ⚠ 取景框高亮取哪个候选的框：`1` = 按分数最高的那个（与注释一致的语义），
+#   `0` = 老行为（`assigned["desig_slots"][cid]` 的**列表首项**，而 stage2 从不保证
+#   它按分数降序）。留成开关只是为了让那次 A/B 的两条臂都能复现。
+REGION_TOPK = env_on("FUSION_REGION_TOPK", "1")
+
 # ⚠ boxscan 的**类型闸门**：这些 type 纸上本来就没有位号（key 是伪造号 `∅N`），
 # 给它们建「位号是什么？」槽位只会让 LLM **编一个** key 出来 ⇒ 元件变 fp。
 # 与 `stage2/assign.py:303 NO_DESIGNATOR` 保持同一份 —— 先试着 import，
@@ -605,16 +610,25 @@ def from_stage2(case: str, doc: dict, assigned: dict, bgr=None,
                                   if not PR.desig_shape_ok(
                                       cd.get("text") or cd.get("canon") or "")]
         # ★ 取景框只设**一次**：窗口 = 全部候选框的并集，高亮 = **分数最高**那个候选的框。
-        # ⚠ 这里踩过一次坑：原来在候选循环里逐个 `set_region`，而 `set_region` 是**覆盖**语义
-        # ⇒ 最后一个候选（＝分数**最低**的）赢。`case 0001` 的 `c0015` 候选是
-        # `C5(0.754) / C1 / C5 / C3(-1.77)`，高亮最终落在 `C3` 那个框上，而那个框里印的是
-        # `R8` —— 模型老老实实答了 `R8`，是取景错了不是模型错了。
-        boxed = [cd.get("box") for cd in cands if cd.get("box")]
+        # ⚠ 这里踩过两次坑：
+        #   (1) 原来在候选循环里逐个 `set_region`，而 `set_region` 是**覆盖**语义
+        #       ⇒ 最后一个候选（＝分数**最低**的）赢。`case 0001` 的 `c0015` 候选是
+        #       `C5(0.754) / C1 / C5 / C3(-1.77)`，高亮最终落在 `C3` 那个框上，而那个框里印的是
+        #       `R8` —— 模型老老实实答了 `R8`，是取景错了不是模型错了。
+        #   (2) 改成「设一次」之后，高亮取的是 `boxed[0]`，而 `boxed` 是
+        #       `assigned["desig_slots"][cid]` 的**原始列表顺序**，`stage2` 从来没有
+        #       保证过它按分数降序 ⇒ 注释写着「分数最高那个候选的框」，代码却不保证。
+        #       现在按分数**显式排序**后再取（`FUSION_REGION_TOPK=0` 可退回列表首项）。
+        boxed = [cd for cd in cands if cd.get("box")]
         if boxed:
-            win = [_f(v) for v in boxed[0]]
-            for bx in boxed[1:]:
-                win = union_box(win, [_f(v) for v in bx]) or win
-            pool.set_region(sid, win, focus=[_f(v) for v in boxed[0]],
+            order = (sorted(boxed, key=lambda cd: -_f(cd.get("score")))
+                     if REGION_TOPK else boxed)
+            win = [_f(v) for v in order[0].get("box")]
+            for cd in boxed:
+                if cd is order[0]:
+                    continue
+                win = union_box(win, [_f(v) for v in cd.get("box")]) or win
+            pool.set_region(sid, win, focus=[_f(v) for v in order[0].get("box")],
                             note="元件 %s（%s）的位号候选框" % (cid, ctype),
                             src="ocr:designator")
         # 本体框也给进去：位号经常印在本体边上，取景必须包含本体才认得出是什么。
