@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **551** 个脚本。
+共 **563** 个脚本。
 
 
 <a id="data"></a>
@@ -69,7 +69,7 @@
 
 <a id="diag"></a>
 
-## `tools/diag/`（434 个脚本）
+## `tools/diag/`（446 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -241,6 +241,11 @@
 | `_labelaudit` | 104 | 标注审计：当前训练集（trainset_v3）里的标签**本身**有多可疑。 |
 | `_leakpair` | 79 | 对照 train 侧的 `synth_<id>` 与 val 侧的 `200_train_cases-<id>__full` 的标注直方图。 |
 | `_lencal` | 142 | 长度律的**域校准**：`fusion/charwidth.py` 是从**标注框**（manifest）拟合的， |
+| `_libcov` | 195 | 元器件库（官方 cpntLibrary）对 GT 的覆盖率体检。 |
+| `_libnum` | 240 | 官方元器件库当「引脚号来源」的机会 —— 只针对**名读到了、号没有**的引脚。 |
+| `_libopp` | 187 | 量化「官方元器件库 cpntLibrary 能给我方当前产物补多少分」的机会。 |
+| `_libpins_cpu` | 107 | 交付级等价 A/B（**纯 CPU**，不碰 GPU / LM Studio），并产出可打分的 JSON 目录。 |
+| `_libsim` | 294 | **不改管线**的模拟：把「官方库给出的引脚号」直接补进交付 JSON，再打分。 |
 | `_lineprobe` | 163 | 为什么 NetLineF1 只有 0.019？ |
 | `_lineweld` | 170 | `net_line`（权重 0.10）爆 0 的对策实验：把「共线且首尾相接」的导线片段焊成整条直线。 |
 | `_linewhy` | 125 | `net_line` 为什么爆 0 —— 逐条看边的端点距离。 |
@@ -256,6 +261,7 @@
 | `_nameboxes` | 90 | 把 `_namefix.py` 找出的「名错」引脚连同它在 `_assigned` 里的来源文字框一起打出来。 |
 | `_namecat` | 194 | 引脚名错配的**成因分类**：截断 / 扩读 / 字符混淆 / 完全无关。 |
 | `_namefix` | 204 | 引脚名（`pinname`）的字符级混淆普查 —— `pin_f1` 的 tp 要求 pinname **逐字**相等。 |
+| `_netconv` | 179 | 量「净 hyperGraph」的两种口径，看差多少分。 |
 | `_netcover` | 200 | 网络分（`net_hypergraph_f1`，权重 **0.35** —— 四项里最重）到底卡在哪。 |
 | `_netdump` | 32 |  |
 | `_netfrag` | 69 | 把某个 case 的「GT 网 <-> 我们网」的碎裂结构打印出来。 |
@@ -272,6 +278,8 @@
 | `_nldiag` | 145 | _nldiag.py —— `net_line_f1` 为什么只有 0.06？ |
 | `_nldup` | 325 | _nldup.py —— `net_line` 的真凶：我们把**笔画的两条边**都当成导线输出。 |
 | `_nledge` | 97 | _nledge.py —— 把某一对配对 net 的 GT 边/我方边**逐条并排打出来**，肉眼看差在哪。 |
+| `_nlfork` | 155 | net_line 失分分解：把 tp/fp/fn 拆成「网没配上」「网配上了但边数不对」「边数对但端点超差」。 |
+| `_nlfork2` | 137 | net_line 结构归因：把「我们边太多」拆成 ①双描边（平行近重复）②过分割（GT 长边被切成几段）。 |
 | `_nlpair` | 83 | _nlpair.py —— `net_line` 是被**边**卡住，还是被**网络配对**卡住？ |
 | `_nobom` | 9 |  |
 | `_nodeclust` | 71 | 量 pskel 的结点聚簇尺寸 —— 验证「长斜线 = 跨大聚簇的隐式直连」假设。 |
@@ -339,23 +347,25 @@
 | `_pinkey2` | 60 | stage2 文档里 `pins` 是按 cid 还是按位号存的？以及 `assigned['comps'][cid]['pins']` 的规模。 |
 | `_pinlabel` | 130 | GT 的 IC 引脚名**在图上到底有没有被我们检出文字**，以及它落在元件框内还是框外。 |
 | `_pinlands` | 22 |  |
+| `_pinlat` | 151 | GT 的 IC 引脚排布有多「规则」？—— 决定「按库补缺失引脚」这条路值不值得走。 |
 | `_pinledger` | 214 | **引脚失分账本**：把 `pin_f1` 的 fn/fp 逐条拆到「缺号 / 多号 / 名字错 / 位置错」， |
 | `_pinloss` | 221 | 引脚失分分解：把 220 张的 `pin.missing`（8335）拆成 |
 | `_pinmap` | 53 |  |
 | `_pinmatch1` | 58 | 逐脚对账：我们的某个元件 vs GT —— 号对不对、名对不对。只读。 |
-| `_pinmiss` | 58 | 引脚为什么丢：逐 IC 把 GT 引脚号 / 我们发出的引脚号 / OCR 读到的号摆在一起。 |
+| `_pinmiss` | 281 | 把「GT 有、我方没有」的 IC 引脚按**成因**分桶（取代 2026-10 之前的占位版）。 |
 | `_pinname` | 153 | Why does `pin.name_mismatch` fire?  (`p.get('pinname') != g.get('pinname')`) |
 | `_pinname_stat` | 23 |  |
 | `_pinnamepair` | 117 | **引脚名字账本**：官方档 IC 引脚的 GT `pinname` vs 我方 `_assigned` 槽位里读到的 |
 | `_pinoff` | 122 | 引脚**位置**误差普查：同号引脚 GT 点 vs 我们的点到底差多少、往哪个方向差。 |
 | `_pinoracle` | 129 | 引脚分的**结构上界**：如果「我们产出的引脚」能一一对上 GT 的引脚，能拿多少？ |
-| `_pinpos` | 99 | 同号引脚（`box` IC）的位置误差普查：我们的引脚点 vs GT 的引脚点。 |
+| `_pinpos` | 115 | IC 引脚「点距」误差体检：PinF1 里 tp 要求 pinname 相等 **且** 点距 ≤ pin_tol(5 px)。 |
 | `_pinprobe` | 153 | PinF1 为什么只有 0.039？（权重 25，是四个指标里最大的窟窿） |
 | `_pinprune` | 140 | 引脚剪枝的离线实验：不动管线，只删预测里的引脚，再按官方口径重打分。 |
 | `_pinslot` | 52 | 看 `_assigned/<case>.json` 里**每个引脚槽位**到底带了什么（尤其：名字那段文字的框在不在）。 |
 | `_pinsnap` | 256 | 引脚第④关（位置 ≤ `cfg.pin_tol` = 5.0 px）到底能不能靠**纯几何**救回来。 |
 | `_pinsweep` | 187 | 引脚窗口扫描：**在 GT 的引脚点上**读号/名，直接量「窗口几何」这一层的能力上限。 |
 | `_pintext` | 151 | **GT 的 `point` 是「框边接点」还是「引脚名/号那行文字的中心」？** |
+| `_pintip` | 210 | _pintip.py — 引脚点几何体检：**tip vs base** 与 **邻脚错位** 两个假设的纯 CPU 判据。 |
 | `_pinwhy` | 95 | **`pin`（权重 0.25）为什么爆 0** —— 在快测集上按官方判定口径逐条拆。 |
 | `_pinwin` | 111 | 不依赖 LLM 的几何判据：引脚窗口里**混进了几条别的引脚行**。 |
 | `_pinwin_u` | 104 | 三臂几何对照：窗口里混进几条**别的引脚行**（不依赖 LLM）。 |
@@ -376,9 +386,11 @@
 | `_prpeek` | 11 |  |
 | `_psympin` | 12 |  |
 | `_pwhy` | 137 | 兜底键（pNNN）的 2191 个元件到底缺什么——逐条查 `_assigned`。 |
+| `_pwrfilter` | 195 | 电源节点「怎么放」的稳健性实验：把电源符号写进净图有多少种放法，各种放法在 |
 | `_recover` | 23 |  |
 | `_region` | 39 | 渲染任意图的任意区域，用于肉眼判定图形到底是什么。 |
 | `_repsum` | 17 |  |
+| `_rescore` | 156 | 把已存档的 A/B 臂**用新口径重打一遍**，看有没有结论会翻。 |
 | `_rlook` | 123 | 看 GT 里 r / l 到底长什么样：在原始分辨率上裁 GT 框，按类型拼接触表。 |
 | `_row1` | 92 | 把 case 1 电容排（GT `C155`..`C164`）整排打出来： |
 | `_rowfull` | 63 | 把某个 case 的**全部**位号候选框按「前缀 + y 带」排成轴打印出来， |
@@ -542,7 +554,7 @@
 | `stage1_wire_colour` | 167 | 提取线段按「是否真的压在 GT 网表线段上」分组，比较两组的图像颜色。 |
 | `stage1_wire_filter` | 179 | stage1 导线过滤扫描：到底有多少「提取线段」是文字/符号/边框？ |
 | `stage1_wires_eval` | 201 | stage1 导线产出 vs GT 的验收评测。 |
-| `stage2_eval` | 232 | 第二阶段的评测：把 `<pred_dir>\<case>.json` 与官方 GT 对起来。 |
+| `stage2_eval` | 236 | 第二阶段的评测：把 `<pred_dir>\<case>.json` 与官方 GT 对起来。 |
 | `tp_diag` | 119 | 诊断 CV testpoint 检测器的误报：TP 与 FP 的环特征分布差在哪里。 |
 | `tp_probe` | 119 | testpoint 的 CV 可行性探针。 |
 | `tp_probe2` | 86 | 按 case 解剖 testpoint 的三种画法：每个 GT 附近都有哪些圆、半径多少、有没有孔。 |

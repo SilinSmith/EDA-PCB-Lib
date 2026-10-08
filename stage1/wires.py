@@ -362,8 +362,29 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
         src = cv2.resize(work, (max(8, int(round(W * s))), max(8, int(round(H * s)))),
                          interpolation=cv2.INTER_AREA)
     _hint_wire_hue(bgr)
-    ex = WireExtractor(ink_mode=ink_mode, thin_w=thin_w, use_colour=use_colour,
-                       rdp_eps=rdp_eps, snap=snap)
+    # ★ 2026-10-08 新增：导线骨架「空壳」修正旋钮（病灶见 `pipeline/pskel.py:118`
+    #   `thin_stroke_mask` 的 `dt <= max_half_width`）：一根 4px 宽的导线，横截面上
+    #   dt = 1,2,2,1 ⇒ `dt <= 1.6` **只留下两条外沿**，Zhang-Suen 于是给出**两条平行骨架**
+    #   （镜像出两条边 2~3px 相望）。GT 的 `edges` 是**一条中心线**，而 `net_line` 是一对一派
+    #   ⇒ 每条 GT 边最多命中我们两条里的一条，另一条必成 fp。实测官方 9 张：配对网内
+    #   我们 993 条 edge / GT 523 条（1.90×），其中**856 对**是「平行且端点都近」的双胞胎。
+    #   三个不破坏旧行为的旋钮（默认全为旧行为）：
+    #     STAGE1_WIRE_THIN_W     半宽阈值（默认 1.6 = 历史值；调到 ≥2.0 可保住 4px 描边整条）
+    #     STAGE1_WIRE_CLOSE_THIN 1 = 3x3 形态学闭运算把两条外沿之间的 2px 缝焊上（再骨架化）
+    #     STAGE1_WIRE_DILATE     N>0 = 把「离细笔画 N px 内的墨」补回来（N=2 可填满 4~5px 描边）
+    try:
+        _thin_w = float(os.environ.get("STAGE1_WIRE_THIN_W", "") or thin_w)
+    except ValueError:
+        _thin_w = thin_w
+    _close_thin = os.environ.get("STAGE1_WIRE_CLOSE_THIN", "0").strip().lower() in (
+        "1", "true", "on", "yes")
+    try:
+        _dilate = int(os.environ.get("STAGE1_WIRE_DILATE", "0"))
+    except ValueError:
+        _dilate = 0
+    ex = WireExtractor(ink_mode=ink_mode, thin_w=_thin_w, use_colour=use_colour,
+                       rdp_eps=rdp_eps, snap=snap, close_thin=_close_thin,
+                       dilate_to=_dilate)
     t0 = time.time()
     r = ex.extract(src)
     dt = time.time() - t0
