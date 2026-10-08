@@ -17,11 +17,11 @@ import sys
 from typing import Dict, List, Optional, Sequence, Tuple
 
 try:                                    # 作为包导入（submission\run.py 把 eda-pcb\ 加进 sys.path）
-    from envflag import env_on        # 「假值词表」唯一实现，见 eda-pcb/envflag.py
+    from envflag import env_on, env_str  # 「假值词表」唯一实现，见 eda-pcb/envflag.py
 except ImportError:                     # 直接跑脚本（python eda-pcb\stage2\assemble.py 自检）：
     import sys as _sys, os as _os       # `sys.path[0]` 是本目录，得把 eda-pcb\ 补上
     _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-    from envflag import env_on
+    from envflag import env_on, env_str
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -52,6 +52,73 @@ FREE_TOL = 2.0          # 两个端点离多近算「接上了」
 #
 # ⇒ 默认改成 **0（输出）**。`STAGE2_DROP_UNKEYED=1` 可退回旧行为做对照。
 DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "0")
+
+# ---------------------------------------------------------------------------
+# ★★ 内部合并类 `tp` 的**文本闸门**（只跟 `STAGE1_MERGE_TP=1` 配套，默认 off）。
+#
+# 业主原话（m00001）：「testpoint 和跟他搞混的那个则直接合并成一个（YOLO识别阶段），
+# 而在**文本绑定时**才决定他到底是哪个」。检测阶段只出一个类 `tp`
+# （`stage1/detect.py` 的 `MERGE_TP`），**在这里**落回官方类名。
+#
+# 为什么选 `assemble.py` 而不是 `assign.py`：`build_doc` 就是「元件键 → 官方交付
+# 文档」的那一步，也是**唯一**一处把 `c["type"]` 写进交付产物的地方
+# （`:637 components[key] = {"Name":…, "type": ctype, …}`）。放进 `assign.py` 得去
+# 改 stage1 的 doc（那层不该知道交付格式），而且阶段三会从 `_assigned/*.json` 重新
+# `build_doc` 一遍 —— 只有当决议就在 `build_doc` 里时，两次调用才必然一致。
+#
+# 三条规则：
+#   ① 绑到了 TP 系位号（`assign.py` 的 `TYPE_PREFIX["tp"]`）**且**有 CV 形状证据
+#      （子类型落在 `TP_CV_SUBTYPES` 里）→ 官方类名 `testpoint`；
+#   ② 绑到了位号但没有形状证据 → `pin`；
+#   ③ **没绑到位号 → 直接丢**（不管 `DROP_UNKEYED`）。这就是把原来 stage1 那条
+#      「盲目的类型级丢弃」（`detect.py` 顶 `DROP_TYPES`：`pin` 预测 98.9% 是 fp）
+#      换成「**有证据的文本闸门**」：位号读出来了才配占一个键，读不出来就别占。
+#      「读出来了」的严格定义见 `TP_TRUST_EV`（位号要带 `text`/`conf` 之类真证据，
+#      只有 `canon` 的空壳位号不算 —— 融合层会凭空补那种，实测贴错物理器件）。
+# 形状证据 = CV 子类型（`stage1/detect.py` 记到元件上的 `subtype`）。
+# `cvparts/testpoint.py:10-13` 只有三种：`ring3` 三层细同心圆环（案例 0050，
+# `cvparts/__init__.py:12` 记「同心双圆环靶心，43/43 能找到」——43 正好等于 GT
+# `testpoint` 总数 43）、`hole` 粗圆环、`dot` 单圆点。
+#
+# ★★ 2026-10-08 六张派生 case 实测（`work/_fast_out_tpmerge_A6mrg`，stage1 侧统计）：
+#   0050 GT testpoint 20 → 27 个 tp，subtype `ring3 22 / 无 5`
+#   0011 GT testpoint 12 → 13 个 tp，subtype **`hole 13`**
+#   0102 GT testpoint  8 → 17 个 tp，subtype `dot 11 / hole 1 / 无 5`
+#   0001 GT pin 8        →  8 个 tp，subtype `无 8`
+#   0087 GT pin 68       → 70 个 tp，subtype `无 70`
+#   0187 GT pin 23       → 25 个 tp，subtype `无 25`
+# ⇒ **判据是「CV 有没有认出 testpoint 那一族形状」，不是「是不是 ring3」**：
+#   凡 CV 给了子类型的（`ring3`/`hole`/`dot`）6 张上全部落在 GT `testpoint` 上，
+#   一个 CV 子类型都没有的（`0001`/`0087`/`0187`）全部落在 GT `pin` 上（0 例反例）。
+#   把 `hole`/`dot` 算成 `pin` 会让 0011 的 12 个 + 0102 的 8 个 testpoint 全变错类。
+#   `STAGE2_TP_CV_SUBTYPES` 用来切臂：默认仍是 task 口径的 `ring3`（**不含**
+#   `hole`/`dot`）。**放宽到 `ring3,hole,dot` 今天是一个逐位相同的 no-op**：
+#   闸门台账（`STAGE2_TP_LEDGER=1`）显示 6 张里真正绑上位号的只有 `无 19 / ring3 12`，
+#   `hole`（0011 的 13 个）与 `dot`（0102 的 11+1 个）**一个都没绑上**、早在 `unkeyed`
+#   那一步就被丢了。所以按实测口径的正确取值是 `ring3,hole,dot`，但今天不产生分数差异，
+#   默认保持 task 原话的 `ring3`；等位号绑定能力上来（例如 CRNN 前缀骨架那类改动）
+#   再打开，免得那时 hole/dot 被错判成 `pin`。
+TP_MERGED = "tp"
+# 同一个环境变量在 `stage1/detect.py` 里也读一次（那里负责合并，这里负责决议）。
+MERGE_TP = env_on("STAGE1_MERGE_TP", "0")
+TP_CV_SUBTYPES = frozenset(s.strip().lower() for s in
+                           env_str("STAGE2_TP_CV_SUBTYPES", "ring3").split(",") if s.strip())
+# `STAGE2_TP_TRUST_EVIDENCE`（默认 1）：`tp` 的位号必须**带着读出证据**才算「绑上了」。
+# 只有 `canon` 一个字段的空壳位号（融合层凭空补出来的那种）不算，整颗元件丢掉。
+# 动机（2026-10-08 实测，`work/_tpmerge_who.py`）：0087 的 stage2 侧只有 8 个 tp
+# 拿到 canon，到了 `runs/fusion/_assigned/0087.json` 变成 **38** 个，多出的 30 个形如
+# `{"canon": "TP18", "_by": "solve:ocr:designator"}` —— 连 `text`/`conf`/`box` 都没有。
+# 官方按 key 匹配元件 ⇒ 键名撞上了 GT（`TP1`/`TP2`/…）却贴在**别的物理器件**上
+# （实测 `TP1` GT bbox [1102,631] vs pred [1482.8,799.6]；`TP11` 的 pred 反而落在
+# GT `TP1` 的位置），于是 `pairs {"pin->pin": 19}` 里 0 个得分、`fFP` 0→38、
+# compF1 0.1923→0.1546、总分 −0.0466。判据 = 除 `canon`/`_by` 外**还有别的字段**：
+# `stage2/assign.py:862` 写的位号一定带 `{"text","canon","conf","box","d","fit","box_i"}`，
+# 而融合层凭空补的只有 `canon`（+`_by`）。
+TP_TRUST_EV = env_on("STAGE2_TP_TRUST_EVIDENCE", "1")
+# 决议台账（只用于诊断，不进交付产物）：每条 = 为什么被丢 / 落成了哪个官方类名。
+# 默认关（`STAGE2_TP_LEDGER=1` 打开），免得给不关心的人白建 list。
+TP_LEDGER_ON = env_on("STAGE2_TP_LEDGER", "0")
+TP_LEDGER: List[dict] = []
 
 # `box`(IC) 的引脚号：OCR 读出的号**一颗 IC 里有一个读废就整颗退回位置号**，
 # 还是**逐引脚**回退。
@@ -114,20 +181,55 @@ BOX_PIN_DROP_CAP = _DROP_MODE in ("cap", "max", "ceiling")
 #     ⇒ 8 张赚 3 张亏、净值 +0.67（相对无 pincol 的 23.30 基线）。**默认改为开**。
 BOX_PIN_NEED_NAME = env_on("STAGE2_BOX_PIN_NEED_NAME", "1")
 
+# ★ 官方元器件库（`cpntLibrary`）引脚先验的**总闸**：`STAGE2_LIB_PINS`，**默认 `0`（关）**。
+# 关掉时本文件不会 import `stage2.libpins`（那个模块的库文件读取是惰性的），产物与
+# 不挂接这条通道时**逐字节一致**。库文件路径 `STAGE2_CPNT_LIB`，默认仓库根的
+# `work\data\cpntLibrary.json`（1,755,587 B / 337 键）。
+# 两条规则、唯一性判据、以及**为什么默认关**（收益靠元件型号名被读对，stage2 直出的
+# `Name` 是 OCR 原文，官方 9 张 17 个 box 里只有 1 个能命中库 ⇒ 收益在融合层/交付链）
+# 见 `stage2/libpins.py` 的模块 docstring。挂接点在 `build_doc` 的 box 引脚路径：
+# 规则 A 在「局部采信 + 位置号补位」之后**就地补号**，规则 B 在出组时**改名**。
+LIB_PINS = env_on("STAGE2_LIB_PINS", "0")
+#: `=1` 时无论 `STAGE2_DBG_PINS` 都打印本通道补/改了几处（诊断用）。
+LIB_PINS_DBG = env_on("STAGE2_LIB_PINS_DBG", "0")
+
 # 兜底键的形状（`p000`…），和 `schematic_parser/metrics.py` 的 `FKEY_RE` 一致。
 FKEY_RE = re.compile(r"^p\d{3,4}$")
-# **兜底键元件的引脚要不要写进 net 超图**。
-# `net_hypergraph` 的 FP = `total_pred_pins - tp`，而兜底键元件的引脚号
-# （位置序号或硬读的号）对上一颗 GT 里同样是 `∅NNN` 的元件几乎不可能对
-# （官方 Q&A 数据 Q6：「编号是随机生产的」）⇒ 这些引用基本是纯 FP。
-# 注意：component 那一项**仍然要输出这些元件**（它们靠坐标匹配拿 tp），
-# 这里剪的只是 net 里的引用。
-# 220 张实测（官方口径 `--unkeyed-match gt`）：`=0` → **21.1165**，
-# `=1` → **22.9068**（**+1.79**）。收益全在 net 那条线上：
-# `net_hypergraph` F1 0.1357 → 0.1862（P 0.1328→0.3254，pred 引脚 23743→9676），
-# `net_line` 0.0172 → 0.0195；而 component / pin 两项**一个数都没动**。
-# 剪掉的正好是 `DROP_UNKEYED=0` 换 component 时多出来的那 14000 个假引用。
-NET_DROP_UNKEYED = env_on("STAGE2_NET_DROP_UNKEYED", "1")
+# **兜底键元件（`pNNN`，GT 里是 `∅NNN`）的引脚要不要写进 net 超图**。
+# `net_hypergraph` 的 FP = `total_pred_pins - tp`。
+#
+# ★★ 默认值在 2026-10 官方最新 QA 之后**从 `1` 翻成 `0`**（见
+#    `schematic_parser/metrics.py` 的 `net_pin_collapse_nonbox`）。两个口径下的实测：
+#
+#    * 旧（字面）口径 —— 非 box 元件的 `组件.引脚号` 按字面当净图节点：
+#      GT 电源/地的引脚号是**随机内部号**（`∅200` 的脚是 `pin_198`，官方 Q&A
+#      「编号是随机生产的」）⇒ 我们写什么号都配不上，写进去就是纯 FP。
+#      220 张实测 `=0` → **21.1165**、`=1` → **22.9068（+1.79）**，收益全在 net 线
+#      （`net_hypergraph` 0.1357→0.1862，pred 引脚 23743→9676），component/pin 一动不动。
+#      ⇒ 那时的结论是「剪掉」。
+#    * 新（折叠）口径 —— 非 box 引脚号折成通配 `*`（最新 QA：「非 box 元件 pinnumber
+#      不计分，所以 rcl 等在 hygraph 中相当于不区分引脚；gnd/vcc 同理；**输出规范参考
+#      10gt**」）：`(p012,*)` 经坐标匹配被 `rewrite_keys` 改写成 `(∅200,*)` **就能配上**，
+#      剪掉反而白丢分。官方 9 张实测（同 stage1、同 VLM 目录、`--workers 1`）：
+#        **文档级** 剪 53.4673 → 不剪 **55.8307（+2.363）**
+#        **融合层** 剪 62.5201 → 不剪 **64.8641（+2.344）**（netH 0.5726 → 0.6394）
+#      上界量法：让 GT 与「删掉全部 gnd/v 成员」的 GT 互评，9 张均值 **−4.4793 分**
+#      ⇒ 电源节点在折叠口径下确实值钱。
+#    * 代价（诚实记录）：万一官方仍是字面口径，同一改动是 **−4.44**（57.0646 vs 61.5084）。
+#      缓解见下面的 `NET_DROP_PWRONLY`：只保留「挂在真实成员上」的电源引用。
+# 注意：component 那一项**始终要输出这些元件**（它们靠坐标匹配拿 tp），这里只管 net 引用。
+NET_DROP_UNKEYED = env_on("STAGE2_NET_DROP_UNKEYED", "0")
+
+# ★ **只由电源/地符号组成的孤立网要不要丢**（`STAGE2_NET_DROP_PWRONLY`，默认 `1`）。
+#
+# 不剪电源引用之后，那些「整条网只有一个 gnd/v 符号」的碎网会从「被剪空 ⇒ 丢弃」
+# 变成「有成员 ⇒ 输出」。GT 里**没有**这种网（每个电源符号都挂在一条有真实元件的
+# 网络上）⇒ 它们只可能是 FP。官方 9 张、融合层、在 `NET_DROP_UNKEYED=0` 基础上：
+#   全部保留 64.8641（netH 0.6394）→ **丢掉孤网 66.3024（netH 0.6800，+1.4383）**
+# 同口径下逐张都变好或持平（1 51.56→53.11、3 78.48→81.44、5 58.40→59.71 …）。
+# 旧（字面）口径下也顺带把损失从 −4.44 收窄到 −2.64 ⇒ **两个口径下都更优**。
+# `=0` 可退回「连孤网一起输出」的行为做对照（`work\tools\diag\_pwrfilter.py` 的 `keep`）。
+NET_DROP_PWRONLY = env_on("STAGE2_NET_DROP_PWRONLY", "1")
 
 # ★ 电源/地符号（GT 里键为 `∅NNN`）**只用来合并网络，不写进 hyperGraph**。
 #
@@ -604,6 +706,21 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     # `<case>.pinindex.json`，交付文档本身保持逐字节不变。
     pin_pk: Dict[Tuple[str, int], str] = {}
     ct_by_cid: Dict[str, str] = {c["id"]: (c.get("type") or "other") for c in comps}
+    # `tp` 闸门的台账（只在本函数内累计，退出前打印；`STAGE2_TP_LEDGER=1` 时）。
+    _tp_ledger: List[dict] = []
+
+    # ★ `STAGE2_LIB_PINS`：官方元器件库（`cpntLibrary`）的引脚先验总闸。**默认关**。
+    # 关掉时 `libpins` 这个模块**根本不会被 import**（下面那个 `LIB_PINS` 常量只是
+    # 读一个环境变量，`libpins` 的模块级代码不会去读 1.76 MB 的库文件），于是
+    # 产物与不挂接这条通道时逐字节一致。开的时候，整份文档**只加载库一次**
+    # （`libpins.LibCtx` 自带惰性 + 幂等 `load()`）。
+    # 依据与两条规则见 `stage2/libpins.py` 的模块 docstring；为什么默认关见那里
+    # 「默认关的原因」（收益靠元件型号名被读对，stage2 直出的 `Name` 是 OCR 原文，
+    # 17 个 box 里只有 1 个能命中库 ⇒ 收益在融合层/交付链，不在 stage2 单跑）。
+    _LIB_CTX = None
+    if LIB_PINS:
+        from stage2 import libpins as _libpins
+        _LIB_CTX = _libpins.new_ctx()
 
     for i, c in enumerate(comps):
         cid = c["id"]
@@ -613,6 +730,23 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         _d = info.get("designator") or {}
         des = _d.get("canon") or _d.get("text")
         key = des if des else None
+        # ★ 内部合并类 `tp` 的**文本闸门**（`STAGE1_MERGE_TP=1` 时才可能出现，
+        #   见文件顶 `TP_MERGED` 的长注释）。三条规则里的 ③ 在这里：
+        #   **位号没绑上就直接丢**，且绕开 `DROP_UNKEYED` 的兜底键 `pNNN`
+        #   —— 合并类的存在意义就是「读到位号才认它」，给它一个假的 `pNNN`
+        #   等于把原来那 98.9% 的 fp 又请回来。
+        _is_tp = MERGE_TP and str(c.get("type") or "").strip().lower() == TP_MERGED
+        # 「绑上了」= 有键 **且** 这个键带着读出证据（见文件顶 `TP_TRUST_EV` 的长注释：
+        # 融合层会给 tp 补一个只有 `canon` 的空壳位号，那种键会贴到别的物理器件上）。
+        _ev_ok = (not _is_tp) or (not TP_TRUST_EV) or any(
+            k not in ("canon", "_by") for k in _d)
+        if _is_tp and (not key or not _ev_ok):
+            if TP_LEDGER_ON:
+                _tp_ledger.append({"cid": cid,
+                                   "drop": "unkeyed" if not key else "no-evidence",
+                                   "subtype": c.get("subtype"), "des": des,
+                                   "by": _d.get("_by")})
+            continue
         if not key or key in components:
             # 拿不到位号（或位号撞号）—— 兜底键 `pNNN` 在 GT 里不可能存在，
             # 输出它 = 白送一个 component.extra + 它名下所有引脚在 net 超图里
@@ -622,6 +756,20 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             key = "p%03d" % i
         keymap[cid] = key
         ctype = c.get("type") or "other"
+        if _is_tp:
+            # ★ 三条规则里的 ① / ②：有 CV 形状证据（子类型在 `TP_CV_SUBTYPES` 里）
+            #   → `testpoint`，否则 → `pin`。证据来自 `stage1/detect.py` 记在元件上的
+            #   `subtype`（CV 子类型；YOLO 框被 CV 复用时也补了，见 `detect.py` 里
+            #   `best["cv_subtype"]` 那条）。
+            #   没有证据**不等于** pin：也可能是 CV 漏了这一颗 ⇒ 落到 ② 的 `pin`，
+            #   这是刻意的保守选择 —— `pin` 的 GT 基数（175/32 张）远大于
+            #   `testpoint`（43/6 张），押 `pin` 的期望损失最小。
+            _sub = str(c.get("subtype") or "").strip().lower()
+            ctype = "testpoint" if _sub in TP_CV_SUBTYPES else "pin"
+            if TP_LEDGER_ON:
+                _tp_ledger.append({"cid": cid, "key": key, "type": ctype,
+                                   "subtype": _sub,
+                                   "by": "cv:sub" if _sub in TP_CV_SUBTYPES else "default"})
         bbox = c.get("bbox_json") or c.get("bbox_img") or [0, 0, 0, 0]
 
         name = key
@@ -741,7 +889,35 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 for k in range(len(raw)):
                     raw[k]["num"] = tmp[k]
                     raw[k]["kept"] = kept[k]
+                    # `fill=True` = 这个号是**位置补位号**（假号），不是 OCR 读出来的。
+                    # 规则 A 需要它来区分「号读到了」与「号读废了、拿位置顶的」——
+                    # 后者只有名字是真证据（见下面规则 A 的长注释）。
+                    raw[k]["fill"] = not kept[k]
                 _anykept = any(kept)
+                if _LIB_CTX is not None:
+                    # ★ **规则 A（补号）**：把「读到了引脚名、但没读出合法号」的桩，
+                    # 用官方库的 `(型号, 引脚名) → 号` 换成真号。这里「没读出合法号」
+                    # 有**两种**形态，都要抓：
+                    #   ① `tmp[i]=""`（一个号都没读出来）；
+                    #   ② 读到了号但没通过 1..999/不撞号检查 ⇒ `tmp[i]` 是**位置补位号**
+                    #      （`kept=False, fill=True`，比如按顺序填的 `1`,`2`,…）。
+                    #   位置号只是占位，真正的证据是那个读到的名字；`_libsim.py` 量到的
+                    #   6 个可补引脚，在本管线里正是「有名字 + 位置号」这一种。
+                    # 依据：`_libnum.py` 实测「名字在库里唯一映射一个号」的 20 个里
+                    # **20/20 都是 GT 号**（精度 100%）；放宽到多号就得猜，猜错 =
+                    # fp+fn 双罚，所以本实现只做 uniq（`_libsim.py --mode uniq`）。
+                    # `used` = 这颗 IC 里**别处的有效号**（`kept=True` 的那些）：撞号就
+                    # 放弃，绝不改别人的号 —— 补号的目的就是把假号换真号，不是把两个
+                    # 真脚挤进同一个 `pin_<号>` 键。位置号**不进** `used`（它本来就是假的，
+                    # 否则每个目标号都被占着、规则 A 一次都不会触发 —— 实测过）。
+                    _lib_used = set(str(q.get("num") or "") for q in raw
+                                    if q.get("kept"))
+                    _lib_used.discard("")
+                    _n = _libpins.complete_pins(name, raw, _LIB_CTX, used=_lib_used)
+                    if _n:
+                        _anykept = any(q.get("kept") for q in raw)
+                        if os.environ.get("STAGE2_DBG_PINS") or LIB_PINS_DBG:
+                            print("[libpins] 规则A 元件=%r 补 %d 个引脚号" % (name, _n))
             else:
                 for k in range(len(raw)):
                     raw[k]["num"] = str(k + 1)
@@ -759,6 +935,24 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             if ctype == "box" and BOX_PIN_NEED_NAME and not r.get("nm"):
                 continue
             nm = r["nm"] or num
+            # ★ **规则 B（改名）**：这个桩的**号读到了**（`num` 是 1..999 的整数，或者
+            # 规则 A 刚从库里补出来的号），但名字要么空、要么不在库里该型号的名字
+            # 集合里 —— 那就用库的 `(型号, 号) → 名`，**只有该号唯一对应一个名字**时
+            # 才改写。注意顺序：改名在 `nm = r["nm"] or num` **之后**，所以
+            # 「名字空 ⇒ 退化成号」的那种也有机会被换成真名字。
+            # 依据：`_libsim.py --fixname` 官方 9 张改名 4 处 **4/4 正确**
+            # （pin F1 0.4951→0.5936）；号是多实例聚合过的，一个号对应多个名字时
+            # 猜错 = fp+fn 双罚，所以多候选一律不动手。
+            if _LIB_CTX is not None and ctype == "box" and str(num).isdigit():
+                _lkey = _LIB_CTX.key_for(name)
+                _lnames = _LIB_CTX.names_of(_lkey)
+                if not (_lnames and _libpins.norm(nm) in _lnames):
+                    _new = _LIB_CTX.name_for_num(_lkey, num)
+                    if _new:
+                        nm = _new
+                        if os.environ.get("STAGE2_DBG_PINS") or LIB_PINS_DBG:
+                            print("[libpins] 规则B 元件=%r 号=%s 名改 %r → %r"
+                                  % (name, num, r["nm"] or "", _new))
             pk = "pin_%s" % num
             base = pk
             while pk in group:
@@ -769,6 +963,26 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             num_of[(cid, k)] = num
             pin_pk[(cid, k)] = pk
         pins[key] = group
+
+    # ★ `tp` 闸门小结（`STAGE2_TP_LEDGER=1` 时打一行；默认不打）。
+    # 数字口径：`kept` = 通过文本闸门的 `tp` 元件，`dropped` = 被丢掉的
+    # （两种原因：`unkeyed` 没绑到 TP 系位号；`no-evidence` 位号是融合层补的空壳，
+    # 见 `TP_TRUST_EV`。**这是 `DROP_TYPES` 那条「盲目类型级丢弃」的替代品**）。
+    if MERGE_TP and TP_LEDGER_ON and _tp_ledger:
+        _kept = [r for r in _tp_ledger if "type" in r]
+        _by: Dict[str, int] = {}
+        for r in _kept:
+            _by[r["type"]] = _by.get(r["type"], 0) + 1
+        _why: Dict[str, int] = {}
+        for r in _tp_ledger:
+            if "drop" in r:
+                _why[r["drop"]] = _why.get(r["drop"], 0) + 1
+        print("[assemble] tp 闸门：保留 %d（%s），丢弃 %d（%s）"
+              % (len(_kept),
+                 " / ".join("%s %d" % (k, v) for k, v in sorted(_by.items())) or "-",
+                 len(_tp_ledger) - len(_kept),
+                 " / ".join("%s %d" % (k, v) for k, v in sorted(_why.items())) or "-"))
+        TP_LEDGER[:] = _tp_ledger
 
     # ---- 网络 ----
     segs_all = (stage1.get("wire_detail") or {}).get("segments") or []
@@ -850,6 +1064,22 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # ★ 端点吸附放在**最后**：这时 net 的成员已经定下来，同 net 里能拿来当
         # 结点的邻居最全（离线实验就是在最终文档上做的，顺序必须一致）。
         snap_edge_ends(out_nets, EDGE_SNAP, EDGE_SNAP_ANG)
+    if NET_DROP_PWRONLY:
+        # ★ 「整条网只有电源/地符号」的孤立网：GT 里不存在这种网（每个电源符号都挂在
+        # 一条有真实元件的网络上），所以它只可能是 FP。**必须放在全部合并之后**——
+        # `merge_by_symbol` / `merge_by_label` / `attach_orphan_rails` /
+        # `merge_shared_pins` 都可能给一条孤网补上真实成员，早剪会误伤。
+        # 实测（官方 9 张、融合层、`NET_DROP_UNKEYED=0`）：全留 64.8641
+        # → 剪掉孤网 **66.3024**（netH 0.6394→0.6800，逐张不变差）。见文件顶注释。
+        _kept: Dict[str, dict] = {}
+        for _v in out_nets.values():
+            _keys = [k for k, _p in _hg_refs(_v.get("hyperGraph", ""))]
+            _tys = [str((components.get(k) or {}).get("type") or "").strip().lower()
+                    for k in _keys]
+            if _keys and all(t in POWER_TYPES for t in _tys):
+                continue
+            _kept["net_%d" % (len(_kept) + 1)] = _v
+        out_nets = _kept
     _pidx: Dict[str, Dict[str, str]] = {}
     for (_c, _k), _pk in pin_pk.items():
         _pidx.setdefault(_c, {})[str(_k)] = _pk
