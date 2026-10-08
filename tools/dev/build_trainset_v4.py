@@ -244,6 +244,15 @@ def main() -> int:
     per_class: Counter = Counter()
     new_pairs: list[tuple[Path, Path, str]] = []      # (sheet png, label txt to write later, stem)
 
+    # Clean the target **now**, not at write time: the scan phase below writes tiled crops of the
+    # new corpus into `<out>/_tmp/`, so a later `rmtree(out)` would delete the very files the
+    # write phase is about to link (that was a real bug: `--force` + tiling died with
+    # `FileNotFoundError` on `_tmp/new01_…_t0000_0000.png`).
+    if not args.dry_run and args.out.exists() and any(args.out.iterdir()):
+        if not args.force:
+            raise SystemExit(f"{args.out} exists and is not empty; pass --force")
+        shutil.rmtree(args.out)
+
     # ---- 1. new corpus -----------------------------------------------------------------
     sheets = sorted(p for p in args.new.glob("*/*.json"))
     print(f"\n新补充训练集: {len(sheets)} sheets")
@@ -396,10 +405,7 @@ def main() -> int:
 
     # ---- 3. write ----------------------------------------------------------------------
     out: Path = args.out
-    if out.exists() and any(out.iterdir()):
-        if not args.force:
-            raise SystemExit(f"{out} exists and is not empty; pass --force")
-        shutil.rmtree(out)
+    # (the `--force` / rmtree guard already ran at the top of main, before `_tmp` was populated)
     for sub in ("images", "labels"):
         for split in ("train", "val", "test"):
             (out / sub / split).mkdir(parents=True, exist_ok=True)

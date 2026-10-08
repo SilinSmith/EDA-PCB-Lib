@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **528** 个脚本。
+共 **546** 个脚本。
 
 
 <a id="data"></a>
@@ -61,13 +61,13 @@
 | 脚本 | 行 | 说明 |
 |---|---:|---|
 | `audit_labels` | 277 | Training-label quality audit for a YOLO dataset — "错误的标号" triage. |
-| `build_trainset_v4` | 447 | Assemble `work/trainset_v4` = `trainset_v3` (optionally label-repaired) + `新补充训练集`. |
+| `build_trainset_v4` | 453 | Assemble `work/trainset_v4` = `trainset_v3` (optionally label-repaired) + `新补充训练集`. |
 | `gen_knobs` | 94 | 扫描源码里所有环境开关，生成 `docs/KNOBS.md`。 |
 | `gen_toolindex` | 96 | 生成 `docs/TOOLS.md` —— `tools/` 下每个脚本的索引（含首行 docstring）。 |
 
 <a id="diag"></a>
 
-## `tools/diag/`（413 个脚本）
+## `tools/diag/`（431 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -477,12 +477,30 @@
 | `_wire_ab` | 128 | 导线提取的 A/B：无遮挡 / 遮挡元件 / 遮挡+边框与笔画过滤。 |
 | `_wirecand` | 260 | _wirecand.py —— 端点精度的三个最小候选，官方 9 张离线重算（不动管线/不改产物）。 |
 | `_wirecount` | 54 | stage1 提出来的线 vs 最终进网络的边：差在哪一步？ |
+| `_wirecover` | 91 | _wirecover.py —— 我们的一条 GT 边被几条预测边覆盖？预测边比 GT 边短多少？ |
+| `_wireeval19` | 49 | _wireeval19.py —— 用官方评测器口径对派生 19 张汇总（stage2_eval 的 --cases 按 stem 过滤，这里自己配）。 |
+| `_wirefix` | 99 |  |
+| `_wirefunnel` | 125 | _wirefunnel.py —— 逐 case 漏斗：stage1 线段 → stage1 网 → stage2 → fusion → 输出 net_line。 |
+| `_wiregeo` | 84 | _wiregeo.py —— 几何失配到底长什么样（抽样打点 + 长度分布）。 |
+| `_wirejson` | 30 | _wirejson.py —— 打印预测/GT 的 nets 段原样，确认 edges 里点的形状。 |
+| `_wirekey` | 21 | _wirekey.py —— 页面关键数字在位自检。 |
+| `_wiremeet` | 116 | _wiremeet.py —— 候选 (a)/(b) 端点吸附到**支撑直线交点**：穷举参数看有没有正收益。 |
+| `_wiremiss` | 172 | _wiremiss.py —— 逐 case 追「边到底在哪一步消失」+ 6 张爆 0 拆解。 |
 | `_wirenew` | 95 | 找出「把 `WIRE_TOL` 从 1.5 抬到 N 之后**新产生**的段并」是哪几对。 |
+| `_wirepage` | 361 | _wirepage.py —— 生成独立的「导线 workflow.html」单文件页面（不依赖任何外部资源）。 |
+| `_wirepagecheck` | 56 | _wirepagecheck.py —— 静态自检生成的导线页（不依赖浏览器）。 |
+| `_wirepairs` | 75 | _wirepairs.py —— 「如果网全部配对正确，导线还能得几分？」 |
+| `_wireprobe` | 66 | _wireprobe.py —— 抽查预测边与 GT 边的坐标系/端点对齐情况。 |
+| `_wireskel` | 130 | _wireskel.py —— 「骨架到底有没有画出这根线」的逐 case 上限测量。 |
+| `_wiresnap` | 106 | _wiresnap.py —— 5px 到底是「差一点」还是「结构性错位」： |
 | `_wiresnapaudit` | 141 | _wiresnapaudit.py —— 追 EDGE_SNAP 为什么没吃掉那 5~10px。 |
+| `_wirestage` | 265 | _wirestage.py —— 导线失分按阶段拆解（只读现成产物，不跑 stage1）。 |
 | `_wiresweep` | 18 |  |
 | `_wiretime` | 42 | 把 stage1 产物的 wires 耗时与图片规模/骨架复杂度关联起来。 |
 | `_wiretj` | 163 | Can a pure-CV *T-junction* count pick the wire colour? |
+| `_wiretok` | 19 | _wiretok.py —— 定位内嵌 JSON 的断点（一次性诊断）。 |
 | `_wireview` | 125 | 把 stage1 的导线段按「连通分量」上色画在原图上，看分组到底碎在哪。 |
+| `_wirezero` | 71 | _wirezero.py —— 为什么「网配上了但预测侧零边」：把那些网对挖出来看。 |
 | `_wlen` | 96 | 量「位号框宽度 / 字高」能不能预测位号字符串长度。 |
 | `_wlen2` | 98 | 位号框「宽/高」能不能预测真实位号的字符数 —— 决定连号窗口能不能靠几何定案。 |
 | `_zerocount` | 42 | 数一数 220 张里每个分项**爆 0 / 近 0** 的图有多少（用当前最佳产物）。 |
