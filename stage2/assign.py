@@ -66,6 +66,25 @@ FAR = 40.0           # 多远算「网络标签」（离所有元件都远）
 # 只有 **21** 个，缺的正是那 5 个**最宽的**（32~36px）—— 它们全被这条长度依赖踢出去了。
 # ⇒ 「贴不贴在这颗元件上」只应取决于两框之间还有多少空白。`OWN_BBOX=0` 退回历史行为。
 OWN_BBOX = env_on("STAGE2_OWN_BBOX", "1")
+# ★★ 位号通道的**全局一对一**归属（`STAGE2_OWN_ASSIGN`，默认 **0 = 关**）。
+#
+# 动机：`cvparts/own.py` 的 `assign()` 是「整体最小代价的一对一」（直接复用官方
+# `schematic_parser.metrics._assign`），但全仓库**从未被调用** —— 这正是 `own` 节点
+# 描述里「一个主张者够到多个标的 → 整体解一次一对一」那一半。
+# 现状（`OWN_ASSIGN=0`）是：每颗元件各自从候选池挑最优，再按**位号字符串**贪心去重。
+#
+# 实测（`work\tools\diag\_ownasgn.py`，官方 9 张的 `_assigned` 产物，GT 用
+# 官方 `bbox_mode='corners'` 口径近邻匹配）：现状与这一臂**都拿到 114 个位号**，
+# `dup_box`（同一块文字框被 >=2 颗元件选中）与 `dup_canon` **两臂都是 0** ——
+# 因为 `owned` 本身就是一份**划分**（每块文字只归一颗元件），一对一不变式
+# 在改造前就已经成立，这一臂只可能**重排**。重排发生在 4 个元件上，去问 GT：
+#   官方 case 2 `c0009`（GT `R6`，文字被误读成 `R5`）与 `c0013`（GT `R5`）：
+#     现状 = c0013 拿 `R5` **✓**、c0009 空；这一臂 = c0009 拿 `R5` **✗**、c0013 空。
+#   官方 case 7 `c0003`（GT `C6`，误读成 `C5`）与 `c0009`（GT `C5`）：
+#     现状 = c0009 拿 `C5` **✓**；这一臂 = c0003 拿 `C5` **✗**。
+#   ⇒ 现状 **2 对 0 错**、这一臂 **0 对 2 错**：整体求解会把被误读的那块框
+#     配给错的元件。**判负，保持 0**；机制留在代码里以便复现与后续复用。
+OWN_ASSIGN = env_on("STAGE2_OWN_ASSIGN", "0")
 MAX_BOX_W = 3.0      # 位号框宽度 / 字高 之比上限（挡掉「一排字」被当成一个框）
 # **IC 引脚号必须离得更远也能收**（2025-11 实测，`case 1` 的 `U1`）。
 # 大 IC 的引脚号印在**符号框外**、而且离框边 29~44 px（`U1` 框左沿 x=961，
@@ -601,6 +620,77 @@ def _global_match(cands: Sequence[Tuple[str, str, float, dict]],
     return [(cid, v[1]) for cid, v in best.items()]
 
 
+def _own_assign_pick(desig_all: Dict[str, List[dict]]) -> List[Tuple[str, dict]]:
+    """★ `STAGE2_OWN_ASSIGN`：把「元件 × 位号文字框」整体解一次**一对一**。
+
+    `desig_all[cid]` 是每颗元件的**全部**位号候选（`stage2` 自己算好的，阶段三仲裁也吃它），
+    每条带 `box_i`（文字框序号，跨元件唯一）/ `box` / `canon` / `score`。
+
+    与现状的区别只有一步：现状是「每颗元件各自挑最优 + 按 `canon` 字符串贪心去重」，
+    这里是「一块文字框只能配给一颗元件，由 `cvparts.own.assign`（复用官方
+    `schematic_parser.metrics._assign`）求整体最小代价」。`canon` 唯一这道去重**保持不变**，
+    因为真图上位号确实唯一。
+
+    实测结论见 `OWN_ASSIGN` 常量处的注释：**判负**（现状 2 对 0 错，这一臂 0 对 2 错）。
+    """
+    from cvparts import own as own_mod
+
+    def _key(info: dict):
+        bi = int(info.get("box_i", -1))
+        if bi >= 0:
+            return bi
+        bx = info.get("box")
+        return tuple(round(float(v), 2) for v in bx) if bx else None
+
+    score: Dict[Tuple[str, object], float] = {}
+    info_of: Dict[object, dict] = {}
+    items: List = []
+    seen: set = set()
+    for cid, alts in desig_all.items():
+        for al in alts or []:
+            k = _key(al)
+            if k is None:
+                continue
+            score[(cid, k)] = float(al.get("score") or 0.0)
+            if k not in seen:
+                seen.add(k)
+                info_of[k] = al
+                bx = al.get("box") or (0.0, 0.0, 0.0, 0.0)
+                items.append(own_mod.Party("tb|%s" % (k,), tuple(float(v) for v in bx), "text"))
+    if not items:
+        return []
+
+    def _kk(pid: str):
+        s = pid[3:]
+        try:
+            return eval(s)  # 只吃我们自己写出来的 int / (..) 字面量
+        except Exception:
+            return None
+
+    cl = [own_mod.Party(cid, (0.0, 0.0, 0.0, 0.0), "comp")
+          for cid in desig_all if any(_key(al) is not None for al in (desig_all.get(cid) or []))]
+    got, _led = own_mod.assign(
+        cl, items,
+        gate=lambda c, i: (c.id, _kk(i.id)) in score,
+        cost=lambda c, i: -score[(c.id, _kk(i.id))])
+
+    first: List[Tuple[float, str, dict]] = []
+    for cid, iid in got.items():
+        al = info_of.get(_kk(iid))
+        if al:
+            first.append((float(al.get("score") or 0.0), cid, al))
+    first.sort(key=lambda x: -x[0])
+    picked: List[Tuple[str, dict]] = []
+    seen_canon: set = set()
+    for _sc, cid, al in first:
+        can = al.get("canon")
+        if not can or can in seen_canon:
+            continue
+        seen_canon.add(can)
+        picked.append((cid, al))
+    return picked
+
+
 def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[dict],
            near: float = NEAR, far: float = FAR,
            global_match: bool = None, pincol: Dict[str, List] = None) -> dict:
@@ -754,6 +844,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
 
     if global_match:
         picked = _global_match(desig_cands, [c["id"] for c in comps])
+    elif OWN_ASSIGN:
+        picked = _own_assign_pick(desig_all)
     else:
         # 位号去重：同一张图里位号唯一，全局按分数贪心，撞号的低分者让位。
         picked = []

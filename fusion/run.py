@@ -78,6 +78,12 @@ from envflag import env_on                       # noqa: E402  (唯一权威假�
 #   于是 `FUSION_LLM=off` / `=none` / `=disable` 全被当成**开**，想关 LLM 轮的人
 #   越写越用力却关不掉（`work\tools\diag\_vlmab2.py` 那类对照实验最容易被它坑）。
 #   统一走 `eda-pcb\envflag.py` 的 `FALSE_WORDS`（8 个词，`.lower()` 后比较）。
+#
+# ★ 默认值是 **"1"（开）**，而 `submission\run.py` 的 `-fusion` 默认也是 `on`
+#   ⇒ **不设任何环境变量直接跑，LLM 轮就是开的**（`-fusion off` 才整层关）。
+#   成本实测（10-08，case 1+10）：融合层墙钟 **关 3.5 s → 开 62.7 s**（+29.6 s/张，
+#   220 张约 +1.8 h），而那两张图上两臂的 `*_Pred.json` **MD5 逐字节相同**。
+#   改默认值前先读 `submission\run.py` 里 owner m25661 那段决定。
 DO_LLM = env_on("FUSION_LLM", "1")
 
 
@@ -232,6 +238,11 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
 
     rep = {"case": case, "n_slots": len(pool.slot_ids()),
            "vlm_doc": bool(vlm_doc),
+           # ★ `pool.notes` = 建池阶段（`claims.build` / `priors` / `axis` / `cropfix`）
+           #   留下的**计数笔记**（`shape_gate` / `boxscan` / `run_window` …）。以前只在
+           #   `claims.py` 自己的 `__main__` 里才看得到，跑分路径上完全不可见 ——
+           #   「boxscan 到底建了几个槽位」这种问题只能靠猜。原样搬进报告。
+           "notes": list(pool.notes),
            "priors": pri_st, "rounds": [], "sec_prior": round(t_prior, 1),
            "cropfix": {k: v for k, v in rep_cf.items() if k != "rows"},
            "axis": {k: v for k, v in rep_ax.items() if k != "plan"},
@@ -273,7 +284,11 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
         SV.write_back(pool, sol)
         r["score_after"] = _summary(pool, sol)
         rep["rounds"].append(r)
-        if not tasks and not q_first:
+        # ★ boxscan 的自由读数题（`q["free"]`，零候选槽位）**不参与收敛判据**：它是
+        #   「补问一遍」，不是「还没定」。否则每张图都会因为多了几道零候选题而永远
+        #   跑满 `MAX_ROUNDS`，把「多跑一轮」的成本算到 boxscan 头上。
+        q_hard = [q for q in q_first if not q.get("free")]
+        if not tasks and not q_hard:
             break
         q_first = SV.open_questions(pool, sol["assign"])
 

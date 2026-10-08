@@ -43,6 +43,22 @@ from fusion import solve as SV                         # noqa: E402
 
 # LLM 读数的分数：必须高于 CRNN 那条（`desig_slots` 的 score 上限约 1.0）
 LLM_SCORE = float(os.environ.get("FUSION_LLM_SCORE", "1.5"))
+# ★ boxscan（`q["free"]`，零候选槽位）的**自由读数**用另一个分数，**故意压到读数带以下**。
+#
+# 为什么必须分开：`solve.match()` 对 `comp.*.key` 是**全局一对一**（同一个位号只能
+# 归一颗元件）。零候选元件上，自由读数**没有竞争**，多低的分都能拿下自己那个槽位；
+# 但一旦模型**编**出一个与别处真读数同名的 key，`LLM_SCORE=1.5` 会让它**抢走**
+# 那颗元件本来该拿的 key —— 于是那边丢一个 tp、这边多一个 fp，**净 −2**。
+# 实测（官方 9 张，`--no-vlm` + `FUSION_LLM=1` 同口径）：`boxscan` 每张只建 1 个槽位
+# （case 4/7/10 各 1，case 1 是 0），但 case 4 因此从 **57.99 掉到 55.69**
+# （comp 0.7755→0.7347），case 7 从 57.12 **涨到 58.37**、case 10 从 51.56 涨到 52.57
+# ⇒ 整档 52.48 → 52.47（打平偏负）。把自由读数压到读数带以下，它就只能**补空位**
+# 不能**抢位**。
+# ⚠ 但**实测这个补救没有用**：`FUSION_FREE_SCORE=0.5` 那一臂（`bs1f_9`）与
+#   `FUSION_FREE_SCORE=1.5` 的 `bs1_9` **逐位相同**（52.47 / case 4 仍是 55.69）
+#   ⇒ case 4 的损失**不是抢位造成的，就是那颗元件的自由读数本身错了**。这条压分
+#   留着只作为**安全性质**（自由读数永远不该盖过真读数），不要再拿它做 A/B。
+FREE_SCORE = float(os.environ.get("FUSION_FREE_SCORE", "0.5"))
 # 放大倍数（端点预算有限：放大 4 倍后 200x200 的窗口是 800x800）
 SCALE = int(os.environ.get("FUSION_JUDGE_SCALE", os.environ.get("VLM_SCALE", "4")))
 # 每张图最多问几问（每问 0.2~3 s）
@@ -91,6 +107,19 @@ PROMPT_ALT = (
     "有人读成了 A = %s，也有人读成了 B = %s。\n"
     "请仔细看正中央那个字符串，只回答 A 或 B 或 OTHER（如果是别的字符串）。\n"
     "如果回答 OTHER，再另起一行原样写出你看到的字符串。不要解释。"
+)
+
+# ★★ boxscan ② 用的**自由读数**提示：这一整颗元件**一个候选都没有**（位号文字根本没
+#    进候选表），所以没有「正中央」可言 —— 红框画的是元件本体，位号通常印在本体旁边。
+#    因此：① 问的是「画面里属于这颗元件的位号」而不是「正中央」；② 明确排除型号/参数/
+#    网络名（`GND`/`VCC`），因为元件本体旁边这三类文字最常见；③ 切图走 `window`
+#    而不是 `tight`（`tight` 只切本体，会把印在本体外的位号切掉）。
+PROMPT_FREE = (
+    "这是一张电路图的局部截图（已放大），画面里有一颗元件（红框标出的是它的本体）。\n"
+    "请找出**属于这颗元件的位号**——形如 R12、C151、U3、L2、Q7、D5，通常印在本体旁边。\n"
+    "只回答**这一个**位号字符串本身，原样照抄，区分大小写与数字。\n"
+    "不要回答器件型号、参数值或网络名（GND/VCC/VIN 这类都不是位号）。\n"
+    "不要解释、不要加标点、不要加空格。如果画面里没有任何位号文字就回答 NONE。"
 )
 
 # ★ 裁决模式：**位号槽位默认让模型在候选之间二选一**，而不是自由读数。
@@ -187,11 +216,16 @@ def strip_fence(t: str) -> str:
 
 # ------------------------------------------------------------------ 问
 def ask_one(reg: CL.Region, bgr, prompt: str, client=None,
-            scale: int = SCALE, timeout: float = TIMEOUT):
-    """切图 + 问一次。返回 `(答案, 原样文本, 秒)`；切不出图返回 `(None, "", 0.0)`。"""
+            scale: int = SCALE, timeout: float = TIMEOUT, mode: str = None):
+    """切图 + 问一次。返回 `(答案, 原样文本, 秒)`；切不出图返回 `(None, "", 0.0)`。
+
+    `mode` 不给就用全局 `CROP_MODE`；boxscan 的零候选题要显式传 `window`
+    （`tight` 只切本体，会把印在本体外的位号切掉）。
+    """
     if reg is None or bgr is None:
         return None, "", 0.0
-    img = reg.crop(bgr, scale=scale, focus_rect=False, mode=CROP_MODE)
+    img = reg.crop(bgr, scale=scale, focus_rect=False,
+                   mode=(mode or CROP_MODE))
     if img is None:
         return None, "", 0.0
     ask = client or _client_ask()
@@ -295,12 +329,21 @@ def judge(pool, questions: Optional[Sequence[dict]] = None,
         use_choose = (mode == "choose" or
                       (mode == "auto" and kind_of(sid) in ("key", "pin", "net", "netlabel") and
                        q.get("top") and q.get("alt")))
-        if use_choose:
+        # ★★ boxscan ②：零候选槽位（`q["free"]`，见 `solve.open_questions`）走**自由
+        #    读数**：没有「正中央」可言（红框是元件本体），切图也必须是 `window`
+        #    ——`tight` 只切本体，会把印在本体外的位号切掉。
+        is_free = bool(q.get("free"))
+        if is_free:
+            prompt = PROMPT_FREE
+            crop_mode = "window"
+        elif use_choose:
             prompt = PROMPT_ALT % (KIND_HINT[kind_of(sid)],
-                                   q.get("top", {}).get("value"),
-                                   q.get("alt", {}).get("value"))
+                                   (q.get("top") or {}).get("value"),
+                                   (q.get("alt") or {}).get("value"))
+            crop_mode = None
         else:
             prompt = PROMPT % KIND_HINT[kind_of(sid)]
+            crop_mode = None
         # ★ 不给**没有读数**的位号槽位出题。
         #
         # 这类槽位的 top 是装配层的占位键（`p002`）、alt 是 `prior:run_inwindow`
@@ -311,20 +354,20 @@ def judge(pool, questions: Optional[Sequence[dict]] = None,
         # 「给它命名」这件事不该由看图模型来背书。
         b0 = pool.best(sid)
         if kind_of(sid) == "key" and b0 is not None and PLACEHOLDER.match(str(b0.value)):
-            row = {"slot": sid, "skip": "placeholder", "top": q.get("top", {}).get("value"),
-                   "alt": q.get("alt", {}).get("value")}
+            row = {"slot": sid, "skip": "placeholder", "top": (q.get("top") or {}).get("value"),
+                   "alt": (q.get("alt") or {}).get("value")}
             rep["n_skip_ph"] = rep.get("n_skip_ph", 0) + 1
             rep["rows"].append(row)
             continue
-        ans, raw, dt = ask_one(reg, bgr, prompt, client=client)
+        ans, raw, dt = ask_one(reg, bgr, prompt, client=client, mode=crop_mode)
         if use_choose:
-            ans = _from_choice(ans, raw, q.get("top", {}).get("value"),
-                               q.get("alt", {}).get("value"))
+            ans = _from_choice(ans, raw, (q.get("top") or {}).get("value"),
+                               (q.get("alt") or {}).get("value"))
         rep["n_asked"] += 1
         rep["sec"] += dt
         row = {"slot": sid, "raw": raw.strip()[:60], "ans": ans, "sec": round(dt, 1),
-               "top": q.get("top", {}).get("value"), "alt": q.get("alt", {}).get("value"),
-               "mode": "choose" if use_choose else "read"}
+               "top": (q.get("top") or {}).get("value"), "alt": (q.get("alt") or {}).get("value"),
+               "mode": "free" if is_free else ("choose" if use_choose else "read")}
         if not ans:
             row["res"] = "empty"
             rep["rows"].append(row)
@@ -384,7 +427,8 @@ def _settle(pool, q, ans, raw, dt, reg, row, rep, log=None) -> dict:
             log("  %-18s top=%-8s alt=%-8s -> vlm=%-8s [agree_prior]" % (
                 sid, row.get("top"), row.get("alt"), ans))
         return row
-    pool.add(sid, ans, score=LLM_SCORE * mult, source="vlm:judge",
+    pool.add(sid, ans, score=(FREE_SCORE if q.get("free") else LLM_SCORE) * mult,
+             source="vlm:judge",
              evidence={"原样": (raw or "").strip()[:120],
                        "取景框": (reg.to_dict()["box"] if reg is not None else None),
                        "耗时": round(dt, 1), "分数倍数": mult},
@@ -523,6 +567,12 @@ def judge_sheet(pool, questions=None, limit: int = SHEET_MAX, client=None,
             rep["n_skip_ph"] = rep.get("n_skip_ph", 0) + 1
             rep["rows"].append({"slot": sid, "skip": "placeholder"})
             continue
+        # ★ 整表模式是「A/B 二选一」的表，零候选题没有 A/B —— 交给逐个模式问
+        #   （`_sheet_image` / 答案解析都按 `top`/`alt` 排版）。跳过并记账。
+        if q.get("free"):
+            rep["n_skip_free"] = rep.get("n_skip_free", 0) + 1
+            rep["rows"].append({"slot": sid, "skip": "free(整表模式不支持)"})
+            continue
         items.append((q, reg))
         if len(items) >= max(1, int(limit)):
             break
@@ -543,8 +593,8 @@ def judge_sheet(pool, questions=None, limit: int = SHEET_MAX, client=None,
         rep["sheet"] = str(p)
     except Exception:                                      # noqa: BLE001
         pass
-    cand = "\n".join("%d: A=%s / B=%s" % (k, q.get("top", {}).get("value"),
-                                          q.get("alt", {}).get("value"))
+    cand = "\n".join("%d: A=%s / B=%s" % (k, (q.get("top") or {}).get("value"),
+                                          (q.get("alt") or {}).get("value"))
                      for k, (q, _r) in enumerate(items))
     prompt = SHEET_PROMPT % (len(items), SHEET_COLS, cand, _known_designators(pool, qs))
     ask = client or _client_ask()
@@ -568,7 +618,7 @@ def judge_sheet(pool, questions=None, limit: int = SHEET_MAX, client=None,
     for k, ans in got.items():
         q, reg = items[k]
         sid = q["slot"]
-        top, alt = q.get("top", {}).get("value"), q.get("alt", {}).get("value")
+        top, alt = (q.get("top") or {}).get("value"), (q.get("alt") or {}).get("value")
         row = {"slot": sid, "raw": ans[:60], "ans": ans, "sec": rep["sec"],
                "top": top, "alt": alt, "mode": "sheet"}
         up = ans.upper()
@@ -622,8 +672,8 @@ def contact_sheet(pool, questions, path, scale: int = SCALE,
         c = np.full((cell + 22, cell, 3), 255, np.uint8)
         ih, iw = img.shape[:2]
         c[22:22 + min(ih, cell), :min(iw, cell)] = img[:cell, :cell]
-        lab = "%s  T=%s A=%s" % (q["slot"], q.get("top", {}).get("value"),
-                                 q.get("alt", {}).get("value"))
+        lab = "%s  T=%s A=%s" % (q["slot"], (q.get("top") or {}).get("value"),
+                                 (q.get("alt") or {}).get("value"))
         cv2.putText(c, lab[:40], (3, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
                     (0, 0, 200), 1, cv2.LINE_AA)
         tiles.append(c)

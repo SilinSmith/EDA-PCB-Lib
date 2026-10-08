@@ -141,12 +141,14 @@ def main(argv=None) -> int:
     ap.add_argument("-fusion", "--fusion", dest="fusion", default="on",
                     choices=("off", "on", "llm"),
                     help="融合层（21 节点架构的落地）：先验 + 解 + 合理性检查。"
-                         "`on` = 只跑确定性节点（不调模型，220 张约 10 分钟）；"
-                         "`llm` = 再叠加判官/审计/重扫（每张多约 50 秒 LM Studio）；"
+                         "`on` = 确定性节点 **+ LLM 轮（judge/audit/rescan）**；"
+                         "`llm` = 再叠加 cropfix（重裁重读）；"
                          "`off` = 不做融合，直接导出阶段三/二产物。"
-                         "220 张实测：融合 `on` = 28.4200、不融合（VLM 补强后的阶段二）"
-                         "= 28.4133 ⇒ 融合**不降分**（+0.007，噪声级），而它修掉了"
-                         "`Name` 顶位号这类真 bug。")
+                         "LLM 轮实测约 **+30 s/张**（case 1+10 墙钟：融合 3.5 s → "
+                         "62.7 s；折算 220 张约 +1.8 h），临时关掉用 `FUSION_LLM=0`。"
+                         "220 张实测：LLM 轮关 = 28.4973、开 = 28.4200、不融合"
+                         "（VLM 补强后的阶段三）= 28.4133。默认带 LLM 轮是 owner "
+                         "m25661 的决定（见下方 `fusion_rows` 上方那段注释）。")
     ap.add_argument("-llm-max-slots", "--llm-max-slots", dest="llm_max_slots",
                     type=int, default=0)
     ap.add_argument("-gpu-frac", "--gpu-frac", dest="gpu_frac", type=float,
@@ -328,7 +330,13 @@ def main(argv=None) -> int:
                 _log(fp, "警告：-vlm %s 但补强未执行（端点不可用），导出的产物**未经 VLM 补强**"
                      % a.vlm)
         except Exception as exc:                    # noqa: BLE001
-            import traceback
+            # ⚠ 这里原来有一行 `import traceback`。它是**函数内的局部导入**，会让
+            # `main()` 整个函数体里的 `traceback` 都变成局部名 —— 于是后面融合层那两个
+            # `except` 支（`:401` / `:407` 的 `fp.write(traceback.format_exc()...)`）在
+            # **这一行还没执行到**的路径上抛
+            # `UnboundLocalError: cannot access local variable 'traceback' where it is
+            #  not associated with a value`，把真正的 traceback 整个吃掉。
+            # 模块顶层已有 `import traceback`（`:39`），这里不需要再导一次。
             traceback.print_exc()
             vlm_err = "%s: %s" % (type(exc).__name__, exc)
             _log(fp, "⚠️ VLM 补强整段失败：%s —— 继续用**未补强**的阶段三产物导出" % vlm_err)
@@ -363,6 +371,16 @@ def main(argv=None) -> int:
         # `DO_LLM = env_on("FUSION_LLM","1")`）：`on` 不覆盖 `FUSION_LLM`，
         # 想临时关掉 LLM 轮但保留融合层就 `FUSION_LLM=0`；`-fusion off` 才整层关，
         # `-fusion llm` 额外打开 cropfix/rescan。
+        #
+        # ★ 成本实测（10-08，LM Studio 实测在 127.0.0.1:1234，case 1+10，`fast.py`）：
+        #   融合层墙钟 **LLM 轮关 3.5 s → 开 62.7 s**（每张 **+29.6 s**；
+        #   220 张折算 **+1.8 h**，会与「所有案例 < 2 小时」的硬约束抢预算）。
+        #   ⚠ 同一对臂的 `final_results/*_Pred.json` 与 `runs/fusion/_assigned/*.json`
+        #   **MD5 逐字节相同** ⇒ 这两张图上 LLM 轮**一个字段都没改**。
+        #   归档 `work\_fast_base\{llmab_off,llmab_on}.json`、日志
+        #   `work\_fast_out_llmab_{off,on}\final_results\run.log`。
+        #   即「省时间」的开关是安全可用的；但**是否默认开**是 owner m25661 的
+        #   决定（见上），不要因为一次 A/B 就翻回去。
         os.environ["FUSION_CROPFIX"] = "1" if a.fusion == "llm" else "0"
         if a.fusion == "off":
             os.environ["FUSION_LLM"] = "0"
@@ -373,9 +391,11 @@ def main(argv=None) -> int:
         try:
             from fusion import run as fusion_run
             want = [r["case"] for r in s2_rows]
-            _log(fp, "=== 融合层：先验 + 解 + 合理性检查（%d 张，LLM 轮 %s，cropfix %s） ==="
+            _log(fp, "=== 融合层：先验 + 解 + 合理性检查（%d 张，LLM 轮 %s，"
+                     "cropfix %s，FUSION_LLM=%s） ==="
                  % (len(want), "开" if _do_llm else "关",
-                    "开" if a.fusion == "llm" else "关"))
+                    "开" if a.fusion == "llm" else "关",
+                    os.environ.get("FUSION_LLM", "(未设→默认 开)")))
             t0 = time.time()
             for i, cid in enumerate(want, 1):
                 try:
@@ -387,6 +407,29 @@ def main(argv=None) -> int:
                     fp.write(traceback.format_exc()[-800:] + "\n")
             _log(fp, "融合完成 %d/%d 张，用时 %.1fs"
                  % (len(fusion_rows), len(want), time.time() - t0))
+            # ★ 落 `_fusion_report.json`：`fusion/run.py` 只在它自己的 `main()` 里写这份
+            #   报告，而**真实提交路径**（这里）是直接调 `run_case` 的 ⇒ 以前提交产物里
+            #   根本没有它，**逐轮明细（judge/audit/rescan 的每一题）事后无从查证**。
+            #   合并进已有文件，别覆盖：分批跑（后台作业 / 重跑单张）时覆盖会让报告
+            #   只剩最后一批 —— 这个坑 `fusion/run.py:412` 已记过。
+            try:
+                _rp = fuse_dir / "_fusion_report.json"
+                _old = []
+                if _rp.exists():
+                    _prev = json.loads(_rp.read_text(encoding="utf-8"))
+                    _new = {r.get("case") for r in fusion_rows}
+                    _old = [x for x in (_prev.get("cases") or [])
+                            if x.get("case") not in _new]
+                _merged = sorted(_old + fusion_rows,
+                                 key=lambda x: str(x.get("case") or ""))
+                _rp.write_text(
+                    json.dumps({"cases": _merged, "run_dir": str(runs)},
+                               ensure_ascii=False, indent=1),
+                    encoding="utf-8")
+                _log(fp, "  逐轮明细 %s（现共 %d 张）"
+                     % (_rp.name, len(_merged)))
+            except Exception as exc:                    # noqa: BLE001
+                _log(fp, "  ⚠️ 写 %s 失败：%s" % ("_fusion_report.json", exc))
         except Exception as exc:                        # noqa: BLE001
             _log(fp, "⚠️ 融合层整段失败：%s: %s —— 继续用未融合的产物导出"
                  % (type(exc).__name__, exc))

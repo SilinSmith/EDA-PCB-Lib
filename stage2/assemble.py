@@ -194,6 +194,24 @@ EDGE_MERGE = env_on("STAGE2_EDGE_MERGE", "0")
 EDGE_JOIN = float(os.environ.get("STAGE2_EDGE_JOIN", "40.0"))     # 端点相接容差（px）
 EDGE_ANG = float(os.environ.get("STAGE2_EDGE_ANG", "6.0"))        # 共线夹角容差（度）
 
+# ★ 端点吸附（T 型结解算）—— `net_line` 唯一真正有效的杠杆，2026-10 新增。
+# `work/tools/diag/_nledge.py` 把某一对配对 net 的 GT 边与我方边**逐条并排**打印，
+# 真相是：**每条边的形状都对，端点却普遍偏 7~13px**，而官方 `metrics._seg_distance`
+# 的容差只有 **5px**（`_edge_points` 只取首尾两点，`unordered` 取两个朝向里较小的那个
+# 端点距离的 **max**）。偏差的两个来源：① 导线有 ~2px 描边，骨架落在其中一条描边上；
+# ② 骨架的分叉点没有解算到真正的交叉处，比真结点短 8~10px —— 例：GT 那根横枝
+# `(843,1058)-(944,1058)`，我们给的是 `(853,1057)-(957,1057)`，`d=13.0`。
+# 把端点推回「同 net 另一条边的中心线」上就能救回一大批。
+# `work/tools/diag/_nldup.py` 官方 9 张离线重打分（基线 50.0598 / 导线 0.0649）：
+#   snap12 0.1582 / 50.9922 · **snap20 0.1648 / 51.0589** · snap24 0.1617 / 51.0274 ·
+#   snap30 0.1536 / 50.9466 · snap40 0.1475 / 50.8854 ⇒ 取 20（再大会吸到隔壁的枝）。
+#   19 张档：off 48.7337 → snap20 49.6574（导线 0.0563 → 0.1487）。
+# **没有一张被它打成 0**（逐张都 ≥ 基线），这是它能过门槛的关键 —— 对比 `par3`
+# （把同一条导线的两条描边并成一条中心线）netL 0.0868 却把 case 2 打成 0；
+# `par3+snap20` 0.1879 / 51.2898 分数更高但同样爆 0 ⇒ **不合并描边、只做吸附**。
+EDGE_SNAP = float(os.environ.get("STAGE2_EDGE_SNAP", "20.0"))          # 吸附半径（px），0=关
+EDGE_SNAP_ANG = float(os.environ.get("STAGE2_EDGE_SNAP_ANG", "45.0"))  # 只吸到近似垂直的边
+
 
 def _ang_deg(d1, d2) -> float:
     """两个方向向量的夹角（度）；任一为零向量时返回 180（不焊）。"""
@@ -202,6 +220,57 @@ def _ang_deg(d1, d2) -> float:
         return 180.0
     c = (d1[0] * d2[0] + d1[1] * d2[1]) / (n1 * n2)
     return math.degrees(math.acos(max(-1.0, min(1.0, c))))
+
+
+def snap_edge_ends(nets: Dict[str, dict], radius: float = None,
+                   max_ang: float = None) -> int:
+    """把每条边的端点吸附到**同一个 net 里另一条边**的中心线上，返回改动的端点数。
+
+    只吸到与自身近似垂直的邻居（夹角容差 `max_ang`，默认 45°）：平行的邻居是
+    **同一条导线的重复描边**，吸过去只会把枝拉歪（实测 `par` 那一路就是负结果）。
+    就地改 `nets[*]["edges"]` 里每条边的首/尾点 —— 官方只看这两点。
+    """
+    radius = EDGE_SNAP if radius is None else radius
+    max_ang = EDGE_SNAP_ANG if max_ang is None else max_ang
+    cos_lim = math.cos(math.radians(max_ang))
+    moved = 0
+    for rec in nets.values():
+        edges = rec.get("edges") or {}
+        keys = [k for k, v in edges.items() if isinstance(v, (list, tuple)) and len(v) >= 2]
+        segs = [(edges[k][0], edges[k][-1]) for k in keys]
+        for i, k in enumerate(keys):
+            seg = edges[k]
+            p0, p1 = seg[0], seg[-1]
+            for idx, p in ((0, p0), (-1, p1)):
+                o = p1 if idx == 0 else p0
+                d0 = (o["x"] - p["x"], o["y"] - p["y"])
+                if abs(d0[0]) < 1e-9 and abs(d0[1]) < 1e-9:
+                    continue
+                n0 = math.hypot(d0[0], d0[1])
+                best = None
+                for j, (a, b) in enumerate(segs):
+                    if j == i:
+                        continue
+                    vx, vy = b["x"] - a["x"], b["y"] - a["y"]
+                    L2 = vx * vx + vy * vy
+                    if L2 < 1e-12:
+                        qx, qy = a["x"], a["y"]
+                    else:
+                        t = ((p["x"] - a["x"]) * vx + (p["y"] - a["y"]) * vy) / L2
+                        t = max(0.0, min(1.0, t))
+                        qx, qy = a["x"] + t * vx, a["y"] + t * vy
+                    d = math.hypot(p["x"] - qx, p["y"] - qy)
+                    if d > radius or (best is not None and d >= best[0]):
+                        continue
+                    n1 = math.hypot(vx, vy) or 1e-9
+                    if abs((d0[0] * vx + d0[1] * vy) / (n0 * n1)) > cos_lim:
+                        continue
+                    best = (d, qx, qy)
+                if best is not None:
+                    seg[idx]["x"] = round(best[1], 2)
+                    seg[idx]["y"] = round(best[2], 2)
+                    moved += 1
+    return moved
 
 
 def merge_collinear(runs: List[list], join_tol: float = None,
@@ -777,6 +846,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         out_nets["net_%d" % (len(out_nets) + 1)] = v
     out_nets = attach_orphan_rails(out_nets, pins)
     out_nets = merge_shared_pins(out_nets)
+    if EDGE_SNAP > 0:
+        # ★ 端点吸附放在**最后**：这时 net 的成员已经定下来，同 net 里能拿来当
+        # 结点的邻居最全（离线实验就是在最终文档上做的，顺序必须一致）。
+        snap_edge_ends(out_nets, EDGE_SNAP, EDGE_SNAP_ANG)
     _pidx: Dict[str, Dict[str, str]] = {}
     for (_c, _k), _pk in pin_pk.items():
         _pidx.setdefault(_c, {})[str(_k)] = _pk

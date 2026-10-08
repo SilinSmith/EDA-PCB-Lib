@@ -253,3 +253,7 @@ eda_yolo/
 /submissions/
 /work/
 *.log
+
+# --- 5. 生成器的本地备份（tools/diag/_wfbuild.py 等会写 .bakN）--------------
+*.bak
+*.bak[0-9]

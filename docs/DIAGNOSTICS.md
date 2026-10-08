@@ -1,6 +1,6 @@
 # 诊断手册：怎么量，以及为什么这么量
 
-> 全部脚本索引见 `TOOLS.md`（464 个，自动生成）。
+> 全部脚本索引见 `TOOLS.md`（482 个，自动生成）。
 > 本文只讲**方法**：拿到一个笼统的「某项失分」，怎么把它拆到可行动的最小单元。
 
 ---
@@ -32,6 +32,30 @@
 
 **采纳门槛**：官方 9 与派生 19 **两个档都赚**才落地。只赚一个档的改动一律记为负结果
 （`WIRE_TOL=10` 就是这么被否掉的）。
+
+### 口径必须配对，还要看「开关有没有生效」
+
+同一块失分可能只在某个口径下存在，**对照臂必须同口径**：
+
+* `boxscan`（`FUSION_BOXSCAN`）在 **VLM 开着时基本是 no-op**（`_add_vlm` 已把
+  `comp.<cid>.key` 覆盖到 82/83、12/12、22/22），而它的第 ② 条又要求 LLM 轮真跑
+  ⇒ 只有 **`--no-vlm` + `$env:FUSION_LLM='1'`** 这个口径量得到它本身。
+  goal 里那两个基线（57.54 / 35.75）是**另一个口径**，不可同表比。
+
+⚠️ **「A/B 有差别」不等于「你改的那条分支生效了」。** boxscan 第一版实测有差
+（52.48 → 52.47），但把 `_fusion_report.json` 的 `notes` 打出来才看到
+`{"kind":"boxscan","n_slot":1,"n_skip_type":11}` —— **每张图只建了 1 个槽位**，
+分差根本不是「boxscan 整体」的效果，而是那 1 颗元件的自由读数对不对。
+**改完先证明分支执行了、执行了几次，再解释分差。**
+
+```powershell
+# 打印建池阶段的计数笔记（boxscan / shape_gate / run_prior …）
+python -c "import json;d=json.load(open(r'work\_fast_out_<名>\runs\fusion\_fusion_report.json',encoding='utf-8'));[print(c['case'],c['notes']) for c in d['cases']]"
+```
+
+同一份报告里还有 `rounds[*].judge_rows`（每一问的 `slot/ans/res/mode`）—— `res` 是
+`agree_top / agree_alt / new / reject / agree_prior / empty`，`mode` 是
+`choose / read / **free**`（`free` 就是 boxscan 的自由读数）。**看不到行就等于没问。**
 
 ---
 
@@ -173,6 +197,11 @@ $env:FUSION_LLM='0'               # 关 LLM 裁决
 | 两个融合产物到底改了哪些键 | `tools/diag/_keydiff.py` |
 | 把 GT 框画回原图 | `tools/diag/_gtoverlay.py --case N` |
 | GT 里某类元件长什么样 | `tools/data/gt_look.py` |
+| 引脚号读数对不对（按框宽分桶 + 归属错/识别错归因） | `tools/diag/_numread.py [--dump out.png]` |
+| **位号这一路还剩多少可救（候选池天花板）** | `tools/diag/_ownasgn.py --headroom --gt` |
+| **`own.assign` 全局一对一离线重跑 + GT 裁决** | `tools/diag/_ownasgn.py --gt --show` |
+| **GND 系引脚在 GT 里到底几条网** | `tools/diag/_gndnet.py` |
+| **`net_line` 边能不能配上 GT（端点距离）** | `tools/diag/_nledge.py --case N --net net_9` |
 
 ---
 

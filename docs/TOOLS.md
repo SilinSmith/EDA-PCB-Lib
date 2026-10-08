@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **464** 个脚本。
+共 **482** 个脚本。
 
 
 <a id="data"></a>
@@ -65,7 +65,7 @@
 
 <a id="diag"></a>
 
-## `tools/diag/`（356 个脚本）
+## `tools/diag/`（374 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -89,6 +89,7 @@
 | `_box_pin_diag` | 110 | `box`（IC）引脚为什么只 recall 0.47 —— 一次性诊断。 |
 | `_boxcrop` | 108 | 把 GT 某个元件的框（含四周留白）裁出来放大，看**位号到底画没画在图上**。 |
 | `_boxdesig` | 289 | 位号归因：GT 的大 IC（`box`）为什么**检出了却键对不上**。 |
+| `_boxgap` | 122 | 量「围绕元件 box 的重扫」到底缺什么：按 cid 统计位号/引脚槽位与取景框。 |
 | `_boxgeom` | 162 | 检出框 vs 真值框的几何差：宽高比、中心偏移。看清「框到底差在哪」。 |
 | `_boxkey` | 146 | GT 的 `box`（大 IC）为什么键（位号）对不上：**没检出** 还是 **检出但位号错**？ |
 | `_boxmiss` | 97 | 量一个事：**GT 的 `box`（大 IC）有多少是我们整颗没输出的。** |
@@ -145,6 +146,7 @@
 | `_dumpstruct` | 32 | 把 GT / pred 的 components 与 pins 两个 section 的真实形状打出来。 |
 | `_dupscore` | 134 | 量化「重复检测」对本方提交文档的影响 —— 纯 CPU，不动流水线。 |
 | `_edgeclr` | 59 |  |
+| `_envdump` | 21 |  |
 | `_envflagprobe` | 41 | 验证「假值词表统一」：把每个手写短词表换成 `envflag.env_on` 之后， |
 | `_errbudget` | 86 | 按 GT 类型拆开 component 的错误预算。 |
 | `_evidence_sheet` | 66 | 把 owner 7 条判断对应的证据图拼成一张总览（每格带标题）。 |
@@ -184,6 +186,7 @@
 | `_fzenrich` | 61 | 在指定的一批 case 上跑 VLM 补强，产出干净的 `<case>.json`（供融合层消费）。 |
 | `_fzrep` | 32 | 一页看融合层的报告：逐 case 打印 cropfix / judge / audit / rescan / 分数。 |
 | `_gndname` | 29 |  |
+| `_gndnet` | 135 | _gndnet.py —— GND 互证先验（用户 m12359）到底有没有头寸？ |
 | `_gndpot` | 49 |  |
 | `_gtdup` | 82 | GT 标注里有没有「同一颗器件被标了两遍」—— 重复检测是不是被**训练出来的**。 |
 | `_gtdup2` | 65 | 重复框对到底是「同一个框写了两遍」还是「两个挨得很近的符号」。 |
@@ -249,6 +252,10 @@
 | `_netsplit` | 111 | 量 netH（权重 0.35）的结构性杠杆：把预测的每张网**拆成单引脚网**会怎样。 |
 | `_netweld` | 185 | `netH` 的 `D_在网里但配错`（10GT 上 96 个 / 0.229）对策实验：**按几何把网络焊起来**。 |
 | `_netwhy` | 120 | 网络（`netH`，权重 0.35）的丢分逐条拆开：GT 的网络引脚里，我们缺的那些**为什么缺**。 |
+| `_nldiag` | 145 | _nldiag.py —— `net_line_f1` 为什么只有 0.06？ |
+| `_nldup` | 325 | _nldup.py —— `net_line` 的真凶：我们把**笔画的两条边**都当成导线输出。 |
+| `_nledge` | 97 | _nledge.py —— 把某一对配对 net 的 GT 边/我方边**逐条并排打出来**，肉眼看差在哪。 |
+| `_nlpair` | 83 | _nlpair.py —— `net_line` 是被**边**卡住，还是被**网络配对**卡住？ |
 | `_nobom` | 9 |  |
 | `_nodeclust` | 71 | 量 pskel 的结点聚簇尺寸 —— 验证「长斜线 = 跨大聚簇的隐式直连」假设。 |
 | `_nothink` | 129 | 同一个视觉任务上试各种「关思维链」的写法，看哪个能真的把 thinking 压掉。 |
@@ -265,6 +272,7 @@
 | `_ocr_verify` | 92 | 检查弱监督标注的质量：随机抽 manifest 里的行，裁图 + 显示「声称的真值」。 |
 | `_ocrerr` | 278 | CRNN 真实错误典例采集器（只读，不改任何产物）。 |
 | `_overcheck` | 56 | 规则 (5)「穿越式微越过」的自检。 |
+| `_ownasgn` | 361 | 量「一块文字框被两颗元件同时当成位号」的规模，并离线试 `own.assign` 全局一对一的收益。 |
 | `_owndiff` | 60 | 对比同一张图、两个 `STAGE1_OWN` 设定下的 stage1 产物，看**归属闸到底并掉了谁**。 |
 | `_owneval` | 119 | 同类相邻框：把「判据阈值」和「并了会不会误并真符号」放在同一张表上。 |
 | `_padab` | 105 | 对照图：同一个框、同一个模型，在**两条预处理路径**下的读数。 |
@@ -298,6 +306,7 @@
 | `_pingrid` | 286 | 逐引脚问 VLM：把「一个引脚」的邻域裁片拼成网格，一次调用读回「编号:名称」。 |
 | `_pinjunk` | 105 | 量「IC 的预测引脚里有多少是垃圾」—— 用来判断 `pin_f1` 的 fp 有多少是白送的。 |
 | `_pinkey` | 16 |  |
+| `_pinkey2` | 60 | stage2 文档里 `pins` 是按 cid 还是按位号存的？以及 `assigned['comps'][cid]['pins']` 的规模。 |
 | `_pinlands` | 22 |  |
 | `_pinloss` | 221 | 引脚失分分解：把 220 张的 `pin.missing`（8335）拆成 |
 | `_pinmap` | 53 |  |
@@ -379,6 +388,7 @@
 | `_tipprobe` | 120 | 量「引脚列的号画在离框边多远」以及 `TIP_PAD` 能救回多少。 |
 | `_tmp_pc` | 22 |  |
 | `_tmp_pinkey` | 45 |  |
+| `_toollist` | 21 |  |
 | `_trace_jump` | 173 | 复刻 pskel._trace 的并链循环并加日志：找出哪一次 append 产生了远距离跳变。 |
 | `_trace_prof` | 206 | 把 pskel._trace 逐段计时，定位真正的瓶颈。用法：python _trace_prof.py 0107 |
 | `_u1dump` | 15 |  |
@@ -414,7 +424,15 @@
 | `_vlmval3` | 166 | 只量**键已经匹配上**的 r/c 元件（也就是真正会被 `component_text_ok` 比较的那批） |
 | `_weld_selftest` | 110 | 方向性桥接（stage1.labels._weld_unions / wire_groups 规则 3）的合成自检。 |
 | `_weldprobe` | 151 | 量「方向性桥接（规则 3 `weld`）」被哪一道闸门卡住。 |
+| `_wfbuild` | 533 | 重建 workflow.html：要点清单 + 按数据流分带布局 + CSS/JS 补丁（阅读面板/分层 tidy）。 |
+| `_wfbullets` | 388 | workflow.html 的第二轮内容：每个节点的「要点清单」（正面可见）。 |
+| `_wfdump` | 19 |  |
+| `_wfextract` | 19 |  |
+| `_wfhead` | 108 | 改写 workflow.html 内嵌 graphdata 的 `name` 与 `note` 开头（第七批）。 |
+| `_wfmd` | 20 |  |
 | `_wfnodes` | 38 | 看 workflow.html 里指定节点的 file / note / params（用法：python _wfnodes.py [id ...]）。 |
+| `_wfpeek` | 20 |  |
+| `_wfsize` | 12 |  |
 | `_wfupdate` | 335 | 把本会话（2026-10-07）的改动与实测写进 work/flow/workflow.html 的 graphdata。 |
 | `_widebox` | 93 | 把「宽框引脚号」的裁片摊开看（含 35px 邻域），用来判「框里到底有几个字形」。 |
 | `_wire_ab` | 128 | 导线提取的 A/B：无遮挡 / 遮挡元件 / 遮挡+边框与笔画过滤。 |

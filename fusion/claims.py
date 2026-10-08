@@ -79,6 +79,53 @@ REGION_PAD = float(os.environ.get("FUSION_REGION_PAD", "24"))
 # 取景框的**最小边长**：位号框常常只有十几个像素，直接切出来给 VLM 看不出是什么。
 REGION_MIN = float(os.environ.get("FUSION_REGION_MIN", "120"))
 
+# ★★ boxscan（用户 m23186 原话：「我探测到了 box 元件，那么肯定要围绕他的 box 展开
+#    pin 和文字的扫描。这也是为什么需要融合层：统筹各种资源引导其他的子调度。」）
+#
+# 改造前的缺口：第 1 节只遍历 `assigned["desig_slots"]` —— 于是**一个位号候选都没有的
+# 元件连槽位都没有**，`llm_judge`/`rescan`/`cropfix`/`audit` 四个模块全部跳过它，
+# `solve.open_questions` 也问不到（零候选）。实测 220 张：629 颗没配上的 GT IC 里
+# **418 颗（56.0%）**的重叠元件 `desig_slots` 是空的。
+#
+# 打开后：对每个 `type` **不在 `NO_DESIGNATOR` 里**、又没有取景框的元件建
+# `comp.<cid>.key` 槽位 + 取景框（本体框，`set_region` 再用 `REGION_MIN=120` 兜底撑开
+# 视野）。零候选槽位的「去问一遍」路径在 `solve.open_questions` 的
+# `FUSION_OPEN_FREEFORM` 那里。
+# ⚠ VLM 开着时这一条基本是 no-op（`_add_vlm` 已经把 `comp.<cid>.key` 覆盖到 82/83、
+#   12/12、22/22）；它补的是**无 VLM**口径下整条路径消失的那一半。
+#
+# ============================ 实测：**判负，默认关** ============================
+# 口径：`--no-vlm` + `$env:FUSION_LLM='1'`（VLM 开着时 ① 是 no-op、② 要 LLM 轮真跑，
+# 所以只有这个口径量得到 boxscan 本身）。同口径配对对照（两档、官方 10GT 9 张与
+# 派生 19 张）：
+#   官方 9：`bs0_9` **52.48**（comp 0.7682 / netH 0.5130 / 元件 tp 167）
+#           vs `bs1_9` **52.47**（0.7721 / 0.5096 / 168）      ⇒ **−0.01**
+#   19 张：`bs0_19` **31.32**（0.5278 / 0.2754 / 316）
+#           vs `bs1_19` **31.37**（0.5302 / 0.2762 / 318）      ⇒ **+0.05**
+#   （不满足「两档都赚」门槛。）
+# 机制（`_fusion_report.json` 的 `notes`，一次 4 张的现场）：
+#   `{"kind":"boxscan","n_slot":0,"n_no_bbox":0,"n_skip_type":8}`（case 1）
+#   `{...,"n_slot":1,...,"n_skip_type":11}`（case 4）/ `n_slot:1`（case 7、case 10）
+#   ⇒ **每张图最多只建 1 个槽位**（类型闸门挡掉 6~11 个），收益/损失就是那 1 颗元件的
+#   自由读数对不对：case 4 那颗读错 ⇒ **57.99 → 55.69**（comp 0.7755→0.7347，多一个
+#   fp）；case 7 读对 ⇒ 57.12 → 58.37；case 10 读对 ⇒ 51.56 → 52.57。**净打平。**
+# 试过的补救（也否掉了）：把自由读数的分数压到读数带以下（`FUSION_FREE_SCORE=0.5`，
+#   见 `llm_judge.py`），让零候选元件只能**补空位**不能**抢位** —— 实测 `bs1f_9`
+#   与 `bs1_9` **逐位相同**（52.47，case 4 仍是 55.69）⇒ **case 4 的损失不是「抢位」
+#   造成的，就是那颗元件被 LLM 读错了**，压分救不了。
+# ⇒ 代码保留（`FUSION_BOXSCAN=1` 可复现每一臂），**默认 0**。
+BOXSCAN = env_on("FUSION_BOXSCAN", "0")
+
+# ⚠ boxscan 的**类型闸门**：这些 type 纸上本来就没有位号（key 是伪造号 `∅N`），
+# 给它们建「位号是什么？」槽位只会让 LLM **编一个** key 出来 ⇒ 元件变 fp。
+# 与 `stage2/assign.py:303 NO_DESIGNATOR` 保持同一份 —— 先试着 import，
+# 拿不到时退回本地副本（内容逐字相同）。
+try:
+    from stage2.assign import NO_DESIGNATOR as _NO_DESIGNATOR      # noqa: E402
+except Exception:                                                  # noqa: BLE001
+    _NO_DESIGNATOR = frozenset({"gnd", "v", "net_input", "net_short", "net_output",
+                                "other", "net_bidirection", "m3\u87ba\u4e1d"})
+
 
 def _f(v, d: float = 0.0) -> float:
     try:
@@ -578,6 +625,49 @@ def from_stage2(case: str, doc: dict, assigned: dict, bgr=None,
 
     if shape_dropped:
         pool.note("shape_gate", n=len(shape_dropped), dropped=shape_dropped)
+
+    # ---- 1b boxscan：连位号候选都没有的元件，也要有槽位和取景框 --------------
+    # 见文件顶部 `BOXSCAN` 的长注释。这里只做「建槽位 + 建框」；「去问一遍」在
+    # `solve.open_questions`（零候选以前被 `continue` 挡死）。
+    #
+    # ⚠ 2026-10 修正：第一版**没有类型闸门**，于是 `gnd` / `v` / `net_*` / `other`
+    # 这些 `stage2/assign.py:303 NO_DESIGNATOR` **故意不给位号候选**的类型也被建了
+    # `comp.<cid>.key` 槽位，去问 LLM「这颗元件的位号是什么」—— 它们纸上本来就没有位号，
+    # LLM 只能**编一个**出来，编出来的 key 配不上 GT ⇒ 元件变 fp。
+    # 实测（官方 9 张，`--no-vlm` + `FUSION_LLM=1` 同口径配对）：
+    #   无闸门 `bs1_9` **52.47**（comp 0.7721 / netH 0.5096 / 元件 tp 168）
+    #   vs 对照 `bs0_9` **52.48**（comp 0.7682 / netH 0.5130 / tp 167）
+    #   ⇒ **净 −0.01（打平偏负）**，且 case 4 从 57.99 掉到 55.69（comp 0.7755→0.7347）。
+    if BOXSCAN:
+        n_new, n_no_bb, n_skip_type = 0, 0, 0
+        for cid in sorted(set(comps) | set(assigned.get("comps") or {})):
+            sid = "comp.%s.key" % cid
+            if pool.region(sid) is not None:
+                continue                                    # 第 1 节已建过
+            c = comps.get(cid) or {}
+            rec = (assigned.get("comps") or {}).get(cid) or {}
+            ctype = rec.get("type") or c.get("type")
+            if str(ctype) in _NO_DESIGNATOR:
+                n_skip_type += 1
+                continue
+            bb = c.get("bbox_img") or rec.get("bbox_img")
+            if not _box4(bb):
+                n_no_bb += 1
+                continue
+            if sid not in pool.hy.slots:
+                pool.hy.slots[sid] = Slot(
+                    slot_id=sid,
+                    question="元件 %s（类型 %s）的位号是什么？" % (cid, ctype),
+                    context={"type": ctype, "cid": cid, "boxscan": True})
+            meta = pool.meta.setdefault(sid, {})
+            meta.setdefault("type", ctype)
+            meta["boxscan"] = True
+            pool.set_region(sid, bb, focus=bb,
+                            note="元件 %s（%s）本体：无位号候选，按 box 重扫" % (cid, ctype),
+                            src="boxscan:component")
+            n_new += 1
+        if n_new or n_no_bb or n_skip_type:
+            pool.note("boxscan", n_slot=n_new, n_no_bbox=n_no_bb, n_skip_type=n_skip_type)
 
     # ---- 2 参数 / 器件名 ---------------------------------------------------
     for cid, rec in (assigned.get("comps") or {}).items():

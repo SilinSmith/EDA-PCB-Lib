@@ -135,6 +135,35 @@ SHAPE_SCORE = os.environ.get("FUSION_SHAPE_SCORE", "").strip()
 BOX_PIN_PRIOR = env_on("FUSION_BOX_PIN_PRIOR", "0")
 _PRIOR_IC_TYPES = ("box", "ic", "boxic", "bigic")
 
+# ★★ `FUSION_SHAPE_W`（默认 **0.0 = 关**）：**让形状分真的压分**。
+#
+# 原来第 3 节「形状惩罚」只把 `f` 写进 `a.evidence["形状分"]` 并给 `st["shape_pen"]`
+# 加一 —— **分数一动不动**，是个静默的 no-op：`pin_number_shape("A")=0.1` 与
+# `pin_number_shape("7")=1.0` 在 `best()` 眼里一模一样。`value_shape` / `key_fits_type`
+# 里那几十行判据相当于只写给人看。
+#
+# 语义按 owner 的两条原则定：**判据不二值、信息只降权不销毁**。
+#   * 不是「f 低就删」—— 候选永远还在池子里，`overflow`/`history` 也都留着；
+#   * 只是**乘一个系数**：`k = FLOOR + (1-FLOOR)·f`，`f=1 → k=1`（原样），
+#     `f=0 → k=FLOOR=0.35`（明显降权，仍能被别的证据重新扶起来）。
+#   * `SHAPE_W` 是「这个降权管多大用」的插值：`0` = 老行为（只标注不压分），
+#     `1` = 完全生效。
+#
+# ★★ **实测判负，默认取 0**（口径：`--no-vlm` + `FUSION_LLM=0`，
+#    `work\tools\eval\fast.py`；归档 `work\_fast_base\{sw0,sw35,sw100,sw0_19,sw100_19}.json`）：
+#    * 官方 10GT 9 张：`W=0` / `W=0.35` / `W=1.0` **三者逐位相同**
+#      （51.06，comp 0.7682 / pin 0.3769 / netH 0.4840 / netL 0.1648）⇒ 对 10GT 毫无影响；
+#    * 19 张档：`W=1.0` **30.16**（pin 0.1841 / netH 0.2539）vs `W=0` **30.73**
+#      （pin 0.1974 / netH 0.2599 / netL 0.0862），tp 引脚 36→42、网络 204→211
+#      ⇒ **压分反而掉 0.57**（引脚号与网络成员一起掉，说明形状分低的候选
+#      里有用的是「分数低但对」的那些 —— 降权把它们推下去了）。
+#    * ⇒ 机制保留（`SHAPE_W>0` 可复现上面每一臂），**默认关**。
+#
+# ⚠️ 压分之后**必须重排 `s.alts`**：`Slot.best()` 是 `alts[0]`，而列表是按分降序维护的
+# （`hypo.py` 的 `Slot.add` 就踩过同一个坑：抬了分不重排 ⇒ `best()` 返回分更低那个）。
+SHAPE_W = float(os.environ.get("FUSION_SHAPE_W", "0.0"))
+SHAPE_FLOOR = float(os.environ.get("FUSION_SHAPE_FLOOR", "0.35"))
+
 
 def desig_shape_ok(raw: Any) -> bool:
     """**原样读出的串** `raw` 有没有可能是个位号？
@@ -748,11 +777,17 @@ class Priors:
                 st["pin_prior"] += 1
 
         # ---- 3 形状惩罚：给「不像」的候选降权（来源仍是它自己） -----------
+        #
+        # ★ `SHAPE_W > 0` 时这里**真的改分**（原先是静默 no-op，见文件头 `SHAPE_W` 注释）。
+        # 乘 `k = FLOOR + (1-FLOOR)·f` 再按 `SHAPE_W` 插值：`f=1` 时 `k=1`
+        # （**只降不升** —— 形状永远不能凭空抬高一个候选）；`f=0` 时 `k=FLOOR`。
+        # 改完**必须重排** `s.alts`，否则 `best()`（= `alts[0]`）还指着旧的第一名。
         for sid in pool.slot_ids():
             s = pool.hy.slots.get(sid)
             if s is None:
                 continue
             kind = sid.rsplit(".", 1)[-1]
+            touched = False
             for a in s.alts:
                 v = str(a.value)
                 if sid.startswith("comp.") and kind == "key":
@@ -772,6 +807,13 @@ class Priors:
                 a.evidence = ev
                 if f <= 0.0:
                     st["shape_pen"] += 1
+                if SHAPE_W > 0.0 and f < 1.0:
+                    k = SHAPE_FLOOR + (1.0 - SHAPE_FLOOR) * f
+                    a.score *= (1.0 - SHAPE_W) + SHAPE_W * k
+                    touched = True
+                    st["shape_demote"] = st.get("shape_demote", 0) + 1
+            if touched:
+                s.alts.sort(key=lambda a: -a.score)
         return st
 
     # ------------------------------------------------------------ 体检
