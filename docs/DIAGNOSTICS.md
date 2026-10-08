@@ -1,6 +1,6 @@
 # 诊断手册：怎么量，以及为什么这么量
 
-> 全部脚本索引见 `TOOLS.md`（487 个，自动生成）。
+> 全部脚本索引见 `TOOLS.md`（504 个，自动生成）。
 > 本文只讲**方法**：拿到一个笼统的「某项失分」，怎么把它拆到可行动的最小单元。
 
 ---
@@ -13,6 +13,10 @@
    做 A/B 必须 `--out <独立目录>`，否则你比的是上一次的残留。
 3. **不要跨口径比分数。** `--no-vlm` 与 VLM 开差 5.2 分；不同 `--cases` 集合的均分不可比。
    报数时必须写清「评测集 + VLM 开关 + LLM 开关」。
+4. **「慢」先量余额、再上 profiler、最后才怀疑硬件。** 阶段耗时里 `total` 与各分段之和的
+   **差额**永远指向进程外调用（网络/IO/锁）；一次 cProfile 就能落到调用行。
+   任何发到进程外的调用都要自带超时、上界与熔断 —— 见 §1「一次无界的远程调用会把整个阶段
+   变成黑洞」。**失败如果被吞成字符串，它就不会以报错的形式出现。**
 
 ---
 
@@ -129,6 +133,53 @@ Get-FileHash work\flow\_wfbullets.py, eda-pcb\tools\diag\_wfbullets.py   # 两�
 **同坑的变体：替换脚本必须能被重复执行。** `_patch8.py` 的 `batch` 那条替换，
 新文本里**包含了旧文本**（徽标行 + 原样那一行）⇒ 对同一文件跑第二次又多插了一行徽标。
 ⇒ 字面替换要么保证 `new` 不含完整的 `old`，要么先查标记再替换。
+
+---
+
+### 一次**无界的远程调用**会把整个阶段变成黑洞（先看 `timing` 的「余额」）
+
+**症状**：`work\_full220` 首跑里 `0003`（4491×3173）单张 `total_s` = **315.73 s**，而同一张
+的 `timing` 里 yolo 0.11 + cv 0.215 + wires 1.49 + rays 0.28 + text 1.66 + bigic 0.15 +
+pins 0.4 = **4.31 s**。⇒ **311 s 不知道去哪了**。
+
+**尺子 1（免费）**：把 `timing` 各段加起来与 `total_s` 比。**差多少就是「没记名的等待」**，
+它只可能来自网络/IO/锁，不可能来自算力。这一步不需要 profiler。
+
+**尺子 2（一次 cProfile 定位到调用行）**：
+
+```powershell
+python work\tools\diag\_prof1.py 0003 --top 12      # profile 落在 work\_prof1\<case>\_profile.txt
+```
+
+实测（320.85 s，20995097 次调用）：
+
+```
+stage1/pipeline.py:118 run_case
+  └ stage1/wires.py:265 extract_wires           308.374 s
+      └ stage1/wires.py:230 _hint_wire_hue      304.151 s
+          └ vlm/client.py:161 ask               303.516 s
+              └ vlm/client.py:128 _chat_once → urllib urlopen → socket.recv_into  303.377 s
+```
+
+**三处叠加才成灾**（每一处单独看都「有理由」）：
+
+| 位置 | 事实 | 为什么危险 |
+|---|---|---|
+| `stage1/wires.py:311` | `_hint_wire_hue(bgr)` 在 `extract_wires` 里**无条件调用**，发的是**整张原图** | 一张 17.4 MPx 的图也照发 |
+| `vlm/client.py:38` | `VLM_TIMEOUT` 默认 **600 s**，且 `ask()` 最多**重试 4 次** | 单张最坏 40 min |
+| `vlm/client.py:161-178` | `ask()` 把一切异常吞成 `"ERR:..."` **字符串正常返回** | **不抛异常 ⇒ 不会出现在 `errors` 里，只会表现为「这张图莫名多了 5 分钟」** |
+
+**规模先量再改**：`python work\tools\diag\_huetime.py --count` ⇒ 220 张里 **168 张**会触发
+（52 张灰度图跳过），>2000px 的 **23 张**，最大 **17.4 MPx**。
+延迟实测：`0043` 整图首发 **121.98 s 换来 `HTTPError 400`**，缩到 1024 后 **0.55 s**（16×）。
+
+**修法（保留功能，只把它变有界）**：`_hue_small()` 先缩到 `STAGE1_WIRE_HUE_MAXSIDE=1024`；
+独立超时 `STAGE1_WIRE_HUE_TIMEOUT=30`（不再用全局 600）；连续失败
+`STAGE1_WIRE_HUE_MAXFAIL=3` 次后**整进程熔断**（端点没起来时不该每张都等一次超时）。
+效果：`0003` **315.73 s → 8.3 s**；220 张 stage1 从「前 10 张 356.8 s」变成 **416.5 s**。
+
+⇒ 规矩：**任何发到进程外的调用，都要自己带超时、带上界、带熔断，并且失败必须计数**。
+只要「失败被吞成字符串」，它就会以「这里有段时间不见了」的形式存在，而不是以报错的形式。
 
 ---
 
@@ -281,6 +332,17 @@ $env:FUSION_LLM='0'               # 关 LLM 裁决
 | **改 workflow 节点的徽标（`kind`）** | `tools/diag/_wfkind.py --list` / `--set exec <ids…>` / `--set dead --all-new`（默认 dry-run，`--write` 才落盘） |
 | **改 `name`/`note`（长 JSON 字符串，别手改）** | `tools/diag/_wfhead.py --write`（**必须在 `_wfbuild.py --write` 之前**） |
 | **按字面子串替换文件内容**（绕开 PowerShell 引号地狱） | `python -c "import sys;sys.path.insert(0,'work/tools/diag');from _subst import subst;subst(path,[(old,new)])"` |
+| **单张 stage1 的 cProfile**（找「黑洞」到底在哪一行） | `tools/diag/_prof1.py <case> [--top 12]`，profile 落 `work\_prof1\<case>\_profile.txt` |
+| **VLM 色相询问的触发张数与延迟**（整图 vs 缩到 1024） | `tools/diag/_huetime.py --count` / `tools/diag/_huetime.py <case> --reps 2` |
+| **GPU / torch / YOLO 健康探针**（判断「慢」是不是硬件） | `tools/diag/_gpuprobe.py` |
+| **一次全量跑的分阶段统计**（阶段一 stats+timing、阶段二读出率、按官方权重打分与最差 N 张） | `tools/diag/_stage220.py --run work\_full220 [--split 10GT] [--worst 12]` |
+| **引脚四段漏斗**（键没配上 / 键配上没这根 / 名字不同 / 坐标超差） | `tools/diag/_pin200.py --n 60`；`--emit` 看产出率 |
+| **上帝键上界**（位号全修对能涨几分；顺手看引脚涨多少） | `tools/diag/_keyoracle.py --n 60` |
+| **把「绑定」用上帝视角消掉后引脚还剩什么**（同元件键下取离 GT 点最近的预测引脚） | `tools/diag/_pinoracle.py --n 60 [--examples 8]` |
+| **逐根引脚的名字与距离归因**（名字逐字符相等的比例、距离分位） | `tools/diag/_pindist.py --n 40` |
+| **GT 引脚名有多少是真信号名** / **我们产出的 `pinname` 有多少只是引脚号** | `tools/diag/_gtpinname_stat.py` / `tools/diag/_pinname_stat.py` |
+| **GT 引脚点离元件框有多远**（判「框内硬门槛」是不是根本错） | `tools/diag/_gtpinplace.py` |
+| **GT 引脚点附近有没有我们的文字、文字在框内还是框外** | `tools/diag/_pinlabel.py --n 60` |
 
 ---
 

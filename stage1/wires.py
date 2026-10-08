@@ -225,11 +225,57 @@ _HUE_WORDS = (
     ("绿", 55.0), ("青", 95.0), ("蓝", 125.0), ("紫", 145.0),
 )
 _HINT_STAT = {"calls": 0, "hit": 0, "words": {}}
+# ★ 2026-10-08：给色相询问一个**自己的、短的**超时 + 熔断闸。
+#   根因：`vlm/client.py:38 TIMEOUT = float(os.environ.get("VLM_TIMEOUT", "600"))` ——
+#   默认 **600 秒**，而且 `ask()` 最多重试 4 次；`ask()` 把一切异常吞成 `"ERR:..."` 字符串，
+#   于是「端点慢」在 stage1 里只表现为「这张图莫名多花了 5 分钟」。问一个颜色词不需要 10 分钟。
+HUE_TIMEOUT = float(os.environ.get("STAGE1_WIRE_HUE_TIMEOUT", "30"))
+HUE_MAXFAIL = int(os.environ.get("STAGE1_WIRE_HUE_MAXFAIL", "3"))
+_HUE_FAIL = {"n": 0, "off": False}
+
+
+def _hue_small(bgr: np.ndarray) -> np.ndarray:
+    """★ 2026-10-08：**问色相之前先把图缩到最大边 `STAGE1_WIRE_HUE_MAXSIDE`（默认 1024）**。
+
+    原来这里把**整张原图**（14 MPx 的图 base64 之后十几 MB）直接发给端点，实测
+    `0003`（4491x3173）这一次调用耗 **303 s**（cProfile：`wires.py:230 → vlm/client.py:161
+    → urllib urlopen → socket.recv_into` 303.4 s），而 `timing` 里 yolo/cv/wires/rays/
+    text/bigic/pins 加起来只有 4.3 s —— **stage1 的「黑洞」就是这一次 VLM 调用**。
+    更糟的是 `VLM_TIMEOUT` 默认 600 s、`ask()` 还有最多 4 次重试，`ask()` 内部又把
+    一切异常吞成 `"ERR:..."` 字符串 ⇒ 失败只会表现为「这张图慢了 5 分钟」。
+
+    我们问的只是「导线是什么颜色」这一个词，1024 边长足够（`pskel.chroma` 的判据
+    本来就是颜色是否成片出现）。缩放不改变 `_HINT_STAT` 的语义。
+    """
+    try:
+        cap = int(os.environ.get("STAGE1_WIRE_HUE_MAXSIDE", "1024"))
+    except Exception:
+        cap = 1024
+    if cap <= 0:
+        return bgr
+    h, w = bgr.shape[:2]
+    m = max(h, w)
+    if m <= cap:
+        return bgr
+    s = cap / float(m)
+    return cv2.resize(bgr, (max(8, int(round(w * s))), max(8, int(round(h * s)))),
+                      interpolation=cv2.INTER_AREA)
 
 
 def _hint_wire_hue(bgr: np.ndarray) -> None:
-    """`STAGE1_WIRE_COLOUR=hint` 时问一次模型，把色相写进 `pipeline.pskel.HINT_HUE`。"""
+    """`STAGE1_WIRE_COLOUR=hint` 时问一次模型，把色相写进 `pipeline.pskel.HINT_HUE`。
+
+    ★ 2026-10-08 两处加固（都是为了「2 小时 / 50 张」的时间预算）：
+    ① 发出去的是 `_hue_small(bgr)`（最大边 1024），不是整图；
+    ② 用 `STAGE1_WIRE_HUE_TIMEOUT`（默认 **30 s**）而不是 `VLM_TIMEOUT`（默认 600 s），
+       并且**连续失败 `STAGE1_WIRE_HUE_MAXFAIL`（默认 3）次后就整进程关掉**这一路 ——
+       端点没起来时，220 张图不该每张都去等一次超时。
+    `_HUE_STAT["skipped"]` 记熔断后跳过的张数，便于事后确认「是省了时间还是丢了几张的提示」。
+    """
     if os.environ.get("STAGE1_WIRE_COLOUR", "hint").strip().lower() != "hint":
+        return
+    if _HUE_FAIL["off"]:
+        _HINT_STAT["skipped"] = int(_HINT_STAT.get("skipped", 0)) + 1
         return
     import sys
     root = Path(__file__).resolve().parents[1]
@@ -247,12 +293,19 @@ def _hint_wire_hue(bgr: np.ndarray) -> None:
         pass
     try:
         from vlm import client
-        r = client.ask(bgr, WIRE_HUE_PROMPT, max_tokens=24)
+        r = client.ask(_hue_small(bgr), WIRE_HUE_PROMPT, timeout=HUE_TIMEOUT,
+                       max_tokens=24)
         txt = r[0] if isinstance(r, (tuple, list)) else r
     except Exception:
-        return
+        txt = "ERR:raise"
     txt = "".join(str(txt).split())
-    _HINT_STAT["calls"] += 1
+    if txt.startswith("ERR:") or not txt:
+        _HUE_FAIL["n"] += 1
+        _HINT_STAT["fail"] = int(_HINT_STAT.get("fail", 0)) + 1
+        _HINT_STAT["last_err"] = txt[:60]
+        if _HUE_FAIL["n"] >= HUE_MAXFAIL and not _HUE_FAIL["off"]:
+            _HUE_FAIL["off"] = True
+        return
     _HINT_STAT["words"][txt] = _HINT_STAT["words"].get(txt, 0) + 1
     for w, hue in _HUE_WORDS:
         if w in txt:

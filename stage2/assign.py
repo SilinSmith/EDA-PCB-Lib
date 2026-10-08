@@ -128,6 +128,30 @@ PINNUM_DUP = float(os.environ.get("STAGE2_PINNUM_DUP", "0"))
 # `GNDA`(67x18=3.72) 这类长名判成 `wide` 直接踢出候选池 —— 而它们恰恰
 # 是 `U1` 的合法引脚名。IC 引脚名本来就比位号长，这里单独放宽。
 PINNAME_MAXW = float(os.environ.get("STAGE2_PINNAME_MAXW", "6.0"))
+# ★★ 2026-10-08：**框外补引脚名**的距离上限（px，`0` = 关闭）。
+# 语义 = 「引脚号那一轮跑完之后，只往**还空着**的名字槽里补框外的名字」，
+# 也就是 late pass。取值是「文字中心到元件框」的距离上限，走 `t["d"]` 那套量。
+# 实现在 `assign()` 里角色循环**之后**的那一段「★★ 框外补名」，`if PINNAME_OUTSIDE > 0:` 起。
+#
+# **为什么必须试这个**：`assign.py` 对 `pin_name` 角色有一条
+#     `if want_inside and not t["inside"]: continue`
+# 而 GT 的引脚 `point` 实测 **2220 根里 100% 落在元件 bbox 之外**
+# （到框边界 中位 9px / p75 14px / p90 35px / p99 67px），
+# 且「GT 引脚点 6px 内我们检出了文字」的那 1035 根里 **89.5% 的文本中心也在框外**
+# （`work\tools\diag\_pinlabel.py --n 60`）。结果就是产出的引脚里
+# **78.2% 的 `pinname` 回退成了引脚号本身**（`assemble.py:761 nm = r["nm"] or num`），
+# 而 GT 的 IC 引脚名 **86.5% 是真信号名**（`CS / D1/DO / GPI04 / IOVDD / VCLK`…），
+# 纯数字名只占 13.5%（`_gtpinname_stat.py`）。⇒ 引脚名这一项**结构性地对不上**。
+#
+# ★ **第一版（放宽 `pin_name`、仍在引脚号之前跑）实测判负**：19 张（官方 10GT 9 张 +
+#   训练集最差 10 张，`fast.py --no-vlm` + `FUSION_LLM=0`）`OUTSIDE=0` 均分 **30.81**
+#   （引脚 0.1987、网络 0.2612、tp 引脚 44 / 网络 214）→ `OUTSIDE=40` 均分 **30.09**
+#   （引脚 **0.1756**、网络 0.2574、tp 引脚 **42** / 网络 217）；10GT 9 张单独看引脚
+#   0.3920 → **0.3432**。机制：`pin_name` 角色在循环里**排在 `pin_number` 之前**
+#   （`:979-981`），放宽之后它先抢走框外那块文字，而 `taken_box`（`:978`）规定
+#   「同一块文字只能当一次引脚名或引脚号」⇒ **引脚号被饿死**、元件键配不上，
+#   丢掉的 `tp` 比补来的名字更贵。⇒ 所以改成 late pass，**对引脚号那一轮零影响**。
+PINNAME_OUTSIDE = float(os.environ.get("STAGE2_PINNAME_OUTSIDE", "0"))
 # 位号框的宽高比上限。**同一个坑的第三次踩**：`MAX_BOX_W=3.0` 会把 3 位数字的位号
 # 整排踢出候选池 —— 位号最长 7 字符（`USB1234`），字高 18px 时 `C152` 宽 56px
 # ⇒ 宽高比 3.11 > 3.0 ⇒ `wide=True` ⇒ `if t["wide"]: continue` 直接丢掉。
@@ -1088,6 +1112,71 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                                    "box": list(cc["rec"]["bbox"])}
                 taken_box.add(id(cc["rec"]))
 
+        # ★★ **框外补名**（`STAGE2_PINNAME_OUTSIDE`，默认 0 = 关闭）。见该常量处的长注释。
+        #
+        # 三条规则同时成立才落地，目的是对上一轮（引脚号）**零影响**：
+        #   ① 只写 `pinfo[i]["name"] is None` 的槽 —— 引脚号读出来的东西一个不动；
+        #   ② 只吃**框外**的文字（框内的已由 `pin_name` 轮处理）；
+        #   ③ 只吃**像名字**的读法：`fit_pinname` 对纯数字只给 0.15，这里要求 `f >= 0.5`。
+        #      这条最关键 —— GT 的 IC 引脚名有 **13.5% 本来就是纯数字**，而
+        #      `assemble.py:761` 的兜底 `nm = r["nm"] or num` 已经能把这种填对；
+        #      拿一块纯数字的框外文字去覆盖它，只会把对的分变成错的。
+        #
+        # 分配用「空槽 × 候选」全配对的**全局贪心**（按最终分降序，槽与候选各用一次），
+        # 不做单调对齐：框外剩下的名字往往只有零星几个，`structmatch` 的单调性假设不成立。
+        if PINNAME_OUTSIDE > 0 and plist:
+            _pool = []
+            for t in cands:
+                if not take(t) or id(t) in taken_box or t["inside"]:
+                    continue
+                if t["d"] > PINNAME_OUTSIDE:
+                    continue
+                if t.get("wide") and (t.get("wratio") or 0.0) > PINNAME_MAXW:
+                    continue
+                got = _best_read(t["reads"], "pin_name", fit_pinname)
+                if not got:
+                    continue
+                s0, txt, conf, f = got
+                # 闸门只压在「适配度 × 置信度」上（`_best_read` 的原始分），**不压距离**：
+                # 框外的名字天然比框内远，`_score` 里那 `-0.035*d` 加 `inside` 才有
+                # `+0.15` 的算法会让 30px 外的合法名字直接算成负分（合成用例实测）。
+                # 距离只进下面的排序项，作排序用。
+                if f < 0.5 or s0 < 0.5:
+                    continue
+                s = _score(s0, conf, t["d"], False)
+                _pool.append({"text": txt, "score": s, "conf": conf,
+                              "rec": t, "center": t["center"]})
+            if _pool:
+                _pairs = []
+                for cc in _pool:
+                    for pi in range(len(plist)):
+                        if pinfo[pi]["name"] is not None:
+                            continue
+                        dx = plist[pi][0] - cc["center"][0]
+                        dy = plist[pi][1] - cc["center"][1]
+                        dp = (dx * dx + dy * dy) ** 0.5
+                        if dp > PINNUM_NEAR:
+                            continue
+                        # 排序 = 分数 **减** 距离惩罚（和 `_score` 同一套量纲）。
+                        # ★ 不能用 `score / (1 + dp/20)`：当 score 为负（框外候选的常态）时，
+                        # 除法会让**越远的分越高**，实测把 `VDDIO` 与 `VSSA` 两个名字对调。
+                        _pairs.append((cc["score"] - 0.035 * dp, pi, id(cc["rec"]), cc))
+                _pairs.sort(key=lambda x: -x[0])
+                _used_pin, _used_rec, _n_late = set(), set(), 0
+                for _s2, pi, rid, cc in _pairs:
+                    if pi in _used_pin or rid in _used_rec:
+                        continue
+                    pinfo[pi]["name"] = {"text": cc["text"], "conf": cc["conf"],
+                                         "box": list(cc["rec"]["bbox"])}
+                    taken_box.add(rid)
+                    _used_pin.add(pi)
+                    _used_rec.add(rid)
+                    _n_late += 1
+                if _n_late and os.environ.get("STAGE2_DBG_CID") == cid:
+                    print("[dbg] cid=%s pin_name late: 框外补名 %d 个（池 %d，空槽 %d）"
+                          % (cid, _n_late, len(_pool),
+                             sum(1 for i in range(len(plist)) if pinfo[i]["name"] is None)))
+
     # ---- 网络标签：离所有元件都远、且不在元件框里的文字 ----
     net_labels = []
     for t in free:
@@ -1118,9 +1207,12 @@ def _selftest() -> int:
     comps = [
         {"id": "c0", "type": "r", "bbox_img": [100, 100, 140, 110]},   # 两脚电阻
         {"id": "c1", "type": "box", "bbox_img": [300, 100, 400, 300]},  # IC
+        # ★ `STAGE2_PINNAME_OUTSIDE`（框外补名）专用：这颗 IC 的**名字与号码都在框外**。
+        {"id": "c2", "type": "box", "bbox_img": [600, 100, 700, 200]},
     ]
     pins = {"c0": [[90, 105], [150, 105]],
-            "c1": [[290, 150], [290, 250], [410, 150], [410, 250]]}   # 引脚画在框外 10px
+            "c1": [[290, 150], [290, 250], [410, 150], [410, 250]],   # 引脚画在框外 10px
+            "c2": [[700, 130], [700, 170]]}
     def T(box, **reads):
         return {"bbox": tuple(box), "reads": {k: (v, 0.9) for k, v in reads.items()}}
     texts = [
@@ -1133,6 +1225,11 @@ def _selftest() -> int:
         T((282, 144, 298, 158), pin_number="12"),          # 框外引脚号
         T((402, 244, 418, 258), pin_number="13"),
         T((500, 400, 540, 414), net_label="VBUS"),         # 远处网络标签
+        T((702, 124, 716, 136), pin_number="7"),           # c2：框外号码（贴着脚）
+        T((702, 164, 716, 176), pin_number="8"),
+        T((714, 124, 752, 136), pin_name="VDDIO"),         # c2：框外**名字**，中心距框 33px
+        T((714, 164, 744, 176), pin_name="VSSA"),
+        T((640, 140, 692, 154), partname="STM32F4"),       # c2：框内器件名（别被名字抢走）
     ]
     res = assign(comps, pins, texts)
     fails = []
@@ -1154,6 +1251,18 @@ def _selftest() -> int:
     chk(any(n["text"] == "VBUS" for n in res["net_labels"]),
         "网络标签应包含 VBUS: %r" % (res["net_labels"],))
 
+    # ★ 框外补名（`STAGE2_PINNAME_OUTSIDE`）：c2 的名字与号码都在框外。
+    # 关键断言与开关状态无关：**引脚号必须拿到 7/8**（late pass 不许饿死引脚号）；
+    # 名字槽在 `OUTSIDE=0` 时必须是空的（旧行为），开着时必须是 VDDIO/VSSA。
+    d = res["comps"]["c2"]
+    dnames = sorted(v["name"]["text"] for v in d["pins"].values() if v["name"])
+    dnums = sorted(v["number"]["text"] for v in d["pins"].values() if v["number"])
+    chk(dnums == ["7", "8"], "c2 引脚号应为 7/8（框外号码不被名字抢走）: %r" % (dnums,))
+    if PINNAME_OUTSIDE > 0:
+        chk(dnames == ["VDDIO", "VSSA"], "c2 框外引脚名应为 VDDIO/VSSA: %r" % (dnames,))
+    else:
+        chk(dnames == [], "c2 关掉框外补名时不应有引脚名: %r" % (dnames,))
+
     # 位号去重：两个元件抢同一个 R7
     dup = assign([{"id": "a", "type": "r", "bbox_img": [0, 0, 20, 10]},
                   {"id": "b", "type": "r", "bbox_img": [200, 0, 220, 10]}],
@@ -1162,7 +1271,7 @@ def _selftest() -> int:
     got = [v["designator"] for v in dup["comps"].values()]
     chk(sum(1 for g in got if g) == 1, "重复位号应只留一个: %r" % (got,))
 
-    print("自检 %d 项：%s" % (9 + 3, "全部通过" if not fails else "失败"))
+    print("自检 %d 项：%s" % (9 + 3 + 3, "全部通过" if not fails else "失败"))
     for f in fails:
         print("  FAIL", f)
     return 1 if fails else 0

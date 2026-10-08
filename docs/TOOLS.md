@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **487** 个脚本。
+共 **504** 个脚本。
 
 
 <a id="data"></a>
@@ -65,7 +65,7 @@
 
 <a id="diag"></a>
 
-## `tools/diag/`（379 个脚本）
+## `tools/diag/`（396 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -188,6 +188,7 @@
 | `_gndname` | 29 |  |
 | `_gndnet` | 135 | _gndnet.py —— GND 互证先验（用户 m12359）到底有没有头寸？ |
 | `_gndpot` | 49 |  |
+| `_gpuprobe` | 34 | 判断「GPU 是不是被 VLM 占住导致 CUDA 变慢」：量一次小矩阵乘 + 一次 YOLO 推理的墙钟。 |
 | `_gtdup` | 82 | GT 标注里有没有「同一颗器件被标了两遍」—— 重复检测是不是被**训练出来的**。 |
 | `_gtdup2` | 65 | 重复框对到底是「同一个框写了两遍」还是「两个挨得很近的符号」。 |
 | `_gtdup3` | 91 | 同类近邻 GT 框（corner_dev<=20px）到底是「一颗符号被标了两遍」还是「两颗真符号」。 |
@@ -195,8 +196,11 @@
 | `_gtmatch` | 19 |  |
 | `_gtoverlay` | 91 | 把某个 case 的 GT 框全部画回原图（可缩放、可圈定区域），用来判断 |
 | `_gtpeek` | 18 |  |
+| `_gtpinname_stat` | 26 |  |
+| `_gtpinplace` | 36 |  |
 | `_gtshape` | 38 | 看 GT 数据里**一个元件**到底有哪些字段（尤其有没有位号文字框）。 |
 | `_gtypes` | 43 | 看各 split 的 GT `components[].type` 取值分布，以及 `canon_type` 之后落在 IC_TYPES 的比例。 |
+| `_huetime` | 87 | 量 `stage1.wires._hint_wire_hue` 的真实代价：整图 vs 缩到 1024，以及有多少张图会触发它。 |
 | `_icbox` | 159 | For every GT `box` (IC) component, decide WHY it failed the key match. |
 | `_ickey` | 142 | IC 的**钥匙**为什么配不上 —— 逐条拆开。 |
 | `_ickeyprobe` | 87 | 逐颗 IC 直接调 `enrich.read_designator`，看位号通道**到底读出了什么**。 |
@@ -219,6 +223,7 @@
 | `_keydbg` | 62 | 看融合层把哪些位号改掉了，以及每个改动槽位的候选与来源。 |
 | `_keydiff` | 54 | 对比两份文档的元件键集合，看融合层到底改了什么。 |
 | `_keyfix` | 154 | _keyfix.py —— 「检测对了、类型对了、中心 <=20px，只是 key 对不上」的那批元件， |
+| `_keyoracle` | 139 | ★ 关键实验：**位号（元件键）错误到底值多少分？** |
 | `_keyorigin` | 44 | `U580` 是哪来的：把 r36 的最终文档键 与 `_assigned` 的 cid/位号 摆在一起。 |
 | `_keyprint` | 142 | Is the GT key of a mis-named IC box *readable anywhere in the image*? |
 | `_keytype` | 131 | 按**元件类型**量「键配上了没有」——决定 component / pin / net 三块权重的天花板。 |
@@ -280,11 +285,15 @@
 | `_padsweep` | 173 | 外扩参数扫描：在**同一批检出框**上比不同 (pad_frac, pad_min, 纵横比) 的 OCR exact。 |
 | `_paramcheck` | 38 | 核对 workflow.html 各节点 params 栏里的常量是否与当前代码一致。 |
 | `_paramcheck2` | 28 | 第二批参数核对：detect.py 的 conf/imgsz、metrics.py 的口径、enrich.py 的引脚名开关。 |
+| `_patch9` | 122 | 把「第九批」的实测结论写进两份 `_wfbullets.py`（字面替换，可重复执行）。 |
+| `_peek220` | 33 | 看一眼 work/_fast_base/*.json 的顶层结构，判断是「行列表」还是别的形状。 |
+| `_peek_stage1` | 23 |  |
 | `_percase` | 73 | 每张图的「位号可读性」分布 —— 用来判断哪些 case 压根没标注位号。 |
 | `_phibox` | 20 |  |
 | `_phipins` | 18 |  |
 | `_phisym` | 32 |  |
 | `_pidxcheck` | 24 |  |
+| `_pin200` | 422 | 200 训练集 **引脚** 为什么大面积缺失 —— 看清 GT/预测里 `pins` 的真实结构与总量。 |
 | `_pin_stamp` | 190 | 引脚「图章点位」可行性核算。 |
 | `_pin_why` | 174 | 引脚失配归因：把 `pin_f1` 的损失拆成「键丢 / 号丢 / 名错 / 点错」。 |
 | `_pinab` | 110 | 引脚窗口 A/B：`pin_pitch_frac=0`（旧，垂直半宽 = cross）vs `0.45`（新，按引脚间距收窄）。 |
@@ -302,6 +311,7 @@
 | `_pincropab` | 85 | 引脚取景「旧(cross 对称) vs 新(按引脚间距收窄垂直半宽)」对照图 —— 纯 CPU，不叫 LLM。 |
 | `_pindbg2` | 114 | `pin_f1`（权重 0.25，现在只有 0.0474）到底卡在哪：把「键已匹配上的 box 元件」单独拎出来， |
 | `_pindiff` | 45 |  |
+| `_pindist` | 121 | 引脚**位置**与**名字**的失分归因：GT 的 `point` 到底指哪里？我们给的又是什么？ |
 | `_pinerr` | 180 | Where exactly do our pin POINTS miss the GT pin points? |
 | `_pinextra` | 119 | `pin_f1` 的失配按**元件**归因：extra / missing / name_mismatch / position_mismatch 各是谁贡献的。 |
 | `_pinfunnel` | 218 | 引脚 tp 到底丢在哪一关：**键 → 号 → 名 → 位置** 四关漏斗。 |
@@ -309,13 +319,16 @@
 | `_pinjunk` | 105 | 量「IC 的预测引脚里有多少是垃圾」—— 用来判断 `pin_f1` 的 fp 有多少是白送的。 |
 | `_pinkey` | 16 |  |
 | `_pinkey2` | 60 | stage2 文档里 `pins` 是按 cid 还是按位号存的？以及 `assigned['comps'][cid]['pins']` 的规模。 |
+| `_pinlabel` | 130 | GT 的 IC 引脚名**在图上到底有没有被我们检出文字**，以及它落在元件框内还是框外。 |
 | `_pinlands` | 22 |  |
 | `_pinloss` | 221 | 引脚失分分解：把 220 张的 `pin.missing`（8335）拆成 |
 | `_pinmap` | 53 |  |
 | `_pinmatch1` | 58 | 逐脚对账：我们的某个元件 vs GT —— 号对不对、名对不对。只读。 |
 | `_pinmiss` | 58 | 引脚为什么丢：逐 IC 把 GT 引脚号 / 我们发出的引脚号 / OCR 读到的号摆在一起。 |
 | `_pinname` | 153 | Why does `pin.name_mismatch` fire?  (`p.get('pinname') != g.get('pinname')`) |
+| `_pinname_stat` | 23 |  |
 | `_pinoff` | 122 | 引脚**位置**误差普查：同号引脚 GT 点 vs 我们的点到底差多少、往哪个方向差。 |
+| `_pinoracle` | 129 | 引脚分的**结构上界**：如果「我们产出的引脚」能一一对上 GT 的引脚，能拿多少？ |
 | `_pinpos` | 99 | 同号引脚（`box` IC）的位置误差普查：我们的引脚点 vs GT 的引脚点。 |
 | `_pinprobe` | 153 | PinF1 为什么只有 0.039？（权重 25，是四个指标里最大的窟窿） |
 | `_pinprune` | 140 | 引脚剪枝的离线实验：不动管线，只删预测里的引脚，再按官方口径重打分。 |
@@ -336,6 +349,7 @@
 | `_probe3` | 89 | 某个真值文字框在 textseg 里的命运：属于哪个墨迹分量、为什么被丢。 |
 | `_probe_mods` | 40 | Quick module reconnaissance + workflow node geometry dump. |
 | `_probe_score` | 11 |  |
+| `_prof1` | 68 | 给单张图的 stage1 做 cProfile，找出 total_s 之外的「黑洞」。 |
 | `_prof_wires` | 33 | 对最慢的 case 做 cProfile，定位 pskel 到底慢在哪。用法：python _prof_wires.py 0107 |
 | `_prpeek` | 11 |  |
 | `_psympin` | 12 |  |
@@ -355,6 +369,7 @@
 | `_schema` | 53 | 打印 GT 与预测 JSON 的结构，供后续 dedup 实验用。 |
 | `_schemadump` | 70 | 把官方 GT 与我们的预测各打印一小段，确认 schema 完全对齐。 |
 | `_score1` | 50 | 给**单个 case** 的预测文档打分（`fast.py --score-only` 只认 `_fast_out`，这张表要单点）。 |
+| `_score220` | 116 | 把任意产物目录 (`<out>/final_results/*_Pred.json`) 打成 `_220_*` 那种形状的分数文件， |
 | `_scorelist` | 9 |  |
 | `_seg_miss` | 99 | 新 textseg 漏掉了哪些真值文字框？（best IoU < 阈值 的真值框） |
 | `_segap` | 99 | 量「碎片网到别的线段」的缺口，用来判断并网容差该怎么定。 |
@@ -370,6 +385,8 @@
 | `_splitaudit` | 87 | split 审计：val 的 77 张到底是不是 77 张**独立**的图？train/val 有没有同源泄漏？ |
 | `_st1_nets` | 48 | stage1 的 nets / wires 结构摸底（第二阶段组装要用）。 |
 | `_st1_probe` | 72 | stage1 产物 schema 摸底 + 官方 GT 的 Name/位号约定。 |
+| `_stage220` | 152 | 把一次 `submission\run.py` 全量跑的**关键阶段**逐个抽出来看（用户 m31144 的要求）。 |
+| `_stages` | 205 | 全量 220 张的**阶段漏斗**分析 —— 不跑管线，只读已经打好的分。 |
 | `_stale` | 12 |  |
 | `_stampshape` | 152 | 图章形状勘察：官方 GT 的每类 bbox 到底是「正方形」还是「长方形」。 |
 | `_stubfill` | 139 | Could geometric *pin stubs* fill the pins that have no wire attached? |
@@ -428,10 +445,10 @@
 | `_weld_selftest` | 110 | 方向性桥接（stage1.labels._weld_unions / wire_groups 规则 3）的合成自检。 |
 | `_weldprobe` | 151 | 量「方向性桥接（规则 3 `weld`）」被哪一道闸门卡住。 |
 | `_wfbuild` | 533 | 重建 workflow.html：要点清单 + 按数据流分带布局 + CSS/JS 补丁（阅读面板/分层 tidy）。 |
-| `_wfbullets` | 397 | workflow.html 的第二轮内容：每个节点的「要点清单」（正面可见）。 |
+| `_wfbullets` | 408 | workflow.html 的第二轮内容：每个节点的「要点清单」（正面可见）。 |
 | `_wfdump` | 19 |  |
 | `_wfextract` | 19 |  |
-| `_wfhead` | 112 | 改写 workflow.html 内嵌 graphdata 的 `name` 与 `note` 开头（第八批）。 |
+| `_wfhead` | 116 | 改写 workflow.html 内嵌 graphdata 的 `name` 与 `note` 开头（第九批）。 |
 | `_wfkind` | 93 | 改 `workflow.html` 里节点的 `kind`（徽标），用 `json` 模块安全改写内嵌 graphdata。 |
 | `_wfmd` | 20 |  |
 | `_wfnew` | 76 | 把 workflow.html 里 kind='new'（★ 要新写）的节点的 note + bullets 全文倒出来， |

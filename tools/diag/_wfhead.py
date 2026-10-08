@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""改写 workflow.html 内嵌 graphdata 的 `name` 与 `note` 开头（第八批）。
+"""改写 workflow.html 内嵌 graphdata 的 `name` 与 `note` 开头（第九批）。
 
 用法：
     python work\\tools\\diag\\_wfhead.py            # 预演
@@ -9,6 +9,10 @@
 用编辑器手改要处理一堆 `\\n` 转义；这里走 json 模块，改完再 `json.dumps`。
 注意 `_wfbuild.py` 只重写 bullets/params，不碰 `name`/`note`，所以本脚本
 必须在 `_wfbuild.py --write` **之前**跑，让 SRC 先带上新标题。
+
+★ 本脚本只有从 `work\\tools\\diag\\` 下跑才解析得到 `work\\flow\\workflow.html`；
+  从 `eda-pcb\\tools\\diag\\` 跑会 SystemExit（`_find` 找不到）。改完记得
+  `Copy-Item work\\tools\\diag\\_wfhead.py eda-pcb\\tools\\diag\\_wfhead.py -Force`。
 """
 import io
 import json
@@ -33,46 +37,46 @@ PAT = re.compile(r'(<script type="application/json" id="graphdata">\s*)(.*?)(\s*
 
 NAME = ("目标架构 · 证据层 → 约束求解 → 迭代重扫"
         "（实测：官方 10GT 9 张 58.63 / 派生 19 张 36.35 · 交付口径 VLM auto + fusion on · "
-        "**关掉 LLM 轮还是 58.63，逐位相同**）")
+        "**★ 全量 220 stage1 从「单张黑洞 315 s」修到 220 张 416.5 s（1.89 s/张）**）")
 
-BLOCK = """**★ 第八批：把 19 个「★要新写」逐个对账，并给 LLM 补上下文**
+BLOCK = """**★ 第九批：全量 220 的阶段级归因 —— 分到底丢在哪一段**
 
-19 个 `kind='new'` 徽标逐个读代码对账（不是信进度叙述）。结论：
-**16 个是「早就落地、只是徽标没改」**（`know` `pool` `solve` `plausible` `conflict` `llm_judge`
-`rescan` `iterate` `cropfix` `audit` `own` `ev_bridge` `pincol` `ownnum` `boxpinprior` `gtcheck`），
-**3 个是「量过、判负/证否」**（`fixstr` `batch` `boxscan`）—— 已全部去掉「要新写」徽标。
+第一次把 220 张按**阶段**摊开看，而不是只看总分。结论：**引脚 + 网络占 60% 权重、
+共用同一个根因（IC 引脚我们没有）**，而位号（元件分）根本不是最大的洞。
 
-| # | 改了什么 | 文件 | 量出来的结果 | 结论 |
+| # | 改了什么 / 查了什么 | 文件 · 工具 | 量出来的结果 | 结论 |
 |---|---|---|---|---|
-| 1 | **LLM 上下文块**（类型 / 同件别的字段 / 邻近元件 / 已定位号 / 已判可疑，+ 要求回一句 `依据=`） | `fusion/llm_judge.py` | VLM 关时官方 9 张 **52.48 → 53.27（+0.79）** | 采纳，默认开 |
-| 2 | **整表裁决（contact sheet）真的被执行** | `fusion/llm_judge.py` | 4 张 **59.62 → 55.32（−1.07）**，且更慢（160.5 s vs 83.6 s） | **判负**，`SHEET_MIN=9999` 默认关 |
-| 3 | **交付口径三臂**：LLM 关 / LLM 开 / LLM 开+上下文 | `fusion/run.py` | 三个臂**全是 58.63 且逐位相同** | LLM 轮在交付口径下值 **0.00**，却要 **+1.8 h/220 张** |
-| 4 | `judge` / `rescan` 各自包 `try` | `fusion/run.py` | `judge` 一抛异常该 case 原本**一份融合产物都没有** | 采纳 |
-| 5 | 收敛判据用**本轮结束**的题面（`FUSION_CONV_EXACT=1`） | `fusion/run.py` | case 1 实为 `n_q_next 15`，旧判据看的是上一轮 | 采纳 |
-| 6 | 位号取景框取**最高分**那个（`FUSION_REGION_TOPK=1`） | `fusion/claims.py` | `stage2` 从不保证 `desig_slots` 按分降序 | 采纳 |
-| 7 | `solve.gap_fill` 的负分跳过**留计数** | `fusion/solve.py` | 原为静默 `continue` | 采纳（只加计数） |
+| 1 | **stage1 色相询问有界化**：先缩到最大边 1024，独立超时 30 s，连续失败 3 次熔断 | `stage1/wires.py` | `0003` 单张 **315.73 s → 8.3 s**；220 张 stage1 **416.5 s** | 采纳（默认仍是 `hint`） |
+| 2 | 按**官方权重**算可回收空间 | `schematic_parser/metrics.py:11` | 网络 **+27.9** ＞ 引脚 **+23.1** ＞ 元件 +11.4 ＞ 导线 +9.7 | 先修引脚/网络 |
+| 3 | **上帝键实验**（位号按中心距强行配对正确） | `_keyoracle.py --n 60` | 21.53→**27.19**，但**引脚只 +0.0112**、元件 +0.1310（那是强行配对的作弊分） | **否掉「是位号/键的问题」** |
+| 4 | 放宽 `pin_name` 到框外（第一版，仍在引脚号**之前**跑） | `stage2/assign.py` | 19 张 **30.81 → 30.09**（引脚 0.1987→0.1756、tp 44→42） | **判负** |
+| 5 | 改成 **late pass**：引脚号那一轮跑完再补空名字槽 | `stage2/assign.py` | 合成自检 **15 项**两种开关状态都过；真实 A/B 待显存 | 采纳（`STAGE2_PINNAME_OUTSIDE` 默认 **0** = 关） |
+| 6 | `_patch9`/`_wfhead`/`_wfkind` 等工装的**同名两份**坑 | `docs/DIAGNOSTICS.md` | 改一份、重建后输出字节数一模一样 | 已写成纪律 |
 
-**★ 第八批的方法学（比上表更值钱）**
+**★ 第九批的根因链（硬数据，全在 10/6 的 CV-only 产物上量）**
 
-1. **「开关开着」不等于「这条路被执行过」。** `SHEET_ON` 默认 `1`、`_sheet_image` /
-   `_known_designators` / `judge_sheet` 全是为整表写的，**但入口是
-   `if mode == "sheet" and SHEET_ON:`，而 `MODE` 默认 `"auto"`** ⇒ 那条路一次都没跑过。
-   「没有上下文环境」这句话因此有了代码级坐标。**默认值 ≠ 生效值**：双开关（允许 + 选择）
-   两个都要看。尺子：`python tools/diag/_jrep.py --out <产物目录> [--rows]`。
-2. **提示词改动必须回读「模型到底收到了什么」。** 分不变也可能是真的生效了。
-   `ctx=1` 时 **12/12 行都有 `依据=…`**，`ctx=0` 时 **0/12**。只报分数说不清为什么变，
-   只报 `why` 说不清值不值 —— **两样都要**。
-3. **「LLM 有没有用」必须先给它上下文，再问。** 本轮第一次给出有前提的答案：
-   在 VLM `auto` 的交付口径下，整个 LLM 轮 **+0.00**（三臂逐位相同）；在 VLM 关时 **+0.79**。
-   ⇒ 它是在**没有 VLM** 时的补强，不是交付口径的增量。
-4. **审计报告里的「这里有个 bug」四个字不等于这里真有 bug。** 一份审计说
-   `claims.py` 的 `pinpts.get(cid)` 与 `doc["pins"]` 的键对不上；实测
-   `_pinbox.py`：融合读的是 **stage1** 文档，`pins` 按 `cid` 记（case 1 = 22/22/22 全中），
-   按**位号**记键的是 **stage2** 文档 —— 审计把两份文档搞混了，
-   照它改**反而会引入 bug**。**复现不出来就不是 bug。**
-5. **一个「零效果」的改动，先问它有没有可赢空间。** `own.assign` 端到端逐位相同，
-   因为一对一不变式**改造前就成立**；官方 9 张 124 颗里失配 20 颗，而其中只有
-   **1 颗**的候选池里有正确读法。先量天花板，再决定动不动手。
+- GT 的 IC 引脚名 **86.5% 是真信号名**（`CS / D1/DO / CLK / IOVDD / XTAL2`），纯数字只 13.5%。
+- 我们产出的引脚里 **78.2% 的 `pinname` 就是引脚号本身**（回退点 `assemble.py:761 nm = r['nm'] or num`）。
+- GT 引脚 `point` **100% 在元件 bbox 之外**（中位 9 px / p90 35 px / p99 67 px）。
+- 2220 根 GT IC 引脚里 **64.9% 在配对上的元件键下一根都没有**；能比的 780 根里名字逐字符相等只 **3.1%**。
+- ⇒ **位号全修对也救不回引脚**（上帝键只值 +0.0112）。要动的是**引脚检出率 + 名字读出**。
+
+**★ 第九批的方法学（比上表更值钱）**
+
+1. **「慢」先量余额，再上 profiler，最后才怀疑硬件。** `total_s` 减去 `timing` 里各段之和，
+   差额只可能来自**进程外**。这一条免费；一次 cProfile（`work/tools/diag/_prof1.py 0003`）
+   就落到 `wires.py:230 → vlm/client.py:161 → urlopen → socket.recv_into` 的 303.4 s。
+2. **任何发到进程外的调用都要自带超时、上界与熔断，失败必须计数。**
+   `ask()` 把一切异常吞成 `"ERR:..."` **字符串正常返回** ⇒ 失败不会以报错的形式出现，
+   只会以「这里有段时间不见了」的形式存在。全局 `VLM_TIMEOUT=600` + 重试 4 次 + **整张原图**
+   三处叠加，把一次「问个颜色」变成单张 315 s。
+3. **先用上帝视角量天花板，再决定动不动手。** 上帝键给出 +5.66，但拆开看引脚只占 +0.0112
+   ⇒ 花在位号绑定上的每一分钟都是在修一个**不是根因**的东西。
+4. **顺序就是优先级。** `pin_name` 排在 `pin_number` **之前**，而 `taken_box` 规定同一块文字
+   只能用一次 ⇒ 一旦放宽 `pin_name` 的取景范围，它先抢走文字、**引脚号被饿死**。
+   要放宽，只能改成**事后补空槽**（late pass），不能只改距离阈值。
+5. **负分候选上不能用除法做归一。** `score / (1 + d/20)` 在 `score < 0`（框外候选的常态）时
+   **越远的分越高**，实测把 `VDDIO` 与 `VSSA` 两个名字对调；换成 `score - 0.035*d`。
 
 ---
 
@@ -89,8 +93,8 @@ def main():
     old_name = d.get("name") or ""
     d["name"] = NAME
     note = d.get("note") or ""
-    if "★ 第八批" in note:
-        print("note 里已经有第八批，跳过插入（只改 name）")
+    if "★ 第九批" in note:
+        print("note 里已经有第九批，跳过插入（只改 name）")
     else:
         d["note"] = BLOCK + note
     print("name:")
