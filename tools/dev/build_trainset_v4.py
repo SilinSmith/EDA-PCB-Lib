@@ -227,18 +227,29 @@ def main() -> int:
             raise SystemExit(f"--merge-classes: unknown class {c!r}")
     if merged:
         name = args.merged_name or "_".join(merged)
-        classes_out = [name] + [c for c in classes if c not in merged]
-        remap = {classes.index(c): 0 for c in merged}
-        shift = 1
+        # The merged class takes the slot of the **first** merged class and the rest are dropped, so
+        # every class id below that slot keeps its meaning.  (Appending `tp` at index 0 instead would
+        # renumber all 43 classes, which throws away the per-class alignment of the pretrained head
+        # we fine-tune from.)
+        first = min(classes.index(c) for c in merged)
+        classes_out: list[str] = []
+        remap: dict[int, int] = {}
         for i, c in enumerate(classes):
-            if c not in merged:
-                remap[i] = shift
-                shift += 1
+            if c in merged:
+                if i == first:
+                    remap[i] = len(classes_out)
+                    classes_out.append(name)
+                else:
+                    remap[i] = remap[first]
+            else:
+                remap[i] = len(classes_out)
+                classes_out.append(c)
     else:
         classes_out = list(classes)
         remap = {i: i for i in range(len(classes))}
     print(f"base classes {len(classes)} -> out classes {len(classes_out)}"
-          + (f"  (merged {merged} -> {classes_out[0]!r})" if merged else ""))
+          + (f"  (merged {merged} -> {classes_out[remap[first]]!r} at index {remap[first]})"
+             if merged else ""))
 
     stats: Counter = Counter()
     per_class: Counter = Counter()
@@ -340,21 +351,33 @@ def main() -> int:
           f"val={sum(1 for p in base_pairs if p[2] == 'val')} "
           f"test={sum(1 for p in base_pairs if p[2] == 'test')}")
 
+    needs_remap = any(remap[i] != i for i in range(len(classes)))
     fixed_lines: dict[Path, list[str]] = {}
-    if args.fix_ink != "off" or args.snap == "new+train":
+    if args.fix_ink != "off" or args.snap == "new+train" or needs_remap:
         for img, lbl, split, stem in base_pairs:
-            if split != "train":
+            # `--fix-ink` / `--snap new+train` are train-only repairs, but a **class remap** applies
+            # to every split: linking a val/test label whose ids were renumbered would silently point
+            # those boxes at the wrong classes.
+            if split != "train" and not needs_remap:
                 continue
+            pixel_work = (split == "train"
+                          and (args.fix_ink != "off" or args.snap == "new+train"))
             raw = [ln.split() for ln in lbl.read_text(encoding="utf-8").splitlines() if ln.strip()]
             if not raw:
                 continue
             W = H = None
-            if args.fix_ink != "off":
+            if pixel_work:
                 gray = imread_gray(img)
                 H, W = gray.shape
             out_lines = []
             for parts in raw:
                 cid = int(parts[0])
+                if not pixel_work:
+                    # Class-id-only rewrite: the stored numbers are already normalised, so carrying
+                    # them through a pixel round-trip would only add rounding.
+                    out_lines.append(f"{remap[cid]} " +
+                                     " ".join(f"{float(v):.6f}" for v in parts[1:]))
+                    continue
                 cx, cy, w, h = (float(v) * (W if i % 2 == 0 else H) for i, v in enumerate(parts[1:]))
                 cls = classes[cid]
                 if args.snap == "new+train":
@@ -377,13 +400,16 @@ def main() -> int:
     if args.dry_run:
         print("\n=== box counts per class (v4 = base + new) ===")
         base_hist: Counter = Counter()
+        new_hist: Counter = Counter()
         for img, lbl, split, stem in base_pairs:
             for ln in lbl.read_text(encoding="utf-8").splitlines():
                 if ln.strip():
-                    base_hist[classes[int(ln.split()[0])]] += 1
+                    base_hist[classes_out[remap[int(ln.split()[0])]]] += 1
+        for c, n in per_class.items():
+            new_hist[classes_out[remap[classes.index(c)]]] += n
         print(f"{'class':16s} {'v3':>7s} {'+new':>7s} {'v4':>7s}")
-        for c in classes:
-            print(f"{c:16s} {base_hist[c]:7d} {per_class[c]:7d} {base_hist[c] + per_class[c]:7d}")
+        for c in classes_out:
+            print(f"{c:16s} {base_hist[c]:7d} {new_hist[c]:7d} {base_hist[c] + new_hist[c]:7d}")
         print("\n=== stats ===")
         for k, v in sorted(stats.items()):
             print(f"  {v:7d}  {k}")
