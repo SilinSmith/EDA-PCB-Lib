@@ -9,7 +9,7 @@
     一个分量 + 挂上来的引脚 = 一个 net
 
 **已知的结构性天花板（必须记住）**：官方 `pin_f1` 的键是 `(component, pin_number)`，
-`net_hypergraph` 的键也是 `(component, pin_number)`，而且都要 `pinname` 字符串严格相等。
+`net_hypergraph` 的键也是 `(component, pin_number)`；只有 `pin_f1` 还比较 `pinname`。
 **引脚号/引脚名只能靠 OCR**（第二阶段 `eda-pcb\\textrec\\`），位号（`key`）同理。
 所以这里产出的是**位置正确、编号自造**的引脚和网络：几何部分是对的，能拿分的部分
 要等第二阶段把编号和名字填进来。别把这个模块的输出当成可以直接提交的东西。
@@ -100,11 +100,69 @@ def _nearest_seg(pts: np.ndarray, segs: np.ndarray, full: bool = False):
     return out + (d,) if full else out
 
 
+def _component_boxes(components):
+    """Read optional image-space boxes without depending on detector classes."""
+    boxes = []
+    for comp in components or ():
+        try:
+            box = comp.get("bbox_img") if isinstance(comp, dict) else comp
+            x1, y1, x2, y2 = map(float, box)
+        except (TypeError, ValueError):
+            continue
+        if all(math.isfinite(v) for v in (x1, y1, x2, y2)) and x2 > x1 and y2 > y1:
+            boxes.append((x1, y1, x2, y2))
+    return boxes
+
+
+def _crosses_box_interior(start, end, box):
+    """Whether an attachment bridge enters a rectangle's open interior.
+
+    Touching an edge or corner is allowed.  A zero-length bridge adds no new
+    connection, even when a detection box overlaps an existing wire.
+    """
+    dx, dy = float(end[0] - start[0]), float(end[1] - start[1])
+    if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+        return False
+    lo, hi = 0.0, 1.0
+    for origin, step, lower, upper in (
+            (start[0], dx, box[0], box[2]),
+            (start[1], dy, box[1], box[3])):
+        if abs(step) < 1e-9:
+            if not lower < origin < upper:
+                return False
+            continue
+        t1, t2 = (lower - origin) / step, (upper - origin) / step
+        lo, hi = max(lo, min(t1, t2)), min(hi, max(t1, t2))
+        if hi - lo <= 1e-9:
+            return False
+    return hi - lo > 1e-9
+
+
+def _guard_distances(pts, segs, distances, boxes, radii):
+    """Mask local distances in place within the caller's existing search radii."""
+    guarded = distances
+    blocked = {}
+    if not boxes:
+        return guarded, blocked
+    for m, point in enumerate(pts):
+        for k in np.flatnonzero(distances[:, m] <= radii[m]):
+            a, b = segs[k, :2], segs[k, 2:]
+            delta = b - a
+            length2 = float(np.dot(delta, delta))
+            t = float(np.clip(np.dot(point - a, delta) / length2, 0.0, 1.0)) if length2 else 0.0
+            projection = a + t * delta
+            if any(_crosses_box_interior(point, projection, box) for box in boxes):
+                guarded[k, m] = np.inf
+                blocked.setdefault(m, []).append(int(k))
+    return guarded, blocked
+
+
 def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
                weld=None, perp_tol=None, cos_tol=None, ink=None, over=None,
                join_dist: float = PIN_JOIN_DIST, min_pins: int = MIN_NET_PINS,
                join_far: float = PIN_JOIN_FAR, report=None,
-               pin_synth=None, join_synth: float = PIN_JOIN_SYNTH):
+               pin_synth=None, join_synth: float = PIN_JOIN_SYNTH,
+               components=None, guard_attachments: bool = False):
     """返回 (nets, seg_groups)。
 
     `comp_pins`: `{comp_id: [(x, y), ...]}`（图像坐标）
@@ -127,6 +185,13 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
     间距只有 ~10px，而 `join_dist=12` 比它还大，一个悬空的补脚会把**隔壁脚的
     导线**认领过来，于是两条本该分开的网络被并成一条 —— 症状是 `net_hypergraph`
     的 P 虚高、R 被拖平。给了 `pin_synth=None`（默认）时行为与历史完全一致。
+
+    `guard_attachments=True` opts into conservative attachment checks. Optional
+    `components` contain `bbox_img` rectangles (or are bare image-space boxes):
+    a bridge to a wire cannot pass through a component's interior. Equal-distance
+    choices in different wire groups are kept in `report["ambiguous"]`, rather
+    than resolved by segment order. Same-group ties are harmless. Neither check
+    expands a search radius or changes wire grouping; the default remains off.
     """
     segs = segments if isinstance(segments, np.ndarray) else labels_mod._as_segs(segments)
     tol = labels_mod.WIRE_TOL if tol is None else tol
@@ -143,6 +208,13 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
         over = getattr(labels_mod, "WIRE_OVER", 0.0)
 
     if not len(segs):
+        if report is not None:
+            for cid, plist in comp_pins.items():
+                for k, point in enumerate(plist):
+                    report.setdefault("orphans", []).append({
+                        "comp": cid, "pin": k,
+                        "x": round(float(point[0]), 1), "y": round(float(point[1]), 1),
+                        "d": None})
         return [], []
 
     seg_groups = labels_mod.wire_groups(
@@ -152,23 +224,52 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
         ink_frac=getattr(labels_mod, "WIRE_INK_FRAC", 0.5))
 
     # 收集所有引脚点，并记住它属于哪个元件、第几个脚
-    pts, owner, jd = [], [], []
+    pts, owner, jd, strict_synth = [], [], [], []
+    synth_radius = float(join_synth)
     for cid, plist in comp_pins.items():
         sf = (pin_synth or {}).get(cid) or []
         for k, p in enumerate(plist):
             pts.append((float(p[0]), float(p[1])))
             owner.append((cid, k))
             # 「补出来的脚」用紧半径挑导线，其余用 `join_dist`。见 `PIN_JOIN_SYNTH`。
-            jd.append(float(join_synth) if (k < len(sf) and sf[k]) else float(join_dist))
+            # Negative or nonrestrictive values disable the synthetic-pin guard,
+            # as documented by PIN_JOIN_SYNTH. A strict guard also applies to
+            # weak attachment: join_far must not resurrect a known unconnected pin.
+            restricted = bool(k < len(sf) and sf[k] and 0 <= synth_radius < float(join_dist))
+            strict_synth.append(restricted)
+            jd.append(synth_radius if restricted else float(join_dist))
     if not pts:
         return [], seg_groups
     P = np.asarray(pts, np.float64)
     JD = np.asarray(jd, np.float64)
     use_longest = (PIN_ATTR == "longest")
-    if use_longest:
+    blocked, ambiguous = {}, {}
+    if use_longest or guard_attachments:
         dist, sidx, D = _nearest_seg(P, segs, full=True)
     else:
         dist, sidx = _nearest_seg(P, segs)
+
+    if guard_attachments:
+        radii = np.where(np.asarray(strict_synth), JD, np.maximum(JD, float(join_far)))
+        D, blocked = _guard_distances(P, segs, D, _component_boxes(components), radii)
+        sidx = np.argmin(D, axis=0)
+        dist = D[sidx, np.arange(len(P))]
+        for m, nearest in enumerate(dist):
+            if not np.isfinite(nearest) or nearest > radii[m]:
+                continue
+            tied = np.flatnonzero(np.abs(D[:, m] - nearest) <= 1e-6)
+            groups = sorted({int(seg_groups[k]) for k in tied})
+            if len(groups) > 1:
+                ambiguous[m] = groups
+        if report is not None:
+            for m, indices in blocked.items():
+                report.setdefault("blocked", []).append({
+                    "comp": owner[m][0], "pin": owner[m][1], "segments": indices})
+            for m, groups in ambiguous.items():
+                report.setdefault("ambiguous", []).append({
+                    "comp": owner[m][0], "pin": owner[m][1],
+                    "x": round(float(P[m][0]), 1), "y": round(float(P[m][1]), 1),
+                    "d": round(float(dist[m]), 1), "groups": groups})
 
     # 每个分量的段下标 + 总长（`longest` 模式的排序键）
     groups_idx: Dict[int, List[int]] = {}
@@ -186,6 +287,8 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
         # 每脚自己的接线半径：补出来的脚只有 `join_synth`（见 `PIN_JOIN_SYNTH`）。
         # `pin_synth` 没给时 `JD[m]` 恒等于参数 `join_dist`，行为与历史一致。
         jdm = float(JD[m])
+        if m in ambiguous:
+            return -1
         if use_longest:
             near = float(dist[m])
             # ★ 2026-07 审计修复：这两处原来写的是模块常量 `PIN_JOIN_DIST`，
@@ -224,7 +327,8 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
             #   这一段距离里的引脚照样挂上（挂最近的那个分量），只是记进
             #   `report["weak"]` 让下游能降权/复核。`join_far=0`（默认）时
             #   weak 区间为空，行为与历史完全一致。
-            if _far > 0 and len(segs) and np.isfinite(d) and d <= _far:
+            if (not strict_synth[m] and m not in ambiguous
+                    and _far > 0 and np.isfinite(d) and d <= _far):
                 g = int(seg_groups[int(sidx[m])])
                 if report is not None:
                     report.setdefault("weak", []).append(rec)

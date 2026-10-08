@@ -64,6 +64,11 @@ BIGIC_ON = env_on("STAGE1_BIGIC", "1")
 #     枚举后 5px 命中  63/64   （L 32 个 pitch 9.99、R 31 个 pitch 9.96）
 PINC_ON = env_on("STAGE1_PINC", "1")
 
+# Direction and body-crossing checks are opt-in until a held-out end-to-end
+# comparison confirms they help for the detector's boxes and this drawing style.
+PIN_DIRECTION_GUARD = env_on("STAGE1_PIN_DIRECTION_GUARD", "0")
+PIN_ATTACHMENT_GUARD = env_on("STAGE1_PIN_ATTACHMENT_GUARD", "0")
+
 
 def _pt_seg_dist(p, a, b) -> float:
     px, py = p
@@ -273,7 +278,8 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
             # 覆盖率只有 0.45、`point@5px` 仅 16.8%）。
             _ink = (cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) < ray_mod.INK).astype(np.uint8)
             comp_pins = nets_mod.build_pins(
-                comps, w.get("segments") or [], texts=texts, ink=_ink)
+                comps, w.get("segments") or [], texts=texts, ink=_ink,
+                direction_guard=PIN_DIRECTION_GUARD)
             # ★★ 引脚**列枚举**：把「框外那一排引脚号 / 框内那一排引脚名」的
             # 等距格点补进 `comp_pins`。规则是**不丢弃**：枚举点附近已有导线触点
             # 就用触点（网络装配靠它），没有触点就用格点坐标（= 补出来的脚），
@@ -299,7 +305,8 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                 # 紧半径（`PIN_JOIN_SYNTH=3`）挑导线。引脚列间距只有 10px，
                 # 而 `PIN_JOIN_DIST=12` 比它还大 ⇒ 补脚会认领**隔壁脚的导线**，
                 # 把两条网络并成一条。`pin_synth` 为空时行为与历史完全一致。
-                pin_synth=pin_synth)
+                pin_synth=pin_synth, components=comps,
+                guard_attachments=PIN_ATTACHMENT_GUARD)
         except Exception as e:
             traceback.print_exc()
             # ★ 审计项②：这一条是**最贵**的吞异常 —— 它把 pin(0.25)+net(0.35)
@@ -328,8 +335,14 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         #   只有先看得见「哪些引脚没锁上」，才谈得上围绕它再扫一次。
         "pin_join": {"n_orphans": len(net_report.get("orphans", [])),
                      "n_weak": len(net_report.get("weak", [])),
+                     "n_blocked": len(net_report.get("blocked", [])),
+                     "n_ambiguous": len(net_report.get("ambiguous", [])),
+                     "direction_guard": PIN_DIRECTION_GUARD,
+                     "attachment_guard": PIN_ATTACHMENT_GUARD,
                      "orphans": net_report.get("orphans", []),
-                     "weak": net_report.get("weak", [])},
+                     "weak": net_report.get("weak", []),
+                     "blocked": net_report.get("blocked", []),
+                     "ambiguous": net_report.get("ambiguous", [])},
         # ★ 独家归属的账（业主 m25181：相邻两个框争一个位置，最终只归一个；
         #   「在其他任何地方，类似的情况也是同理」）。`rule` 是判据（默认
         #   `cd<=12` —— 19 张实测并 2 对、误伤 0），`dropped` 的主张**没有消失**，

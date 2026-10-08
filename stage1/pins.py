@@ -74,6 +74,8 @@ CLUSTER_R = 12.0
 CLUSTER_IC = float(os.environ.get("STAGE1_PIN_CLUSTER_IC", "12.0"))
 # 采样步长（像素）
 SAMPLE_STEP = 3.0
+# Optional direction guard: allow small extraction skew, reject edge-parallel lines.
+TOUCH_NORMAL_COS = 0.95
 # 每个元件最多输出多少个引脚（防毛刺炸开）
 MAX_PINS = 64
 
@@ -128,30 +130,45 @@ ONE_PIN = frozenset({"gnd", "v", "vcc", "vbus_in", "net_input", "net_output", "p
 
 
 def sample_segments(segments: Sequence[Sequence[Sequence[float]]],
-                    step: float = SAMPLE_STEP) -> np.ndarray:
+                    step: float = SAMPLE_STEP, return_directions: bool = False):
     """把线段按 `step` 像素密集采样成一个点云 (M,2)。
 
-    采样而不是只取端点：导线常常**从元件框中间穿过去**（串联元件），那时接触点
-    在段中间，只看端点会漏掉。
+    逐相邻顶点采样，不能把折线替换成首末点之间不存在的直线。
+    `return_directions=True` 时同时返回各采样点所在段的单位方向。
+    转角保留两条方向的样本，供方向感知的接触判据使用。
     """
     pts: List[Tuple[float, float]] = []
+    directions: List[Tuple[float, float]] = []
     for s in segments:
         try:
-            ax, ay = float(s[0][0]), float(s[0][1])
-            bx, by = float(s[-1][0]), float(s[-1][1])
-        except (TypeError, IndexError, ValueError):
+            pairs = zip(s, s[1:])
+        except (TypeError, IndexError):
             continue
-        if not (math.isfinite(ax) and math.isfinite(ay)
-                and math.isfinite(bx) and math.isfinite(by)):
-            continue
-        L = math.hypot(bx - ax, by - ay)
-        k = max(1, int(math.ceil(L / max(0.5, step))))
-        for i in range(k + 1):
-            t = i / k
-            pts.append((ax + (bx - ax) * t, ay + (by - ay) * t))
+        for a, b in pairs:
+            try:
+                ax, ay = float(a[0]), float(a[1])
+                bx, by = float(b[0]), float(b[1])
+            except (TypeError, IndexError, ValueError):
+                continue
+            if not all(math.isfinite(v) for v in (ax, ay, bx, by)):
+                continue
+            L = math.hypot(bx - ax, by - ay)
+            if L < 1e-9:
+                continue
+            direction = ((bx - ax) / L, (by - ay) / L)
+            k = max(1, int(math.ceil(L / max(0.5, step))))
+            for i in range(k + 1):
+                t = i / k
+                pts.append((ax + (bx - ax) * t, ay + (by - ay) * t))
+                if return_directions:
+                    directions.append(direction)
     if not pts:
-        return np.zeros((0, 2), np.float64)
-    return np.asarray(pts, np.float64)
+        pts_array = np.zeros((0, 2), np.float64)
+    else:
+        pts_array = np.asarray(pts, np.float64)
+    if return_directions:
+        return pts_array, np.asarray(directions, np.float64).reshape(-1, 2)
+    return pts_array
 
 
 def _edges(bbox):
@@ -166,14 +183,24 @@ def _normals(bbox):
     return [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)]
 
 
-def outline_hits(pts: np.ndarray, bbox, tol: float = TOUCH_TOL):
+def outline_hits(pts: np.ndarray, bbox, tol: float = TOUCH_TOL, directions=None):
     """返回 (edge_idx, arc_len, dist, point) —— 落在框边 `tol` 内的采样点。
 
     用「到**框边**（不是实心矩形）的距离」：只算实心矩形距离的话，框内部远处的
     点距离也是 0，会把整个框内的东西全当成接触点。
+    提供 `directions` 时只接受接近该边法线的方向；纯点云保留旧距离判据。
     """
     if not len(pts):
         return np.zeros(0, int), np.zeros(0), np.zeros(0), np.zeros((0, 2))
+    unit_dirs = None
+    if directions is not None:
+        dirs = np.asarray(directions, dtype=np.float64)
+        if dirs.shape != pts.shape:
+            raise ValueError("directions must have the same (M, 2) shape as pts")
+        lengths = np.linalg.norm(dirs, axis=1)
+        valid = np.isfinite(dirs).all(axis=1) & (lengths > 1e-9)
+        unit_dirs = np.zeros_like(dirs)
+        unit_dirs[valid] = dirs[valid] / lengths[valid, None]
     x1, y1, x2, y2 = [float(v) for v in bbox]
     # 每条边算一次：参数 t、垂距 d、弧长 s
     best_d = np.full(len(pts), np.inf)
@@ -191,6 +218,11 @@ def outline_hits(pts: np.ndarray, bbox, tol: float = TOUCH_TOL):
         d = np.hypot(pts[:, 0] - cx, pts[:, 1] - cy)
         s = t * math.sqrt(L2)
         upd = d < best_d
+        if unit_dirs is not None:
+            # Filter each edge before choosing the nearest one. At corners the
+            # closest edge may be parallel to the wire while another is valid.
+            normal = _normals(bbox)[e]
+            upd &= np.abs(unit_dirs @ normal) >= TOUCH_NORMAL_COS
         best_d = np.where(upd, d, best_d)
         best_e = np.where(upd, e, best_e)
         best_s = np.where(upd, s, best_s)
@@ -232,9 +264,10 @@ def _point_on_edge(bbox, e: int, s: float):
 
 
 def pins_from_touch(bbox, pts: np.ndarray, tol: float = TOUCH_TOL,
-                    cluster_r: float = CLUSTER_R, out_dist: float = PIN_OUT):
+                    cluster_r: float = CLUSTER_R, out_dist: float = PIN_OUT,
+                    directions=None):
     """导线接触点 -> 引脚（朝框外推 `out_dist`）。"""
-    e, s, _d, _p = outline_hits(pts, bbox, tol)
+    e, s, _d, _p = outline_hits(pts, bbox, tol, directions=directions)
     if not len(e):
         return []
     normals = _normals(bbox)
@@ -313,15 +346,20 @@ def _merge_stubs(pins, bb, ink, out_dist):
 def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
               cluster_r: float = CLUSTER_R, out_dist: float = PIN_OUT,
               sample_step: float = SAMPLE_STEP, use_prior: bool = True,
-              ink=None):
+              ink=None, direction_guard: bool = False):
     """给每个元件找引脚。返回 {comp_id: [(x, y), ...]}（图像坐标）。
 
     `texts` 目前不参与（引脚号/引脚名要 OCR，属于第二阶段），留着是为了以后把
     「框边外的文字框」当成一个额外的引脚证据。
 
     `ink` 非空且 `STAGE1_PIN_STUB=1` 时，对 `box`/`bigic` 追加几何引脚桩。
+    `direction_guard` 仅约束导线接触候选，默认关闭；不改变类型兜底或补桩。
     """
-    pts = sample_segments(segments, sample_step)
+    if direction_guard:
+        pts, directions = sample_segments(segments, sample_step, return_directions=True)
+    else:
+        pts = sample_segments(segments, sample_step)
+        directions = None
     out: Dict[str, List[Tuple[float, float]]] = {}
     for c in components:
         bb = c.get("bbox_img")
@@ -332,7 +370,7 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
         _od = PIN_OUT_BOX if _is_ic else out_dist
         # IC 的引脚间距只有 ~10px，不能用 12px 的合并半径（会把邻脚并掉）
         _cr = CLUSTER_IC if _is_ic else cluster_r
-        pins = pins_from_touch(bb, pts, touch_tol, _cr, _od)
+        pins = pins_from_touch(bb, pts, touch_tol, _cr, _od, directions=directions)
         if not pins and use_prior:
             pins = pins_from_prior(bb, c.get("type") or "")
         if STUB_FILL and ink is not None and _is_ic:
@@ -384,9 +422,9 @@ def _selftest() -> int:
     print("4) 线离框 15px -> 不算触到")
     chk("差 15px", pins_from_touch(box, sample_segments([[(85, 200), (0, 200)]])), [])
 
-    print("5) 线**沿着**左边界画（y 120..200）-> 整段贴边，算 1 个引脚、取中点 y=160")
-    # 注意期望值是 160 不是 200：整段都贴边时它本来就是一个「沿边的长接触」，
-    # 取这段的中点是合理行为。我第一版把期望写成 200（线的起点），是测试写错了。
+    print("5) 点云旧接口兼容：未提供方向时，沿边样本仍取中点 y=160")
+    # 纯点云不能区分沿边线与垂直接触，只保留原接口行为。
+    # 方向感知的沿边拒绝判据另见 tests/test_pin_geometry.py。
     chk("沿边画", pins_from_touch(box, sample_segments([[(100, 200), (100, 120)]])),
         [(90.0, 160.0)])
 
