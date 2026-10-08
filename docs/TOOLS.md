@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **563** 个脚本。
+共 **564** 个脚本。
 
 
 <a id="data"></a>
@@ -69,7 +69,7 @@
 
 <a id="diag"></a>
 
-## `tools/diag/`（446 个脚本）
+## `tools/diag/`（447 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -416,6 +416,7 @@
 | `_slotdbg` | 46 | 把一个位号槽位的原始证据全部摊开：desig_slots 原文、stage1 的文字框、本体框。 |
 | `_slotdiff` | 60 | 用真实的 stage3.build 量「真歧义槽位」数，并统计 MARGIN 敏感性。 |
 | `_slotwhy` | 106 | 追一张图里「位号被改成错号」的现场：把该槽位的全部候选（值/分/来源）打出来。 |
+| `_split220` | 71 | 把两个 stage2_eval --json（220 张）按 suite 拆分汇总。 |
 | `_splitaudit` | 87 | split 审计：val 的 77 张到底是不是 77 张**独立**的图？train/val 有没有同源泄漏？ |
 | `_st1_nets` | 48 | stage1 的 nets / wires 结构摸底（第二阶段组装要用）。 |
 | `_st1_probe` | 72 | stage1 产物 schema 摸底 + 官方 GT 的 Name/位号约定。 |

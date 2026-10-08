@@ -567,14 +567,14 @@ python -X utf8 work\tools\diag\_pinmiss.py --pred work\_fnew --assigned work\_fn
 （在符号体内部）——用「名字框中心离 GT 引脚 ≤8 px」判「名读到」会得到 **0/55** 的假结论，
 要用「最近的桩索引 j 的 `raw_pins[j].name`」。
 
-#### 官方库补号/改名已落进管线（`STAGE2_LIB_PINS`，**默认关**）
+#### 官方库补号/改名已落进管线（`STAGE2_LIB_PINS`，**2026-10-09 默认已改为开**）
 
 上面那条「唯一外部来源是官方库」的建议**已经实现**，不再是模拟：
 
 | | |
 |---|---|
 | 实现 | `eda-pcb\stage2\libpins.py`（新）+ `eda-pcb\stage2\assemble.py` `build_doc` 的 box 引脚路径 |
-| 总闸 | `STAGE2_LIB_PINS`，**默认 `"0"`（关）**；关掉时 `libpins` 根本不会被 import，产物逐字节不变 |
+| 总闸 | `STAGE2_LIB_PINS`，**默认 `"1"`（开）** —— 2026-10-09 依据下表 220 张拆分回归从 `0` 翻过来；`STAGE2_LIB_PINS=0` 时 `libpins` 根本不会被 import，产物逐字节不变 |
 | 库路径 | `STAGE2_CPNT_LIB`，默认仓库根 `work\data\cpntLibrary.json` |
 | 模糊阈值 | `STAGE2_LIB_PINS_FUZZY`，默认 `0.85`（**只用来找库键**；某条引脚仍走「唯一」判定） |
 | 诊断 | `STAGE2_LIB_PINS_DBG=1` 打印补/改了哪几处；`python -X utf8 stage2\libpins.py` 跑自检 |
@@ -612,8 +612,33 @@ python -X utf8 work\tools\eval\stage2_eval.py work\_libpins_cpu\on  --quiet
 ⚠️ 打分口径坑：`stage2_eval.py <dir>` 会把 `<case>.pinindex.json` 当预测、造成重复打分
 （18 份预测配 9 张 GT，分数虚低）。打分前把那两个文件挪走。
 
-⚠️ **交付包必须带上 `work\data\cpntLibrary.json`（1.76 MB / 337 键）**：`STAGE2_LIB_PINS=1`
-时它是运行时依赖，缺文件只打印一行 `[libpins] 库不可用` 并自动跳过（不炸管线，但也就没有收益）。
+**220 张拆分回归（2026-10-09，这就是改默认值的依据）**：输入换成全量 220 的
+`work\_full220\runs\stage1` + `work\_f220_A\_assigned`（case 名单 `work\_cases220.txt`，
+220 个逗号连接；32 s 跑完，纯 CPU）：
+
+```powershell
+$cases = (Get-Content work\_cases220.txt -Raw).Trim()
+python -X utf8 work\tools\diag\_libpins_cpu.py --stage1 work\_full220\runs\stage1 `
+    --assigned work\_f220_A\_assigned --out work\_libpins220 --cases $cases
+python -X utf8 work\tools\eval\stage2_eval.py work\_libpins220\off --quiet --json work\_libpins220\_score_off.json
+python -X utf8 work\tools\eval\stage2_eval.py work\_libpins220\on  --quiet --json work\_libpins220\_score_on.json
+python -X utf8 work\tools\diag\_split220.py work\_libpins220\_score_off.json work\_libpins220\_score_on.json
+```
+
+| suite | n | off → on | Δ | 逐张 |
+|---|---:|---|---:|---|
+| `10GT`（官方） | 10 | 62.5743 → **65.1834** | **+2.6091** | 7 涨 0 跌（pin tp 38→47 / fp 42→38 / fn 98→89） |
+| `10_GTcase`（官方） | 10 | 36.8815 → 36.8815 | 0.0000 | 全不变（型号名不在库里） |
+| **官方 20** | 20 | 49.7279 → **51.0324** | **+1.3045** | — |
+| `train200`（派生） | 200 | 31.3691 → 31.4300 | +0.0609 | 24 涨 25 跌（最差 `0167` −2.924） |
+
+改动的量：补号 125 / 改名 367 / 受影响网络 917。门槛「官方为正 且 派生不为负」已过 ⇒ 默认改开。
+`STAGE2_LIB_PINS_FUZZY=1.0`（只用精确键）与默认 0.85 几乎相同（派生 +0.0616 vs +0.0609、改动更少
+116/305/720）⇒ 派生档的回退不是模糊键造成的，阈值保持 0.85。另：**交付口径官方 9 张 +1.60
+九张零回归**（`RESULTS.md` §2.6 表；那才是真正决定分数的口径）。
+
+⚠️ **交付包必须带上 `work\data\cpntLibrary.json`（1.76 MB / 337 键）**：默认已开，
+它是运行时依赖，缺文件只打印一行 `[libpins] 库不可用` 并自动跳过（不炸管线，但也就没有收益）。
 
 ### 引脚坐标超差：**「发的是 base 不是 tip」被判负**（2026-10，`_pintip.py`）
 
@@ -671,14 +696,14 @@ python tools\diag\_nlfork2.py     # ★ 区分「双描边」与「过分割」�
   离线臂 `par2/par3/par5/par3col` 是**在产物上事后把双描边并成中心线**，全部判负
   （`par3` 把 case 2 的导线打成 0）⇒ **不要在产物上合并，要在提取处让骨架回到中心线。**
 
-三个**默认等于旧行为**的旋钮（`stage1\wires.py`，2026-10-08 接线；`close_thin` / `dilate_to`
+三个旋钮（`stage1\wires.py`，2026-10-08 接线、**2026-10-09 改默认**；`close_thin` / `dilate_to`
 是 `WireExtractor` 早就有、但构造时从没传进去的参数）：
 
 | 旋钮 | 含义 |
 |---|---|
-| `STAGE1_WIRE_THIN_W` | 覆盖半宽阈值（默认 1.6；**≥2.0 就能保住 4px 描边整条**） |
-| `STAGE1_WIRE_CLOSE_THIN` | 1 = 3×3 形态学闭运算把两条外沿之间 2px 的缝焊上（`pskel.py:401-404`） |
-| `STAGE1_WIRE_DILATE` | N>0 = 把「离细笔画 N px 以内的墨」补回来（`pskel.py:405-409`，N=2 可填满 4~5px 描边） |
+| `STAGE1_WIRE_THIN_W` | 覆盖半宽阈值（**默认已改 2.6**，`wires.py:320`；1.6 = 历史值，会把 4px 描边掏空） |
+| `STAGE1_WIRE_CLOSE_THIN` | 1 = 3×3 形态学闭运算把两条外沿之间 2px 的缝焊上（`pskel.py:401-404`，默认 0） |
+| `STAGE1_WIRE_DILATE` | N>0 = 把「离细笔画 N px 以内的墨」补回来（`pskel.py:405-409`，N=2 可填满 4~5px 描边，默认 0） |
 
 **官方 9 张横扫**（`fast.py --no-vlm --cases 1,2,3,4,5,7,8,9,10`，`STAGE1_WIRE_COLOUR=off`，
 纯 CPU、0 次 LM Studio）：
@@ -704,11 +729,14 @@ python tools\diag\_nlfork2.py     # ★ 区分「双描边」与「过分割」�
    引脚 +0.0104 是连带（`pin_f1` 按网配对计数）；`DILATE=3` 与 `DILATE=2+CLOSE` 不再加收益。
 2. **`STAGE2_EDGE_MERGE=1` 在修正后的几何上依然判负**（netL 0.1460→0.0987）——旧的
    「共线焊接」结论在新基线上复现，别再试。
-3. ⚠️ **还没在真交付配置（`STAGE1_WIRE_COLOUR=hint` + VLM 轮）里验证**：上表全是
-   `--no-vlm` + `off`/`chroma`。`dilate_to` 的回填写作 `near & ink`（`pskel.py:409`）而不是
-   `& cm`，色相掩膜开着时会**把紧邻导线的非导线墨也补回来** —— `chroma` 那一行
-   （+0.88）说明后果可接受，但 `hint` 下仍需一次真口径 A/B 才能改默认值。
-4. 旋钮**默认值一律没改**（全部等于旧行为）⇒ 现在是「可用但未启用」状态。
+3. ⚠️ 上面这张表全是 `--no-vlm` + `off`/`chroma` 的**纯 CPU 口径**。`dilate_to` 的回填写作
+   `near & ink`（`pskel.py:409`）而不是 `& cm`，色相掩膜开着时会**把紧邻导线的非导线墨也补回来**。
+4. **真交付口径已验（2026-10-09）**：`fast.py` 不加 `--no-vlm`、`STAGE1_WIRE_COLOUR=hint` 默认，
+   每臂各两次重复 —— 导线 F1 **0.1929 → 0.2317**（tp 152→141）、总分 66.33/66.52 → 66.79/66.60；
+   **同一臂两次的 netL 分项与逐 case 导线 F1 逐位一致** ⇒ 增量确定性，总分里的 ±0.19 是 VLM 噪声。
+   逐 case **8 涨 1 跌**（case 3 0.1560→0.1308）。表在 `RESULTS.md` §4.8(b)。
+   ⇒ **默认值已改为 2.6**（这一条推翻了下面第 5 条）。
+5. ~~旋钮默认值一律没改~~（2026-10-08 的状态；2026-10-09 已按第 4 条改默认）。
 
 ---
 

@@ -317,7 +317,7 @@ def _hint_wire_hue(bgr: np.ndarray) -> None:
 
 def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
                   ink_mode: str = "adaptive", use_colour: bool = True,
-                  thin_w: float = 1.6, rdp_eps: float = 1.6, snap: bool = True,
+                  thin_w: float = 2.6, rdp_eps: float = 1.6, snap: bool = True,
                   scale: float | None = None,
                   occlude=None, occ_pad: float = 2.0,
                   erase=None, erase_pad: float = 1.0,
@@ -368,10 +368,13 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
     #   （镜像出两条边 2~3px 相望）。GT 的 `edges` 是**一条中心线**，而 `net_line` 是一对一派
     #   ⇒ 每条 GT 边最多命中我们两条里的一条，另一条必成 fp。实测官方 9 张：配对网内
     #   我们 993 条 edge / GT 523 条（1.90×），其中**856 对**是「平行且端点都近」的双胞胎。
-    #   三个不破坏旧行为的旋钮（默认全为旧行为）：
-    #     STAGE1_WIRE_THIN_W     半宽阈值（默认 1.6 = 历史值；调到 ≥2.0 可保住 4px 描边整条）
+    #   2026-10-09 定案：**默认已改为 2.6**（真交付口径 A/B：导线 F1 0.1929→0.2317，
+    #   总分 66.33/66.52 → 66.79/66.60，九张里 8 张涨；导线通道两次重复逐位一致 ⇒ 增量确定性，
+    #   总分里的 ±0.19 是 VLM 噪声。表见 `docs/RESULTS.md` §4.8 与 `docs/DIAGNOSTICS.md` 的 `net_line` 小节）。
+    #   三个旋钮：
+    #     STAGE1_WIRE_THIN_W     半宽阈值（默认 **2.6**；1.6 = 历史值，会把 4px 描边掏空）
     #     STAGE1_WIRE_CLOSE_THIN 1 = 3x3 形态学闭运算把两条外沿之间的 2px 缝焊上（再骨架化）
-    #     STAGE1_WIRE_DILATE     N>0 = 把「离细笔画 N px 内的墨」补回来（N=2 可填满 4~5px 描边）
+    #     STAGE1_WIRE_DILATE     N>0 = 把「离细笔画 N px 内的墨」补回来（N=2 可填满 4~5px 描边，与 2.6 打平）
     try:
         _thin_w = float(os.environ.get("STAGE1_WIRE_THIN_W", "") or thin_w)
     except ValueError:
