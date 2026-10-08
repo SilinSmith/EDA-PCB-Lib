@@ -80,6 +80,10 @@ PINNUM_NEAR = float(os.environ.get("STAGE2_PINNUM_NEAR", "60"))
 # 在 d>28 时把满分读法（`fit*conf ≈ 1.0`）直接压到 ≤0 ⇒ 被 `if s <= 0` 丢掉。
 # 引脚号天生比位号离得远（大 IC 印在框外），所以它对距离应该几乎不敏感。
 PINNUM_DISTW = float(os.environ.get("STAGE2_PINNUM_DISTW", "0.005"))
+# Resolve only uncertain, equal-length numeric disagreements with same-box
+# majority evidence. The five role reads share one recognizer, so their votes
+# do not constitute independent probabilities or justify overriding a strong read.
+PINNUM_CONSENSUS = env_on("STAGE2_PINNUM_CONSENSUS", "1")
 # ★★ 2026-10：`score_of` 的**沿边距离衰减尺度**。原来写死 `/(1 + d/20)`，
 # 衰减太慢 ⇒ 单调对齐「整排挪一格」只让每对掉一点分，却能多配上一对
 # （`cover=PIN_COVER=0.15`），于是 DP 宁可错位也要多拿一对。
@@ -552,6 +556,27 @@ def _best_read(reads: Dict[str, Tuple[str, float]], role: str,
     return best
 
 
+def _best_number_read(reads: Dict[str, Tuple[str, float]]):
+    """Use stronger same-box agreement only for an uncertain numeric glyph."""
+    original = _best_read(reads, "pin_number", fit_pinnum)
+    if not PINNUM_CONSENSUS or original is None or original[2] >= 0.6:
+        return original
+    groups = {}
+    for txt, conf in reads.values():
+        if txt.isdigit() and fit_pinnum(txt) > 0:
+            groups.setdefault(txt, []).append(float(conf))
+    # Three agreeing role reads are a majority of the five recognizer roles.
+    supported = [(max(cs), txt) for txt, cs in groups.items() if len(cs) >= 3]
+    if not supported:
+        return original
+    conf, txt = max(supported)
+    if txt == original[1] or conf <= original[2] or len(txt) != len(original[1]):
+        return original
+    fit = fit_pinnum(txt)
+    score = fit * (0.3 + 0.7 * max(0.0, min(1.0, conf)))
+    return score, txt, conf, fit
+
+
 def _global_match(cands: Sequence[Tuple[str, str, float, dict]],
                   comp_ids: Sequence[str], thr: float = 0.02) -> List[Tuple[str, dict]]:
     """（元件 × 文字框）一对一最大权匹配，返回 `[(cid, 证据)]`。
@@ -878,7 +903,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     continue
                 if (not want_inside) and (t["inside"] or t["d"] > _dlim):
                     continue
-                got = _best_read(t["reads"], role, fit_fn)
+                got = (_best_number_read(t["reads"]) if role == "pin_number"
+                       else _best_read(t["reads"], role, fit_fn))
                 if not got:
                     continue
                 s, txt, conf, f = got

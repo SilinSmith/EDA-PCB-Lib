@@ -42,6 +42,7 @@ STUB_MIN = int(os.environ.get("BIGIC_STUB_MIN", "3"))        # 边缘引脚桩�
 STUB_OFF = int(os.environ.get("BIGIC_STUB_OFF", "10"))       # 取列的位置：边线外多少像素
 INK = int(os.environ.get("BIGIC_INK", "140"))                # 暗像素阈值
 STUB_BAND = float(os.environ.get("BIGIC_STUB_BAND", "0.6"))  # 只数中间这一段（避开四角）
+BORDER_MIN = float(os.environ.get("BIGIC_BORDER_MIN", "0.9"))
 
 
 def _runs(col: np.ndarray) -> int:
@@ -83,14 +84,37 @@ def _edge_stubs_h(dark: np.ndarray, y: int, x1: int, x2: int) -> int:
     return _runs((sub.max(axis=0) > 0).astype(np.uint8))
 
 
+def _border_support(dark, box, pad=2, trim=4):
+    """Ink coverage of each expected side; box right/bottom are exclusive.
+
+    A contour enclosing a wire loop can have high area fill while missing part
+    of its rectangular boundary. Such a region must not erase a real component
+    and its wires as an IC. Narrow bands tolerate contour/stroke rounding.
+    """
+    height, width = dark.shape[:2]
+    x0, y0, x1, y1 = map(int, box)
+    xa, xb = max(0, x0 + trim), min(width, x1 - trim)
+    ya, yb = max(0, y0 + trim), min(height, y1 - trim)
+    bands = (
+        dark[max(0, y0 - pad):min(height, y0 + pad + 1), xa:xb].any(axis=0),
+        dark[ya:yb, max(0, x1 - pad - 1):min(width, x1 + pad)].any(axis=1),
+        dark[max(0, y1 - pad - 1):min(height, y1 + pad), xa:xb].any(axis=0),
+        dark[ya:yb, max(0, x0 - pad):min(width, x0 + pad + 1)].any(axis=1),
+    )
+    return [float(side.mean()) if side.size else 0.0 for side in bands]
+
+
 def detect_rects(bgr: np.ndarray, min_side=None, min_area=None, max_frac=None,
-                 fill_min=None, stub_min=None):
+                 fill_min=None, stub_min=None, border_min=None):
     """返回候选 IC 体：`[{x1,y1,x2,y2,fill,stub,w,h}]`（图像坐标，y 向下）。"""
     min_side = MIN_SIDE if min_side is None else min_side
     min_area = MIN_AREA if min_area is None else min_area
     max_frac = MAX_FRAC if max_frac is None else max_frac
     fill_min = FILL_MIN if fill_min is None else fill_min
     stub_min = STUB_MIN if stub_min is None else stub_min
+    # Some real ICs have square terminal pads interrupting their body outline.
+    # Keep standalone contours; add_components uses borders with detector context.
+    border_min = 0.0 if border_min is None else border_min
 
     H, W = bgr.shape[:2]
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
@@ -116,6 +140,9 @@ def detect_rects(bgr: np.ndarray, min_side=None, min_area=None, max_frac=None,
         fill = cv2.contourArea(ct) / float(w * h + 1e-6)
         if fill < fill_min:
             continue
+        border = _border_support(dark, (x, y, x + w, y + h))
+        if min(border) < border_min:
+            continue
         ns = max(_edge_stubs(dark, x - STUB_OFF, y, y + h),
                  _edge_stubs(dark, x + w + STUB_OFF, y, y + h),
                  _edge_stubs_h(dark, y - STUB_OFF, x, x + w),
@@ -124,7 +151,8 @@ def detect_rects(bgr: np.ndarray, min_side=None, min_area=None, max_frac=None,
             continue
         out.append({"x1": float(x), "y1": float(y), "x2": float(x + w),
                     "y2": float(y + h), "w": float(w), "h": float(h),
-                    "fill": round(float(fill), 4), "stub": int(ns)})
+                    "fill": round(float(fill), 4), "stub": int(ns),
+                    "border": [round(v, 4) for v in border]})
     out.sort(key=lambda r: -r["w"] * r["h"])
     return out
 
@@ -138,6 +166,16 @@ def _iou(a, b):
         return 0.0
     inter = (ix2 - ix1) * (iy2 - iy1)
     return inter / ((ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter + 1e-9)
+
+
+def _straddles_body_boundary(box, body, margin=3.0):
+    """A proposed IC edge cuts through another detected IC's body interior."""
+    x0, y0, x1, y1 = box
+    bx0, by0, bx1, by1 = body
+    overlap_x = min(x1, bx1) - max(x0, bx0)
+    overlap_y = min(y1, by1) - max(y0, by0)
+    return ((overlap_x > 2 * margin and any(by0 + margin < y < by1 - margin for y in (y0, y1)))
+            or (overlap_y > 2 * margin and any(bx0 + margin < x < bx1 - margin for x in (x0, x1))))
 
 
 def add_components(bgr, comps, hyps, iou_skip=0.35) -> list:
@@ -154,13 +192,22 @@ def add_components(bgr, comps, hyps, iou_skip=0.35) -> list:
         box = [r["x1"], r["y1"], r["x2"], r["y2"]]
         if any(_iou(box, hb) >= iou_skip for hb in have):
             continue
+        # Low border coverage alone cannot reject a pad-interrupted real IC.
+        # A second independent contradiction is required: the proposed body
+        # cuts through an already detected IC. Wire loops plus a nearby symbol
+        # can otherwise erase that symbol's pins and steal its designator.
+        if (min(r["border"]) < BORDER_MIN
+                and any(c.get("type") in ("box", "bigic")
+                        and _straddles_body_boundary(box, c["bbox_img"])
+                        for c in comps)):
+            continue
         cid = "b%04d" % len(added)
         hyp_id = f"{cid}.type"
         # 置信度按证据强度给：桩越多越像 IC
         score = round(min(0.9, 0.55 + 0.05 * r["stub"]), 4)
         hyps.add(hyp_id, "box", score, source="cv:bigic",
                  evidence={"fill": r["fill"], "stub": r["stub"],
-                           "w": r["w"], "h": r["h"]},
+                           "w": r["w"], "h": r["h"], "border": r["border"]},
                  question=f"{cid}（{int(r['w'])}x{int(r['h'])} 的大矩形）是 IC 吗？",
                  context={"w": r["w"], "h": r["h"], "stub": r["stub"]})
         comps.append({

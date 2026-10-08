@@ -314,30 +314,12 @@ def stamp_pins(c: dict, ctype: str, pts_img: Sequence,
     for p in pts_img:
         proj = (float(H) - float(p[1]) - cy) if axis_y else (float(p[0]) - cx)
         side.append(True if proj * s1 > 0 else False)
-    # 这一类元件的 GT 引脚数**恒为 2**（r 3398/2、c 3313/2、l 230/2 …），
-    # stage1 给 1 个或 3 个附着点都只是几何噪声 —— 一律按图章输出 pin_1/pin_2。
-    #
-    # 2026-07 审计提出「`len(side)==1` 时落进 else 只输出 1 个引脚，与本注释矛盾，
-    # 改成 `if len(side) != 2 or side[0] == side[1]:`」—— **实测否证、已回退**
-    # （10GT 无 VLM：48.35 → 46.88；component 与 pin_f1 **逐位不变**，因为
-    # `cfg.pin_box_only=True` 时 r/c/l/d 的引脚根本不进 pin_f1，但 netH 的引用
-    # 含全部元件 ⇒ netH tp −14 / fp +14 / fn +14，净 −1.44 分）。
-    # 机制：补出来的 `pin_2` 位置是我们**盖章猜**的（`cy ± span`），与 GT 的
-    # pin_2 经常对不上，于是既加 fp、又会改变 `net_pin_set` 的交集把原本配对的
-    # 网络配对打乱。补桩数是「引脚 f1 的口径」问题，等 `pin_box_only` 之外的
-    # 口径确定后再谈，不要在这里凭空补。
-    if len(side) == 2 and side[0] == side[1]:
-        # 两个附着点落在同一侧（我们自己的点太糙）—— 退回按顺序给号
-        side = [True, False]
-    else:
-        seen = [False, False]
-        fixed = []
-        for want1 in side:
-            if seen[0 if want1 else 1]:
-                want1 = not want1
-            seen[0 if want1 else 1] = True
-            fixed.append(want1)
-        side = fixed
+    # Several detected contacts may belong to the same physical terminal.
+    # Keep their observed side: assigning a duplicate to the opposite terminal
+    # makes the network reference a pin which that wire never touches. The
+    # caller deduplicates the published pin keys while retaining every raw
+    # index -> number mapping, so same-side wire fragments can reconnect.
+    # A lone contact does not invent an unseen contact on the opposite side.
     return [(("1", p1) if want1 else ("2", p2)) for want1 in side]
 
 
