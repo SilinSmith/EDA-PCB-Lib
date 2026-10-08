@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **546** 个脚本。
+共 **551** 个脚本。
 
 
 <a id="data"></a>
@@ -54,20 +54,22 @@
 
 <a id="dev"></a>
 
-## `tools/dev/`（4 个脚本）
+## `tools/dev/`（6 个脚本）
 
 开发辅助（本目录的生成器）。
 
 | 脚本 | 行 | 说明 |
 |---|---:|---|
 | `audit_labels` | 277 | Training-label quality audit for a YOLO dataset — "错误的标号" triage. |
-| `build_trainset_v4` | 453 | Assemble `work/trainset_v4` = `trainset_v3` (optionally label-repaired) + `新补充训练集`. |
+| `build_trainset_v4` | 599 | Assemble `work/trainset_v4` = `trainset_v3` (optionally label-repaired) + `新补充训练集`. |
 | `gen_knobs` | 94 | 扫描源码里所有环境开关，生成 `docs/KNOBS.md`。 |
 | `gen_toolindex` | 96 | 生成 `docs/TOOLS.md` —— `tools/` 下每个脚本的索引（含首行 docstring）。 |
+| `gpu_gate` | 363 | GPU 串行闸门：**同一时刻只允许一个自己起的吃卡任务**，且起之前先确认显存够。 |
+| `mix_crnn_manifest` | 180 | 把「真实语料」和「合成语料里挑出来的那几类」混成一份 CRNN 训练清单。 |
 
 <a id="diag"></a>
 
-## `tools/diag/`（431 个脚本）
+## `tools/diag/`（434 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -101,6 +103,7 @@
 | `_boxwhy` | 97 | box(IC) 位号为什么挂不上 —— 官方口径下唯一的 pinF1 来源。 |
 | `_c1` | 83 | 看 case `1`（10GT）的 `U1` 到底为什么没配上键：GT 的 IC 框 vs 我们预测里的同一个框。 |
 | `_c151row` | 190 | Part 1 probe: the C151..C156 row in 10GT case 1, end to end. |
+| `_c1src` | 89 | `_assigned/<case>.json` 的**出处归因**：每个字段到底是哪一层定的。 |
 | `_caserows` | 54 | 一次性：把某个 case 的元件对账里某一批键打出来。 |
 | `_cfrep` | 29 |  |
 | `_charfit` | 150 | 从 38.8 万条真实「框 + 文本」标注里**拟合逐字符的宽度**，替换 axis.py 里那个 |
@@ -218,7 +221,9 @@
 | `_imgdbg` | 23 | 临时探针：看 stage1 doc 的 image.path 能不能读出来。 |
 | `_imgdbg2` | 24 | 临时探针 2：看 from_file 之后 pool.bgr 到底有没有。 |
 | `_inkband` | 89 | 量「墨迹高度 g / 标注框高度 H」的稳定性。 |
+| `_inkcheck` | 114 | v3 vs v4：框是不是真的套在墨迹上（recenter 修复的定量体检）。 |
 | `_inkdiag` | 143 | 归一的逐条诊断：把 val 拆成「归一几乎没动框」和「归一大幅改了框」两组， |
+| `_inktest` | 71 | `ink_recenter` 的三条硬测试（合成图，不碰真实数据）。 |
 | `_inkvis` | 117 | 对照：同一个框，左＝现行裁剪（框 + PAD_X/Y_FRAC），右＝墨迹归一后的裁剪。 |
 | `_jrep` | 95 | 把 `_fusion_report.json` 里 LLM 轮（`rounds[].judge`）的**开关与计数**整行打出来。 |
 | `_jsdump` | 9 |  |

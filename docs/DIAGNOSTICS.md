@@ -146,6 +146,49 @@ silhouette 反而是 `r 0.252 > c 0.207 > d 0.199 > gnd 0.141 > v 0.092 > net_in
    里那组 `ARMS` 有一个 `"pins": dict(designator=True, value=False)`——**`pin=True` 根本没设**
    ⇒ 这一臂等价于 `desig` 臂，等于「拿基线比基线」。凡是要量某条新通道，先在代码里确认
    那一臂真的传了那个开关（比 `_jrep.py` 更省事的办法：让 A/B 脚本把每臂的开关 `print` 出来）。
+4. **`fusion.run` 在 `--workers > 1` 时不可复现 ⇒ 所有对比臂一律 `--workers 1`。**（2026-10，子代理
+   6be262af 在阅读顺序先验的 4 臂 A/B 里撞上）同一份代码、同一份输入，`--workers 2` 的两次 9 张批跑
+   在 **case 8** 上给出不同的 `pins` / `nets` / `__pin_index`（MD5 `3D87…` vs `239C…`），而 `--workers 1`
+   与历史上所有跑法都是 `8B26…`（case 8 单独跑 3 次 hash 全同）。9 张均值因此出现 **±0.09 的假差异**
+   ——一次「带闸 C 臂 = 62.2699」的假读数就是这么来的，`--workers 1` 复跑回到 62.1763。
+   fusion 本身很快（9 张 25~66 s），**不差这点时间**：凡是要进报告的数字，都用 `--workers 1`；
+   用了 `--workers 2+` 的批量跑必须在报告里标注这个噪声底。
+
+5. **`--no-llm` ≠「不碰 LM Studio」。** `fusion.run --no-llm` 只关掉 `fusion/run.py:417` 那个「LLM 轮」
+   （`do_llm=(not a.no_llm) and DO_LLM`）。fusion 里还有几条**按自己开关走、默认开着**的 VLM pass，
+   它们照样 `vlm.client.ask` → `127.0.0.1:1234`：`fusion/cropfix.py:61 ON = env_on("FUSION_CROPFIX","1")`
+   （在 `run.py:219` 跑）、`fusion/iterate.py:58 FUSION_ITERATE`（默认开，`run.py:330`）、
+   `fusion/audit.py:74/76 FUSION_AUDIT / FUSION_AUDIT_REREAD`（默认开）。
+   **2026-10-08 实测后果**：一个 `fusion.run --no-llm --workers 2` 的 220 张扫描把 LM Studio 打成持续推理
+   （`llama-server` 5 s 内烧 4.91 s CPU、GPU 47→78%，server log 里刷 `Running chat completion on
+   conversation with 1 messages`，task id 已到 5 万+），**而它没有拿闸门锁** ⇒ 闸门在等一个永远等不到的
+   显存：我自己的扫描把模型钉住，又让我自己的训练排不进去（用户先发现的：「为什么 LM Studio 一直能吃到请求」）。
+   ⇒ 规矩：**只要进程可能打 LM Studio，就必须走 `gpu_gate`（哪怕它自己不吃显存）**；要做纯 CPU 的对照实验，
+   显式加 `-vlm off` 或 `FUSION_CROPFIX=0 FUSION_ITERATE=0 FUSION_AUDIT=0`，并在报告里写明用了哪一组。
+
+6. **「修完仍然是空框」是数据集自检的硬指标。** `build_trainset_v4.py` 的 `--fix-ink recenter`
+   老版本把空框中心挪到**最近连通域的质心**（`cv2.connectedComponentsWithStats`）。对「一整条网络」那种
+   大连通域，质心能落在空白处 ⇒ 挪完**仍是空框**；更糟的是多个空框会被挪到**同一个质心**，随后被
+   `--drop-dup` 当成重复框删掉（真丢标注）。实测（2026-10-08，1920 张 train 抽样 12000+ 框）：
+   v4（旧）有 **329 个空框 = 2.6%**（其中 278 个是类 `r`、全在新增语料、尺寸正好 20×8 / 8×20 的图章尺寸），
+   空框邻域 1.5× 内**总能**找到墨迹、位移中位仅 **4.5 px** —— 根因是 `snap()` 只改尺寸不改中心。
+   修法（现在的实现，`eda-pcb/tools/dev/build_trainset_v4.py` 的 `ink_recenter` + `ink_frac`）：在框周围开
+   搜索窗，用**积分图**枚举所有候选位置，在「框内墨迹够多」的候选里取**位移最小**者；窗里连一个墨迹像素
+   都没有时才退回最近墨迹像素。修后同一把尺子：空框 **290 → 12**（v3 基线 50），居中偏移不变（0.097），
+   框总数 84760 → 84781（找回 21 个被 dedup 吃掉的标注）。
+   ⇒ 构建脚本现在**每次都打**一行「空框自检：new X + base Y = Z   [v3 基线 27/13620 = 0.2%]」，
+   残留非 0 会标 ✗；**重训前先看这一行**。量它的两把尺子：`eda-pcb/tools/diag/_inkcheck.py`
+   （抽样量空框数 + 墨迹质心对框中心的偏移 + 框内墨迹占比，`--roots tag=path,...` 可随意比多个数据集）、
+   `eda-pcb/tools/diag/_inktest.py`（4 条合成图硬测试，含上面那个质心陷阱的用例）。
+
+### PowerShell 5.1 与中文日志（本机踩过两次）
+
+* 本机**没有 `pwsh`（PowerShell 7）**，`pwsh -File x.ps1` 会报 `CommandNotFoundException`；
+  只能用 `powershell -NoProfile -ExecutionPolicy Bypass -File x.ps1`（默认执行策略禁止直接 `& x.ps1`，
+  会报 `cannot be loaded. The file ... is not digitally signed`）。
+* `.ps1` 存成 **UTF-8 无 BOM** 时，5.1 会按 ANSI 解析 ⇒ **脚本里的中文字面量全成乱码**（Python 侧写的
+  日志文件不受影响，只有脚本自己的 `Write-Host` 会乱）。要中文可读就把脚本存成 **UTF-8 with BOM**，
+  并加上 `[Console]::OutputEncoding = [Text.Encoding]::UTF8`（后者修的是「PS 解码子进程 stdout」这一半）。
 
 ### 按位置查，不要按号查（否则你会去修错的东西）
 
@@ -378,6 +421,39 @@ stage1/pipeline.py:118 run_case
 
 ⇒ 规矩：**任何发到进程外的调用，都要自己带超时、带上界、带熔断，并且失败必须计数**。
 只要「失败被吞成字符串」，它就会以「这里有段时间不见了」的形式存在，而不是以报错的形式。
+
+---
+
+### 产物里必须有「这条结论是谁下的」字段，否则归因只能靠猜
+
+官方 10GT 第 1 张交付出去 6 个位号是 `C1513/C1514/C1515/C1517/C1518/C1519`，
+而图上印的和 GT 都是 `C153/C154/C155/C159/C160/C161`。它们不是读错的：
+
+```powershell
+# 每颗元件都带 _by = 这条 designator 是谁定的
+python -X utf8 work\tools\diag\_c1src.py          # 逐条打印 (元件, 读数, 终值, _by)
+```
+
+⇒ 6 个全带 `_by = "solve:prior:run_altwindow"`。而 `run_altwindow` **只存在于 `fusion/priors.py`**，
+所以错号是融合层编的、`stage2` 原来是对的（两份 `_assigned\1.json` 的 md5 不同：
+`work\_f9_B_pin\_assigned\1.json` = `44f0f1d7e9a9`，
+`work\_fast_out_reg9\runs\stage2\_assigned\1.json` = `3a6bee232875`）。
+
+机制在 `fusion/priors.py:528 repair_variants()`：它把数字段每个位置插回一个 `1`
+（`C153`→`C1153`/**`C1513`**/`C1531`），这些修复变体被 `windows_for()` 当成锚点开窗，
+于是多出一个**偏移窗口 `[1511,1522]`**；`annotate()` 又把**并列窗口**（`ws[1:]`）的号一起塞进候选池，
+于是 `C53→C1513`、`C15→C1515`、`C101→C1519`…（`_fusion_report.json`：这张图 181 个槽位里
+**95 个是 `prior` 派的**，`score_final.sources={"ocr":18,"vlm":100,"stage2":14,"prior":95,"geo":6}`）。
+
+三条要记住的：
+1. **先验只能细化读数，不能发明身份**（`metrics.is_unkeyed` 只认 `^∅\d+$`/`^p\d{3,4}$`，
+   `fusion/priors.py:619-629` 已用 `0001` 的教训写过一遍）。
+2. **并列窗口不能靠分差选，要靠阅读顺序选**：官方 GT 坐标系 y 越大越靠上，
+   case 1 的 12 个电容按「y 降序、同 y 按 x 升序」正好是 `C151…C162`（12/12 全对）。
+   只把并列窗口关掉（`FUSION_RUN_ALTWINDOW=0`）是 61.5112→61.5798、case 1 的 compF1
+   反而 0.5909→0.5455 —— **只是打乱，不是修好**。
+3. 归因顺序：**先看出处字段（`_by` / `source` / `sources`），再看分数**。
+   只按分数拆，你会以为是 OCR；有出处就能一步定位到哪一层、哪个先验。
 
 ---
 

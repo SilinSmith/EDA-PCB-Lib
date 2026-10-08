@@ -44,6 +44,18 @@ code change before it can score**: `stage1/detect.py:97` defaults
 `STAGE1_DROP_TYPES=pin,testpoint,mosfet_npn`, and `cvparts/testpoint.py:88` /
 `stage2/assign.py:227` compare against the literal names `pin` / `testpoint`.
 
+⚠ **`--fix-tpl` 默认关着，而且不该照默认打开。** 它按 `STAMP_WH` 判「尺寸不对」，
+但实测（2026-xx，取 `trainset_v3/images/train` 前 400 张真实图）**图章的典型偏差并不是 0**：
+`c/r/d` 的 `w/stamp` 中位数都是 1.0000（`|dev|` 中位 0.8~1.3 px、p90 2.3~3.9 px），
+但 **`net_input` 的中位数是 1.3201（dev 9.6 px、p90 22.8）、`v` 是 1.2000** ——
+这两类的真实框**本来就比图章大**，按图章去「修」它们等于把一批正常标号改坏
+（一次 `--fix-tpl snap --tpl-tol 1` 的 dry-run 报了 **25851** 个「待修」框，
+其中 11329 只是 `net_input`/`v` 的固有差异）。所以：
+- `--drop-dup on` 是**真修复**：dry-run 实测正好命中标签体检里那 **6** 个 DUP 框
+  （`work/label_audit.csv` 的 `reason=DUP`），房新语料也一起查重。
+- `--fix-tpl` 只能当**目标整形实验**（和推理端 `stage1/detect.py:9-12` 的「贴规范图章」
+  对齐），要先把 `net_input`/`v` 排除或改成**按类众数**再谈，别直接上。
+
     $env:PYTHONIOENCODING='utf-8'
     cd eda-pcb
     python tools\\dev\\build_trainset_v4.py --dry-run
@@ -156,41 +168,91 @@ def yolo_line(cid: int, cx: float, cy: float, w: float, h: float, W: int, H: int
 
 
 # --------------------------------------------------------------------------- ink repair
-def ink_recenter(gray: np.ndarray, cx: float, cy: float, w: float, h: float,
-                 radius: float = 25.0):
-    """L1 repair: if the box interior has no ink, move the centre onto the nearest blob.
-
-    Returns (cx, cy, status) with status in {'ok','noink_noblob','moved'}.
-    """
+def ink_frac(gray: np.ndarray, cx: float, cy: float, w: float, h: float) -> float:
+    """Fraction of ink pixels inside the box (0.0 when the box is empty or fully outside)."""
     H, W = gray.shape
     x1, y1 = int(round(cx - w / 2)), int(round(cy - h / 2))
     x2, y2 = int(round(cx + w / 2)), int(round(cy + h / 2))
-    x1c, y1c = max(0, x1), max(0, y1)
-    x2c, y2c = min(W, x2), min(H, y2)
+    x1c, y1c, x2c, y2c = max(0, x1), max(0, y1), min(W, x2), min(H, y2)
     if x2c <= x1c or y2c <= y1c:
+        return 0.0
+    return float((gray[y1c:y2c, x1c:x2c] < INK).mean())
+
+
+def ink_recenter(gray: np.ndarray, cx: float, cy: float, w: float, h: float,
+                 radius: float = 25.0, want_frac: float = 0.01):
+    """L1 repair: if the box interior has no ink, slide it onto the ink.
+
+    Returns (cx, cy, status) with status in {'ok','noink_noblob','moved'}.
+
+    ★ 2026-10-08 修正。老版本把中心挪到**最近连通域的质心**；对「一整条网络」那种大连通域，
+    质心可以落在空白处 ⇒ 挪完仍是空框。实测后果：v4 里 **329 个空框（v3 只有 27 个）**，
+    其中 278 个是类 `r`、全在新增语料，尺寸正好 20×8/8×20 的图章尺寸 —— 新增语料的电阻框被
+    `snap()` 重写成图章尺寸时中心偏了（邻域内总能找到墨迹，位移中位仅 4.5 px），而修复本身
+    又把框推到质心的空白点上。现在改成：在框周围开搜索窗，用积分图枚举所有候选位置，取
+    「框内墨迹够多」里**位移最小**的那个；窗里连一个墨迹像素都没有时才退回最近墨迹像素。
+    """
+    H, W = gray.shape
+    bw, bh = int(round(w)), int(round(h))
+    if bw < 2 or bh < 2:
         return cx, cy, "noink_noblob"
-    inside = gray[y1c:y2c, x1c:x2c]
-    frac = float((inside < INK).mean())
-    if frac >= 0.01:
+    if ink_frac(gray, cx, cy, w, h) >= want_frac:
         return cx, cy, "ok"
-    # ring search: ink within `radius` of the box centre
-    r = int(round(radius))
-    X1, Y1 = max(0, int(cx) - r), max(0, int(cy) - r)
-    X2, Y2 = min(W, int(cx) + r + 1), min(H, int(cy) + r + 1)
-    patch = gray[Y1:Y2, X1:X2]
-    mask = (patch < INK).astype(np.uint8)
-    if mask.sum() < 4:
+    R = int(round(max(float(radius), 0.6 * min(bw, bh))))
+    bx, by = int(cx - bw / 2), int(cy - bh / 2)
+    wx0, wy0 = max(0, bx - R), max(0, by - R)
+    wx1, wy1 = min(W, bx + bw + R + 1), min(H, by + bh + R + 1)
+    if wx1 <= wx0 or wy1 <= wy0:
         return cx, cy, "noink_noblob"
-    n, lab, stats, cent = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    best, bestd = None, None
-    for i in range(1, n):
-        mx, my = cent[i]
-        d = (mx + X1 - cx) ** 2 + (my + Y1 - cy) ** 2
-        if bestd is None or d < bestd:
-            best, bestd = (mx + X1, my + Y1), d
-    if best is None:
+    mask = gray[wy0:wy1, wx0:wx1] < INK
+    if not mask.any():
         return cx, cy, "noink_noblob"
-    return float(best[0]), float(best[1]), "moved"
+    if bw > mask.shape[1] or bh > mask.shape[0]:
+        ys, xs = np.nonzero(mask)                        # 窗比框还小：直接落到最近墨迹像素
+        i = int(np.argmin((xs + wx0 - cx) ** 2 + (ys + wy0 - cy) ** 2))
+        return float(xs[i] + wx0), float(ys[i] + wy0), "moved"
+    ii = np.zeros((mask.shape[0] + 1, mask.shape[1] + 1), np.int32)
+    ii[1:, 1:] = mask.cumsum(0).cumsum(1)
+    cnt = ii[bh:, bw:] - ii[:-bh, bw:] - ii[bh:, :-bw] + ii[:-bh, :-bw]  # cnt[ty, tx]
+    best = int(cnt.max())
+    if best < 3:                                          # 窗口里几乎是空白，退到最近墨迹像素
+        ys, xs = np.nonzero(mask)
+        i = int(np.argmin((xs + wx0 - cx) ** 2 + (ys + wy0 - cy) ** 2))
+        return float(xs[i] + wx0), float(ys[i] + wy0), "moved"
+    ys, xs = np.nonzero(cnt >= max(3, int(0.5 * best)))    # 「够多墨迹」的候选里取位移最小
+    ccx = wx0 + xs + (bw - 1) / 2.0
+    ccy = wy0 + ys + (bh - 1) / 2.0
+    i = int(np.argmin((ccx - cx) ** 2 + (ccy - cy) ** 2))
+    return float(ccx[i]), float(ccy[i]), "moved"
+
+
+def stamp_wh(cls: str, w: float, h: float):
+    """Expected (w, h) of `cls`'s official stamp, taking the axis from the measured aspect."""
+    tpl = STAMP_WH.get(cls)
+    if tpl is None:
+        return None
+    long_side, short_side = tpl
+    if h >= w:
+        return float(short_side), float(long_side)
+    return float(long_side), float(short_side)
+
+
+def drop_dups(rows: list[tuple[str, int, float, float, float, float]], tol: float):
+    """Drop boxes that repeat an earlier box of the same class within `tol` px.
+
+    `rows` items are `(cls, out_cid, cx, cy, w, h)`; returns `(kept, n_dropped)`.
+    """
+    kept: list[tuple[str, int, float, float, float, float]] = []
+    dropped = 0
+    for r in rows:
+        for k in kept:
+            if (k[0] == r[0] and abs(k[2] - r[2]) <= tol and abs(k[3] - r[3]) <= tol
+                    and abs(k[4] - r[4]) <= tol and abs(k[5] - r[5]) <= tol):
+                dropped += 1
+                break
+        else:
+            kept.append(r)
+    return kept, dropped
 
 
 # --------------------------------------------------------------------------- main
@@ -207,6 +269,21 @@ def main() -> int:
     ap.add_argument("--overlap", type=float, default=0.25)
     ap.add_argument("--snap", choices=("off", "new", "new+train"), default="new")
     ap.add_argument("--fix-ink", choices=("off", "recenter", "drop"), default="off")
+    # `--fix-tpl` / `--drop-dup` implement the two **auto-fixable** rows of the label audit
+    # (`work/label_audit.csv`, produced by `tools/dev/audit_labels.py` over the built v3 labels):
+    #   TPL_MISMATCH — a real-image box whose (w, h) is not the class's official stamp
+    #                  (`schematic_parser/stamp.py:STAMP_WH`; on official GT the stamp is 100%
+    #                  unique per class, so a different size is a labelling slip, not a variant).
+    #                  `snap` rewrites **size only** (centre kept); `drop` removes the box.
+    #   DUP          — a second box of the same class within a couple of px of another one.
+    # Both are train-only, like `--fix-ink`: val/test stay byte-identical so val77 mAP50 remains
+    # comparable with the recorded 0.6208 baseline.
+    ap.add_argument("--fix-tpl", choices=("off", "snap", "drop"), default="off")
+    ap.add_argument("--drop-dup", choices=("off", "on"), default="off")
+    ap.add_argument("--tpl-tol", type=float, default=1.0,
+                    help="px tolerance when deciding a box size already matches the stamp")
+    ap.add_argument("--dup-tol", type=float, default=2.0,
+                    help="px tolerance for calling two boxes of one class duplicates")
     ap.add_argument("--merge-classes", default="",
                     help="comma list of classes to collapse into one, e.g. pin,testpoint")
     ap.add_argument("--merged-name", default="",
@@ -297,10 +374,18 @@ def main() -> int:
                     cx, cy = cx2, cy2
                 elif st == "noink_noblob" and args.fix_ink == "drop":
                     continue
+            if (args.fix_ink != "off" and w >= 2 and h >= 2
+                    and ink_frac(gray, cx, cy, w, h) <= 0.0):
+                stats["new: ink left empty"] += 1   # ★ 修完仍然是空框 = 硬伤，必须为 0
             if w < 2 or h < 2:
                 stats["new: degenerate box"] += 1
                 continue
             boxes.append((cls, cx, cy, w, h))
+        if args.drop_dup == "on" and boxes:
+            rows = [(c, 0, a, b, cw, ch) for c, a, b, cw, ch in boxes]
+            rows, n_dup = drop_dups(rows, args.dup_tol)
+            stats["new: dup dropped"] += n_dup
+            boxes = [(c, a, b, cw, ch) for c, _, a, b, cw, ch in rows]
         # tile
         if args.tile and max(W, H) > args.max_scale * args.tile:
             stats["new: sheets tiled"] += 1
@@ -352,16 +437,17 @@ def main() -> int:
           f"test={sum(1 for p in base_pairs if p[2] == 'test')}")
 
     needs_remap = any(remap[i] != i for i in range(len(classes)))
+    needs_px = (args.fix_ink != "off" or args.snap == "new+train"
+                or args.fix_tpl != "off" or args.drop_dup == "on")
     fixed_lines: dict[Path, list[str]] = {}
-    if args.fix_ink != "off" or args.snap == "new+train" or needs_remap:
+    if needs_px or needs_remap:
         for img, lbl, split, stem in base_pairs:
-            # `--fix-ink` / `--snap new+train` are train-only repairs, but a **class remap** applies
-            # to every split: linking a val/test label whose ids were renumbered would silently point
-            # those boxes at the wrong classes.
+            # `--fix-ink` / `--fix-tpl` / `--drop-dup` / `--snap new+train` are train-only repairs,
+            # but a **class remap** applies to every split: linking a val/test label whose ids were
+            # renumbered would silently point those boxes at the wrong classes.
             if split != "train" and not needs_remap:
                 continue
-            pixel_work = (split == "train"
-                          and (args.fix_ink != "off" or args.snap == "new+train"))
+            pixel_work = split == "train" and needs_px
             raw = [ln.split() for ln in lbl.read_text(encoding="utf-8").splitlines() if ln.strip()]
             if not raw:
                 continue
@@ -370,6 +456,7 @@ def main() -> int:
                 gray = imread_gray(img)
                 H, W = gray.shape
             out_lines = []
+            rows: list[tuple[str, int, float, float, float, float]] = []
             for parts in raw:
                 cid = int(parts[0])
                 if not pixel_work:
@@ -382,6 +469,15 @@ def main() -> int:
                 cls = classes[cid]
                 if args.snap == "new+train":
                     cx, cy, w, h = snap(cls, cx, cy, w, h)
+                if args.fix_tpl != "off":
+                    want = stamp_wh(cls, w, h)
+                    if want is not None and (abs(w - want[0]) > args.tpl_tol
+                                             or abs(h - want[1]) > args.tpl_tol):
+                        if args.fix_tpl == "drop":
+                            stats["base: tpl dropped"] += 1
+                            continue
+                        cx, cy, w, h = snap(cls, cx, cy, w, h)
+                        stats["base: tpl snapped"] += 1
                 if args.fix_ink != "off":
                     cx2, cy2, st = ink_recenter(gray, cx, cy, w, h)
                     stats[f"base: ink {st}"] += 1
@@ -393,9 +489,25 @@ def main() -> int:
                     elif st == "noink_noblob" and args.fix_ink == "drop":
                         stats["base: box dropped"] += 1
                         continue
-                out_lines.append(yolo_line(remap[cid], cx, cy, w, h, W, H))
+                if (args.fix_ink != "off" and w >= 2 and h >= 2
+                        and ink_frac(gray, cx, cy, w, h) <= 0.0):
+                    stats["base: ink left empty"] += 1
+                if args.drop_dup == "on":
+                    rows.append((cls, remap[cid], cx, cy, w, h))
+                else:
+                    out_lines.append(yolo_line(remap[cid], cx, cy, w, h, W, H))
+            if args.drop_dup == "on":
+                rows, n_dup = drop_dups(rows, args.dup_tol)
+                stats["base: dup dropped"] += n_dup
+                out_lines.extend(yolo_line(c, a, b, cw, ch, W, H) for _, c, a, b, cw, ch in rows)
             fixed_lines[lbl] = out_lines
             stats["base: labels rewritten"] += 1
+
+    n_left_empty = stats["new: ink left empty"] + stats["base: ink left empty"]
+    print(f"\n空框自检（框内一点墨迹都没有的框）：new {stats['new: ink left empty']} + "
+          f"base {stats['base: ink left empty']} = {n_left_empty}   [v3 基线 27/13620 = 0.2%]"
+          + ("  ✗ 有残留：看上面 `ink moved` / `noink_noblob` 的分布"
+             if n_left_empty else "  ✓ 一个都没有"))
 
     if args.dry_run:
         print("\n=== box counts per class (v4 = base + new) ===")
@@ -457,8 +569,11 @@ def main() -> int:
         shutil.rmtree(tmp)
 
     names_block = "\n".join(f"- {n}" for n in classes_out)
+    # path 必须写**绝对路径**：写成相对路径时，解析结果取决于谁在哪个目录跑训练
+    # （实测踩过：--out ..\work\trainset_v4 写成 path: ../work/trainset_v4，
+    #   在 yolo_part 里训练就变成 eda-pcb\work\trainset_v4 ⇒ 找不到数据集）。
     (out / "data.yaml").write_text(
-        f"path: {out.as_posix()}\ntrain: images/train\nval: images/val\nnc: {len(classes_out)}\n"
+        f"path: {out.resolve().as_posix()}\ntrain: images/train\nval: images/val\nnc: {len(classes_out)}\n"
         f"names:\n{names_block}\n", encoding="utf-8")
     print(f"\nwrote {out}\n  transfer {dict(how)}")
     hist: Counter = Counter()
@@ -466,7 +581,12 @@ def main() -> int:
         for p in (out / "labels" / split).iterdir():
             for ln in p.read_text(encoding="utf-8").splitlines():
                 if ln.strip():
-                    cid = int(ln.split()[0])
+                    tok = ln.split()[0]
+                    if not tok.lstrip("-").isdigit():
+                        raise SystemExit(
+                            f"标签第一列不是类别 id（是 '{tok}'）: {p}\n"
+                            "  YOLO 只认数字 id；写出类名说明某条写标签的路径把 `cls` 当成了 id")
+                    cid = int(tok)
                     if cid >= len(classes_out):
                         raise SystemExit(f"class id {cid} out of range in {p}")
                     hist[classes_out[cid]] += 1
