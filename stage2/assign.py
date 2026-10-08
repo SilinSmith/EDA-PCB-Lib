@@ -314,12 +314,19 @@ def is_netname(s: str) -> float:
     return 0.0
 
 # type -> 允许的位号前缀（按官方 9609 个元件统计）
+# ★ `"tp"` 是 `STAGE1_MERGE_TP=1` 时 `stage1/detect.py` 出的**内部合并类**
+#   （`pin` + `testpoint`）。**必须有这一条**，否则 `canon_designator` 走到
+#   `:402 allow = TYPE_PREFIX.get(ctype, ())` 为空的兜底支（保真度 0.5、且绕过
+#   `PREFIX_MODE=strict`），位号绑不上 ⇒ 合并类拿不到 TP 号 ⇒ 会被出口闸门全丢。
+#   两者本来就共用 `TP` 前缀（见上一行的 `pin` / 下一行的 `testpoint`）。
+#   默认 off 时 `tp` 这个 ctype 根本不会出现 ⇒ 现有结果逐位不变。
 TYPE_PREFIX: Dict[str, Tuple[str, ...]] = {
     "c": ("C",), "r": ("R",), "box": ("U", "USB", "u"), "d": ("D",),
     "led": ("D", "LED"), "pin": ("TP",), "switch": ("SW", "S"), "l": ("L",),
     "mosfet": ("Q",), "bjt": ("Q",), "crystal_2pin": ("X", "Y", "C"),
     "crystal_3pin": ("X", "Y"), "crystal_4pin": ("X", "Y"), "crystal": ("X",),
-    "testpoint": ("TP",), "fuse": ("F",), "amp": ("U",), "amp_3pin": ("U",),
+    "testpoint": ("TP",), "tp": ("TP",), "fuse": ("F",), "amp": ("U",),
+    "amp_3pin": ("U",),
     "amp_5pin": ("U",), "bjt_npn": ("Q",), "bjt_pnp": ("Q",),
     "mosfet_npn": ("Q",), "mosfet_pnp": ("Q",), "v": ("TP",),
 }

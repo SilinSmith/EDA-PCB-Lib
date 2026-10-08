@@ -22,6 +22,11 @@ Metrics and weights (``Score_Accuracy_SingleCase``)::
   ⇒ ``pin_f1`` 只统计 **GT 里 type 为 box 的元件**的引脚。
 * **评测 Q3.1** —— LineF1 是「按照端点进行匈牙利匹配」。
 * **数据 Q6** —— 电源/地那类 ∅ 的 pin number 是「**随机生产的**」，不必也无法重建。
+* **最新 QA（2026-10，用户转述）** —— 「非 box 元件 pinnumber 不计分，所以 rcl 等在
+  hygraph 中相当于**不区分引脚** 1.2；gnd/vcc 同理；vcc 和 gnd 默认属于同一个 net；
+  输出规范**参考 10gt**」。⇒ 净 hyperGraph 的节点对非 box 元件折叠成
+  ``组件.*``（:attr:`EvalConfig.net_pin_collapse_nonbox`，官方 9 张上 +1.08 分）。
+  输出侧：电源符号按 10GT 的样子给（单个 `∅NNN` 元件 + 一个 pin + `value` 写 `GND`/`VCC`）。
 """
 from __future__ import annotations
 
@@ -105,6 +110,12 @@ class EvalConfig:
     # pin_f1 是否只统计 box（评测 Q2「非 box 类型元器件 pin name, pin number
     # 不参与评分」）；设 False 回到旧口径（全部元件）
     pin_box_only: bool = True
+    # 净 hyperGraph 的**节点口径**：非 box 元件的引脚号折成通配 `*`。
+    # 最新 QA（2026-10）：「非 box 元件 pinnumber 不计分，所以 rcl 等在 hygraph 中
+    # 相当于**不区分引脚** 1.2；gnd/vcc 同理；输出规范参考 10gt」。
+    # GT 里电源引脚号是随机生产的（`∅113.111`），字面比永远配不上；开着更贴官方。
+    # 设 False 回到「按字面比」的旧口径（历史分数都是那个口径，见 docs/DIAGNOSTICS.md）。
+    net_pin_collapse_nonbox: bool = True
     # type 是否按 type_list 归一化
     canon_types: bool = True
 
@@ -464,13 +475,26 @@ def pin_f1(gt: dict, pred: dict, cfg: EvalConfig,
     return res
 
 
-def _net_sets(section: dict) -> List[Tuple[str, frozenset]]:
+def _net_sets(section: dict, comps: Optional[dict] = None,
+              collapse_nonbox: bool = False) -> List[Tuple[str, frozenset]]:
+    """每个 net 的节点集合。
+
+    ``collapse_nonbox=True`` 时把**非 box 元件**的引脚号折成通配 ``*``
+    （最新 QA：「rcl 等在 hygraph 中相当于不区分引脚」；电源引脚号是随机生产的，
+    字面比永远配不上）。box（IC）的引脚号照旧逐位比较。
+    """
     out = []
     for name, net in section.items():
         if not isinstance(net, dict):
             out.append((name, frozenset()))
             continue
-        out.append((name, frozenset(net_pin_set(net))))
+        refs = set(net_pin_set(net))
+        if collapse_nonbox:
+            c = comps or {}
+            refs = {(comp, pin if canon_type((c.get(comp) or {}).get('type')) in IC_TYPES
+                     else '*')
+                    for comp, pin in refs}
+        out.append((name, frozenset(refs)))
     return out
 
 
@@ -497,7 +521,10 @@ def match_nets(gt_nets, pred_nets) -> List[Tuple[int, int]]:
 def net_hypergraph_f1(gt: dict, pred: dict, cfg: EvalConfig,
                       detail: Optional[Dict[str, int]] = None,
                       ) -> Tuple[F1, List[Tuple[int, int]]]:
-    g_nets, p_nets = _net_sets(gt['nets']), _net_sets(pred['nets'])
+    g_nets = _net_sets(gt['nets'], gt.get('components'),
+                       cfg.net_pin_collapse_nonbox)
+    p_nets = _net_sets(pred['nets'], pred.get('components'),
+                       cfg.net_pin_collapse_nonbox)
     pairs = match_nets(g_nets, p_nets)
     res = F1()
     if cfg.net_mode == 'exact':

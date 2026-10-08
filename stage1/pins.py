@@ -123,8 +123,13 @@ STUB_SPARSE_RATIO = float(os.environ.get("STAGE1_PIN_STUB_RATIO", "0.6"))
 TWO_PIN = frozenset({"r", "c", "l", "d", "led", "fuse", "crystal_2pin", "battery",
                      "battary", "net_short", "switch", "buzzer", "amp"})
 # 一脚符号
+# ★ `"tp"` 是 `STAGE1_MERGE_TP=1` 时 `stage1/detect.py` 把 `pin`/`testpoint` 合并出的
+#   **内部类**（见 detect.py:100-124）。少了它，开关打开后 `pins_from_prior` 在
+#   `:263` 匹配不上、一路掉到 `:274 return []` —— 而它的两个父类都在表里，
+#   于是「合并」会**顺手删掉测试点/焊盘的兜底脚**（脚不进 pin F1、但进 net 超图 0.35）。
+#   两个父类都按一脚处理，合并类必须同款，否则开关打开前后不是同一套语义。
 ONE_PIN = frozenset({"gnd", "v", "vcc", "vbus_in", "net_input", "net_output", "pin",
-                     "testpoint", "net_bidirection", "block", "other"})
+                     "testpoint", "tp", "net_bidirection", "block", "other"})
 
 
 def sample_segments(segments: Sequence[Sequence[Sequence[float]]],

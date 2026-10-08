@@ -107,6 +107,35 @@ def evaluate(model, loader, charset: Charset, device, max_batches: int = 0):
 
 
 # ---------------------------------------------------------------- 主流程
+def _balance_pin_number(recs: List[dict], max_bucket: int = 3) -> List[dict]:
+    """给 `pin_number` 按文本长度分层**复制**到各桶样本数相等（只复制、不丢样本）。
+
+    动机：线上失败模式是「3 位引脚号被 CTC 吞掉一位」（`113`→`13`、位号 `C160`→`C10`），
+    而合成语料实测 2 位号占 79%（87000 条里 1 位 8909 / 2 位 70694 / 3 位 7660），模型先验
+    天然偏向 2 位。超过 `max_bucket` 位的并进最后一桶。
+    """
+    buckets: Dict[int, List[dict]] = {}
+    out_other: List[dict] = []
+    for r in recs:
+        if r.get("role") == "pin_number":
+            k = min(max(1, len(str(r.get("text") or ""))), max_bucket)
+            buckets.setdefault(k, []).append(r)
+        else:
+            out_other.append(r)
+    if len(buckets) < 2:
+        return recs
+    target = max(len(v) for v in buckets.values())
+    before = {k: len(v) for k, v in sorted(buckets.items())}
+    out = list(out_other)
+    for k in sorted(buckets):
+        items = buckets[k]
+        for i in range(target):
+            out.append(items[i % len(items)])
+    print("[balance] pin_number 分桶 %s -> 每桶 %d 条；总样本 %d -> %d"
+          % (before, target, len(recs), len(out)))
+    return out
+
+
 def main(argv=None) -> int:
     d = C.DEFAULTS
     ap = argparse.ArgumentParser(description="训练 textrec CRNN+CTC")
@@ -130,6 +159,10 @@ def main(argv=None) -> int:
     ap.add_argument("--resume", default="", help="从某个 last.pt 继续")
     ap.add_argument("--include-real", action="store_true",
                     help="把真实语料也拿进训练（默认不用，它只做验证）")
+    ap.add_argument("--pin-num-balance", choices=("off", "equal"), default="off",
+                    help="pin_number 按文本长度分层重采样：'equal' 让 1/2/3 位样本数相等。"
+                         "线上失败模式是「3 位号读成 2 位」（`113`→`13`），而合成语料里 2 位占 79%%，"
+                         "默认 off 保持原分布")
     args = ap.parse_args(argv)
 
     if args.smoke:
@@ -159,6 +192,8 @@ def main(argv=None) -> int:
         train_recs = train_recs[: args.limit]
     if args.val_limit:
         val_recs = val_recs[: args.val_limit]
+    if args.pin_num_balance == "equal":
+        train_recs = _balance_pin_number(train_recs)
 
     train_ds = CropDataset(train_recs, charset, augment=args.augment)
     val_ds = CropDataset(val_recs, charset, augment=False)

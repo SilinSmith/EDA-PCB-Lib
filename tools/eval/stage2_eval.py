@@ -113,6 +113,9 @@ def main(argv=None):
                     help="无名元(∅NNN)的匹配方式，默认 gt=官方口径")
     ap.add_argument("--pin-all", action="store_true",
                     help="pin_f1 统计全部元件（旧口径），默认只统计 box")
+    ap.add_argument("--net-literal", action="store_true",
+                    help="净 hyperGraph 按字面比引脚号（旧口径，会多扣非 box 的引脚号）；"
+                         "默认按最新 QA 把非 box 元件的引脚号折成通配")
     ap.add_argument("--no-canon-types", action="store_true",
                     help="不按 type_list 归一化 type")
     ap.add_argument("--quiet", action="store_true")
@@ -127,6 +130,7 @@ def main(argv=None):
                      line_tol=args.line_tol, compare_text=not args.no_text,
                      unkeyed_match=args.unkeyed_match,
                      pin_box_only=not args.pin_all,
+                     net_pin_collapse_nonbox=not args.net_literal,
                      canon_types=not args.no_canon_types)
     exact, digits = build_index(args.data_root)
 

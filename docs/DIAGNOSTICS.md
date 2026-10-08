@@ -24,6 +24,16 @@
 6. **把「读错」和「没产出」分开量，否则你会去修错的东西。** 同一批缺号，成因可能是
    「识别错了」「策略把它丢了」「压根没检测到」——三者的修法完全不同（换模型 / 改一行开关 /
    改检测）。判据见 §1「按位置查，不要按号查」。
+7. **官方 Q&A 一变，先把「不可赢的口径」找出来，再谈优化。** 2026-10 的答疑明确
+   「非 box 元件的 pin number 不计分 ⇒ rcl/gnd/vcc 在净图里不区分引脚」，而 GT 的电源引脚号
+   是**随机生产**的（`∅113.111` / `pinname "P_27"`）⇒ 旧口径下这一项**任何队伍都不可能对上**。
+   判据：拿一批**已归档的产物**（不重跑管线）同时用新旧两套口径重打
+   （`tools/diag/_rescore.py --preset pin,order,f220,tp19,ckpt`），看 ① 分差有多大、
+   ② 有没有 A/B 结论翻盘、③ 用**独立实现**再算一遍能否逐位复现
+   （`tools/diag/_netconv.py` 的预处理版 vs 评分器内部默认值：9 张逐位相同）。
+   本轮结果 +1.08（官方 9）/ +1.7（220 张）、**名次一个都没变** ⇒ 历史实验不用重跑，
+   但报告里所有旧数字都必须挂上「旧口径」标签。**口径是配置项，不是事实**：改默认值的同时
+   必须留一条回旧口径的开关（这里是 `stage2_eval.py --net-literal`）。
 
 ---
 
@@ -180,6 +190,24 @@ silhouette 反而是 `r 0.252 > c 0.207 > d 0.199 > gnd 0.141 > v 0.092 > net_in
    残留非 0 会标 ✗；**重训前先看这一行**。量它的两把尺子：`eda-pcb/tools/diag/_inkcheck.py`
    （抽样量空框数 + 墨迹质心对框中心的偏移 + 框内墨迹占比，`--roots tag=path,...` 可随意比多个数据集）、
    `eda-pcb/tools/diag/_inktest.py`（4 条合成图硬测试，含上面那个质心陷阱的用例）。
+
+7. **训练慢 20× 的元凶是「显存贴卡沿 + WDDM 溢出」，不是单一的 `--workers`。**（2026-10-08，v4 43 类重训；
+   这条结论当天被推翻过一次，留着教训）现象 A：`--workers 6` 跑出 `1/60 28.7G … 290/480 5.2s/it`，
+   而 v3 同一批超参是 **100.4 s/轮（0.22 s/it）**。现象 B：改成 `--workers 2` 后**同一套 args** 又慢
+   （`1/60 16G→17.6G … 14/480 5.5s/it`，一个 epoch 42 min）；`Compare-Object` 比对
+   `runs/detect/probe_w2/args.yaml` 与 `runs/detect/pcb43_v4_im1536-2/args.yaml` 证明两份参数**只差**
+   `model` 路径形态（绝对/相对）、`epochs 1→60`、`name`/`save_dir` ⇒ **「`--workers 6` 是唯一元凶」不成立**。
+   病态签名（两次完全一致）：`utilization.gpu 100%` 但 **`power.draw ≈ 84 W`**（好状态 199~220 W）、
+   `utilization.memory 0%`、`clocks 2760/3105 MHz`、`clocks_throttle_reasons.active 0x0`、温度 48 ℃、
+   系统 RAM 空 35 GB ⇒ **不是 CPU / RAM / 温度 / 降频**。`Get-Counter '\GPU Process Memory(*)\Dedicated Usage'`
+   给出决定性证据：**我们自己的 python 独占 15.04 GB**（dwm 0.86 + msedge 0.13 GB，其余为 0）
+   ⇒ 16 GB 卡被占满、WDDM 往系统内存溢出，并且**逐轮恶化**（1.3→1.7→2.1→2.9→3.9→5.5 s/it）。
+   ⇒ 处置（定稿，`work/_gpu_queue.ps1` 已改）：**`--batch 4 → 2`**（imgsz 1536 不变）、`--workers 2` 保持、
+   **删掉 `$env:PYTORCH_CUDA_ALLOC_CONF = 'max_split_size_mb:128'`**（抗碎片设置会把 PyTorch 的保留段撑大，
+   实测 reserved 12.8G→17.4G，正好越过卡沿）。实测 `--batch 2`：**reserved 6.49~6.91G、199 W、
+   6.4 it/s、960 步不退化（无该 env）**。⇒ 规矩：**进度条里的 `GPU_mem` 只要逼近/超过物理显存就是溢出，
+   速度会塌 20~40×**；本机 YOLO 训练的 batch·imgsz² 上限就按 **batch 2 @1536** 定；`--workers` 仍 ≤ 2
+   （它只决定溢出多少：reserved 12.8G→28.7G）。**判定阈值/参数要先看「离物理上限还有多远」，再谈算法**。
 
 ### PowerShell 5.1 与中文日志（本机踩过两次）
 
@@ -496,6 +524,120 @@ python tools\diag\_numprobe.py --dir work\_fast_out_off9_tightpn
 实测（官方 9 张）：引脚点 322 · 有小字且交出号 **79** · 有小字没交出 **72** ·
 没小字却交出 22 · 都没有 149。
 
+**「GT 有、我方没有」的 IC 引脚到底丢在哪**（2026-10，`work/tools/diag/_pinmiss.py`）：
+
+```powershell
+# ⚠️ 半径必须 8 px：引脚列间距 ~20 px，30 px 会串到隔壁脚
+python -X utf8 work\tools\diag\_pinmiss.py --pred work\_fnew --assigned work\_fnew\_assigned `
+    --stage1 work\_fast_out_reg9\runs\stage1 --cases 1,2,3,4,5,7,8,9,10 --radius 8 --verbose 1
+```
+
+它把每个 missing 引脚追回原始读数（`_assigned/<case>.json` 的 `comps[cid].pins[*].name/number` +
+`stage1.pins[cid]` 的桩点列表）再分桶。交付级 `work/_fnew` 的 55 个 missing（**半径 8 px**）：
+
+| 桶 | 数 | 占比 | 含义 | 怎么修 |
+|---|---|---|---|---|
+| **A3** 名读到、桩在、号没读到 | **22** | 40.0% | 缺「这一个桩的号」 | 号识别 / **用官方库补号** |
+| **C** 附近没有名字读数 | 14 | 25.5% | 检测真没拿到 | 检测/裁剪 |
+| **A2** 名+号都读到、但该处无桩 | 9 | 16.4% | stage1 没给出这个引脚点 | 引脚检出 |
+| **A1** 名+号+桩都在、号读错 | 7 | 12.7% | 读数齐了却读错号 | 号识别 |
+| D 同位同名、号不同 | 2 | 3.6% | 号读错 | 号识别 |
+| A4 只有名 | 1 | 1.8% | | |
+
+- **教训（本轮自己犯的）**：半径 30 px 时出现的 `E-swap 13`（「同位发了、名是隔壁脚的」）**是伪影** ——
+  8 px 下 E 桶**整桶为 0**。判定阈值必须小于结构周期（这里是同列相邻脚间距 ~20 px）。
+- **A1 的回头复核**：那 9 个引脚读到的号文本里**没有一个含 GT 号**（样例 `num='2 / X2'`、`num='0'` ——
+  我方把两处读数拼进了一个字段）；同理 E 桶我方键的号 **0/15** 等于 GT 号。
+  ⇒ 「A1+E = 22 个纯绑定、不动模型就能拿」的说法**不成立**：它们都是**号识别错**。
+- attach 交叉列（8 px）：A3 no-attach 21 / attach 1、A2 no-attach 9、C no-attach 11 / attach 3
+  ⇒ **A3 的桩大多是孤脚/悬空脚**，这解释了它们为什么只有名没有号。
+- 修正后的结论：最大矛盾是「**号的召回**」（A3 22 + A1 7 + D 2 = **31/55 = 56%**），
+  第二是检测（A2 9 + C 14 = 23/55 = 42%）；**不存在「号键撞车」**（`_libopp` 的 `extra 0` 也支持）。
+- **号的来源**（几何插值已判负：`_pinlat.py` 里 ≤5 px 只 1/52）⇒ 唯一外部来源是官方库：
+  见 `eda-pcb\docs\COMPETITION_RULES.md` §6 ④（`_libnum.py` 量上界、`_libsim.py` 量交付级收益）：
+  规则 = 库里 `(型号, 名)` 唯一映射一个号 ⇒ 补号；`(型号, 号)` 唯一对应一个名 ⇒ 改名。
+  官方 9 张实测 **+2.4635 分**（pin F1 0.4951→0.5936，tp 44→54，fp 21→17），**纯 CPU、不动模型**。
+
+同一批的对照（`_libopp.py`）：文档级臂 `pinname ok 43 / missing 61`、号通道 `extra 6` →
+融合臂 `work/_fnew` `ok 58 / missing 55`、`extra 0` ⇒ **融合的 VLM 轮把 6 个错号修回来了**。
+
+⚠️ 陷阱：`stage1.<case>.json` 的 `attachments[cid].hits` 是**截断过的**（一颗大 IC 只记 3 条），
+所以本工具那个 `attach` 交叉列**不可当判据**；判「桩在不在」要用 `stage1.pins[cid]`（点列表）。
+⚠️ 另一个陷阱：`_assigned` 的引脚索引与 `stage1.pins[cid]` 的桩点**同序**，但**名字读数框不在引脚点上**
+（在符号体内部）——用「名字框中心离 GT 引脚 ≤8 px」判「名读到」会得到 **0/55** 的假结论，
+要用「最近的桩索引 j 的 `raw_pins[j].name`」。
+
+#### 官方库补号/改名已落进管线（`STAGE2_LIB_PINS`，**默认关**）
+
+上面那条「唯一外部来源是官方库」的建议**已经实现**，不再是模拟：
+
+| | |
+|---|---|
+| 实现 | `eda-pcb\stage2\libpins.py`（新）+ `eda-pcb\stage2\assemble.py` `build_doc` 的 box 引脚路径 |
+| 总闸 | `STAGE2_LIB_PINS`，**默认 `"0"`（关）**；关掉时 `libpins` 根本不会被 import，产物逐字节不变 |
+| 库路径 | `STAGE2_CPNT_LIB`，默认仓库根 `work\data\cpntLibrary.json` |
+| 模糊阈值 | `STAGE2_LIB_PINS_FUZZY`，默认 `0.85`（**只用来找库键**；某条引脚仍走「唯一」判定） |
+| 诊断 | `STAGE2_LIB_PINS_DBG=1` 打印补/改了哪几处；`python -X utf8 stage2\libpins.py` 跑自检 |
+
+两条规则（都不看 GT，都**只在唯一映射时动手**）：**A 补号** = 桩读到了引脚名、但号是空的
+或者是**位置补位号**（`fill`）⇒ 用库里 `(型号, 名)` **唯一**对应的号；**B 改名** = 号读到了、
+但 `pinname` 空或不在库里该型号的名字集合里 ⇒ 用库里 `(型号, 号)` **唯一**对应的名字。
+
+**验证（纯 CPU；不跑 `fusion.run` / `fast.py`）**——两件事都做了：
+
+1. **开关关掉时与「不挂接」逐字节一致**：`work\_libpins_bak\mk_noedit.py` 从当前文件里把
+   libpins 挂接**逐字挖掉**重建出「编辑前」的 `assemble.py`，`work\_libpins_bak\cmp_off.py`
+   让两者对同一批输入各跑一次 `build_doc` ⇒ **9/9 张 `sort_keys` JSON 的 md5 相同**。
+2. **`stage2` 直出这条路上两条规则几乎不触发**（关/开两次跑的 9 份产物 MD5 全 SAME）——
+   stage2 的 `Name` 是 OCR 原文，17 个 box 里只有 1 个命中库（收益靠型号名被读对，
+   那是**融合层**的事）。真正能触发的是「融合层的 `_assigned` + `stage1` 直接喂 `build_doc`」：
+
+```powershell
+# 交付级等价 A/B，纯 CPU（融合层也是这么调 build_doc 的，见 fusion\run.py:128）
+python -X utf8 work\tools\diag\_libpins_cpu.py `
+    --stage1 work\_fast_out_reg9\runs\stage1 --assigned work\_fnew\_assigned `
+    --out work\_libpins_cpu --cases 1,2,3,4,5,7,8,9,10
+python -X utf8 work\tools\eval\stage2_eval.py work\_libpins_cpu\off --quiet
+python -X utf8 work\tools\eval\stage2_eval.py work\_libpins_cpu\on  --quiet
+```
+
+官方 9 张实测（2026-10）**67.3015 → 68.7995（+1.4980）**：pin F1 0.5350→0.5715
+（tp 47→51、fp 18→21、**fn 73→69**）、net_hypergraph F1 0.6800→**0.6972**（tp 245→255、fn 174→164）。
+补号 7 处、改名 2 处、受影响网络 37 条，**逐条对 GT 核过：7/7 号对、2/2 名对**
+（`assign_components + rewrite_keys` 对齐后 `{'add_ok':7,'add_bad':0,'ren_ok':2,'ren_bad':0}`）。
+产物目录 md5 合并值：off `6d57f48961f4388e` / on `316345d07513e8cf`（逐张 md5 见 `_diff.json`）。
+⚠️ 这与 `_libsim.py` 的模拟 +2.4635 **不是同一口径**（模拟基线的分母不同，且模拟补进去的
+引脚**不进网络**）：本实现补的号**进** net（netH 因此多赚一份），而模拟那份的净收益只在 pin 通道。
+
+⚠️ 打分口径坑：`stage2_eval.py <dir>` 会把 `<case>.pinindex.json` 当预测、造成重复打分
+（18 份预测配 9 张 GT，分数虚低）。打分前把那两个文件挪走。
+
+⚠️ **交付包必须带上 `work\data\cpntLibrary.json`（1.76 MB / 337 键）**：`STAGE2_LIB_PINS=1`
+时它是运行时依赖，缺文件只打印一行 `[libpins] 库不可用` 并自动跳过（不炸管线，但也就没有收益）。
+
+### 引脚坐标超差：**「发的是 base 不是 tip」被判负**（2026-10，`_pintip.py`）
+
+官方附录三说元件有 outerbbox/bodybbox、**pin tip 在外侧框边缘、base 连内侧框**，我们
+`_pinpos.py` 又量到超差引脚里 20~50 px 桶的误差中位数是 `dx +2.0, dy +29.0` —— 于是有个
+很自然的假设：**我们发的是符号里侧的 base 点**。用 `work\tools\diag\_pintip.py` 逐条量过（两臂都量）：
+
+```
+python -X utf8 work\tools\diag\_pintip.py --pred work\_fnew                       # 融合层
+python -X utf8 work\tools\diag\_pintip.py --pred work\_libpins_cpu_verify\off     # stage2 直出
+```
+
+| 量 | 结果（`work\_fnew`，58 对「号同+名同」的引脚） | 含义 |
+|---|---|---|
+| `sG`（GT 点到 **GT bbox** 的有符号距离） | 中位 **−13.0**，`|sG|≤3` 占 **0/58** | GT 引脚**根本不在 GT bbox 边缘**，而在框外 ~13 px ⇒ 我们手里的 GT bbox 是**内侧体框**，不是外框 |
+| `sP`（我们的点到同一 bbox） | 中位 **−12.3** | 与 GT 只差 **1.2 px** |
+| `sP − sG` | 中位 **+1.2**，>0 占 35/58 | **没有系统性的里/外偏移** ⇒ 假设 (H1) 判负 |
+| 内法向证据（位移 ≥70 % 落在内法向） | 5/14 | 全是 case1 的 5 个 GND（`|d|=8.0`、`tan≈0`），是**局部**现象 |
+| 邻脚证据（我们的点落在同元件另一个 GT 脚 5 px 内） | **3/14**，切向偏移 **28.5~29.5 px** | ≈ 引脚列间距 ⇒ 这是**读号串扰**的下游后果，不是几何估计问题 |
+
+**结论**：位置超差（14 个，≈ −1.6 分）**不能**靠「统一往外挪 N px」修 —— 需要的位移方向逐条相反
+（case1 的 GND 要往外 +8，case4/case5 要往内 −6/−5），中位数就是 0。真正要修的是**号↔桩的绑定**
+（见 A1 归因：R1 一框一桩、R2 列内保序匹配、R3 元件框仲裁 + 停用序数伪造号）。
+
 ### 元件（component，权重 0.30）
 
 ```powershell
@@ -509,7 +651,64 @@ python tools\diag\_desigring.py   # GT 位号在周围 R 像素的文字框里�
 ```powershell
 python tools\diag\_linewhy.py     # 逐条看边的端点距离
 python tools\diag\_lineweld.py    # 「共线且首尾相接」焊成整条直线值不值
+python tools\diag\_nlfork.py      # ★ 逐 case 把 tp/fp/fn 拆到「网没配上 / 边数不对 / 端点超差」
+python tools\diag\_nlfork2.py     # ★ 区分「双描边」与「过分割」两种机制（856 对 vs 236 片）
 ```
+
+**★ 2026-10-08 根因定案：我们发的是笔画的「两条外沿」，GT 是一条中心线。**
+
+- 病灶在 `pipeline\pskel.py:118` 的 `thin_stroke_mask`：
+  `thin = (ink>0) & (dt <= max_half_width)`，而 `max_half_width` 默认 **1.6**。
+  一根 **4px 宽**的导线横截面上 `dt = 1,2,2,1` ⇒ `dt <= 1.6` **只留下两条外沿、把芯挖掉**，
+  掩膜变成**空壳**；Zhang-Suen（`pskel.py:31`）于是在空壳的两条壁上各给一条骨架 ——
+  我们镜像出**两条平行边**（相差 2~3px）。
+- 为什么这就是失分：`net_line_f1` 是**一对一派**（`metrics.py:566-578` 网内边匈牙利），
+  每条 GT 边最多命中两条里的一条，**另一条必然是 fp**。官方 9 张：配对网内我们 **993** 条
+  边 / GT **523**（1.90×），其中 **856 对**是「平行且两端都近 ≤4px」的双胞胎。
+- 像素铁证：case 9 图 `(1292, 386..403)` 处竖线是**实心 4px 绿**（`GGGG`）—— 空壳是
+  **我们掩膜造的**，不是图里画的。（`work\_wirepix.py` 一次性取证脚本。）
+- 反面教训（同一个发现、但当时走错了路）：`_nldup.py` 早就在头注释里写了这句话，但它的
+  离线臂 `par2/par3/par5/par3col` 是**在产物上事后把双描边并成中心线**，全部判负
+  （`par3` 把 case 2 的导线打成 0）⇒ **不要在产物上合并，要在提取处让骨架回到中心线。**
+
+三个**默认等于旧行为**的旋钮（`stage1\wires.py`，2026-10-08 接线；`close_thin` / `dilate_to`
+是 `WireExtractor` 早就有、但构造时从没传进去的参数）：
+
+| 旋钮 | 含义 |
+|---|---|
+| `STAGE1_WIRE_THIN_W` | 覆盖半宽阈值（默认 1.6；**≥2.0 就能保住 4px 描边整条**） |
+| `STAGE1_WIRE_CLOSE_THIN` | 1 = 3×3 形态学闭运算把两条外沿之间 2px 的缝焊上（`pskel.py:401-404`） |
+| `STAGE1_WIRE_DILATE` | N>0 = 把「离细笔画 N px 以内的墨」补回来（`pskel.py:405-409`，N=2 可填满 4~5px 描边） |
+
+**官方 9 张横扫**（`fast.py --no-vlm --cases 1,2,3,4,5,7,8,9,10`，`STAGE1_WIRE_COLOUR=off`，
+纯 CPU、0 次 LM Studio）：
+
+| 臂 | 总分 | 元件 | 引脚 | netH | **导线** | 双描边对 | 网内我们的边 / GT |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| base | 50.43 | 0.7682 | 0.3502 | 0.5044 | 0.0978 | 1212 | 1262 / 518 (2.44×) |
+| `DILATE=1` | 50.98 | 0.7682 | 0.3606 | 0.5003 | 0.1407 | — | — |
+| `DILATE=2` | 51.11 | 0.7682 | 0.3606 | 0.5026 | 0.1460 | **348** | **800 / 514 (1.56×)** |
+| `DILATE=3` | 51.11 | 0.7682 | 0.3606 | 0.5026 | 0.1460 | — | — |
+| `DILATE=2 + CLOSE=1` | 51.11 | 0.7682 | 0.3606 | 0.5026 | 0.1460 | 348 | 800 / 514 |
+| `THIN_W=2.2` | 51.23 | 0.7682 | 0.3606 | 0.5086 | 0.1368 | 339 | 798 / 522 (1.53×) |
+| **`THIN_W=2.6`** | **51.30** | 0.7682 | 0.3606 | 0.5078 | **0.1469** | — | — |
+| `THIN_W=3.0` | 51.18 | 0.7682 | 0.3606 | 0.5053 | 0.1434 | — | — |
+| `THIN_W=2.2 + D=2` | 51.11 | 0.7682 | 0.3606 | 0.5026 | 0.1460 | — | — |
+| `DILATE=2 + EDGE_MERGE=1` | 50.64 | 0.7682 | 0.3606 | 0.5026 | **0.0987** | — | — |
+| `chroma` 基线 | 50.41 | 0.7682 | 0.3502 | 0.5009 | 0.1076 | — | — |
+| `chroma + THIN_W=2.2` | 51.29 | 0.7682 | 0.3595 | **0.5124** | 0.1324 | — | — |
+
+结论与待办：
+
+1. **`THIN_W=2.6`（或 `DILATE=2`）把导线 F1 从 0.0978 抬到 0.1469（+50%）、总分 +0.87**，
+   引脚 +0.0104 是连带（`pin_f1` 按网配对计数）；`DILATE=3` 与 `DILATE=2+CLOSE` 不再加收益。
+2. **`STAGE2_EDGE_MERGE=1` 在修正后的几何上依然判负**（netL 0.1460→0.0987）——旧的
+   「共线焊接」结论在新基线上复现，别再试。
+3. ⚠️ **还没在真交付配置（`STAGE1_WIRE_COLOUR=hint` + VLM 轮）里验证**：上表全是
+   `--no-vlm` + `off`/`chroma`。`dilate_to` 的回填写作 `near & ink`（`pskel.py:409`）而不是
+   `& cm`，色相掩膜开着时会**把紧邻导线的非导线墨也补回来** —— `chroma` 那一行
+   （+0.88）说明后果可接受，但 `hint` 下仍需一次真口径 A/B 才能改默认值。
+4. 旋钮**默认值一律没改**（全部等于旧行为）⇒ 现在是「可用但未启用」状态。
 
 ---
 

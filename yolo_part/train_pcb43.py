@@ -69,8 +69,16 @@ YAML_CANDIDATES = [
     Path(r"Y:\workspace\EDA\训练集_v2\data.yaml"),
     Path(r"Y:\workspace\EDA\PCB_trainset\data.yaml"),
     Path(r"Y:\workspace\EDA\PCB训练集\data.yaml"),
+    # 重建版（tools/dev/build_trainset_v4.py 产物）——排在最后，免得悄悄改变默认基线。
+    # v4 = 43 类（与 v3 同类名同语义，只清掉了 6 个重复框）；v4_merged = 42 类
+    # （pin + testpoint 合成 tp，给「检测阶段合并、绑定阶段再分类」用，需要 --nc 42）。
+    Path(r"Y:\workspace\EDA\work\trainset_v4\data.yaml"),
+    Path(r"Y:\workspace\EDA\work\trainset_v4_merged\data.yaml"),
 ]
 EXPECTED_NC = 43
+# 允许的 nc 例外：重建版把 pin/testpoint 合成 tp 之后就是 42 类。
+# 放在这里而不是「随便放行」，是因为 nc 变了而没人注意，跑一天的训练就白跑了。
+NC_EXCEPTIONS = {42: "pin+testpoint 已合并成 tp（见 build_trainset_v4.py 的 merge_classes）"}
 
 
 def ensure_runtime() -> None:
@@ -187,7 +195,7 @@ def resolve_model(name: str) -> str:
     return name
 
 
-def preflight(yaml_path: Path) -> str:
+def preflight(yaml_path: Path, expected_nc: int | None = None) -> str:
     import yaml
 
     cfg = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
@@ -198,8 +206,14 @@ def preflight(yaml_path: Path) -> str:
     names = list(names or [])
     if nc != len(names):
         raise SystemExit(f"data.yaml 自相矛盾：nc={nc} 但 names 有 {len(names)} 项")
-    if nc != EXPECTED_NC:
-        raise SystemExit(f"nc={nc}，期望 {EXPECTED_NC}。classes.txt 变了？")
+    want = expected_nc or EXPECTED_NC
+    if nc != want:
+        detail = NC_EXCEPTIONS.get(nc)
+        if detail and not expected_nc:
+            print(f"注意      : nc={nc}（不是默认 {EXPECTED_NC}）—— {detail}")
+        else:
+            raise SystemExit(f"nc={nc}，期望 {want}。classes.txt 变了？"
+                             + (f"\n（{nc} 是已知的例外：{detail}）" if detail else ""))
 
     root = Path(cfg.get("path") or yaml_path.parent)
     if not root.is_dir():
@@ -249,7 +263,10 @@ def preflight(yaml_path: Path) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description="PCB训练集 43 类元件检测训练", formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default="yolo11m.pt", help="权重名或路径；默认 yolo11m.pt（官方 COCO 干净起点，见文件头说明）")
-    ap.add_argument("--data", default=None, help="data.yaml 路径；默认取 训练集_v3（找不到再回退 训练集_v2 / PCB训练集）")
+    ap.add_argument("--data", default=None, help="data.yaml 路径；默认取 训练集_v3（找不到再回退 训练集_v2 / PCB训练集），"
+                                                "最后才轮到重建版 work\\trainset_v4")
+    ap.add_argument("--nc", type=int, default=None,
+                    help="覆盖类别数检查（默认要求 43）。给 42 就是重建版的 pin+testpoint 合并集")
     ap.add_argument("--imgsz", type=int, default=1024, help="默认 1024，与切片原生尺寸一致")
     ap.add_argument("--epochs", type=int, default=200)
     ap.add_argument("--batch", type=int, default=12, help="显存不够就减半；-1 = 自动估算")
@@ -280,7 +297,7 @@ def main() -> int:
     ensure_runtime()
     from ultralytics import YOLO
 
-    yaml_path, class_names = preflight(resolve_data_yaml(args.data))
+    yaml_path, class_names = preflight(resolve_data_yaml(args.data), args.nc)
     model_ref = resolve_model(args.model)
     check_checkpoint(model_ref, class_names)
     stem = Path(model_ref).stem

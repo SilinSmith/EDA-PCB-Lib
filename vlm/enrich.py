@@ -97,7 +97,7 @@ DESIG_RE = re.compile(r"^[A-Za-z]{1,3}\d{1,4}$")
 # 换成按分立元件写的提示词（沿用 `VALUE_PROMPT` 里验过的四条约束）。
 PASSIVE_TYPES = frozenset((
     "r", "c", "l", "fuse", "crystal", "crystal_2pin", "crystal_3pin", "crystal_4pin",
-    "d", "led", "testpoint", "switch", "bjt", "mosfet", "pin", "amp", "amp_3pin",
+    "d", "led", "testpoint", "tp", "switch", "bjt", "mosfet", "pin", "amp", "amp_3pin",
     "amp_5pin", "amp_7pin", "buzzer", "esd", "battary", "jumper", "motor", "dc",
     "transfomer", "block", "opt", "seg", "ant", "circle_header", "other",
     "mosfet_npn", "mosfet_pnp", "bjt_npn", "bjt_pnp",
