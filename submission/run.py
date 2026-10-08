@@ -132,6 +132,20 @@ def main(argv=None) -> int:
     ap.add_argument("-vlm-name-margin", "--vlm-name-margin", dest="vlm_name_margin",
                     type=float, default=80.0,
                     help="读器件型号时元件框外扩的像素（40 起就平了）。")
+    ap.add_argument("-vlm-pin", "--vlm-pin", dest="vlm_pin",
+                    default="on", choices=("on", "off"),
+                    help="用 VLM **引脚通道**（读 IC 的引脚号/名，替换引脚键）。"
+                         "**默认开**：官方 10GT 9 张交付口径 58.6304 → **61.5112（+2.88）**"
+                         "（pin F1 0.3920→0.4858、tp 37→45）；全量 220 按 split 拆开是"
+                         " 10GT **+2.59** / 10_GTcase **+0.76** / 200_train_cases **−0.25**"
+                         "（负号只在自动命名那一档）。⚠ 这是**替换**引脚键那条路"
+                         "（`VLM_PIN_MERGE=0`）；`VLM_PIN_MERGE=1` 是只并名的旧路线。")
+    ap.add_argument("-vlm-pin-name", "--vlm-pin-name", dest="vlm_pin_name",
+                    default="on", choices=("on", "off"),
+                    help="引脚通道里**『名』那一半**（融合层 `FUSION_VLM_PIN_NAME`）。"
+                         "关掉只剩「号」：官方 9 张 **+1.95 且九张零回归**（全开 +2.88）。"
+                         "**如果评测集更像 JLC 派生的那 200 张（GT 引脚名常常就是号本身），"
+                         "关掉这一半更稳。** 号那一半由 `-vlm-pin` 控制。")
     ap.add_argument("-vlm-desig-fallback", "--vlm-desig-fallback",
                     dest="vlm_desig_fallback", default="on", choices=("on", "off"),
                     help="对『键还是兜底键 pNNN』的元件补读位号（不限类型）。"
@@ -307,6 +321,7 @@ def main(argv=None) -> int:
                           "value_batch": a.vlm_value_batch, "value_side": a.vlm_value_side,
                           "value_cols": a.vlm_value_cols,
                           "name": (a.vlm_name == "on"), "name_margin": a.vlm_name_margin,
+                          "pin": (a.vlm_pin == "on"),
                           "desig_fallback": (a.vlm_desig_fallback == "on")},
                     cases=[c.case_id for c in cases if c.case_id in ok1])
                 s3_dir = s3v                       # 补强后的目录成为导出源
@@ -382,6 +397,13 @@ def main(argv=None) -> int:
         #   即「省时间」的开关是安全可用的；但**是否默认开**是 owner m25661 的
         #   决定（见上），不要因为一次 A/B 就翻回去。
         os.environ["FUSION_CROPFIX"] = "1" if a.fusion == "llm" else "0"
+        # ★ 引脚通道的**「名」那一半**（`fusion/claims.py` 的 `_add_vlm` (d) 段）。
+        #   号那一半由 `-vlm-pin` 走 enrich 的 opts（`pin=True` + 出处标记 `_pin_channel`），
+        #   这一半是融合层侧的开关，只能用环境变量；`from fusion import run` 在下面，
+        #   模块级常量尚未求值 ⇒ 在这里 set 是有效的。
+        #   默认 on（全开 +2.88）；评测集若更像 JLC 派生的那 200 张就 `-vlm-pin-name off`
+        #   （那时只补号更稳：官方 9 张 +1.95 且零回归）。
+        os.environ["FUSION_VLM_PIN_NAME"] = "1" if a.vlm_pin_name == "on" else "0"
         if a.fusion == "off":
             os.environ["FUSION_LLM"] = "0"
         elif a.fusion == "llm":
@@ -392,10 +414,12 @@ def main(argv=None) -> int:
             from fusion import run as fusion_run
             want = [r["case"] for r in s2_rows]
             _log(fp, "=== 融合层：先验 + 解 + 合理性检查（%d 张，LLM 轮 %s，"
-                     "cropfix %s，FUSION_LLM=%s） ==="
+                     "cropfix %s，FUSION_LLM=%s，引脚通道 %s/名 %s） ==="
                  % (len(want), "开" if _do_llm else "关",
                     "开" if a.fusion == "llm" else "关",
-                    os.environ.get("FUSION_LLM", "(未设→默认 开)")))
+                    os.environ.get("FUSION_LLM", "(未设→默认 开)"),
+                    "开" if a.vlm_pin == "on" else "关",
+                    "开" if a.vlm_pin_name == "on" else "关"))
             t0 = time.time()
             for i, cid in enumerate(want, 1):
                 try:

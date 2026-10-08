@@ -178,9 +178,15 @@ python -m submission.run -input in -output out `
   -cases 1,2,10 `             # 只跑指定 case
   -no-wires `                 # 跳过导线网络（只交元件+引脚）
   -mode off `                 # VLM 关闭；默认 auto
+  -vlm-pin on `               # VLM 引脚通道（**默认开**：官方 9 张交付口径 +2.88）
+  -vlm-pin-name off `         # 只补引脚「号」不补「名」（更保守的一档，官方 9 张 +1.95 零回归）
   -fusion on `                # 融合仲裁层（默认开）
   -gpu-frac 0.45              # 给本地 LLM 留显存
 ```
+
+> 引脚通道的两个开关见 `docs/RESULTS.md` §2.5：默认「号+名」全开（官方 10GT 9 张上
+> 58.6304 → 61.5112）；`-vlm-pin-name off` 是**防回归**档（编号那半在官方 9 张上没有
+> 任何一张变差）；`-vlm-pin off` 则完全回到 58.6304 的旧行为。
 
 ### 4.2 启用 VLM / LLM（默认端口 1234）
 

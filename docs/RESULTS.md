@@ -255,6 +255,29 @@ CRNN 在**真值紧框**上 exact **0.843**、在 `stage1` 紧框上只有 **0.1
 - ⇒ **不是「官方 / 派生」两档，是三档**：两个 `10GT*` 派生的集子都赚（+2.59 / +0.76），
   只有 `200_train_cases` 亏（−0.25）。**「220 上是 −0.07」这句话必须带上这个拆分**，
   否则会被读成「这条通道对非官方数据没用」。
+
+**⑤b 全量 220 上的四臂（把「号」「名」两半分着看）**：`work\_f220_A` / `_f220_B` / `_f220_C` / `_f220_n1m0`，
+打分 `python tools\eval\stage2_eval.py work\_f220_<臂> --quiet --json work\_f220_<臂>.json`，
+拆分汇总 `python eda-pcb\tools\diag\_cmp9.py work\_f220_A.json work\_f220_<臂>.json`：
+
+| 220 臂 | 均分 | Δ | `10GT`(10) | `10_GTcase`(10) | `200_train_cases`(200) |
+|---|---:|---:|---:|---:|---:|
+| A 通道关 | 29.4819 | — | 57.8383 | 32.7960 | 27.8984 |
+| **B 全开（号+名）** | 29.4099 | −0.072 | 60.4310 (**+2.59**) | 33.5577 (**+0.76**) | 27.6515 (−0.247) |
+| C 只名（`FUSION_VLM_PIN_NUM=0`） | 29.2639 | −0.218 | 59.0231 (+1.18) | 33.1807 (+0.38) | 27.5801 (−0.318) |
+| D 只号（`FUSION_VLM_PIN_NAME=0`） | **29.4912** | **+0.009** | 59.5944 (+1.76) | 33.2005 (+0.40) | 27.8006 (−0.098) |
+
+- **两半的贡献 = 两臂相减**：B − C = **「号」那一半** ⇒ `10GT` **+1.41** / `10_GTcase` **+0.38** /
+  `200_train_cases` **+0.071**，**三个 split 全是正的**（这一半只补号，不去动已经读对的名）；
+  C − A = **「名」那一半** ⇒ +1.18 / +0.38 / **−0.32**，**只有它在派生档倒扣**。
+  ⇒ 220 上的负号**完全来自「名」**；这也解释了为什么 9 张上「全开」不是「只号 + 只名」的简单相加
+  （case 9 名倒扣 4.55）。
+- **「要稳就不要名」是 220 档的结论，但官方档上「名」值 +0.93**（9 张：全开 61.5112 vs 只号 60.5816）
+  ⇒ **出厂默认保持「全开」（`-vlm-pin on` + `-vlm-pin-name on`），把 `-vlm-pin-name off` 作为一行退守**
+  写进 `README` §4.1 —— 评测集越像 JLC 派生那 200 张，越应该退守到「只号」。
+- 只号臂在**两个官方档 split 上一张都没变差**（`10GT` 3 变好/0 变差、`10_GTcase` 1/0）；
+  全开在 `10GT` 上变差 1 张（就是 ④ 表里 case 8 的 −1.67，纯粹被名拖坏）。
+
 - 为什么 `200_train_cases` 那份**不能当判据**：① 那份 GT 是**自动命名**派生的
   （`*-jlc_target_named.json`），引脚号先验正是在这一类图上调出来的 ⇒ 「外部读数」在它上面
   显得多余属于**自证**；② 官方 `10GT` 是没参与过任何调参的**留出集**，+2.881（评测口径
@@ -269,6 +292,24 @@ CRNN 在**真值紧框**上 exact **0.843**、在 `stage1` 紧框上只有 **0.1
   **GT 派生 200_train 是 20.1%**；我们自己的交付产物是官方 9 张 **0.0%**、派生 220 张 **3.2%**
   （`pinname` 为空或纯数字的比例：官方 9 张 **2.5%** / 派生 220 张 **17.5%** / GT 派生 **20.1%**）。
   ⇒ **派生档本来就靠「号」当「名」活着**，同一个「名」通道在两个集子上必然一正一负。
+
+**⑥ 交付路径端到端复核（单张，`submission/run.py` 全默认）**：融合层那几张表都在
+`--no-llm` 的「融合-only」口径上，交付容器里还多一层 `submission/run.py` 编排
+（VLM opts 从 CLI 传下去、`FUSION_VLM_PIN_NAME` 必须在 `from fusion import run` **之前** set）。
+所以另外做了一次**真交付单张**：`python -m submission.run -input work\_fast_in -output work\_smoke_pin_c2 -cases 2`（31.2 s，日志里
+`改写引脚 6 个`、`引脚通道 开/名 开`；doc 里 `_pin_channel = True`）：
+
+| case 2 交付口径 | 总分 | comp F1 | pin F1 | netH | netL | `pin.name_mismatch` |
+|---|---:|---:|---:|---:|---:|---:|
+| A 旧交付（`work\_fast_out_reg9\final_results`，通道关） | 53.5038 | 1.0000 | 0.2727 | 0.4516 | 0.0879 | 3 |
+| **B 新交付（单张重跑，通道开）** | **58.0492** | 1.0000 | **0.4545** | 0.4516 | 0.0879 | **1** |
+| Δ | **+4.5454** | 0 | +0.1818 | 0 | 0 | −2 |
+
+- ⇒ **+4.5454 与融合-only 臂里 case 2 的 +4.55 逐位一致**（上面 ④ 表），其余的 comp/netH/netL
+  **一位没动** ⇒ 交付路径上的接线（CLI → VLM opts → `_pin_channel` 标记 → 融合层 (d) 段）是通的。
+- 顺带：`stage2_eval work\_fast_out_reg9\final_results` = **58.6304**（comp 0.9403 / pin 0.3920 /
+  netH 0.5355 / netL 0.1876、`pin.name_mismatch 16`）⇒ **`final_results` 口径与 §2.5 ③ 的 A 臂逐位相同**，
+  即「融合产物目录」和「交付产物目录」在这套分数上是同一个数。
 
 ---
 
@@ -514,6 +555,21 @@ $env:FUSION_LLM='0'
 
 # 看「你改的那条分支到底执行了几次」（boxscan / shape_gate / run_prior 的分项计数）
 python -c "import json;d=json.load(open(r'work\_fast_out_reg9\runs\fusion\_fusion_report.json',encoding='utf-8'));[print(c['case'],c['notes']) for c in d['cases']]"
+
+# 引脚通道：交付路径单张复核（§2.5 ⑥）—— 关掉它才是「通道关」的交付基线
+python -m submission.run -input work\_fast_in -output work\_smoke_pin_c2 -cases 2 -gpu-frac 0.45
+python work\tools\eval\stage2_eval.py work\_smoke_pin_c2\final_results --quiet --json work\_smoke_c2.json
+# 对照：不带 `-vlm-pin` 的旧交付产物（通道关）
+python work\tools\eval\stage2_eval.py work\_fast_out_reg9\final_results --quiet --json work\_reg9_final_A.json
+
+# 引脚通道：融合层九臂 / 220 臂（不打 VLM，秒级）
+cd eda-pcb
+$env:FUSION_RUN_DIR='Y:\workspace\EDA\work\_fast_out_reg9\runs'; $env:FUSION_LLM='0'
+$env:FUSION_VLM_DIR='Y:\workspace\EDA\work\_vlm_pinfix_full'
+$env:FUSION_OUT_DIR='Y:\workspace\EDA\work\_f9_B_recheck'
+python -m fusion.run 1 2 3 4 5 7 8 9 10 --no-llm --workers 2 --quiet
+cd ..; python work\tools\eval\stage2_eval.py work\_f9_B_recheck --quiet
+python eda-pcb\tools\diag\_cmp9.py work\_f9_A_base.json work\_f9_B_pin.json   # 逐张 + 按 split 汇总
 
 # 汇总所有归档的均分与分项
 python tools\diag\_basemean.py
