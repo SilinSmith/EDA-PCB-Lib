@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **515** 个脚本。
+共 **528** 个脚本。
 
 
 <a id="data"></a>
@@ -54,18 +54,20 @@
 
 <a id="dev"></a>
 
-## `tools/dev/`（2 个脚本）
+## `tools/dev/`（4 个脚本）
 
 开发辅助（本目录的生成器）。
 
 | 脚本 | 行 | 说明 |
 |---|---:|---|
+| `audit_labels` | 277 | Training-label quality audit for a YOLO dataset — "错误的标号" triage. |
+| `build_trainset_v4` | 447 | Assemble `work/trainset_v4` = `trainset_v3` (optionally label-repaired) + `新补充训练集`. |
 | `gen_knobs` | 94 | 扫描源码里所有环境开关，生成 `docs/KNOBS.md`。 |
 | `gen_toolindex` | 96 | 生成 `docs/TOOLS.md` —— `tools/` 下每个脚本的索引（含首行 docstring）。 |
 
 <a id="diag"></a>
 
-## `tools/diag/`（407 个脚本）
+## `tools/diag/`（413 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -103,6 +105,7 @@
 | `_cfrep` | 29 |  |
 | `_charfit` | 150 | 从 38.8 万条真实「框 + 文本」标注里**拟合逐字符的宽度**，替换 axis.py 里那个 |
 | `_cmp.cmp` | 16 |  |
+| `_cmp9` | 78 | 逐张对比两个 stage2_eval --json 产物（用法：python work\_cmp9.py <A.json> <B.json>）。 |
 | `_cmpcfg` | 13 |  |
 | `_comp_diag` | 51 | 连通分量到底有多大？在「墨迹掩膜」上量，还是「骨架」上量？ |
 | `_compextra` | 185 | 把 `component.extra`（我们多出来的元件 = 纯 fp）按**类别 / 尺寸 / 与已匹配框的关系**分桶。 |
@@ -260,6 +263,7 @@
 | `_netsplit` | 111 | 量 netH（权重 0.35）的结构性杠杆：把预测的每张网**拆成单引脚网**会怎样。 |
 | `_netweld` | 185 | `netH` 的 `D_在网里但配错`（10GT 上 96 个 / 0.229）对策实验：**按几何把网络焊起来**。 |
 | `_netwhy` | 120 | 网络（`netH`，权重 0.35）的丢分逐条拆开：GT 的网络引脚里，我们缺的那些**为什么缺**。 |
+| `_newbbox` | 49 | 新补充训练集 bbox 约定终审：把候选约定放到「引脚对称性」下比较。 |
 | `_nldiag` | 145 | _nldiag.py —— `net_line_f1` 为什么只有 0.06？ |
 | `_nldup` | 325 | _nldup.py —— `net_line` 的真凶：我们把**笔画的两条边**都当成导线输出。 |
 | `_nledge` | 97 | _nledge.py —— 把某一对配对 net 的 GT 边/我方边**逐条并排打出来**，肉眼看差在哪。 |
@@ -305,12 +309,14 @@
 | `_pinab` | 110 | 引脚窗口 A/B：`pin_pitch_frac=0`（旧，垂直半宽 = cross）vs `0.45`（新，按引脚间距收窄）。 |
 | `_pinband` | 82 | 量「某颗 IC 框外的引脚号文字框」到底有没有被检出、又有没有被读成号。 |
 | `_pinbox` | 65 | 核对 boxscan 的第 ③ 条：引脚取景框到底是不是 None。 |
+| `_pincase` | 139 | 逐槽位对照表：**GT / 我们（stage2 装配）/ VLM 引脚通道** 三方的 (号, 名)。 |
 | `_pinchain` | 113 | **引脚在哪一段被丢掉**：GT → stage1 产物 → 最终提交文档，逐跳数引脚。 |
 | `_pincheck` | 66 | 自检：新 `crop_dir` 在 `cross_perp=None` 时**逐位等于**旧实现（A/B 对照臂的正确性前提）， |
 | `_pincolmatch` | 84 | 逐元件对账：stage1 产物的 `pincol` 枚举点 vs GT box 元件的引脚点。 |
 | `_pincolprobe` | 134 | 探针：把「框外号码窗」里到底有什么量化出来。 |
 | `_pincolread` | 98 | `stage1/pincol.py` 的号码窗直接送进 CRNN，读出来到底对不对？ |
 | `_pincoltest` | 167 | 验证 `stage1.pincol` 的引脚列枚举：拿真实 case 的 stage1 产物 + 原图跑一遍， |
+| `_pinconv` | 118 | GT 引脚键的**约定**普查：键是「物理引脚号」还是「1..N 计数器」？ |
 | `_pincov` | 143 | Pin coverage on *matched* ICs: is the loss in the POINT or in the NUMBER? |
 | `_pincover` | 122 | 量「引脚几何」的可用性：GT box 元件的引脚、我们预测里的引脚、stage1 检出的引脚点。 |
 | `_pincrop` | 132 | 把 GT 引脚点周围的邻域裁出来，看「一个引脚」在图上到底长什么样。 |
@@ -437,7 +443,7 @@
 | `_valread` | 138 | 「GT 有值 / 我们 None」的那 477 条，正确的值串到底**读没读出来**？ |
 | `_visionprobe` | 127 | 探 LM Studio 的视觉能力：逐个模型试 OpenAI 风格的 image_url 部件。 |
 | `_vizprobe` | 68 | 可视化前的探针：确认 GT 图 / 预测图 / stage1 图像尺寸三者一致，且 PIL 可用。 |
-| `_vlmab2` | 108 | 隔离 A/B：对同一份 stage2 预测跑 VLM 补强的几种开关组合，直接打分对比。 |
+| `_vlmab2` | 128 | 隔离 A/B：对同一份 stage2 预测跑 VLM 补强的几种开关组合，直接打分对比。 |
 | `_vlmdelta` | 81 | 量 VLM 节点到底改了什么：逐 case 对比 runs/stage2 与 runs/stage3_vlm 的产物。 |
 | `_vlmdesig` | 153 | 量 VLM 读「元器件位号」（IC 外框外的 U1 / U5 / IC2 / J3 …）的准确率。 |
 | `_vlmdoc` | 56 | 看一份 VLM 补强后的文档结构，并与 stage2 原文逐字段比较。 |
@@ -459,7 +465,7 @@
 | `_wfbullets` | 418 | workflow.html 的第二轮内容：每个节点的「要点清单」（正面可见）。 |
 | `_wfdump` | 19 |  |
 | `_wfextract` | 19 |  |
-| `_wfhead` | 165 | 改写 workflow.html 内嵌 graphdata 的 `name` 与 `note` 开头（第十批）。 |
+| `_wfhead` | 179 | 改写 workflow.html 内嵌 graphdata 的 `name` 与 `note` 开头（第十批）。 |
 | `_wfkind` | 93 | 改 `workflow.html` 里节点的 `kind`（徽标），用 `json` 模块安全改写内嵌 graphdata。 |
 | `_wfmd` | 20 |  |
 | `_wfnew` | 76 | 把 workflow.html 里 kind='new'（★ 要新写）的节点的 note + bullets 全文倒出来， |
@@ -469,8 +475,10 @@
 | `_wfupdate` | 335 | 把本会话（2026-10-07）的改动与实测写进 work/flow/workflow.html 的 graphdata。 |
 | `_widebox` | 93 | 把「宽框引脚号」的裁片摊开看（含 35px 邻域），用来判「框里到底有几个字形」。 |
 | `_wire_ab` | 128 | 导线提取的 A/B：无遮挡 / 遮挡元件 / 遮挡+边框与笔画过滤。 |
+| `_wirecand` | 260 | _wirecand.py —— 端点精度的三个最小候选，官方 9 张离线重算（不动管线/不改产物）。 |
 | `_wirecount` | 54 | stage1 提出来的线 vs 最终进网络的边：差在哪一步？ |
 | `_wirenew` | 95 | 找出「把 `WIRE_TOL` 从 1.5 抬到 N 之后**新产生**的段并」是哪几对。 |
+| `_wiresnapaudit` | 141 | _wiresnapaudit.py —— 追 EDGE_SNAP 为什么没吃掉那 5~10px。 |
 | `_wiresweep` | 18 |  |
 | `_wiretime` | 42 | 把 stage1 产物的 wires 耗时与图片规模/骨架复杂度关联起来。 |
 | `_wiretj` | 163 | Can a pure-CV *T-junction* count pick the wire colour? |
@@ -531,12 +539,17 @@
 
 <a id="gnd"></a>
 
-## `tools/gnd/`（12 个脚本）
+## `tools/gnd/`（17 个脚本）
 
 电源/地（`∅NNN`）符号专项。
 
 | 脚本 | 行 | 说明 |
 |---|---:|---|
+| `_gnd_modes_p3` | 195 | Part 3: use the Part-1 shape modes as a VALIDATOR for YOLO's existing gnd boxes. |
+| `_gnd_modes_p3b` | 91 | Part 3b: per-arm comparison of the mode-validator's threshold sweep. |
+| `_gndbox` | 139 | Are the k-means 'gnd modes' really modes -- or degrees of GT box misalignment? |
+| `_gndmodes3` | 172 | Follow-up to work/_gndbox.py -- are the k-means 'gnd modes' real, or are they |
+| `_modesctl` | 124 | Control for work/_gndmodes3.py -- the same k-means/silhouette sweep on other |
 | `cv_gnd_val` | 113 | 把「纯 CV 找 GND」和「YOLO 找 GND」放在同一把尺子、同一批图上比。 |
 | `gnd_anchor` | 209 | Can a ground-named PIN anchor the ground SYMBOL on the same net? |
 | `gnd_census` | 200 | Census of GND glyph FORMS in the real corpus. |
