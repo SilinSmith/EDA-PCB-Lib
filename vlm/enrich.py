@@ -686,6 +686,12 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
 
     # ★ 引脚通道（见 `PIN_CHANNEL` 的定义处）：默认**关**。关掉时下面的循环体一次都不走，
     # `pins` 原样返回 —— 位号/值/型号三条通道在此之前已经改完，不受影响。
+    _pin_ren = {}            # {元件键: {旧号: 新号}}，循环结束后重写 nets[*].hyperGraph
+    if opts.get("pin", PIN_CHANNEL):
+        # ★ 给融合层留一个**出处标记**：`fusion/claims.py:_add_vlm` 的 (d) 段只对带
+        #   `_pin_channel` 的文档把 `pins` 里的号/名当候选收进池子。没有这个标记，
+        #   基线臂（引脚通道关着）的文档也会被收一遍 CRNN 读数，A/B 就不干净了。
+        pred["_pin_channel"] = True
     for key, cv_ in (list(comps.items()) if opts.get("pin", PIN_CHANNEL) else []):
         if str(cv_.get("type") or "").lower() not in IC:
             continue
@@ -731,10 +737,30 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
                 newpins["pin_%s" % num] = {"pinname": name or old_name,
                                            "point": info["point"]}
                 n_pin += 1
+                if ("pin_%s" % num) != pk:
+                    _pin_ren.setdefault(key, {})[
+                        pk[4:] if pk.startswith("pin_") else pk] = num
             else:
                 newpins[pk] = info
         if newpins:
             pins[key] = newpins
+
+    # ★ 引脚键改名后必须同步 `nets[*].hyperGraph`（`VLM_PIN_REBUILD`，默认开）。
+    # 不改的话，被 VLM 读对号的那些引脚**进不了任何网络**：实测 `net.pred_pins`
+    # 替换前后都是 220、net_hypergraph 三臂逐位相同（0.4987），引脚通道的收益
+    # 一滴都流不到 0.35 权重的网络项上。位号改名那条路在 `:591-597` 早就这么做了。
+    if _pin_ren and (opts.get("pin_rebuild", PIN_REBUILD)):
+        for net in (pred.get("nets") or {}).values():
+            hg = net.get("hyperGraph")
+            if not isinstance(hg, str):
+                continue
+            for ck, mp in _pin_ren.items():
+                for old, new in mp.items():
+                    hg = re.sub(
+                        r"(?<![0-9A-Za-z_])%s\.%s(?![0-9A-Za-z_])"
+                        % (re.escape(ck), re.escape(old)),
+                        "%s.%s" % (ck, new), hg)
+            net["hyperGraph"] = hg
 
     pred["components"] = comps
     pred["pins"] = pins
@@ -759,6 +785,14 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
 _PIN_MERGE_ENV = os.environ.get("VLM_PIN_MERGE", "0").strip().lower()
 PIN_MERGE = _PIN_MERGE_ENV not in ("", "0", "false", "off", "none")
 
+# ★ `VLM_PIN_REBUILD`（默认开）：replacement 模式会把引脚键 `pin_13` 改成 `pin_113`，
+# 但 `nets[*].hyperGraph` 是**字符串** `"(U1.13,...)"`。不改它，读对的引脚就
+# **进不了任何网络** —— 实测 `net.pred_pins` 在替换前后都是 220、`net_hypergraph`
+# 一动没动（2026-10 官方 9 张：none 0.4987 / pinmerge 0.4987 / pinrepl 0.4987），
+# 即引脚通道的分全丢在网络门口。位号改名那条路早就在 `:591-597` 做了同样的重写。
+_PIN_REBUILD_ENV = os.environ.get("VLM_PIN_REBUILD", "1").strip().lower()
+PIN_REBUILD = _PIN_REBUILD_ENV not in ("", "0", "false", "off", "none")
+
 # ★★ 引脚通道总开关（2025-1x）：**默认关**。
 #
 # 为什么关：pincol 打开后 stage1 已经能给大 IC 交出**几何正确**的引脚列
@@ -774,6 +808,14 @@ PIN_MERGE = _PIN_MERGE_ENV not in ("", "0", "false", "off", "none")
 # 而同一个 VLM 的**位号通道**在 0143 上是 **component F1 0.5833 → 0.8750（值 +8.75 分）**，
 # 跟引脚通道无关 —— 所以这里只摘掉引脚那一段，位号 / 值 / 型号三条通道照留。
 # 代价：`pinname` 少了 VLM 这条来源，只能靠 CRNN 读框内的名字。
+#
+# ★ 2026-10 补测（**端到端交付口径**，且融合层已修掉「文档的 `pins` 没人读」那个 bug）：
+#   官方 10GT 9 张 **58.6304 → 61.5112（+2.88）**，pin F1 0.3920→0.4858（tp 37→45）；
+#   派生 220 张 **29.4819 → 29.4099（−0.07）**。两半拆开（`FUSION_VLM_PIN_NUM/NAME`）：
+#   官方档**只补号 +1.951 且九张没有一张变差**、只补名 +1.316、全开 +2.881、空跑 0.000。
+#   ⇒ 上面「在有大 IC 的图上净负」这个判断在**派生档上依然成立**（那正是 220 的构成），
+#   本行默认值因此不改；**官方档该开**，并把两半开关交给 `fusion/claims.py`。
+#   见 `docs/RESULTS.md` §2.5、`docs/DIAGNOSTICS.md`「写进了产物 ≠ 有人读」。
 _PIN_CHANNEL_ENV = os.environ.get("VLM_PIN_CHANNEL", "0").strip().lower()
 PIN_CHANNEL = _PIN_CHANNEL_ENV not in ("", "0", "false", "off", "none")
 
@@ -784,7 +826,7 @@ DEFAULTS = dict(designator=True, desig_all=False, desig_margin=60.0,
                 # 改成环境变量是为了能不改 CLI 就 A/B：`VLM_PIN_PER` / `VLM_PIN_COLS`。
                 per=int(os.environ.get("VLM_PIN_PER", "8")),
                 cols=int(os.environ.get("VLM_PIN_COLS", "4")),
-                min_pins=2, pin_merge=PIN_MERGE,
+                min_pins=2, pin_merge=PIN_MERGE, pin_rebuild=PIN_REBUILD,
                 pin=PIN_CHANNEL,
                 # **引脚名窗口：`inner` 是最大的一根旋钮**（实测，`work\tools\diag\_pinsweep.py`，
                 # 在 **GT 的引脚点上**读，所以只反映窗口几何、不含点检测误差）：

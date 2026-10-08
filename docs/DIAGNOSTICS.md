@@ -208,6 +208,59 @@ Get-FileHash work\flow\_wfbullets.py, eda-pcb\tools\diag\_wfbullets.py   # 两�
 
 ---
 
+### 「写进了产物」不等于「有人读」：**同一份产物跑两条口径，差值就是「没人读」的量**
+
+**症状**（2026-10，引脚通道）：`vlm/enrich.py` 的引脚通道把读到的号/名写进了补强文档的
+`pins[...]["pinname"]`，坐实了「读得对」——**同一份文档** `stage2_eval` 打 **60.7776**
+（pin F1 0.5174），可把它喂给融合层跑交付口径，总分 **58.6304，与「通道关着」的基线
+逐位相同**（pin 0.3920、`pin.name_mismatch` 16、`net.pred_pins` 238）。
+**逐位相同**就是铁证：这条通道的产物在下游**一次都没被用到**。
+
+**根因**：融合层 `fusion/claims.py:450 _add_vlm()` 只吃 `vlm["components"]`（键 / `Name` /
+`value`），而引脚是 `stage2/assemble.py:588 build_doc()` 从 `stage1`（点表）+ `stage2/_assigned`
+（号/名的文本）**重新装配**的 —— 补强文档里的 `pins` 没有任何人读。
+
+**尺子**（两口径对账，成本 30 s，不用重跑 OCR）：
+
+```powershell
+# ① 文档级打分：把补强文档目录当预测目录直接评
+python work\tools\eval\stage2_eval.py work\_vlm_pinfix_full --quiet
+# ② 交付级（融合层）打分：同一份文档喂给 fusion.run，只关 LLM 轮
+cd eda-pcb
+$env:FUSION_RUN_DIR='Y:\workspace\EDA\work\_fast_out_reg9\runs'
+$env:FUSION_VLM_DIR='Y:\workspace\EDA\work\_vlm_pinfix_full'
+$env:FUSION_OUT_DIR='Y:\workspace\EDA\work\_f9_B_pin'
+$env:FUSION_LLM='0'; python -m fusion.run 1 2 3 4 5 7 8 9 10 --no-llm --workers 3 --quiet
+python ..\work\tools\eval\stage2_eval.py $env:FUSION_OUT_DIR --quiet --json ..\work\_f9_B_pin.json
+```
+
+⇒ **规矩：任何「把东西写进某个中间产物」的改动，验收时必须把该产物走完下游再打分。**
+文档级分数只证明「读到了」，不证明「用上了」。同理，`_vlmab2.py` 的臂要叠在
+**交付口径自己那份**补强文档上（`--in work\_fast_out_reg9\runs\stage3_vlm`），否则值/名
+通道没开，比出来的是 confound（`work\_vlm_pinfix` 53.73 就是这么误读出来的）。
+
+---
+
+### 报「均分」前先按 split 拆开：**平均分会把方向相反的档抵消掉**
+
+**症状**（2026-10，同一个引脚通道的 A/B，全量 220 张）：全量均分 **29.4819 → 29.4099
+= −0.072**，看上去「这条通道在非官方数据上是负的」。按 split 拆开（`work\_f220_A.json` /
+`work\_f220_B.json` 逐张）：
+
+| 子集 | n | A | B | Δ 均分 |
+|---|---:|---:|---:|---:|
+| 官方 `10GT` | 10 | 57.8383 | 60.4310 | **+2.5927** |
+| `10_GTcase` | 10 | 32.7960 | 33.5577 | **+0.7616** |
+| `200_train_cases` | 200 | 27.8984 | 27.6515 | **−0.2469** |
+
+⇒ **三个集子里两个在赚**，负号只来自最大那一档；而那一档的 GT 是自动命名派生的、
+引脚号先验又正是在它上面调的（**自证**）。
+
+**规矩：任何跨数据集的 A/B，报均分前先按 split（或任何已知的异质子集）拆一次。**
+200 张的权重足以让 20 张上的 +2.6 在均分里看不见 —— 别让加权平均替你做结论。
+
+---
+
 ### 一次**无界的远程调用**会把整个阶段变成黑洞（先看 `timing` 的「余额」）
 
 **症状**：`work\_full220` 首跑里 `0003`（4491×3173）单张 `total_s` = **315.73 s**，而同一张
@@ -417,12 +470,16 @@ $env:FUSION_LLM='0'               # 关 LLM 裁决
 | **GT 引脚点附近有没有我们的文字、文字在框内还是框外** | `tools/diag/_pinlabel.py --n 60` |
 | **GT 引脚点是文字框心吗 / 在 bbox 边线上吗**（两个假说都证伪） | `tools/diag/_pintext.py --run --split --n` |
 | **引脚槽位的原始结构**（`number`/`name` 的 `{text, conf, box}`） | `tools/diag/_pinslot.py <case>` |
-| **官方档的引脚键形状**（10GT 全是纯数字） | `tools/diag/_gtpin10.py --show 4` |
+| ~~**官方档的引脚键形状**（“10GT 全是纯数字”）~~ → **改用下一行** | ~~`tools/diag/_gtpin10.py --show 4`~~（结论写反过，见 `_pinconv.py`） |
 | **缺号三分账**（策略 / OCR / 检测） | `tools/diag/_pinledger.py --run --split --show` |
 | **按位置对账引脚号与名的读法**（完全对 / 读错 / 空 / 截断） | `tools/diag/_ocrstat.py --run --split --n --show` |
 | **读法全对的写实上界**（上帝视角改写再打分） | `tools/diag/_ocroracle.py --out <产物> --cases …` |
 | **装配开关的离线单变量 A/B**（不占 GPU、不重跑 OCR） | `tools/diag/_gateab.py --run <产物> [--all]` → `tools/eval/stage2_eval.py work\_gate_ab\{on,off}` |
 | **引脚邻域肉眼核对**（十字位置、号在框外上方、名在框内） | `tools/diag/_pincropgt.py` |
+| **GT 引脚键的约定普查**（物理号式 vs 1..N 计数器式，按 split / 只算 IC） | `tools/diag/_pinconv.py` |
+| **逐槽位三方对照**（GT / 我们 / VLM 的号与名 + 点对齐） | `tools/diag/_pincase.py 0105 U1`（官方加 `--official`） |
+| **VLM 通道的臂 A/B**（引脚替换/合并/各种开关，产出补强文档） | `tools/diag/_vlmab2.py --in <stage3_vlm> --out <新目录> --arms pinrepl --workers 3` |
+| **两份 `stage2_eval --json` 逐张对比**（含按 split 汇总） | `tools/diag/_cmp9.py A.json B.json` |
 
 ---
 

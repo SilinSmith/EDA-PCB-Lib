@@ -67,6 +67,23 @@ ARMS = {
     "dall": dict(designator=True, value=False, min_pins=10 ** 9, desig_all=True),
     "dallfb": dict(designator=True, value=False, min_pins=10 ** 9,
                    desig_all=True, desig_fallback=True),
+    # ★ 2026-10 补：**引脚通道**。原来那条 `"pins"` 臂只设了 designator、`pin` 根本没开
+    #   ⇒ 「量引脚通道」从来没被真正执行过（等于拿基线比基线）。
+    #   `enrich_doc` 里引脚通道的门是 `opts.get("pin", PIN_CHANNEL)`；merge 门是
+    #   `opts.get("pin_merge")`（`eda-pcb\vlm\enrich.py:689` / `:717`）。
+    #   merge=True：号用我们自己的（几何/CRNN），只把模型读到的名并进来；
+    #   merge=False：VLM 读到的号直接替换键（旧实测三网格全负）。
+    "pinmerge": dict(pin=True, pin_merge=True, designator=False, value=False),
+    "pinrepl":  dict(pin=True, pin_merge=False, designator=False, value=False),
+    # 推荐组合 (a)：位号通道 + 引脚 merge（位号那条是唯一被证明大赚的 VLM 通道）
+    "pinmrgd":  dict(pin=True, pin_merge=True, designator=True, value=False),
+    # 位号通道单独一臂，作为 pinmrgd 的对照
+    "desigonly": dict(designator=True, value=False, pin=False),
+    # ★ 分离 `VLM_PIN_REBUILD`：替换引脚键后**不**重写 nets[*].hyperGraph（旧行为）
+    "pinrepl0": dict(pin=True, pin_merge=False, designator=False, value=False,
+                     pin_rebuild=False),
+    # 推荐组合 (a) 的完整版：位号 + 引脚替换（含 hyperGraph 重建）
+    "pinfix":   dict(pin=True, pin_merge=False, designator=True, value=False),
 }
 
 
@@ -77,6 +94,7 @@ def main():
     ap.add_argument("--arms", default="all")
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--cases", default="", help="逗号分隔的 case 白名单（空=全部）")
     ap.add_argument("--no-desig-pins", action="store_true",
                     help="value 臂里连引脚网格也一起跑（默认 value 臂只读值）")
     a = ap.parse_args()
@@ -91,7 +109,9 @@ def main():
         out = Path(a.outdir) if a.outdir else (ROOT / "work" / ("_vlm_" + arm))
         t0 = time.time()
         st = vlm_enrich.enrich_dir(a.indir, out, png_of, opts=opts,
-                                   workers=a.workers, limit=a.limit)
+                                   workers=a.workers, limit=a.limit,
+                                   cases=[c.strip() for c in a.cases.split(",")
+                                          if c.strip()])
         dt = time.time() - t0
         print("[%s] %s  %.0fs  %s" % (arm, out, dt, st))
         r = subprocess.run([sys.executable,

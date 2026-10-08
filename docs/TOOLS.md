@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **512** 个脚本。
+共 **515** 个脚本。
 
 
 <a id="data"></a>
@@ -65,7 +65,7 @@
 
 <a id="diag"></a>
 
-## `tools/diag/`（404 个脚本）
+## `tools/diag/`（407 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -185,6 +185,7 @@
 | `_fz1` | 56 | fusion 层第一轮实测：拿真实产物建池 + 跑先验，看位号候选变成什么样。 |
 | `_fzenrich` | 61 | 在指定的一批 case 上跑 VLM 补强，产出干净的 `<case>.json`（供融合层消费）。 |
 | `_fzrep` | 32 | 一页看融合层的报告：逐 case 打印 cropfix / judge / audit / rescan / 分数。 |
+| `_gateab` | 86 | `STAGE2_BOX_PIN_NEED_NAME` 的**离线单变量 A/B**（纯 CPU，不需要 GPU / OCR）。 |
 | `_gndname` | 29 |  |
 | `_gndnet` | 135 | _gndnet.py —— GND 互证先验（用户 m12359）到底有没有头寸？ |
 | `_gndpot` | 49 |  |
@@ -288,6 +289,8 @@
 | `_padsweep` | 173 | 外扩参数扫描：在**同一批检出框**上比不同 (pad_frac, pad_min, 纵横比) 的 OCR exact。 |
 | `_paramcheck` | 38 | 核对 workflow.html 各节点 params 栏里的常量是否与当前代码一致。 |
 | `_paramcheck2` | 28 | 第二批参数核对：detect.py 的 conf/imgsz、metrics.py 的口径、enrich.py 的引脚名开关。 |
+| `_patch10` | 93 | 把「第十批」的结论按字面替换写进 _wfbullets.py（work\flow\ 与 eda-pcb\tools\diag\ 两份）。 |
+| `_patch10b` | 62 | 第十批·补：把「闸门 A/B 判负」这条 bullet 插到 _wfbullets.py 的 ev_pin 里。 |
 | `_patch9` | 122 | 把「第九批」的实测结论写进两份 `_wfbullets.py`（字面替换，可重复执行）。 |
 | `_peek220` | 33 | 看一眼 work/_fast_base/*.json 的顶层结构，判断是「行列表」还是别的形状。 |
 | `_peek_stage1` | 23 |  |
@@ -453,10 +456,10 @@
 | `_weld_selftest` | 110 | 方向性桥接（stage1.labels._weld_unions / wire_groups 规则 3）的合成自检。 |
 | `_weldprobe` | 151 | 量「方向性桥接（规则 3 `weld`）」被哪一道闸门卡住。 |
 | `_wfbuild` | 533 | 重建 workflow.html：要点清单 + 按数据流分带布局 + CSS/JS 补丁（阅读面板/分层 tidy）。 |
-| `_wfbullets` | 417 | workflow.html 的第二轮内容：每个节点的「要点清单」（正面可见）。 |
+| `_wfbullets` | 418 | workflow.html 的第二轮内容：每个节点的「要点清单」（正面可见）。 |
 | `_wfdump` | 19 |  |
 | `_wfextract` | 19 |  |
-| `_wfhead` | 116 | 改写 workflow.html 内嵌 graphdata 的 `name` 与 `note` 开头（第九批）。 |
+| `_wfhead` | 165 | 改写 workflow.html 内嵌 graphdata 的 `name` 与 `note` 开头（第十批）。 |
 | `_wfkind` | 93 | 改 `workflow.html` 里节点的 `kind`（徽标），用 `json` 模块安全改写内嵌 graphdata。 |
 | `_wfmd` | 20 |  |
 | `_wfnew` | 76 | 把 workflow.html 里 kind='new'（★ 要新写）的节点的 note + bullets 全文倒出来， |

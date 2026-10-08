@@ -69,6 +69,18 @@ _REPO = _ROOT.parent                                       # 仓库根 Y:\worksp
 # 上限），独立的 `llm_judge` 是 1.5 —— VLM 补强排在中间：它确实比 CRNN 准
 # （真值紧框上 0.95 vs 0.70），但它是**批量补读**、没有针对这一处单独设问。
 VLM_ENRICH = float(os.environ.get("FUSION_VLM_SCORE", "1.15"))
+# ★ `FUSION_VLM_PIN_SCORE`：VLM **引脚通道**（`vlm/enrich.py` 的 `pin=True`）读到的
+#   号/名作为候选时的分数。和 `VLM_ENRICH` 同档：同样是「批量补读」。
+VLM_PIN = float(os.environ.get("FUSION_VLM_PIN_SCORE", "1.15"))
+# ★ 引脚通道的两半**分开开关**（默认都开）：`FUSION_VLM_PIN_NUM` / `FUSION_VLM_PIN_NAME`。
+#   为什么要拆：官方 9 张上这条通道是 +2.88（只号 +1.95 / 只名 +1.32），可 220 派生集
+#   上是 −0.07，**两个集子的引脚约定不同**（`tools/diag/_pinconv.py` 普查：官方 `10GT`
+#   的 21 个 IC 里 20 个（95.2%）的 GT 键就是 `1..N`、IC `pinname` 纯数字 0.0%；
+#   派生 `200_train_cases` 946 个 IC 只有 22.6% 是顺序键、50.9% 的引脚键 >8
+#   （物理封装号）、`pinname` 纯数字 20.1%）。拆开才能量出「号」和「名」各自值多少、
+#   谁在派生集上倒扣（case 9 上「名」倒扣 4.55）。
+VLM_PIN_NUM = env_on("FUSION_VLM_PIN_NUM", "1")
+VLM_PIN_NAME = env_on("FUSION_VLM_PIN_NAME", "1")
 # 装配层给未配上位号的元件发的占位键（`assemble.build_doc` 的 `"p%03d" % i`）：
 # `p008` 这种既不是位号也不是型号，被 VLM 照抄回来时必须丢掉。
 FKEY_RE = re.compile(r"^p\d{3,4}$")
@@ -548,6 +560,79 @@ def _add_vlm(pool: "ClaimPool", vlm: dict, comps: dict,
                 if sid in pool.hy.slots and not pool.region(sid):
                     pool.set_region(sid, bb, focus=bb,
                                     note="VLM 补强的元件 %s" % cid, src="vlm:enrich")
+    # (d) ★★ **引脚通道**：`vlm["pins"]` 里的号/名也要进池子。
+    #
+    # ⚠ 漏了这一块 = 引脚通道的收益**在交付口径上整段归零**（2026-10 实测）：
+    #   `vlm/enrich.py` 的引脚通道把号/名写进**文档的 `pins` 字典**，而融合层是
+    #   从 `_assigned` 的槽位**重新装配**引脚的（`build_doc`），文档里那份 `pins`
+    #   从来没人读 ⇒ 官方 9 张 `FUSION_VLM_DIR=<引脚通道产物>` 的融合结果与基线
+    #   **逐位相同**（58.6304、pin F1 0.3920、`pin.name_mismatch` 16），而同一份
+    #   补强文档在 `stage2_eval` 上是 60.7776（pin F1 0.5174）。**+4 分的收益死在
+    #   「没人读」这一步上。**
+    #
+    # 槽位按**点**对齐：`vlm["pins"][cid][pk]["point"]` 与 `doc["pins"][cid][k]`
+    # 同源（`assemble.build_doc:766-768` 只把 y 翻成 JSON 空间），所以按点最近邻
+    # 就能拿到槽位下标 `k`；阈值 3px，对不上就不认（宁可少改，不可改错桩）。
+    # 出处标记：只有引脚通道**真跑过**的文档才认（`vlm/enrich.py` 写 `_pin_channel`）。
+    # 没标记 ⇒ 这份 `vlm["pins"]` 只是 stage2 的 CRNN 读数，收进池子会让**基线臂**
+    # 凭空多一批 1.15 分的候选，A/B 就不干净了。
+    _pins_src = (vlm.get("pins") or {}) if vlm.get("_pin_channel") else {}
+    _Hh = float(((pool.doc.get("image") or {}).get("h")) or 0.0)
+    _pts_of = pool.doc.get("pins") or {}
+    n_pin = 0
+    for vkey, vp in _pins_src.items():
+        cid = km.get(str(vkey))
+        if not cid or cid not in known or not isinstance(vp, dict):
+            continue
+        pts = _pts_of.get(cid) or []
+        if not pts:
+            continue
+        for pk, info in vp.items():
+            if not isinstance(info, dict):
+                continue
+            pt = info.get("point") or {}
+            try:
+                qx, qy = float(pt["x"]), float(pt["y"])
+            except Exception:                                  # noqa: BLE001
+                continue
+            k, bestd = None, 1e9
+            for i, pp in enumerate(pts):
+                try:
+                    d = abs(float(pp[0]) - qx) + abs(_Hh - float(pp[1]) - qy)
+                except Exception:                              # noqa: BLE001
+                    continue
+                if d < bestd:
+                    k, bestd = i, d
+            if k is None or bestd > 3.0:
+                continue
+            pks = str(pk)
+            num = pks[4:] if pks.startswith("pin_") else pks
+            for fld, txt in (("number", num if VLM_PIN_NUM else ""),
+                             ("name", str(info.get("pinname") or "").strip()
+                                      if VLM_PIN_NAME else "")):
+                if not txt:
+                    continue
+                sid = "pin.%s.%d.%s" % (cid, k, fld)
+                _dup = False
+                for alt in pool.alts(sid):
+                    if str(alt.value) == txt and float(alt.score) >= VLM_PIN:
+                        _dup = True
+                        break
+                if _dup:
+                    continue
+                pool.add(sid, txt, score=VLM_PIN, source="vlm:pin",
+                         evidence={"来源": "vlm/enrich.py 引脚通道",
+                                   "原键": pks, "点距": round(bestd, 2)},
+                         question="元件 %s 第 %d 个引脚的%s是？"
+                                  % (cid, k, "号" if fld == "number" else "名"),
+                         meta={"cid": cid, "k": k,
+                               "type": (pool.assigned.get("comps") or {})
+                                       .get(cid, {}).get("type"),
+                               "pt": [round(qx, 1), round(qy, 1)]})
+                n_pin += 1
+    pool.note("vlm_pin_ingest", n=n_pin,
+              skipped=None if vlm.get("_pin_channel") else "no_pin_channel")
+
     pool.note("vlm_ingest", n=n, n_key=len(km))
     return n
 

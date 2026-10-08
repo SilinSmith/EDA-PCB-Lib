@@ -6,15 +6,15 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **279** 个开关。
+共 **283** 个开关。
 
 ## 目录
 
 - [stage1](#stage1)（81）
 - [stage2](#stage2)（59）
 - [stage3](#stage3)（2）
-- [fusion](#fusion)（103）
-- [vlm](#vlm)（11）
+- [fusion](#fusion)（106）
+- [vlm](#vlm)（12）
 - [textrec](#textrec)（13）
 - [cvparts](#cvparts)（6）
 - [pipeline](#pipeline)（3）
@@ -201,7 +201,7 @@
 | `FUSION_AUDIT_SCORE` | `"1.30"` | `fusion/audit.py:68` |
 | `FUSION_AXIS` | `"1"` | `fusion/axis.py:87` |
 | `FUSION_BASE` | `"ours"` | `fusion/run.py:129` |
-| `FUSION_BOXSCAN` | `"0"` | `fusion/claims.py:117` |
+| `FUSION_BOXSCAN` | `"0"` | `fusion/claims.py:126` |
 | `FUSION_BOX_PIN_PRIOR` | `"0"` | `fusion/priors.py:135` |
 | `FUSION_CASES` | `""` | `fusion/run.py:371` |
 | `FUSION_CONV_EXACT` | `"1"` | `fusion/run.py:91` |
@@ -264,9 +264,9 @@
 | `FUSION_READ_FAR` | `"0.01"` | `fusion/priors.py:281` |
 | `FUSION_READ_INS` | `"0.30"` | `fusion/priors.py:279` |
 | `FUSION_READ_SUB` | `"0.05"` | `fusion/priors.py:280` |
-| `FUSION_REGION_MIN` | `"120"` | `fusion/claims.py:80` |
-| `FUSION_REGION_PAD` | `"24"` | `fusion/claims.py:78` |
-| `FUSION_REGION_TOPK` | `"1"` | `fusion/claims.py:122` |
+| `FUSION_REGION_MIN` | `"120"` | `fusion/claims.py:89` |
+| `FUSION_REGION_PAD` | `"24"` | `fusion/claims.py:87` |
+| `FUSION_REGION_TOPK` | `"1"` | `fusion/claims.py:131` |
 | `FUSION_REPAIR_PENALTY` | `"0.85"` | `fusion/priors.py:223` |
 | `FUSION_RESCAN_CROP` | `"window"` | `fusion/rescan.py:42` |
 | `FUSION_RESCAN_MAX` | `"12"` | `fusion/rescan.py:40` |
@@ -289,6 +289,9 @@
 | `FUSION_VALUE_MIN_N` | `"4"` | `fusion/plausible.py:55` |
 | `FUSION_VALUE_RATIO` | `"4.0"` | `fusion/plausible.py:53` |
 | `FUSION_VLM_DIR` | `r"Y:\workspace\EDA\work\_fusion_vlm"` *(2 处)* | `fusion/audit.py:556` |
+| `FUSION_VLM_PIN_NAME` | `"1"` | `fusion/claims.py:80` |
+| `FUSION_VLM_PIN_NUM` | `"1"` | `fusion/claims.py:79` |
+| `FUSION_VLM_PIN_SCORE` | `"1.15"` | `fusion/claims.py:74` |
 | `FUSION_VLM_SCORE` | `"1.15"` | `fusion/claims.py:71` |
 | `FUSION_WORKERS` | `"1"` | `fusion/run.py:393` |
 | `VLM_TIMEOUT` | `"600"` *(3 处)* | `fusion/audit.py:75` |
@@ -303,10 +306,11 @@
 | `LLM_BASE_URL` | `"http://127.0.0.1:1234/v1"` | `vlm/client.py:32` |
 | `LLM_MODEL` | `"qwen3.5-9b"` | `vlm/client.py:34` |
 | `VLM_MAX_TOKENS` | `"2048"` | `vlm/client.py:36` |
-| `VLM_PIN_CHANNEL` | `"0"` | `vlm/enrich.py:777` |
-| `VLM_PIN_COLS` | `"4"` | `vlm/enrich.py:786` |
-| `VLM_PIN_MERGE` | `"0"` | `vlm/enrich.py:759` |
-| `VLM_PIN_PER` | `"8"` | `vlm/enrich.py:785` |
+| `VLM_PIN_CHANNEL` | `"0"` | `vlm/enrich.py:811` |
+| `VLM_PIN_COLS` | `"4"` | `vlm/enrich.py:820` |
+| `VLM_PIN_MERGE` | `"0"` | `vlm/enrich.py:785` |
+| `VLM_PIN_PER` | `"8"` | `vlm/enrich.py:819` |
+| `VLM_PIN_REBUILD` | `"1"` | `vlm/enrich.py:793` |
 | `VLM_REASONING` | `"none"` | `vlm/client.py:37` |
 | `VLM_SCALE` | `"4"` | `vlm/client.py:35` |
 | `VLM_TIMEOUT` | `"600"` | `vlm/client.py:38` |
