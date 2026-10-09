@@ -112,6 +112,12 @@ CRNN 读文字 → 结构与先验分配角色 → LLM/VLM 融合仲裁 → 官�
 | 口径（官方 9 张） | LLM 关 | LLM 开 | LLM 开 + **上下文块** |
 |---|---:|---:|---:|
 | **交付口径**（VLM `auto` + `-fusion on`，全默认值） | **58.63** | **58.63** | **58.63** |
+
+> ⚠️ **2026-10-11 起交付 CRNN 权重换了**：`weights/textrec_best.pt` 从 `ocr_real`(e51) 换成
+> `ocr_mix`(e57)。上表与本文其它 58.63/58.6304 都是**旧权重**下量的；阶段级与管线内文字两项都已确认
+> 变好（stage2 官方 9 张 57.26→62.80、派生 80 张 23.81→26.14、全 220 张文字 exact 38.2%→40.9%、
+> 无 VLM 的 fusion 层 220 张 +0.19），**交付口径（VLM 开）的 220 张 A/B 待补**（排在 ②b 训练后），
+> 复测后本文头条与四项表要一起改。见 `docs/RESULTS.md` §2.0、`docs/DIAGNOSTICS.md`。
 | VLM 关（`--no-vlm`，同一批图） | 52.48 | 52.48 | **53.27（+0.79）** |
 
 - 交付口径三臂**逐位相同**（逐张 `1=47.24 2=53.50 3=68.25 4=66.60 5=52.20 7=62.12 8=62.71 9=57.13 10=57.93`；
@@ -302,6 +308,10 @@ GND 互证先验（官方 GT 不这么编码）、自由读数压分（`FUSION_F
 |---|---|---:|
 | `weights/pcb43_v2_from_best.pt` | YOLO 元件检测（`stage1/detect.py`） | 38.8 MB |
 | `weights/textrec_best.pt` | CRNN 文字识别（`stage2/text.py`） | 29.6 MB |
+
+> `weights/textrec_best.pt` = `work/ocr_mix/runs/best.pt`（**epoch 57、`val_cer` 0.1698、md5 `7559096C9979`**，
+> 2026-10-11 换入；此前是 `work/ocr_real/runs/best.pt`，e51、`val_cer` 0.1871、md5 `0CD23402952D`，
+> 旧文件留在 `work/weights_backup/textrec_best.real_e51.pt`）。
 
 `assets.py` 按**相对路径**解析，可用环境变量覆盖：`YOLO_WEIGHTS` / `STAGE2_CKPT`。
 源码里**没有功能性绝对路径**（仅少数 docstring 示例保留本机路径）。

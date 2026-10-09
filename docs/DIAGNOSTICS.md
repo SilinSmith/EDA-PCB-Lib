@@ -452,6 +452,37 @@ stage1/pipeline.py:118 run_case
 
 ---
 
+### 「只重跑融合层」**不等于**「不碰 VLM」：`FUSION_LLM=0` 关不掉引脚名回传
+
+2026-10-09 我按 `FUSION_LLM=0` + `fusion.run.run_case(case, do_llm=False)` 跑 220 张的
+默认值 A/B，结果是 **GPU 一直被 LM Studio 占着（9.7 GB / 82% util）、训练在 `gpu_gate`
+上等了 40 min**。查证过程（可复用）：
+
+```powershell
+# 谁在调 LM Studio？先找客户端 PID，再看它的 cmdline
+Get-NetTCPConnection -RemotePort 1234 | Where-Object State -eq Established |
+  Select-Object LocalPort,OwningProcess
+Get-CimInstance Win32_Process -Filter "ProcessId=<PID>" | Select-Object CommandLine
+```
+
+⇒ 客户端就是那个「纯 CPU 融合」进程。原因在 `fusion/run.py:330`：
+
+```python
+rep_it = IT.pin_fields(assigned, doc, pool.bgr, log=log)   # ⓪.9 定向回传：问一次 VLM 的引脚名
+```
+
+这一句**不受 `do_llm` / `FUSION_LLM` 控制**：它只受 `fusion\iterate.py:58` 的
+`FUSION_ITERATE`（默认 `1`）控制，`do_llm=False` 只关掉后面的 LLM 仲裁轮。
+后果有两层：
+
+1. **GPU 占用**：任何「融合层 A/B」都会真调 VLM ⇒ 与训练抢卡（16 GB 卡上
+   llama-server 9.7 GB + YOLO 6.5 GB 必炸）⇒ 要么等训练跑完，要么显式 `FUSION_ITERATE=0`。
+2. **结论噪声**：两臂都吃一次真 VLM 读数，逐张 Δ 里混进 VLM 抖动。`FUSION_ITERATE=0`
+   能得到确定性，但**两臂同时偏离交付配置**，只适合做「机制定位」，不适合改默认值。
+
+纪律：跑「离线/纯 CPU」对照实验前，先 `Get-NetTCPConnection -RemotePort 1234` 确认没有
+Established 连接；改默认值的 A/B 一律接受「会调 VLM」，并在报告里写明这一点。
+
 ### 产物里必须有「这条结论是谁下的」字段，否则归因只能靠猜
 
 官方 10GT 第 1 张交付出去 6 个位号是 `C1513/C1514/C1515/C1517/C1518/C1519`，
@@ -479,9 +510,34 @@ python -X utf8 work\tools\diag\_c1src.py          # 逐条打印 (元件, 读数
 2. **并列窗口不能靠分差选，要靠阅读顺序选**：官方 GT 坐标系 y 越大越靠上，
    case 1 的 12 个电容按「y 降序、同 y 按 x 升序」正好是 `C151…C162`（12/12 全对）。
    只把并列窗口关掉（`FUSION_RUN_ALTWINDOW=0`）是 61.5112→61.5798、case 1 的 compF1
-   反而 0.5909→0.5455 —— **只是打乱，不是修好**。
+   反而 0.5909→0.5455 —— **只是打乱，不是修好**；**必须再开 `FUSION_RUN_ORDER=1`
+   才算修好**（2026-10-09 定案：两个默认值一起翻，官方 9 张 +0.6291，case 1 的 12 颗
+   电容终于恰好 `C151…C162`，其余 8 张逐字节不动，见 `docs\RESULTS.md` §2.7）。
 3. 归因顺序：**先看出处字段（`_by` / `source` / `sources`），再看分数**。
    只按分数拆，你会以为是 OCR；有出处就能一步定位到哪一层、哪个先验。
+
+### 杀进程前先看 cmdline：**按 pid 猜归属 = 杀掉正在干活的人**
+
+2026-10-09 07:47，42 类合并集训练在 24 min 处猝死，日志尾部是：
+
+```
+RuntimeError: DataLoader worker (pid(s) 27632, 5412) exited unexpectedly
+[gate] 结束：退出码 1，用时 1438.7s，峰值整卡占用 15868 MiB（锁已释放）
+```
+
+原因不是数据、不是显存：是我上一步清 `python -X utf8 -m fusion.run ...` 的卡死残留时
+**按 pid 列表杀 python**，而 `27632/5412` 正是这次训练的 dataloader worker（`--workers 2`；
+它们启动的时间 == ②b 开始的时间，我把「CPU 累计 388 s、看着像孤儿」当成了残留）。
+正确做法：
+
+1. **任何 `Stop-Process` 之前先看 cmdline**：
+   `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Select-Object ProcessId,ParentProcessId,CommandLine`
+   —— 按「CPU 高 / 活得久 / 看着像孤儿」判断归属，一定会杀错。
+2. 「孤儿 worker」的可判据是**父进程已经不在了**（拿 `ParentProcessId` 去查活进程），不是 CPU 时间。
+3. 真要清残留，只清**自己刚起的那个进程树**：按启动时间 + cmdline 里的 `--out` / `--tag` 匹配，
+   动手前先确认没有别的长任务在跑（`gpu_gate` 的锁文件只保护 GPU，不保护「谁在跑 dataloader」）。
+4. 被杀的长任务**目录必须移走**（本例移到 `work\_dead\pcb43_v4m42_im1536_dead5ep`），
+   否则 ultralytics 会另建 `...-2` 目录，而队列第 ③ 步拷的 `results.csv` 还是旧目录那份（10-08 已踩过同款）。
 
 ---
 
@@ -670,6 +726,158 @@ python tools\diag\_keytype.py     # 按元件类型量键命中率
 python tools\diag\_des_ceiling.py # 位号链的天花板：认不出 vs 归错元件，分开量
 python tools\diag\_desigring.py   # GT 位号在周围 R 像素的文字框里到底有没有
 ```
+
+**★ 2026-10-10 定案：派生档（`200_train_cases`）的 `component.missing/extra` 是「位号键对不上」，不是漏检、也不主要是文字。**
+
+- 工具：`work\tools\dev\_compgap.py`（按 `∅NNN` 伪元件 / 普通位号分桶量键命中率）、
+  `work\tools\dev\_compdump.py`（单 case 并排印 GT / keymap / 两边没配上的）、
+  `work\tools\diag\_suite_diag.py`（按 `case_id` 拆 `10GT` / `10_GTcase` / `train200` 的 F1 与 `diagnostic`）。
+- 读数（`--dir work\_ro220b --limit 12`）：**普通位号 249 个里 123 个（49.4%）没配上**，
+  而 `∅NNN` 伪元件 253 个里只有 14 个（5.5%）没配上；预测元件数 482 ≈ GT 502 ⇒
+  **数量和坐标都在，只是键不同**。case `0001` 实例：GT `R5@[280,280,300,288]` ↔ pred
+  `R9@[280.02,280.25,300.02,288.25]`（同一位置、键不同），另有「整排错位一个」的挂载错。
+- 机制（`schematic_parser\metrics.py:299 assign_components`）：① 先按**键**成对
+  （`set(gc)&set(pc)`），配不上的记 `component.missing`/`extra`；② 坐标匹配只在
+  `cfg.unkeyed_match == 'gt'`（**注释写明「官方口径」**）时放行，且**只放行 GT 侧
+  `is_unkeyed`（`^∅\d+$`/`^p\d{3,4}$`）的键**（`:338`），配上后撤销第①步的 fn/fp。
+  ⇒ **位号读错 = 必丢一对 tp（fn+fp 各一），并级联到该元件的 pin 与 net。**
+  与旧结论一致：**上帝键**能涨 **+5.66**（`docs\RESULTS.md:175`，`tools\diag\_keyoracle.py`）。
+- 反面（别把预算全押在 CRNN）：train200 的 `component.text_mismatch` 只有 **583** 对；
+  域内语料里 designator 读到位的行与 GT 一致率约 86%（`_offtext_eval.py` 留出集 74%）。
+  ⇒ 杠杆排序应是 **位号挂载/识别 > 文字字形**。
+- 字体实测（为文字域适配定方向，工具 `work\tools\dev\_fontfit.py` / `_fontsheet.py`）：
+  **`jlc` → arial 0.875**、**`Datasheet` → arial 0.888**、**`Altium Designer` → times 0.866**，
+  10GT 那批目视是**衬线等宽**（≈ `courbd.ttf`）；而自建合成语料把位号/值/引脚号都画成
+  `mono` = `consola.ttf`（`synth\style.py:23-27`）⇒ **字体类别不匹配**。
+  对应新增官方字体合成器 `work\tools\dev\mk_fonttext.py`（按变体频次 jlc 3355/Datasheet 836/
+  Altium 313/10GT 307 采样字体组，字号照官方墨迹高度分布采样）。
+
+**★ 2026-10-10 位号挂载体检（`work\tools\dev\_desacc.py`）：派生档 60 张 / 2026 个 GT 元件**
+
+```
+伪键（没挂位号） 47.6%   键对 21.0%   挂了别的位号 20.9%   位置没配上 10.4%
+r: 键对 42% 伪键 19% 挂错 35% | c: 45/20/35 | box: 26/31/41 | switch: 19/24/57
+gnd 496 个、v 211 个是**按设计**用 ∅NNN 伪键（靠坐标匹配），要从分母里剔掉
+```
+- 三张现场图（`work\_desview_0001.png` 等）证明：**文字本身又大又清楚**（`C6` 印得明明白白），
+  我们却输出 `C1`/`C9→Y1`/`R1→R1210`/`R5→R9` ⇒ **不是字形/字体问题，是「框↔元件」的配对问题**。
+  `R1210`/`L3215`/`R110` 这种是**把两个位号（`R12`+`10`）读成了一个**。
+- 已知的一条线索（`vlm\enrich.py:550-553` 注释）：伪键元件 220 张里 **2601 个，其中 92% 在 10px
+  内就有文字框**，只是 `assign.py` 的「同一个框只能给一个人」全局去重没分给它 ⇒ **兜底一轮就能救**。
+- 纪律：量位号要用**自己的配对指标**（IoU 配对 + 键比较，`_desacc.py`），不要只看 end-to-end F1
+  —— F1 被 netH/引脚稀释，位号错 60% 时 F1 只掉一点点。
+
+### 域内微调权重**不能直接换进 stage2**：语料裁片 ≠ 运行时裁片（2026-10-11）
+- 现象：域内语料微调出的 `work\ocr_official_v1\best.pt`，在**语料留出集**上 ALL **66.05% → 87.44%**
+  （value 37.59% → 90.78%，`work\tools\dev\_offtext_eval.py --split val`，23 个官方 case / 645 行）；
+  但把它**直接换进 stage2**（`python -X utf8 -u -m stage2.run --stage1 work\_full220\runs\stage1
+  --out work\_s2_ft --ckpt work\ocr_official_v1\best.pt --cases 1,2,3,4,5,7,8,9,10 --device cpu`）后，
+  官方 9 张由 **62.7992 掉到 58.3532**，主因是 **case 1：61.81 → 38.60**（compF1 0.7727 → 0.5909、
+  pinF1 0.5581 → 0.0000）；其余 8 张只在 ±1.5 内摆动。
+- 定位到「**同一个框、读法变差**」：`work\_s2_base\_assigned\1.json` 与 `work\_s2_ft\_assigned\1.json`
+  逐元件比位号槽，7 处不同而 **box_i 完全相同** —— base `C152 / C1S4 / C153 / C1S5 / C159 / R164`
+  （多数正是 GT）→ ft `C12 / C14 / C3 / C155 / C153 / R14`；value 也从 `10uF` 变 `10F`。
+- **★ 修正（同日，2×2 矩阵跑完）**：掉分的真因是**外扩量是给旧权重调的**，不是「微调没用」。
+  语料裁片是**未外扩**的原始框（`image.crop(bbox)`），而 `stage2/text.py:384 TextEngine.read`
+  会先 `pad_box`（水平 `PAD_MIN=2.0`、垂直 `PAD_FRAC_Y=0.20/PAD_MIN_Y=3.0`）再喂模型 ——
+  把外扩关掉（`STAGE2_PAD_MIN=0 STAGE2_PAD_FRAC=0 STAGE2_PAD_FRAC_Y=0 STAGE2_PAD_MIN_Y=0`，
+  环境变量在 import 时读）后：
+
+  | 臂 | 官方 9 张（10GT） | 派生 30 张（train200 前 30） |
+  |---|---|---|
+  | 旧权重 + 外扩 2.0/0.20/3.0（**现行交付**） | 62.7992 | 25.4934 |
+  | 旧权重 + 关外扩 | 58.7400 | — |
+  | 微调权重 + 外扩 2.0/0.20/3.0 | 58.3532 | 25.4518 |
+  | **微调权重 + 关外扩** | **63.2776** | **26.2658** |
+  | 微调权重 + 小外扩 1.0/0.10/1.5 | 61.9761 | **26.5236** |
+
+  ⇒ **换权重必须同时把外扩改成与训练口径一致**：这样在**两个套系上都是净赚**（官方 9 张 +0.48、
+  派生 30 张 +0.77），component F1 与 tp/fp/fn 回到旧权的水平（192/27/24），pin F1 还涨
+  （官方 9 张 0.4226 → **0.4555**）。小外扩（1.0/0.10/1.5）在派生档更高（26.52）但官方 9 张掉到
+  61.98 —— **9 张的样本太小**，定默认前要用大样本（≥80 张派生）复核。
+  复现用的对照脚本：`tools/dev/_engchk.py`（同一条框走「语料口径（裸框）」与「stage2 口径（`pad_box`）」
+  各读一遍，权重可分别指定），先跑它就能看出「模型漂移」还是「口径不同」。
+- ⇒ 纪律：**微调权重的 A/B 必须走 `stage2.run`（运行时真实的框/角色/裁片），并按 case 拆开看**；
+  「语料留出集准确率」**不能**当上线依据 —— 语料裁片取的是 `work\_f220_A\_assigned` 的槽位框，
+  与 stage2 运行时喂给模型的裁片不是同一口径。要看单条裁片的读数差异用
+  `tools/dev/_deswhy.py --dir <_assigned 目录>` 或直接比 `_assigned` 的槽位 `text`/`box_i`。
+- 附带（同一轮的两个坑）：
+  1. **位号重解 pass 不值**：`work\tools\dev\_desres.py`（空闲框补充 + 类型前缀 + 唯一键）在 20 张派生
+     case 上只有 **+0.08**（27.9172 → 27.9971）；去掉唯一键/距离门的宽松版看着有 +0.48，其实是
+     **重名塌缩**的假收益 —— `components` 是 dict，两个元件改成同一个键会**静默吞掉一个元件**。
+     任何时候改元件键都必须保证键唯一。
+  2. **读 case 名单要用 `utf-8-sig`**：PowerShell `Set-Content -Encoding utf8` 会写 BOM，
+     第一个 token 被 `^[0-9A-Za-z_]+$` 过滤掉 ⇒ **静默少一张 case**（本轮 `cases=19` 就是这么来的）。
+
+### 交付 CRNN 权重陈旧：`weights/textrec_best.pt` == `work/ocr_real`(e51)，而 `work/ocr_mix`(e57) 在**两把尺子**上都更好（2026-10-11）
+- 事实链：
+  1. `assets.py:29 CRNN_ENV="STAGE2_CKPT"`，按 `stage2/text.py:38` 的兜底与 `assets.py:39 REPO/weights/textrec_best.pt`
+     解析交付权重；两者**都是** `work/ocr_real/runs/best.pt`（`epoch 51`、`val_cer 0.1871`）。
+     `work/ocr_mix/runs/best.pt`（`epoch 57`、`val_cer 0.1698`）只是 `TRAINING.md:180` 里告诉你要
+     `$env:STAGE2_CKPT` 指过去的东西 —— **没有任何一步真的把它用上**。
+  2. 复核缓存产物的来源：`work\_full220\runs\stage2\_assigned\1.json` 的槽位文本与
+     `ocr_real` 跑的 `work\_s2_real_pad\_assigned\1.json` **27/27 完全相同**，与 `ocr_mix` 跑的只同 12/27
+     ⇒ **当前交付缓存（也是历次 A/B 用的那一份）是 ocr_real 产的**。
+  3. 官方 9 张 stage2 端到端（同一份 stage1 缓存、同一套外扩 2.0/0.20/3.0、纯 CPU）：
+     `ocr_real` **57.2569** → `ocr_mix` **62.7992**（+5.54，9 张里 8 张变好，只有 case 10 −3.28）。
+  4. 「唯一算数的尺子」（`tools/diag/_numread.py`，引脚号绑定准确率，官方 9 张）：
+     `ocr_real` **0.7090**（n=134）→ `ocr_mix` **0.7615**（n=130）。
+  5. 干净子集（只取**没进过任何训练语料**的官方 case 1、5）加权均分：`ocr_real` 46.32 → `ocr_mix` 60.49。
+- ⇒ 结论：**换 `weights/textrec_best.pt` 为 `ocr_mix` 是一个现成的、干净的交付增益**（两个尺子、两个套系同号）。
+- ✅ **已执行（2026-10-11，用户 m38289 批准）**：
+  1. `eda-pcb/weights/textrec_best.pt` ← `work/ocr_mix/runs/best.pt`（md5 由 `0CD23402952D` 变
+     **`7559096C9979`**）；旧权重留在 `work/weights_backup/textrec_best.real_e51.pt`（与
+     `work/ocr_real/runs/best.pt` 同 md5）。
+  2. 兜底路径一起改：`assets.py:41 WORKSPACE/work/ocr_mix/runs/best.pt`（`ocr_real` 降为第二兜底）
+     + `stage2/text.py:38` 的 ImportError 分支；`docs/KNOBS.md:126` 的 `STAGE2_CKPT` 默认值同步。
+  3. 补测（都在换之前跑完）：
+     * **在管线内、全 220 张、确定性**（`python -X utf8 work\tools\dev\_textrate.py --assigned <缓存> --cases-file work\_cases220.txt`）：
+       exact ALL `ocr_real` **38.2%** → `ocr_mix` **40.9%**；10GT 71.7→**79.3**、10_GTcase 40.7→**49.6**、
+       train200 37.2→**39.7**（三个套系同号；注意这是**整个 220 张**，不是小样本）。
+     * **fusion 层 220 张、无 VLM**（`FUSION_LLM=0 FUSION_CROPFIX=0 FUSION_ITERATE=0`，
+       `work\_cnofix_mix` vs `work\_cnofix_real`，`_ro220score.py --a … --b …`）：
+       全部 220 **33.1950 vs 33.0042（+0.19）**；10GT +0.33、10_GTcase +1.10、train200 +0.14、
+       官方 20 +0.71；逐张 A 好 88 / 差 77 / 平 55 ⇒ **方向一致但幅度小**（VLM 层会重读文字，
+       把 CRNN 的一部分增益吃掉 ⇒ 交付口径（VLM 开）的 A/B 仍要补，见下）。
+  4. ⏳ 待补：**交付口径（VLM 开）220 张 A/B** —— 必须在 ②b 训练跑完、GPU 空出来之后跑
+     （两臂都要新跑，VLM 有抖动，不能拿旧产物当对照）。
+- ⚠️ **同时记下的方法论坑**：域内微调那条线的离线收益**被泄漏污染了**。`mk_official_textset.py` 的语料是从
+  **全部 220 张官方图**用 GT 文本框+GT 文本造的，而 `mk_textrec_manifest.py` 只按「`--val-cases 1,5` +
+  每 10 个四位 case 取一个」划 val ⇒ 官方 2/3/4/7/8/9/10 与派生 0001–0080 里的绝大多数**都在微调训练集里**。
+  所以「语料留出集 66%→87%」和官方 9 张上的 `ft` 读数**都不可用**；只在干净子集 {1,5} 上复算，
+  `ft+nopad` 58.45 / `ft+p1y15` 58.01 都**低于** `ocr_mix` 的 60.49（引脚号尺子上 ft 反而更高：case1 1.0000 vs
+  0.8889、case5 0.9474/1.0000 vs 0.9474 —— 样本只有 18~24 个，噪声大）。
+  **教训：任何「用 GT 造语料再评自己」的实验，必须先按 case 切干净，再看数字**（切分要用**案例级**，
+  不能用「同一张图的不同框」）。
+
+### 「无 VLM 的融合层 A/B」要**三个**开关一起关（2026-10-11，比 455 行那条更细）
+`FUSION_LLM=0` 只关哲学仲裁轮；实测**还有两处会真调 LM Studio**：
+
+| 调用点 | 开关（默认） | 关掉后 |
+|---|---|---|
+| `fusion/run.py:265 LJ.judge` / `:285 AU.run` / `RS.run` | `FUSION_LLM`（`1`） | 关掉仲裁轮 |
+| `fusion/cropfix.py:256 VC.ask` | `FUSION_CROPFIX`（`1`） | 关掉「裁切方向反馈」 |
+| `fusion/run.py:330 IT.pin_fields` | `FUSION_ITERATE`（`1`） | 关掉引脚名定向回传 |
+
+- 复现（别用 CPU 占用猜，直接看客户端）：`Get-NetTCPConnection -RemotePort 1234 -State Established`
+  的条数 + `Get-CimInstance Win32_Process -Filter "Name='llama-server.exe'"` 的 **CreationDate**
+  是不是**本次运行开始之后**；`& "$env:USERPROFILE\.lmstudio\bin\lms.exe" ps` 能看到模型与 TTL，
+  `lms unload --all` 立刻把显存还回去（本轮 llama-server 9.7 GB 与 ②b 训练同抢 16 GB 卡）。
+- 代价对比（同一台机、220 张）：三开关全关 ⇒ **0.4 min / 220 张（~0.1 s 每张）、显存只剩训练**；
+  只关 `FUSION_LLM` ⇒ 每张 30~60 s（真在等 VLM）⇒ **「慢」本身就是「偷偷调了 VLM」的症状**。
+- 用途边界：三开关全关**偏离交付配置**，只能做「机制定位/权重替换」的对照；改默认值仍要按纪律跑
+  VLM 开的真交付口径 A/B，并在报告里写明。
+- 附带坑：`work\tools\diag\_ro220arm.py:26` 会 `os.chdir(eda-pcb)`，所以 `--cases-file` 传**相对路径**
+  会在 chdir 之后解析失败（本轮 `FileNotFoundError: 'work\\_cases220.txt'`）——已改成相对**仓库根**解析；
+  `--out` 一直是相对仓库根。
+- ⚠️ **同时记下的方法论坑**：域内微调那条线的离线收益**被泄漏污染了**。`mk_official_textset.py` 的语料是从
+  **全部 220 张官方图**用 GT 文本框+GT 文本造的，而 `mk_textrec_manifest.py` 只按「`--val-cases 1,5` +
+  每 10 个四位 case 取一个」划 val ⇒ 官方 2/3/4/7/8/9/10 与派生 0001–0080 里的绝大多数**都在微调训练集里**。
+  所以「语料留出集 66%→87%」和官方 9 张上的 `ft` 读数**都不可用**；只在干净子集 {1,5} 上复算，
+  `ft+nopad` 58.45 / `ft+p1y15` 58.01 都**低于** `ocr_mix` 的 60.49（引脚号尺子上 ft 反而更高：case1 1.0000 vs
+  0.8889、case5 0.9474/1.0000 vs 0.9474 —— 样本只有 18~24 个，噪声大）。
+  **教训：任何「用 GT 造语料再评自己」的实验，必须先按 case 切干净，再看数字**（切分要用**案例级**，
+  不能用「同一张图的不同框」）。
 
 ### `net_line`（权重 0.10，长期爆 0）
 

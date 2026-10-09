@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **564** 个脚本。
+共 **592** 个脚本。
 
 
 <a id="data"></a>
@@ -54,22 +54,39 @@
 
 <a id="dev"></a>
 
-## `tools/dev/`（6 个脚本）
+## `tools/dev/`（23 个脚本）
 
 开发辅助（本目录的生成器）。
 
 | 脚本 | 行 | 说明 |
 |---|---:|---|
+| `_compdump` | 70 | 把单个 case 的 GT 元件 / 预测元件 / keymap 并排打印，用来定位「为什么普通位号配不上」。 |
+| `_compgap` | 107 | component 失分溯源：GT 里哪些元件一个都没配上（连坐标都没配上），按「伪元件 ∅NNN / 普通位号」分开。 |
+| `_cropchk` | 95 | **裁片口径核对**：同一条语料裁片，分别用两个权重读一遍。 |
+| `_desacc` | 128 | **位号挂载体检**：把 GT 元件与产物元件按 JSON 坐标 IoU 配对，统计 |
+| `_desceil` | 203 | **位号重解的天花板探针**：对每个「没挂上位号 / 挂了错位号」的 GT 元件，看它附近 |
+| `_desceiling220` | 16 | 把 `eda-pcb/tools/diag/_des_ceiling.py` 指到 220 张的 stage1 产物上跑（原工具写死 work\stage1_all14）。 |
+| `_desres` | 259 | **位号重解 pass（原型）**：把「没挂上位号」的元件，用附近**空闲**文字框里读出的位号补上。 |
+| `_deswhy` | 196 | **位号为什么错**：把「认不出来（字形/字体）」和「挂到别的元件上」分开量。 |
+| `_engchk` | 101 | **口径对照**：同一条框，走「语料口径（裸框裁片）」与「stage2 运行口径（`pad_box` 外扩）」 |
+| `_fontfit` | 174 | 官方渲染用的是哪一款字体？—— 拿真实裁片（GT 文本已知）去套候选字体的字形。 |
+| `_fontsheet` | 80 | 把真实裁片和候选字体的渲染并排画出来，肉眼看哪个像（`_fontfit.py` 的数字靠这个兜底）。 |
+| `_offtext_eval` | 109 | 在**官方渲染图的域内语料**上评一个 CRNN 权重：只走生产路径（`textrec.infer.Recognizer`）。 |
+| `_sheet_from_manifest` | 62 | 从已落盘的文字语料 manifest 里挑一批出来拼对照图（核标签真假 / 看还没修好的）。 |
+| `_textrate` | 175 | 量「CRNN 在官方渲染图上读文字的错读率」——按套（10GT / 10_GTcase / train200）× role 分开。 |
 | `audit_labels` | 277 | Training-label quality audit for a YOLO dataset — "错误的标号" triage. |
 | `build_trainset_v4` | 599 | Assemble `work/trainset_v4` = `trainset_v3` (optionally label-repaired) + `新补充训练集`. |
 | `gen_knobs` | 94 | 扫描源码里所有环境开关，生成 `docs/KNOBS.md`。 |
 | `gen_toolindex` | 96 | 生成 `docs/TOOLS.md` —— `tools/` 下每个脚本的索引（含首行 docstring）。 |
 | `gpu_gate` | 363 | GPU 串行闸门：**同一时刻只允许一个自己起的吃卡任务**，且起之前先确认显存够。 |
 | `mix_crnn_manifest` | 180 | 把「真实语料」和「合成语料里挑出来的那几类」混成一份 CRNN 训练清单。 |
+| `mk_fonttext` | 280 | **官方字体合成语料**：用与官方渲染器同款/同类的字体直接合成文字裁片，补上合成语料的字体域缺口。 |
+| `mk_official_textset` | 438 | 从**官方公开数据**（10GT + 200_train_cases）造一份「域内」文字识别训练集。 |
+| `mk_textrec_manifest` | 152 | 把「官方渲染图上的域内文字语料」（`mk_official_textset.py` 的产物）转成 `textrec` 能直接 |
 
 <a id="diag"></a>
 
-## `tools/diag/`（447 个脚本）
+## `tools/diag/`（458 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -112,6 +129,7 @@
 | `_cmpcfg` | 13 |  |
 | `_comp_diag` | 51 | 连通分量到底有多大？在「墨迹掩膜」上量，还是「骨架」上量？ |
 | `_compextra` | 185 | 把 `component.extra`（我们多出来的元件 = 纯 fp）按**类别 / 尺寸 / 与已匹配框的关系**分桶。 |
+| `_comptext` | 127 | 逐对拆 `component` 的失分：**text_mismatch 到底是 IC 的 `Name` 还是 r/c 的 `value`**。 |
 | `_conn_check` | 96 | 定位「消融里的连通 R」和「stage1_conn_eval 里的连通 R」为什么差 2~9 倍。 |
 | `_conn_comp` | 97 | 连通分量的结构诊断：我的段图到底是不是「一坨」。 |
 | `_conn_reconcile` | 96 | 对账：为什么 60 张消融说 all12 的连通 F1 是 0.5421，而端到端评测器说 0.1457？ |
@@ -159,6 +177,7 @@
 | `_fastdiff` | 15 |  |
 | `_fbceil` | 129 | 给「兜底键」那 2601 个元件量一个上限：它们的 GT 位号，在图上**附近**读得出来吗？ |
 | `_fbview` | 108 | 把「GT 有真名、我们没配上」的元件连同它的 GT 键一起画出来，人眼核对： |
+| `_fix1` | 18 |  |
 | `_flags` | 82 | 开关普查：把 eda-pcb 里所有「环境开关」连默认值一起列出来，判定默认开/关。 |
 | `_flowaudit` | 56 | 按 id 比对 workflow.html 与备份（而不是按下标），并扫描残留的旧数字。 |
 | `_flowcheck` | 50 | Sanity-check work/flow/workflow.html after patching: JSON validity, link/port integrity, |
@@ -239,6 +258,9 @@
 | `_keytype` | 131 | 按**元件类型**量「键配上了没有」——决定 component / pin / net 三块权重的天花板。 |
 | `_label_audit` | 245 | 训练集标签体检：回答用户 m07249 的七条质疑。 |
 | `_labelaudit` | 104 | 标注审计：当前训练集（trainset_v3）里的标签**本身**有多可疑。 |
+| `_labelaudit_gt` | 458 | 全类别 GT 错标体检 —— 扫描 + 逐框指标 + CSV。 |
+| `_labelaudit_gt_report` | 363 | GT 错标体检 —— 汇总与报告生成。 |
+| `_labelaudit_gt_visual` | 141 | 肉眼复核工具：把可疑 GT 框渲染成 ASCII 字符网格（或放大裁图）。 |
 | `_leakpair` | 79 | 对照 train 侧的 `synth_<id>` 与 val 侧的 `200_train_cases-<id>__full` 的标注直方图。 |
 | `_lencal` | 142 | 长度律的**域校准**：`fusion/charwidth.py` 是从**标注框**（manifest）拟合的， |
 | `_libcov` | 195 | 元器件库（官方 cpntLibrary）对 GT 的覆盖率体检。 |
@@ -308,6 +330,7 @@
 | `_paramcheck2` | 28 | 第二批参数核对：detect.py 的 conf/imgsz、metrics.py 的口径、enrich.py 的引脚名开关。 |
 | `_patch10` | 93 | 把「第十批」的结论按字面替换写进 _wfbullets.py（work\flow\ 与 eda-pcb\tools\diag\ 两份）。 |
 | `_patch10b` | 62 | 第十批·补：把「闸门 A/B 判负」这条 bullet 插到 _wfbullets.py 的 ev_pin 里。 |
+| `_patch8` | 88 | 第八批：把本轮实测结论写进 `_wfbullets.py`（徽标已改，bullet 要跟上）。 |
 | `_patch9` | 122 | 把「第九批」的实测结论写进两份 `_wfbullets.py`（字面替换，可重复执行）。 |
 | `_peek220` | 33 | 看一眼 work/_fast_base/*.json 的顶层结构，判断是「行列表」还是别的形状。 |
 | `_peek_stage1` | 23 |  |
@@ -390,8 +413,10 @@
 | `_recover` | 23 |  |
 | `_region` | 39 | 渲染任意图的任意区域，用于肉眼判定图形到底是什么。 |
 | `_repsum` | 17 |  |
-| `_rescore` | 156 | 把已存档的 A/B 臂**用新口径重打一遍**，看有没有结论会翻。 |
+| `_rescore` | 160 | 把已存档的 A/B 臂**用新口径重打一遍**，看有没有结论会翻。 |
 | `_rlook` | 123 | 看 GT 里 r / l 到底长什么样：在原始分辨率上裁 GT 框，按类型拼接触表。 |
+| `_ro220arm` | 87 | 220 张融合层 A/B 的**单进程**驱动器。 |
+| `_ro220score` | 129 | 把两个「220 张融合臂」目录按官方口径打分，并按 suite 拆分（官方 20 / 派生 200）。 |
 | `_row1` | 92 | 把 case 1 电容排（GT `C155`..`C164`）整排打出来： |
 | `_rowfull` | 63 | 把某个 case 的**全部**位号候选框按「前缀 + y 带」排成轴打印出来， |
 | `_run_recovered` | 277 |  |
@@ -426,6 +451,7 @@
 | `_stampshape` | 152 | 图章形状勘察：官方 GT 的每类 bbox 到底是「正方形」还是「长方形」。 |
 | `_stubfill` | 139 | Could geometric *pin stubs* fill the pins that have no wire attached? |
 | `_subst` | 48 | 按「字面子串」替换文件内容（避开 PowerShell 引号地狱）。 |
+| `_suite_diag` | 60 | 按套看某一臂的 per-case 诊断分布（pin/component 的 missing/extra/mismatch 计数）。 |
 | `_symcmp` | 12 |  |
 | `_symdbg` | 13 |  |
 | `_symdbg2` | 19 |  |
@@ -453,7 +479,9 @@
 | `_val_why` | 158 | 官方的 `component.text_mismatch` 到底是什么？—— 按 GT 类型拆开「文字错」。 |
 | `_valab` | 124 | `valbase` vs `valonly` 的完整对账：在**键匹配上的 r/c** 上，把 (GT 值, 管线值, VLM 值) |
 | `_valbatch` | 142 | **请求合并（batch 节点）**的隔离 A/B：值通道「一格一次」vs「N 格拼一张图」。 |
+| `_valbeam` | 157 | r/c `value` 到底能不能靠「后处理/词表」救：把 CRNN 每个字的**前 3 名**打出来。 |
 | `_valdiff` | 130 | 对比两版 stage2 预测的 component.value 改动：每一处改动是变好还是变坏。 |
+| `_valhead` | 102 | 把交付产物的**失分拆到「哪一类、哪一种错」**上——只读已有产物，不跑管线。 |
 | `_valiou` | 82 | 按 IoU 配对（不看键）比较两版预测的 component.value 正确率。 |
 | `_valnone` | 105 | 「GT 有值、我们写 None」的 351 条：到底是**没读到**还是**读到了被丢**？ |
 | `_valpol` | 83 | 离线比较「VLM 值覆盖」的几种采纳策略：不重新调 VLM，只改 v18 的 value 再打分。 |

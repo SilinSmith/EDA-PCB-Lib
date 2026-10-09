@@ -9,8 +9,9 @@
 两个权重：
 
 * **YOLO 元件检测** `pcb43_v2_from_best`：随仓库一起提交，在 `yolo_part/runs/` 下。
-* **CRNN 文字识别** `ocr_real/runs/best.pt`：训练产物原本落在 `work\\`（**不在包内**），
-  已复制一份到 `weights/textrec_best.pt` 随仓库提交。
+* **CRNN 文字识别** `ocr_mix/runs/best.pt`（2026-10-11 起；此前是 `ocr_real/runs/best.pt`，
+  e51）：训练产物原本落在 `work\\`（**不在包内**），已复制一份到 `weights/textrec_best.pt`
+  随仓库提交（e57，md5 `7559096C9979`）。
 
 Docker 里只要把整个 `eda-pcb` 拷进 `/submission`，两个权重都在相对位置能找到。
 """
@@ -37,6 +38,7 @@ def _candidates(kind: str) -> List[Path]:
         ]
     return [
         REPO / "weights" / "textrec_best.pt",
+        WORKSPACE / "work" / "ocr_mix" / "runs" / "best.pt",
         WORKSPACE / "work" / "ocr_real" / "runs" / "best.pt",
     ]
 

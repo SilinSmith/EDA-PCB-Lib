@@ -115,7 +115,7 @@ python yolo_part\train_pcb43.py --resume                          # 断点续训
 
 ### 3.1 为什么需要混合清单
 
-出厂 `weights/textrec_best.pt`（= `work/ocr_real/runs/best.pt`，`epoch 51`，`val_cer 0.1871`）**只在 2977 条真实裁片上**训了 111 遍，没见过合成语料；而线上最痛的一类（3 位引脚号被 CTC 吞一位：`113` → `13`）在合成语料里有 87k 条，真实语料里却极少。纯合成训出来的模型又过不了域差。所以两边都要。
+出厂 `weights/textrec_best.pt`（**2026-10-11 起 = `work/ocr_mix/runs/best.pt`，`epoch 57`，`val_cer 0.1698`**；此前是 `work/ocr_real/runs/best.pt`，`epoch 51`，`val_cer 0.1871`，旧权重留在 `work/weights_backup/textrec_best.real_e51.pt`）**只在 2977 条真实裁片上**训了 111 遍，没见过合成语料；而线上最痛的一类（3 位引脚号被 CTC 吞一位：`113` → `13`）在合成语料里有 87k 条，真实语料里却极少。纯合成训出来的模型又过不了域差。所以两边都要。
 
 ```powershell
 python -X utf8 tools\dev\mix_crnn_manifest.py --out ..\work\crnn_mix --charset-from weights\textrec_best.pt

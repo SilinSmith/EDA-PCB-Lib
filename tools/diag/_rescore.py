@@ -64,8 +64,12 @@ DEFAULTS: dict[str, list[str]] = {
 
 def score_dir(pred_dir: str, glob: str, cfg: EvalConfig):
     idx, digits = SE.build_index(SE.DEFAULT_DATA_ROOT)
+    # ⚠️ 必须排掉 `<case>.pinindex.json` / `<case>.stage1.json` 这类**附属产物**：
+    # `stage2_eval.resolve()` 最后有一条「剥掉非数字字符再查」的兜底，会把
+    # `1.pinindex` 的数字别名 `1` 解析回 case 1 ⇒ 同一个 case 被计两次，
+    # 第二次拿一个结构完全不同的 json 去打分（≈0）⇒ 均分被拖垮。
     files = [f for f in sorted(Path(pred_dir).glob(glob))
-             if not f.name.startswith("_")]
+             if not f.name.startswith("_") and "." not in f.stem]
     scores, miss = [], 0
     for f in files:
         case, _how = SE.resolve(f.stem, idx, digits)

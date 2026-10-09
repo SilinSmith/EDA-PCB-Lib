@@ -34,7 +34,9 @@
 | 无 VLM 官方 9（`novlm9`） | 50.0598 | 51.0006 | +0.9409 |
 | 无 VLM 派生 19（`novlm19`） | 29.6832 | 30.1509 | +0.4677 |
 | 融合层基线 `_f9_B_pin`（官方 9） | 61.5112 | 62.5952 | +1.0840 |
-| **融合层最好臂 `_f9w1_C`**（`FUSION_RUN_ORDER=1`+`ALTWINDOW=0`，`--workers 1`） | 62.1763 | **63.2603** | +1.0840 |
+| **`alt`/`ord` 六臂扫描**（`_f9_ab_A..F`，旧链 `_fast_out_reg9`） | A(alt1/ord0) 61.5112 / B(alt0/ord0) 61.5798 / C(alt0/ord1) 62.1763 / D(alt1/ord1) 61.5112 / E(alt0/ord1/home1) 62.1942 / F(空跑) 61.5112 | A 62.5952 / B 62.6638 / **C 63.2603** / D 62.5952 / **E 63.2844** / F 62.5952 | — |
+| ⚠️ 旧标注「融合层最好臂 `_f9w1_C`」**作废**：`_f9w1_C` 这个标签里带 `=`，`_rescore.py` 一直把它解析成空路径（n=0），从未真正打过分；62.1763→63.2603 那两个数是 **`_f9_ab_C`** 的 | — | — | — |
+| **新默认（`ALTWINDOW=0` + `ORDER=1`）在现链 `work\_fast_out_wl_on`**（官方 9，`FUSION_LLM=0`，见 §2.7） | base 60.7312 → 61.3403 | 68.2706 → **68.8997（+0.6291）** | — |
 | 引脚通道六臂 A/B/C/D/E/F | 58.6304 / 61.5112 / 59.9468 / 60.5816 / 59.9468 / 58.6304 | 59.5419 / 62.5952 / 60.8583 / 61.6656 / 60.8583 / 59.5419 | +0.91 / +1.08 |
 | VLM 引脚分数扫描 `ps090/130/160/250` | 四个全 61.5112 | 四个全 62.5952 | +1.0840 |
 | 220 张融合四臂 | A 29.4819 / B 29.4099 / C 29.2639 / **n1m0 29.4912** | A 31.1901 / B 31.1247 / C 30.9614 / **n1m0 31.2209** | +1.70 ~ +1.73 |
@@ -81,6 +83,38 @@
 | 6 | `STAGE2_PINNUM_DECAY=10` | 56.71 | +0.26 | |
 | 7 | **描边剔除** `pin_number,pin_name` | 57.54 | **+0.83** | 派生 19：+0.36 |
 | 8 | **`STAGE2_EDGE_SNAP=20`**（导线端点同网吸附） | **58.63** | **+1.09** | 增量**全部**在 netL：0.0787 → **0.1876**（导线 tp 58 → **148**）；comp / pin / netH **逐位不动**（0.9403 / 0.3920 / 0.5355） |
+| 9 | **换交付 CRNN 权重**（`ocr_real` e51 → `ocr_mix` e57，2026-10-11） | 待交付口径复测 | — | 阶段级两项都变好：stage2 官方 9 张 57.26→**62.80**、派生 80 张 23.81→**26.14**；管线内全 220 张文字 exact 38.2%→**40.9%**；无 VLM 的 fusion 层 220 张 +0.19（逐套系同号）。交付口径（VLM 开）A/B 排在 ②b 训练后 |
+
+### 2.0 交付 CRNN 权重 `ocr_real`(e51) → `ocr_mix`(e57)（2026-10-11，**已换进仓库**）
+
+`eda-pcb/weights/textrec_best.pt` 在此之前一直是 `work/ocr_real/runs/best.pt`（e51、`val_cer` 0.1871）；
+`work/ocr_mix/runs/best.pt`（e57、`val_cer` 0.1698）虽然写在 `docs/TRAINING.md` 的 A/B 说明里，
+**却从来没有一步真的用上**（复核办法：`work\_full220\runs\stage2\_assigned\1.json` 与 `ocr_real` 臂
+`work\_s2_real_pad\_assigned\1.json` 的槽位文本 **27/27 相同**、与 `ocr_mix` 臂只同 12/27）。
+
+| 尺子 | 套系 | `ocr_real` | `ocr_mix` | Δ |
+|---|---|---:|---:|---:|
+| stage2 端到端均分 | 官方 9 张 | 57.2569 | **62.7992** | **+5.54**（9 张里 8 张变好，仅 case 10 −3.28） |
+| stage2 端到端均分 | 派生 80 张 | 23.8117 | **26.1413** | **+2.33** |
+| 引脚号绑定（`tools/diag/_numread.py`） | 官方 9 张 | 0.7090 | **0.7615** | +0.0525 |
+| 管线内文字 exact（全 220 张，确定性） | 10GT / 10_GTcase / train200 | 71.7 / 40.7 / 37.2 | **79.3 / 49.6 / 39.7** | +7.6 / +8.9 / +2.5 |
+| fusion 层（无 VLM：`FUSION_LLM=0 FUSION_CROPFIX=0 FUSION_ITERATE=0`，220 张） | 全部 220 | 33.0042 | **33.1950** | +0.19（逐张 88 好 / 77 差 / 55 平） |
+
+复现命令：
+
+```powershell
+# 阶段级（纯 CPU，9 张 ~20 min）
+python -X utf8 -m stage2.run --stage1 Y:\workspace\EDA\work\_full220\runs\stage1 `
+  --out work\_s2_base --ckpt work\ocr_mix\runs\best.pt --cases <9 张名单> --device cpu
+python -X utf8 tools\eval\stage2_eval.py work\_s2_base --cases 1,2,3,4,5,7,8,9,10
+# 管线内文字（秒级，确定性）
+python -X utf8 work\tools\dev\_textrate.py --assigned work\_s2_220mix\_assigned --cases-file work\_cases220.txt
+```
+
+⚠️ 无 VLM 的 fusion 层 A/B 要**三个**开关一起关（`FUSION_LLM` + `FUSION_CROPFIX` + `FUSION_ITERATE`），
+只关 `FUSION_LLM` 仍会真调 LM Studio（每张 30~60 s）；详见 `docs/DIAGNOSTICS.md`。
+⚠️ 同时记住**域内微调那条线的离线数字是泄漏的**（语料用了全部 220 张官方图的 GT 文本框+文本，
+val 只切了 23 个 case）⇒ 只在没进过语料的 {case 1, 5} 上复算，`ft` 都低于 `ocr_mix`。
 
 派生 19 张同一轨迹：**34.69 → 35.23 → 35.28 → 35.39 → 35.75 → 36.35**。
 
@@ -434,6 +468,49 @@ CRNN 在**真值紧框**上 exact **0.843**、在 `stage1` 紧框上只有 **0.1
   收益是在**交付链**上拿到的（融合层会重建文档，`fusion/run.py:63/128`）。
 - **交付包必须带 `work\data\cpntLibrary.json`**（1.76 MB）；`STAGE2_CPNT_LIB` 默认按
   `stage2/libpins.py` 上溯到仓库根解析，**与 CWD 无关**（Linux 交付同样成立）。
+
+---
+
+### 2.7 阅读顺序 × 偏移窗口（`FUSION_RUN_ORDER` / `FUSION_RUN_ALTWINDOW`）——**两个默认值一起翻：+0.6291（官方 9 张）**
+
+**结论**：`FUSION_RUN_ALTWINDOW` 默认 `1`→**`0`**、`FUSION_RUN_ORDER` 默认 `0`→**`1`**
+（`fusion/priors.py:247/:259`，2026-10-09 提交 `…`）。**两者必须同时开**。
+
+**现链 A/B**（`work\_fast_out_wl_on` = `THIN_W=2.6` + `STAGE2_LIB_PINS=1` + VLM 引脚通道开着的那条链；
+只重跑融合层：`FUSION_LLM=0`、`FUSION_RUN_DIR=<链>/runs`、`FUSION_VLM_DIR=<链>/runs/stage3_vlm`、
+`--workers 1`，每臂 ~55 s；产物 `work\_ro_on_*`，原始报告 `work\_rescore_order.json`）：
+
+| 臂 | 调用方式 | 新口径均分 | Δ |
+|---|---|---:|---:|
+| 旧默认（alt1/ord0） | `FUSION_RUN_ALTWINDOW=1 FUSION_RUN_ORDER=0` | 68.2706 | — |
+| 只关窗口 | `FUSION_RUN_ALTWINDOW=0` | 68.3238 | +0.0532 |
+| **新默认（alt0/ord1）** | 不设任何变量 | **68.8997** | **+0.6291** |
+| 新默认 + `HOME=1` | `FUSION_RUN_ORDER_HOME=1` | 68.8997 | +0.0000 |
+
+- **只有 `case 1` 变**：54.3981 → **60.0600**（+5.66），其余 8 张**逐字节相同**；case 1 的
+  netH 0.6140 → 0.7368，pin F1 0.5417 不动。
+- **病灶与解药的逐键证据（case 1）**：12 颗电容 GT 是 `C151…C162`。旧默认下管线交出
+  `C151,C152,C156,C157,C158,C162` + **`C1513,C1514,C1515,C1517,C1518,C1519`**（偏移窗口
+  `[1511,1522]` 的号被 `prior:run_altwindow` 派给了这 6 个槽位）；新默认下**恰好
+  `C151…C162` 全对**（`work\_ro_on_base/1.json` vs `work\_ro_on_o1/1.json`）。
+- **交互关系（旧链 `_f9_ab_*` 六臂，`_rescore.py --preset order`，新口径）**：
+  A(alt1/ord0) 62.5952 ／ B(alt0/ord0) 62.6638 ／ **C(alt0/ord1) 63.2603** ／
+  D(alt1/ord1) **62.5952 = 与 A 逐位相同** ／ E(alt0/ord1/home1) 63.2844 ／ F(空跑) 62.5952。
+  ⇒ **窗口不关时阅读顺序先验一分不加**；`HOME=1` 只在旧链上 +0.0241，在现链上零，故保持默认 0。
+- 复现命令（融合层，纯 CPU，不碰 GPU）：
+
+  ```powershell
+  cd Y:\workspace\EDA\eda-pcb
+  $env:FUSION_RUN_DIR='Y:\workspace\EDA\work\_fast_out_wl_on\runs'
+  $env:FUSION_VLM_DIR='Y:\workspace\EDA\work\_fast_out_wl_on\runs\stage3_vlm'
+  $env:FUSION_LLM='0'; $env:FUSION_OUT_DIR='Y:\workspace\EDA\work\_ro_def_new'   # 不设那对开关
+  python -X utf8 -m fusion.run 1 2 3 4 5 7 8 9 10 --quiet --workers 1
+  python -X utf8 work\tools\diag\_rescore.py --dirs "new=Y:\workspace\EDA\work\_ro_def_new"
+  ```
+
+  ⚠️ `_rescore.py --dirs` 的一侧**必须给绝对路径**（相对路径按 CWD 解析，会静默 n=0）；
+  标签里**不能带 `=`**（`label=path` 的分隔符）。
+- 220 张回归（官方 20 / 派生 200 分档）当时仍在跑，见 `work\_ro220_base.log` / `work\_ro220_ord.log`。
 
 ---
 

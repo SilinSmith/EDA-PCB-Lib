@@ -224,7 +224,17 @@ REPAIR_PENALTY = float(os.environ.get("FUSION_REPAIR_PENALTY", "0.85"))
 # 连号窗口返回前几名（并列时交给 llm_judge 看图二选一，不硬选）
 TOP_WINDOWS = int(os.environ.get("FUSION_TOP_WINDOWS", "3"))
 # ★ **并列窗口（alt window）到底能不能给槽位派号。**
-#   打开时（历史默认）：`[151,162]` 之外还有 `[1151,1162]`/`[1511,1522]` 这些
+#   **2026-10-09 定案：默认已从 `1`（开）翻成 `0`（关）**。依据是它与
+#   `FUSION_RUN_ORDER` 的成对 A/B（`work\_fast_out_wl_on` 链，`FUSION_LLM=0`，
+#   官方 9 张，新口径）：
+#       默认（alt1/ord0）        **68.2706**
+#       `ALTWINDOW=0` 单开       68.3238（+0.0532）
+#       `ALTWINDOW=0 + ORDER=1`  **68.8997（+0.6291）** ← 现在的默认
+#   逐 case：**只有 case 1 变（54.3981 → 60.0600），其余 8 张逐字节相同**；
+#   case 1 的 12 颗电容位号从 `C151,C152,C156,C157,C158,C162 + C1513,C1514,
+#   C1515,C1517,C1518,C1519` 变成**完整的 `C151…C162`**（GT 正是这 12 个）
+#   ⇒ netH 0.6140 → 0.7368、pin F1 不变。
+#   打开时（旧默认）：`[151,162]` 之外还有 `[1151,1162]`/`[1511,1522]` 这些
 #   **偏移窗口**，它们窗内的号也会作为候选塞进池子（`source=prior:run_altwindow`）。
 #   实测代价（官方 9 张交付口径）：`case 1` 的 12 颗电容真值 `C151..C162`，
 #   6 颗被判成 **`C1513/C1514/C1515/C1517/C1518/C1519`**（正是偏移窗口 `[1511,1522]`
@@ -234,14 +244,19 @@ TOP_WINDOWS = int(os.environ.get("FUSION_TOP_WINDOWS", "3"))
 #   置 `0` 后只保留**首选窗口**（`[151,162]`）的 `run_inwindow` 与窗内空号的
 #   `run_free` 两个先验。**注意**：`context["连号窗口候选"]` 照旧写（LLM 轮仍能看图二选一），
 #   关掉的只是「文字侧自己派号」。
-RUN_ALTWINDOW = os.environ.get("FUSION_RUN_ALTWINDOW", "1").strip().lower() not in ("0", "off", "false", "no", "")
+RUN_ALTWINDOW = os.environ.get("FUSION_RUN_ALTWINDOW", "0").strip().lower() not in ("0", "off", "false", "no", "")
 
-# ★ **阅读顺序先验（`prior:run_order`）到底开不开。默认关**（关时现有行为逐位不变）。
+# ★ **阅读顺序先验（`prior:run_order`）到底开不开。**
+#   **2026-10-09 定案：默认已从 `0`（关）翻成 `1`（开）** —— 它才是 case 1 那
+#   6 个位号被修好的那一半（`ALTWINDOW=0` 单开只 +0.0532，加上它才 +0.6291）。
+#   ⚠️ **两者必须同时开**：历史 A/B（旧链 `_fast_out_reg9`、官方 9 张、新口径）
+#   `D alt1/ord1` = 62.5952 = 与基线 `A alt1/ord0` 逐位相同 ⇒ **窗口不关时，
+#   阅读顺序先验一分不加**（窗内的错号仍然赢）。
 #   动机：`case 1` 的 12 颗电容真值 `C151..C162`，按**阅读顺序**（图上从上到下、
 #   同行从左到右）排恰好一一对应 —— 而现在的管线只会用「读数/修复变体」决定
 #   谁拿哪个号，读数一错（`C153`→`C53`、`C159`→`C153`）就全错。
 #   规则见 `Priors._run_order`。
-RUN_ORDER = os.environ.get("FUSION_RUN_ORDER", "0").strip().lower() not in ("0", "off", "false", "no", "")
+RUN_ORDER = os.environ.get("FUSION_RUN_ORDER", "1").strip().lower() not in ("0", "off", "false", "no", "")
 # ★ 是否**也**改「窗内读数与自己的阅读位不符」的槽位（默认关）。
 #   关时只派给「没有窗内真读数」的槽位（最保守：一个已读出的号都不动）。
 #   开时的理由：一个窗内读数如果**已经被同族另一个槽位在自己的阅读位上认领**
@@ -249,6 +264,9 @@ RUN_ORDER = os.environ.get("FUSION_RUN_ORDER", "0").strip().lower() not in ("0",
 #   是读错/串框，让位给「它自己阅读位上的号」更对。**一致性闸**（下面第三条）保证
 #   只在「这张图的编号确实跟着阅读顺序走」时才敢这么做 —— 阅读顺序≠连号顺序的图
 #   （`case 3` 的 `C` 就是 `7,4,5,6,1,2,3`）过不了闸，整段放弃。
+#   ★ 2026-10-09 复核（`work\_fast_out_wl_on` 链，官方 9 张）：`HOME=1` 与不设
+#     **逐字节相同**（都是 68.8997）；旧链上它只比不设多 +0.0241（63.2844 vs
+#     63.2603）⇒ **保持默认 0**（不翻一个边际收益未复现的开关）。
 RUN_ORDER_HOME = os.environ.get("FUSION_RUN_ORDER_HOME", "0").strip().lower() not in ("0", "off", "false", "no", "")
 # 派号的加成：`该槽位当前最优分 + RUN_ORDER_BONUS`。
 # 尺度理由（与 `fusion/axis.py:AXIS_MARGIN=0.05` 同款）：要**刚好越过它自己那条
@@ -966,7 +984,7 @@ class Priors:
                              question="元件 %s 的位号是哪一个？" % sid.split(".")[1],
                              meta=dict(pool.meta.get(sid) or {}))
                     st["run_added"] += 1
-            # (d) **阅读顺序 × 连号**（★新增，`FUSION_RUN_ORDER` 默认关）：
+            # (d) **阅读顺序 × 连号**（`FUSION_RUN_ORDER`，2026-10-09 起默认**开**）：
             #     图上从上到下、同行从左到右的第 i 个槽位拿 `lo+i-1` 号。
             #     这是纯形状证据，只在「这张图的编号确实跟着阅读顺序走」（一致性闸）
             #     且「该槽位没有窗内真读数」（或 `HOME` 下的串框读数）时才动手。

@@ -29,13 +29,18 @@ def _default_ckpt() -> Path:
     """CRNN 权重：**不再写死 `Y:\\workspace\\...`**（进容器必炸）。
 
     顺序：`STAGE2_CKPT` 环境变量 -> `eda-pcb/weights/textrec_best.pt`（随仓库提交）
-    -> `EDA/work/ocr_real/runs/best.pt`（本机训练产物）。详见 `assets.py`。
+    -> `EDA/work/ocr_mix/runs/best.pt`（本机训练产物）。详见 `assets.py`。
+
+    ★ 2026-10-11：兜底路径从 `ocr_real`(e51) 改成 `ocr_mix`(e57) —— `weights/textrec_best.pt`
+    也一起换成了 e57（两把尺子都更好：官方 9 张 57.26→62.80，派生 80 张 23.81→26.14，
+    见 `docs/DIAGNOSTICS.md`「交付 CRNN 权重陈旧」）。旧权重留在
+    `work/weights_backup/textrec_best.real_e51.pt`（= `work/ocr_real/runs/best.pt`）。
     """
     try:
         from assets import textrec_ckpt
     except ImportError:                       # 以别的方式被导入时退回老路径
         return Path(os.environ.get(
-            "STAGE2_CKPT", r"Y:\workspace\EDA\work\ocr_real\runs\best.pt"))
+            "STAGE2_CKPT", r"Y:\workspace\EDA\work\ocr_mix\runs\best.pt"))
     return Path(textrec_ckpt(must_exist=False))
 
 
