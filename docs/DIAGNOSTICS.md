@@ -557,11 +557,40 @@ RuntimeError: DataLoader worker (pid(s) 27632, 5412) exited unexpectedly
 | 巨图 | 无像素上限，`imread` 直接吃 9 亿像素（硬 OOM-kill 不是异常，`except` 救不了） | `STAGE1_MAX_PIXELS_HARD`（默认 **8e7 = 80 MP**，只看文件头）⇒ 超过就按 1/2、1/4、1/8 解码（`IMREAD_REDUCED_COLOR_*`）。本地最大图 4491×3173=14 MP ⇒ **正常路径逐像素不变** |
 | 资产缺失（权重/库） | 权重缺失会联网下载或抛异常；**CRNN 静默降级**（`stage2/text.py:343 allow_missing=True`）⇒ 位号/值全空但「产物齐全、退出码 0」 | `run.py` 把 `assets.describe()` 逐项 `exists` 打进行首日志，缺失项打 ⚠️「该通道会静默降级」 |
 | 并发写盘 | `runs/fusion/_fusion_report.json` 读-改-写**无锁**；决策日志直接覆写 | 决策日志与 `_fusion_report.json` 改 `_atomic_write_text`（`.tmp` + `os.replace`）；阶段二主循环**渐进导出**（每张成功即拷贝一份 `_Pred.json`） |
+| **2 小时预算**（30~50 案例 × 交付口径 26.6 s ~ 3.7 min/张 ⇒ 串行约 3 h） | 只有阶段一并行（`-workers`），阶段二/三/融合层**逐 case 顺序循环** ⇒ 50 张顶穿预算、超时的案例直接不得分 | **case 级扇出** `-case-workers`（默认 -1 = 自动：GPU ≥2 时 `min(GPU 数, 图数)`；`0` = 强制串行；`EDA_CASE_WORKERS` 覆盖）：每张图的全流程交给一个**独立子进程 + 独占一张卡** |
+| 某个 lane 崩了 / 跑不完（子进程被 OOM-kill、端点卡死） | 不适用（以前没有 lane 概念）；单进程版是「整个进程一起死/一起等」 | 父进程逐个 `wait` 并记 `rc`，合并**已产出**的 lane 产物，对没产出的 case **补空壳**；`EDA_WALL_BUDGET_S`（默认 0 = 不限）到点**强杀**剩余 lane（`summary.lanes[].rc=-9`）后照常写 `decision_log.json`，退出码 0 |
 
 **验证**（`tools\dev\_hardtest.py`，五个现场 **21 项断言全过**）：非 ASCII 路径 `cv2.imread → None` 而
 `_imread_bgr` 与 ASCII 路径**逐像素相同**；坏图 ⇒ 退出码 0 + 空壳 + `decision_log.json`；同名 `same.png/same.jpg`
 ⇒ 只导出 1 份；`_fix_device` 三种输入行为正确；注入 `run_cases` 抛异常 ⇒ `main` 返回 **3**、两张图各补空壳、
 `summary.fatal` 记录异常串。**回归**：`fast.py --cases 1 --no-vlm` 前后都是 **62.62**（逐位不变）。
+
+#### case 级扇出（2026-10-15，用户 m42543「允许并发」+ m40034「2 小时跑 50 样例」）
+
+```powershell
+# 自动（本机 1 卡 ⇒ 串行；判题机 8 卡 ⇒ 8 路）
+python submission\run.py -input <in> -output <out>
+# 强制 8 路 + 90 分钟看门狗
+python submission\run.py -input <in> -output <out> -case-workers 8
+$env:EDA_WALL_BUDGET_S = "5400"; python submission\run.py -input <in> -output <out>
+```
+
+* **为什么不是 `-workers`**：它只并行阶段一。9 张官方图实测 `--no-vlm` 串行 **50.6 s** →
+  `-workers 8` **45.1 s**（~10%），产物 9/9 逐字节相同。
+* **交付口径实测**（9 张官方图，VLM + 融合 LLM 全开，本机 **1 张卡**、lane 之间抢卡抢端点）：
+  串行 **111.5 s** → `-case-workers 4` **85.5 s**（1.30×）；`--no-vlm` 口径 50.6 → **34.9 s**。
+  **两种口径下 `final_results/*_Pred.json` 都是 9/9 逐字节相同**（VLM 读数确定）。
+* lane 布局：`<out>\_lanes\lane<i>\`（各含 `stdout.log`、`final_results`、`runs`、`decision_log.json`），
+  父进程 `_merge_lane()` **只补缺不覆盖**，然后统一写 `decision_log.json`
+  （`summary.n_lanes` / `summary.lanes[]` / `n_shell`）。
+* 每个 lane 独占一张卡（`_lane_device`：`-device 0` ⇒ 0/1/…/N-1 轮转），扇出 ≥4 时子进程
+  `-vlm-workers` 减半、`-workers 1`，并设 `OMP_NUM_THREADS` 防 N× 抢 CPU。
+* **验证**：`tools\dev\_fantest.py` **16 项全过** —— ① 扇出 3 路 + 坏图 ⇒ 3/3 产物、`n_shell=1`、
+  每 lane 摘要齐、坏图是空壳三键；② `EDA_WALL_BUDGET_S=1` ⇒ 3 个 lane 全 `rc=-9`、
+  父进程仍写 3 份空壳 + `decision_log.json`、退出码 0；③ `-case-workers 0` ⇒ `summary` 里**没有**
+  `n_lanes`（走老路）；④ 默认在本机（1 卡）也走老路。
+* 单卡机器/不传该参数时 `_run_fanout` 直接调 `_run(a)` ⇒ 与本轮之前的交付行为**逐位一致**
+  （`fast.py --cases 1 --no-vlm` = **62.62**）。
 
 ---
 

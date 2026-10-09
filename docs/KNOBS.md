@@ -6,7 +6,7 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **330** 个开关。
+共 **332** 个开关。
 
 ## 目录
 
@@ -18,7 +18,7 @@
 - [textrec](#textrec)（13）
 - [cvparts](#cvparts)（6）
 - [pipeline](#pipeline)（9）
-- [submission](#submission)（1）
+- [submission](#submission)（3）
 
 <a id="stage1"></a>
 
@@ -411,4 +411,6 @@
 
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
-| `FUSION_LLM` | `"1"` *(3 处)* | `submission/run.py:464` |
+| `EDA_CASE_WORKERS` | `""` | `submission/run.py:293` |
+| `EDA_WALL_BUDGET_S` | `"0"` | `submission/run.py:442` |
+| `FUSION_LLM` | `"1"` *(3 处)* | `submission/run.py:754` |

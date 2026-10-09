@@ -33,6 +33,13 @@
 `run_cases` 的进程池崩溃改在本进程串行补跑；导出层对没有产物的 case 写空壳（不是 `continue`）；
 `_fix_device` 在无 CUDA 时把 `-device 0` 回退成 `cpu`；同名 case 去重；巨图走
 `stage1/pipeline.py:_imread_bgr` 的降采样护栏。故障注入测试见 `tools/dev/_hardtest.py`。
+
+★ 2026-10-15（用户 m42543「判题机同时给全部样例且允许并发」）—— **case 级扇出**：
+`-case-workers`（默认 -1 = 自动：可见 GPU ≥2 时取 min(GPU 数, 图数)，否则 1 = 老行为）
+把每张图的**全流程**分给一个独立子进程、每个子进程独占一张卡；父进程负责分派、
+看门狗（`EDA_WALL_BUDGET_S`）、合并产物、给没产出的 case 补空壳并写 `decision_log.json`。
+`-workers` 只并行阶段一（9 张实测只快 ~10%），而阶段二/三/融合层是逐 case 顺序循环，
+交付口径 26.6 s/张（官方 case 1）~3.7 min/张（派生大图）⇒ 50 张必须并行才进 2 小时。
 """
 from __future__ import annotations
 
@@ -40,6 +47,7 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 import traceback
@@ -104,7 +112,16 @@ def main(argv=None) -> int:
                          "（'0' -> 'cuda:0'，没卡则退 CPU）")
     ap.add_argument("-imgsz", "--imgsz", dest="imgsz", type=int, default=1600)
     ap.add_argument("-workers", "--workers", dest="workers", type=int, default=1,
-                    help="stage1 进程池大小（CPU 密集；>1 会各自占显存）")
+                    help="**stage1 内部**进程池大小（CPU 密集；>1 会各自占显存）")
+    ap.add_argument("-case-workers", "--case-workers", dest="case_workers", type=int,
+                    default=-1,
+                    help="**case 级扇出**：把整张图的全流程分给 N 个独立进程并行，"
+                         "每个子进程独占一张卡（`-device` 递增）。-1（默认）= 自动："
+                         "可见 GPU ≥2 时取 min(GPU 数, 图数)，否则 1（= 今天的行为）。"
+                         "环境变量 `EDA_CASE_WORKERS` 可覆盖自动值；0 = 强制关。"
+                         "用户 m42543：判题机一次给全部样例且允许并发；"
+                         "交付口径每张 ~30 s（官方 case 1）~3.7 min（派生大图），"
+                         "50 张串行顶穿 2 小时预算。")
     ap.add_argument("-no-wires", "--no-wires", dest="no_wires", action="store_true",
                     help="跳过骨架提线（最耗时的 CPU 段）")
     ap.add_argument("-texts", "--texts", dest="texts", default="both",
@@ -201,7 +218,9 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     _fix_device(a)
     try:
-        return _run(a)
+        # ★ case 级扇出（用户 m42543）：`_run_fanout` 在扇出数 <= 1 时**原样**调
+        #   `_run(a)`，所以单卡机器/小批量的行为与以前逐位一致。
+        return _run_fanout(a)
     except Exception as e:                                          # noqa: BLE001
         return _safety_net(a, e)
 
@@ -228,6 +247,271 @@ def _fix_device(a) -> None:
               "回退 CPU（否则 YOLO 会对每张图抛 ValueError，整批 0 产物）"
               % (a.device,), flush=True)
         a.device = "cpu"
+
+
+# ======================================================================
+# case 级扇出（用户 m42543：「判题机将同时提供所有样例并且允许并发」）
+# ======================================================================
+# 为什么不是 `-workers`：它只并行**阶段一**（`stage1.pipeline.run_cases` 的进程池）。
+# 9 张官方图实测：串行 50.6 s → `-workers 8` 45.1 s（只快 ~10%），且
+# `final_results/*_Pred.json` **9/9 逐字节相同**（并发只改速度、不改内容）。
+# 交付口径的墙钟分布（官方 case 1，`work\_fast_out_tm_vlm1\final_results\run.log`）：
+#   阶段一 3.7 s ｜ 阶段二 0.6 s ｜ 阶段三 0.1 s ｜ VLM 探测+补强 16.3 s ｜ 融合(LLM 轮) 5.8 s
+#   = **26.6 s/张**；派生大图（元件多 ⇒ VLM 请求多）实测约 **3.7 min/张**
+# ⇒ 50 张串行约 3 h，顶穿「2 小时」硬约束；而阶段二/三/融合层**都是逐 case 顺序循环**。
+# 做法：把「一张图的全流程」当不可分割的任务，N 个**独立进程**并行、每个独占一张卡；
+# 父进程只做分派 / 看门狗 / 合并 / 兜底（空壳 + decision_log）。
+# 用进程而不是线程：CRNN、fusion 的 LLM 轮、以及各模块的模块级状态（`cvparts.hypo.LEDGER`、
+# `structmatch.HIST_*`、stage1 的 VLM 熔断计数）都不是线程安全的；进程级隔离还顺带把
+# `runs/fusion/_fusion_report.json` 的读-改-写竞态消掉了（每个 lane 一份，父进程再合并）。
+_CASE_ARGV_MAP = (
+    ("imgsz", "-imgsz"), ("texts", "-texts"), ("mode", "-mode"),
+    ("llm_batch", "-llm-batch"),
+    ("vlm", "-vlm"), ("vlm_workers", "-vlm-workers"), ("vlm_margin", "-vlm-margin"),
+    ("vlm_value", "-vlm-value"), ("vlm_value_margin", "-vlm-value-margin"),
+    ("vlm_value_batch", "-vlm-value-batch"), ("vlm_value_side", "-vlm-value-side"),
+    ("vlm_value_cols", "-vlm-value-cols"),
+    ("vlm_name", "-vlm-name"), ("vlm_name_margin", "-vlm-name-margin"),
+    ("vlm_pin", "-vlm-pin"), ("vlm_pin_name", "-vlm-pin-name"),
+    ("vlm_desig_fallback", "-vlm-desig-fallback"),
+    ("fusion", "-fusion"), ("llm_max_slots", "-llm-max-slots"),
+    ("gpu_frac", "-gpu-frac"), ("gpu_headroom", "-gpu-headroom"),
+)
+
+
+def _visible_cuda_devices() -> int:
+    try:
+        import torch
+        return int(torch.cuda.device_count()) if torch.cuda.is_available() else 0
+    except Exception:                                               # noqa: BLE001
+        return 0
+
+
+def _resolve_case_workers(a, n_cases: int) -> int:
+    """扇出进程数。`-case-workers` > `EDA_CASE_WORKERS` > 自动（可见 GPU 数）。"""
+    v = int(getattr(a, "case_workers", -1))
+    env = (os.environ.get("EDA_CASE_WORKERS", "") or "").strip()
+    if v < 0 and env.lstrip("+-").isdigit():
+        v = int(env)
+    if v == 0:
+        return 1
+    if v > 0:
+        return max(1, min(v, n_cases))
+    ndev = _visible_cuda_devices()
+    if ndev <= 1:
+        return 1                       # 单卡/无卡：保持交付默认（逐 case 串行）
+    return max(1, min(ndev, n_cases))
+
+
+def _lane_device(base, lane: int) -> str:
+    """lane i 独占一张卡（`-device 0` → 0/1/…/N-1 轮转）。"""
+    d = str(base or "0").strip()
+    n = _visible_cuda_devices()
+    if n <= 0:
+        return d
+    low = d.lower()
+    if d.isdigit():
+        return str((int(d) + lane) % n)
+    if low.startswith("cuda"):
+        i = 0
+        if ":" in low:
+            try:
+                i = int(low.split(":", 1)[1])
+            except Exception:                                       # noqa: BLE001
+                i = 0
+        return "cuda:%d" % ((i + lane) % n)
+    return d
+
+
+def _child_argv(a, out_dir: Path, cases: list, device, vlm_workers: int,
+                stage1_workers: int) -> list:
+    argv = [sys.executable, "-X", "utf8", str(Path(__file__).resolve()),
+            "-input", str(a.input_dir), "-output", str(out_dir),
+            "-cases", ",".join(cases), "-device", str(device),
+            "-case-workers", "1",
+            "-workers", str(stage1_workers)]
+    if getattr(a, "no_wires", False):
+        argv.append("-no-wires")
+    for dest, flag in _CASE_ARGV_MAP:
+        val = getattr(a, dest, None)
+        if val is None:
+            continue
+        if dest == "vlm_workers":
+            val = vlm_workers
+        argv += [flag, str(val)]
+    return argv
+
+
+def _merge_lane(lane_dir: Path, final_dir: Path, runs: Path) -> int:
+    """把一个 lane 的产物并回主输出目录（只补缺，不覆盖已有文件）。"""
+    n = 0
+    lf = lane_dir / "final_results"
+    if lf.is_dir():
+        for f in sorted(lf.glob("*_Pred.json")):
+            dst = final_dir / f.name
+            if dst.exists():
+                continue
+            try:
+                shutil.copyfile(str(f), str(dst))
+                n += 1
+            except Exception:                                       # noqa: BLE001
+                pass
+    lr = lane_dir / "runs"
+    if lr.is_dir():
+        for f in sorted(lr.rglob("*.json")):
+            dst = runs / f.relative_to(lr)
+            if dst.exists():
+                continue
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(str(f), str(dst))
+            except Exception:                                       # noqa: BLE001
+                pass
+    return n
+
+
+def _run_fanout(a) -> int:
+    """`-case-workers` > 1 时把 case 分给 N 个独立子进程；否则原样走 `_run(a)`。"""
+    in_dir, out_dir = Path(a.input_dir), Path(a.output_dir)
+    if not in_dir.is_dir():
+        print("输入目录不存在：%s" % in_dir, file=sys.stderr)
+        return 2
+    items, _dup = _dedupe_items(discover_inputs(in_dir))
+    if getattr(a, "cases", ""):
+        want = {c.strip() for c in a.cases.split(",") if c.strip()}
+        items = [(c, p) for c, p in items if c in want]
+    if getattr(a, "limit", 0):
+        items = items[:a.limit]
+    n_lanes = _resolve_case_workers(a, len(items)) if items else 1
+    if n_lanes <= 1:
+        return _run(a)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    final_dir = out_dir / "final_results"
+    final_dir.mkdir(parents=True, exist_ok=True)
+    runs = out_dir / "runs"
+    lanes_root = out_dir / "_lanes"
+    lanes_root.mkdir(parents=True, exist_ok=True)
+    t_start = time.time()
+    fp = (final_dir / "run.log").open("w", encoding="utf-8")
+    _log(fp, "EDA 赛题六 · 提交入口（case 级扇出）")
+    _log(fp, "input=%s  output=%s" % (in_dir, out_dir))
+    _log(fp, "找到 %d 张图，扇出 %d 个进程（每 lane 独占一张卡）" % (len(items), n_lanes))
+    if _dup:
+        _log(fp, "⚠️ 输入里 %d 张图与别的图**同名**：%s ⇒ 只保留第一个"
+             % (len(_dup), ", ".join("%s <- %s" % (c, p) for c, p in _dup[:6])))
+
+    # lane 内并发度：整体并发 = lanes × 每 lane 并发，别把本地 LLM/VLM 端点打爆。
+    # 端点通常是 LM Studio 单模型（127.0.0.1:1234），32 路并发只会让它排队。
+    child_vw = int(getattr(a, "vlm_workers", 4))
+    if n_lanes >= 4:
+        child_vw = max(1, child_vw // 2)
+    child_s1 = int(getattr(a, "workers", 1))
+    if n_lanes >= 4:
+        child_s1 = 1                     # 每 lane 的 stage1 交给 lane 之间的并行
+    ncpu = os.cpu_count() or 4
+    child_env = dict(os.environ)
+    nthr = str(max(1, ncpu // n_lanes))
+    for k in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENCV_FOR_THREADS_NUM"):
+        child_env[k] = nthr
+
+    ids = [cid for cid, _p in items]
+    lanes = []
+    for i in range(n_lanes):
+        sub = ids[i::n_lanes]
+        if not sub:
+            continue
+        lane_dir = lanes_root / ("lane%d" % i)
+        lane_dir.mkdir(parents=True, exist_ok=True)
+        dev = _lane_device(getattr(a, "device", "0"), i)
+        argv = _child_argv(a, lane_dir, sub, dev, child_vw, child_s1)
+        lf = (lane_dir / "stdout.log").open("w", encoding="utf-8")
+        proc = None
+        try:
+            proc = subprocess.Popen(argv, stdout=lf, stderr=subprocess.STDOUT,
+                                    env=child_env)
+        except Exception as exc:                                    # noqa: BLE001
+            _log(fp, "⚠️ lane%d 起不来（%r）⇒ 这 %d 张只能靠空壳兜底" % (i, exc, len(sub)))
+        lanes.append({"i": i, "cases": sub, "dir": lane_dir, "proc": proc,
+                      "log": lf, "device": dev})
+        _log(fp, "lane%d：device=%s，%d 张，vlm-workers=%d，stdout=%s"
+             % (i, dev, len(sub), child_vw, lane_dir / "stdout.log"))
+
+    budget = 0.0
+    try:
+        budget = float(os.environ.get("EDA_WALL_BUDGET_S", "0") or 0)
+    except Exception:                                               # noqa: BLE001
+        budget = 0.0
+    deadline = (t_start + budget) if budget > 0 else None
+    _log(fp, "墙钟预算 %s（EDA_WALL_BUDGET_S；0 = 不限）"
+         % ("%.0f s" % budget if budget > 0 else "不限"))
+    for lane in lanes:
+        p = lane["proc"]
+        if p is None:
+            continue
+        left = None if deadline is None else max(1.0, deadline - time.time())
+        try:
+            rc = p.wait(timeout=left)
+        except subprocess.TimeoutExpired:
+            _log(fp, "⚠️ lane%d 超过墙钟预算 ⇒ 强杀（未产出的图走空壳兜底）" % lane["i"])
+            try:
+                p.kill()
+                p.wait(timeout=30)
+            except Exception:                                       # noqa: BLE001
+                pass
+            rc = -9
+        lane["rc"] = rc
+        try:
+            lane["log"].close()
+        except Exception:                                           # noqa: BLE001
+            pass
+        _log(fp, "lane%d 结束 rc=%s" % (lane["i"], rc))
+
+    n_merge = 0
+    for lane in lanes:
+        n_merge += _merge_lane(lane["dir"], final_dir, runs)
+    n_shell_here = 0
+    for cid, _p in items:
+        if not (final_dir / ("%s_Pred.json" % cid)).exists():
+            if _write_shell(final_dir, cid, note="扇出 lane 未产出，空壳兜底"):
+                n_shell_here += 1
+    n_export = len(items) - n_shell_here
+    _log(fp, "合并 lane 产物 %d 份；导出 %d 份 <case>_Pred.json%s"
+         % (n_merge, n_export,
+            ("（另有 %d 份空壳兜底）" % n_shell_here) if n_shell_here else ""))
+
+    lane_log = []
+    for lane in lanes:
+        s = {}
+        dl = lane["dir"] / "decision_log.json"
+        if dl.exists():
+            try:
+                s = (json.loads(dl.read_text(encoding="utf-8")) or {}).get("summary") or {}
+            except Exception:                                       # noqa: BLE001
+                s = {}
+        lane_log.append({"lane": lane["i"], "device": lane["device"],
+                         "n": len(lane["cases"]), "rc": lane.get("rc"),
+                         "cases": lane["cases"], "summary": s})
+    cases_log = [{"case": cid, "exported": (final_dir / ("%s_Pred.json" % cid)).exists()}
+                 for cid, _p in items]
+    wall = round(time.time() - t_start, 1)
+    _log(fp, "全部完成，墙钟 %.1fs（%.2f s/张，扇出 %d 路）"
+         % (wall, wall / max(1, len(items)), n_lanes))
+    fp.close()
+    agg = {k: sum(int((l["summary"] or {}).get(k) or 0) for l in lane_log)
+           for k in ("n_stage1_ok", "n_stage2_ok", "n_stage3_ok")}
+    # 空壳 = lane 自己写的（图坏了 / 该 lane 内部阶段失败）+ 父进程补的
+    n_shell_lane = sum(int((l["summary"] or {}).get("n_shell") or 0) for l in lane_log)
+    _write_decision(out_dir,
+                    {"n_cases": len(items), "n_lanes": n_lanes,
+                     "n_stage1_ok": agg["n_stage1_ok"], "n_stage2_ok": agg["n_stage2_ok"],
+                     "n_stage3_ok": agg["n_stage3_ok"],
+                     "n_exported": n_export, "n_shell": n_shell_lane + n_shell_here,
+                     "wall_s": wall,
+                     "lanes": lane_log},
+                    cases_log, a, t_start, note="case 级扇出")
+    print("产物 -> %s" % final_dir)
+    return 0
 
 
 def _run(a) -> int:
@@ -699,6 +983,7 @@ def _write_decision(out_dir: Path, summary: dict, cases_log: list,
         "output_dir": str(a.output_dir),
         "config": {
             "device": a.device, "imgsz": a.imgsz, "workers": a.workers,
+            "case_workers": getattr(a, "case_workers", -1),
             "do_wires": not a.no_wires, "texts": a.texts,
             "llm_mode": a.mode, "llm_batch": a.llm_batch,
             "llm_max_slots": a.llm_max_slots,

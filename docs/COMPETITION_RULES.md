@@ -37,6 +37,27 @@ FinalScore               = FinalScore_Accuracy + FinalScore_Data   # Data ≤ 10
 > 我们本地 9 张的融合层整链是 25~66 s（`--workers 1`，LM Studio 本地），**纯 CV 路径完全没有时间压力**；
 > 真正会吃满预算的是「每案例多次外部 VLM 调用」——见 §7 的 token 权衡。
 > 另：**任何一例超时都会同时扣准确度分子和 `m/M` 因子**，交付脚本必须对每案例做软超时兜底（哪怕只输出空壳 JSON）。
+>
+> **★ case 级扇出（2026-10-15，用户 m42543「判题机同时给全部样例且允许并发」）**
+> `-workers` 只并行**阶段一**（9 张官方图实测：串行 50.6 s → `-workers 8` 45.1 s，只快 ~10%），
+> 而阶段二（CRNN）/阶段三（VLM+LLM）/融合层**都是逐 case 顺序循环**，交付口径墙钟分布
+> （官方 case 1）＝ 阶段一 3.7 s ｜ 阶段二 0.6 s ｜ 阶段三 0.1 s ｜ VLM 探测+补强 16.3 s ｜
+> 融合(LLM 轮) 5.8 s ＝ **26.6 s/张**；派生大图（元件多 ⇒ VLM 请求多）实测约 **3.7 min/张**
+> ⇒ 50 张串行顶穿 2 小时。所以交付入口支持 **`-case-workers`**：把「一张图的全流程」当不可
+> 分割的任务分给 N 个**独立子进程**、每个独占一张卡（`-device` 递增轮转）。
+> - 默认 `-1` = **自动**：可见 GPU ≥2 时取 `min(GPU 数, 图数)`，否则 1（= 旧行为，单卡机器
+>   与本机回归逐位一致）；`-case-workers 0` 强制串行；`EDA_CASE_WORKERS` 可覆盖自动值。
+> - 实测（本机 1 卡，9 张官方图，VLM+融合 LLM 全开）：串行 **111.5 s** → 扇出 4 路 **85.5 s**
+>   （1.30×，且 8 路都在抢同一张卡与同一个本地端点）；`--no-vlm` 口径 50.6 s → 34.9 s。
+>   **两种口径下 `final_results/*_Pred.json` 都是 9/9 逐字节相同**（VLM 读数也是确定的）。
+> - lane 内并发：扇出 ≥4 时每个子进程 `-vlm-workers` 减半、`-workers 1`、并给各子进程
+>   设 `OMP_NUM_THREADS`（避免 N× 全核抢 CPU）——本地端点（LM Studio 单模型）不要用
+>   32 路并发去打。
+> - **看门狗**：`EDA_WALL_BUDGET_S`（默认 0 = 不限）到点强杀剩余 lane，父进程对没产出的图
+>   **补空壳**并写出 `decision_log.json`（`summary.lanes[].rc=-9`），保证「超时也留下东西」。
+>   回归测试 `eda-pcb\tools\dev\_fantest.py`（16 项：坏图 / 看门狗 / 强制串行 / 自动）。
+> - 每个 lane 各写一份 `runs/fusion/_fusion_report.json`，父进程再合并 ⇒ 顺带消掉了
+>   该文件「读-改-写」的跨 case 竞态。
 
 > 风险提示：`qwen3.7-plus` 听起来是**纯文本模型**。`eda-pcb\vlm\client.py` 已经预留
 > `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `VLM_*` 与 `preflight()`（注释里写着
