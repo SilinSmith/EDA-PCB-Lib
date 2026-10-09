@@ -579,6 +579,33 @@ def _run(a) -> int:
             _log(fp, "⚠️ 资产缺失：%s = %s —— 该通道会静默降级，"
                      "请检查镜像里是否带上了这个文件" % (_k, _v.get("path")))
 
+    # ------------------------------------ VLM 预探测 + 竖直脚旋转重读的自动兜底
+    # ★ 用户 m42543「要考虑各种灾难性的现场」：交付默认 `-vlm auto` ⇒ 端点不可用时
+    #   **整个引脚通道不跑**（回到纯 CRNN）。这时 `STAGE2_PINROT`（竖直脚旋转重读）是
+    #   唯一的救命通道：官方 10GT 里 case 6 的引脚在无 VLM 口径是**整张 0 分**
+    #   （`fast.py --cases 6 --no-vlm` = 53.20 / pin 0.0000），开了它 +2.86；case 7
+    #   +3.85、case 10 +2.17（9 张均值 63.02 → 63.69，**7 张逐位不变、无一倒退**）。
+    #   反过来「VLM 引脚通道开着」时旋转重读是**净负**（交付口径 case 6 59.94 → 59.67，
+    #   引脚 +0.0033 但网络 −0.0101：修好的引脚名会参与电源轨挂标签）⇒ 只在引脚通道
+    #   不会跑时自动打开。显式设了 `STAGE2_PINROT` 的人优先，不覆盖。
+    vlm_ok = (a.vlm == "on")
+    if a.vlm == "auto":
+        try:
+            from vlm import client as _vc
+            _t0 = time.time()
+            vlm_ok = bool(_vc.probe())
+            _log(fp, "VLM 端点预探测（%s，%.1fs）：%s"
+                 % (_vc.BASE, time.time() - _t0,
+                    "可用" if vlm_ok else "不支持图片，跳过补强"))
+        except Exception as _e:                                     # noqa: BLE001
+            vlm_ok = False
+            _log(fp, "VLM 预探测失败（%s: %s）⇒ 按不可用处理"
+                 % (type(_e).__name__, _e))
+    if not (vlm_ok and a.vlm_pin == "on") and "STAGE2_PINROT" not in os.environ:
+        os.environ["STAGE2_PINROT"] = "1"
+        _log(fp, "VLM 引脚通道不会跑 ⇒ 打开 STAGE2_PINROT=1（竖直脚旋转重读；"
+                 "无 VLM 口径官方 9 张 +0.67 且九张零回归）")
+
     # ---------------------------------------------------------- 阶段一
     cases = [Case(split="input", case_id=cid, png_path=str(p), json_path=None)
              for cid, p in items]
@@ -673,10 +700,12 @@ def _run(a) -> int:
             from vlm import enrich as vlm_enrich
             on = a.vlm == "on"
             if not on:
-                t0 = time.time()
-                on = vlm_client.probe()
-                _log(fp, "VLM 端点探测（%s，%.1fs）：%s"
-                     % (vlm_client.BASE, time.time() - t0, "可用" if on else "不支持图片，跳过"))
+                # 复用上面的预探测结果（同一次运行只探一次；`STAGE2_PINROT` 的自动开关
+                # 也依赖它 —— 两边必须一致，否则会出现「按 VLM 可用关掉旋转重读，
+                # 补强却因为端点挂了没跑」的空档）。
+                on = vlm_ok
+                _log(fp, "VLM 端点探测（%s，复用预探测结果）：%s"
+                     % (vlm_client.BASE, "可用" if on else "不支持图片，跳过"))
             if on:
                 png_of = {cid: str(p) for cid, p in items}
                 s3v = s3v_dir

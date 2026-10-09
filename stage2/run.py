@@ -241,6 +241,25 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
             reads = list(reads) + list(extra)
             a = assign(doc.get("components") or [], doc.get("pins") or {}, reads,
                        pincol=doc.get("pincol"))
+    # ★ 引脚名救援（`stage2/pinname.py`，`STAGE2_PINNAME_RESCUE` 默认关）：
+    #   「号读对了、名字没读到」的 box 脚以前会被 `assemble.py` 的 NEED_NAME 闸门
+    #   整条丢掉（官方 9 张：缺号 51 里有 23 根 = 45%）。这里从脚点往体内切带、
+    #   剔掉体描边、按行分组只取离脚最近的一行，读一次；过闸门才写回名字。
+    #   必须在 `build_doc` **之前**（名字要进交付文档），且只动 `a` 不删任何东西。
+    try:
+        from . import pinname as _pinname
+        _pn = _pinname.rescue(bgr, doc, a, engine)
+    except Exception as _e:                      # noqa: BLE001
+        _pn = {"on": True, "error": "%s: %s" % (type(_e).__name__, _e)}
+    # ★ 竖直脚旋转重读（`stage2/pinrot.py`，`STAGE2_PINROT` 默认关）：上下边的脚
+    #   文字是旋转 90° 印的（官方 10GT：case 6 有 6 根、case 10 有 3 根、case 7 有 2 根），
+    #   轴对齐裁片只能读成 'L'/'33' 这类碎片 —— case 6 引脚通道整张 0 分。这里把整图
+    #   转 90°（顺/逆各一轮）、在旋转帧里取体内/体外条带重读号与名，过闸门才覆盖。
+    try:
+        from . import pinrot as _pinrot
+        _pr = _pinrot.fix(bgr, doc, a, engine)
+    except Exception as _e:                      # noqa: BLE001
+        _pr = {"on": True, "error": "%s: %s" % (type(_e).__name__, _e)}
     pred = build_doc(doc, a, case)
     pin_index = pred.pop("__pin_index", None)
     t3 = time.time()
@@ -293,6 +312,8 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         "n_pin_name": n_pn, "n_pin_number": n_pnum, "n_pins": n_pins,
         "n_net_labels": len(a["net_labels"]), "n_nets": len(pred["nets"]),
         "labels_merged": sum(1 for v in pred["nets"].values() if v.get("label")),
+        "pinname_rescue": _pn,
+        "pinrot": _pr,
         "t_read": round(t2 - t1, 2), "t_assign": round(t3 - t2, 2),
         "t_total": round(t3 - t0, 2),
     }

@@ -6,12 +6,12 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **332** 个开关。
+共 **351** 个开关。
 
 ## 目录
 
 - [stage1](#stage1)（101）
-- [stage2](#stage2)（73）
+- [stage2](#stage2)（92）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（113）
 - [vlm](#vlm)（12）
@@ -180,6 +180,13 @@
 | `STAGE2_PINCOL_WIN_KEYS` | `"out_win"` | `stage2/run.py:40` |
 | `STAGE2_PINNAME_MAXW` | `"6.0"` | `stage2/assign.py:130` |
 | `STAGE2_PINNAME_OUTSIDE` | `"0"` | `stage2/assign.py:154` |
+| `STAGE2_PINNAME_RESCUE` | `"0"` | `stage2/pinname.py:56` |
+| `STAGE2_PINNAME_RESCUE_AGREE` | `"1"` | `stage2/pinname.py:60` |
+| `STAGE2_PINNAME_RESCUE_CONF` | `"0.70"` | `stage2/pinname.py:58` |
+| `STAGE2_PINNAME_RESCUE_DEPTH` | `"52.0"` | `stage2/pinname.py:63` |
+| `STAGE2_PINNAME_RESCUE_GRAY` | `"170"` | `stage2/pinname.py:65` |
+| `STAGE2_PINNAME_RESCUE_INSET` | `"4.0"` | `stage2/pinname.py:62` |
+| `STAGE2_PINNAME_RESCUE_SAT` | `"70"` | `stage2/pinname.py:66` |
 | `STAGE2_PINNUM_DECAY` | `"10"` | `stage2/assign.py:114` |
 | `STAGE2_PINNUM_DISTW` | `"0.005"` | `stage2/assign.py:101` |
 | `STAGE2_PINNUM_DUP` | `"0"` | `stage2/assign.py:126` |
@@ -188,6 +195,18 @@
 | `STAGE2_PINNUM_TIGHT` | `"1"` | `stage2/text.py:122` |
 | `STAGE2_PINNUM_TIGHT_DARK` | `"160"` | `stage2/text.py:124` |
 | `STAGE2_PINNUM_TIGHT_SAT` | `"60"` | `stage2/text.py:123` |
+| `STAGE2_PINROT` | `"0"` | `stage2/pinrot.py:73` |
+| `STAGE2_PINROT_CONF` | `"0.70"` | `stage2/pinrot.py:75` |
+| `STAGE2_PINROT_HALF` | `"14.0"` | `stage2/pinrot.py:80` |
+| `STAGE2_PINROT_MIN_NAME` | `"2"` | `stage2/pinrot.py:93` |
+| `STAGE2_PINROT_NAME` | `"1"` | `stage2/pinrot.py:86` |
+| `STAGE2_PINROT_NAME_DEPTH` | `"46.0"` | `stage2/pinrot.py:77` |
+| `STAGE2_PINROT_NUM` | `"1"` | `stage2/pinrot.py:87` |
+| `STAGE2_PINROT_NUM_DEPTH` | `"34.0"` | `stage2/pinrot.py:78` |
+| `STAGE2_PINROT_OVERWRITE` | `"1"` | `stage2/pinrot.py:84` |
+| `STAGE2_PINROT_RAW` | `"0"` | `stage2/pinrot.py:89` |
+| `STAGE2_PINROT_SHAPE_ROUND` | `"8.0"` | `stage2/pinrot.py:91` |
+| `STAGE2_PINROT_WIN_PAD` | `"60.0"` | `stage2/pinrot.py:82` |
 | `STAGE2_PIN_ALONG` | `"1"` | `stage2/assign.py:174` |
 | `STAGE2_PIN_COVER` | `"0.15"` | `stage2/assign.py:178` |
 | `STAGE2_PIN_RESIDUAL` | `"0"` | `stage2/assign.py:186` |
@@ -413,4 +432,4 @@
 |---|---|---|
 | `EDA_CASE_WORKERS` | `""` | `submission/run.py:293` |
 | `EDA_WALL_BUDGET_S` | `"0"` | `submission/run.py:442` |
-| `FUSION_LLM` | `"1"` *(3 处)* | `submission/run.py:754` |
+| `FUSION_LLM` | `"1"` *(3 处)* | `submission/run.py:783` |
