@@ -147,6 +147,191 @@ def _candidate_faces_edge(cand: dict, bbox: Sequence[float], edge: str) -> bool:
         return True
 
 
+def _frame_anchor_usable(rec: dict, bbox: Sequence[float]) -> bool:
+    if rec.get("frame_confirmed") is not True or rec.get("edge") not in EDGES:
+        return False
+    try:
+        bx0, by0, bx1, by1 = (float(v) for v in bbox)
+        if not all(math.isfinite(v) for v in (bx0, by0, bx1, by1)):
+            return False
+        if bx1 <= bx0 or by1 <= by0:
+            return False
+        edge = rec["edge"]
+        axis = 0 if edge in ("left", "right") else 1
+        expected = {"left": bx0, "top": by0, "right": bx1, "bottom": by1}[edge]
+        anchor, point = rec["anchor_img"], rec["point_img"]
+        if len(anchor) != 2 or len(point) != 2:
+            return False
+        if not all(math.isfinite(float(v)) for v in (*anchor, *point)):
+            return False
+        # Stage1 searches six pixels normal to the frame and three along it.
+        # Include its raster endpoint and 0.1px serialization rounding.
+        return (abs(float(anchor[axis]) - expected) <= 7.1
+                and abs(float(anchor[1 - axis]) - float(point[1 - axis])) <= 3.1)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def normalize_name_evidence(bbox: Sequence[float], pins: Sequence[Sequence[float]],
+                            evidence: Optional[Sequence[dict]]) -> List[dict]:
+    """Share validated name anchors between eligibility and caller scoring."""
+    checked = normalize_pin_evidence(pins, evidence)
+    for rec in checked:
+        if rec.get("frame_confirmed") is True and not _frame_anchor_usable(rec, bbox):
+            rec.pop("anchor_img", None)
+            rec["frame_confirmed"] = False
+    return checked
+
+
+def confirmed_frame_sides(bbox: Sequence[float], evidence: Sequence[dict]) -> Dict[str, float]:
+    """Collect only calibrated, consistent sides from fresh pin evidence.
+
+    A detector box is not necessarily the symbol body. Stage1 searches within
+    six pixels of each detector side; raster rounding can add one more pixel.
+    Missing or contradictory side measurements remain neutral, rather than
+    making an uncalibrated detector edge a hard text boundary.
+    """
+    try:
+        bx0, by0, bx1, by1 = (float(v) for v in bbox)
+        if not all(math.isfinite(v) for v in (bx0, by0, bx1, by1)):
+            return {}
+        if bx1 <= bx0 or by1 <= by0:
+            return {}
+    except (TypeError, ValueError, OverflowError):
+        return {}
+    samples: Dict[str, List[float]] = {edge: [] for edge in EDGES}
+    for rec in evidence:
+        if not _frame_anchor_usable(rec, bbox):
+            continue
+        edge = rec["edge"]
+        try:
+            anchor = rec["anchor_img"]
+            if len(anchor) != 2 or not all(math.isfinite(float(v)) for v in anchor):
+                continue
+            coordinate = float(anchor[0 if edge in ("left", "right") else 1])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        samples[edge].append(coordinate)
+    sides = {}
+    for edge, values in samples.items():
+        if not values or max(values) - min(values) > 2.0:
+            continue
+        values.sort()
+        middle = len(values) // 2
+        sides[edge] = (values[middle] if len(values) % 2
+                       else 0.5 * (values[middle - 1] + values[middle]))
+    if ("left" in sides and "right" in sides and sides["left"] >= sides["right"]):
+        sides.pop("left")
+        sides.pop("right")
+    if ("top" in sides and "bottom" in sides and sides["top"] >= sides["bottom"]):
+        sides.pop("top")
+        sides.pop("bottom")
+    return sides
+
+
+def _candidate_rectangle(cand: dict) -> Optional[Tuple[float, float, float, float]]:
+    rect = cand.get("bbox") or (cand.get("rec") or {}).get("bbox")
+    try:
+        x0, y0, x1, y1 = (float(v) for v in rect)
+        if not all(math.isfinite(v) for v in (x0, y0, x1, y1)):
+            return None
+        if x1 <= x0 or y1 <= y0:
+            return None
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return x0, y0, x1, y1
+
+
+def candidate_inside_confirmed_frame(cand: dict, sides: Dict[str, float]) -> bool:
+    """Reject name rectangles spanning a confirmed body edge, not just centres.
+
+    OCR sometimes combines an external pin number with the internal pin-1
+    marker. Its centre can be inside while its rectangle crosses the frame.
+    Allow a small glyph-sized OCR halo; do not blacklist numeric name content.
+    Missing geometry or unconfirmed sides do not impose new restrictions.
+    """
+    rect = _candidate_rectangle(cand)
+    if not sides or rect is None:
+        return True
+    x0, y0, x1, y1 = rect
+    halo = max(1.0, min(3.0, 0.15 * min(x1 - x0, y1 - y0)))
+    return (("left" not in sides or x0 >= sides["left"] - halo)
+            and ("top" not in sides or y0 >= sides["top"] - halo)
+            and ("right" not in sides or x1 <= sides["right"] + halo)
+            and ("bottom" not in sides or y1 <= sides["bottom"] + halo))
+
+
+def _name_corridor_distance(cand: dict, bbox: Sequence[float], pins,
+                            index: int, evidence: Sequence[dict]) -> Optional[float]:
+    """Inward distance from a contact to aligned name text, using its near edge."""
+    rect = _candidate_rectangle(cand)
+    if rect is None:
+        return None
+    edge = pin_edge(bbox, pins, index, evidence)
+    anchor = pin_anchor(pins, index, evidence)
+    tolerance = _candidate_axis_tolerance(cand)
+    if (not _candidate_faces_edge(cand, bbox, edge)
+            or _candidate_axis_gap(cand, edge, anchor) > tolerance):
+        return None
+    x0, y0, x1, y1 = (float(v) for v in rect)
+    bx0, by0, bx1, by1 = bbox
+    if edge == "left":
+        near, far, depth = x0 - anchor[0], x1 - anchor[0], bx1 - bx0
+    elif edge == "right":
+        near, far, depth = anchor[0] - x1, anchor[0] - x0, bx1 - bx0
+    elif edge == "top":
+        near, far, depth = y0 - anchor[1], y1 - anchor[1], by1 - by0
+    else:
+        near, far, depth = anchor[1] - y1, anchor[1] - y0, by1 - by0
+    glyph = max(1.0, min(x1 - x0, y1 - y0))
+    # Names sit near their own frame side. Bound the search by symbol size and
+    # font size, so a model label near the centre cannot masquerade as a name.
+    limit = min(0.5 * depth, 4.0 * glyph) + tolerance
+    if far < -tolerance or near > limit:
+        return None
+    return max(0.0, near)
+
+
+def _directional_name_groups(bbox, pins, pool, evidence, active, score_of):
+    """Build one-to-one side groups after inward/axis/nearest eligibility."""
+    distances = {(ci, pi): _name_corridor_distance(cand, bbox, pins, pi, evidence)
+                 for ci, cand in enumerate(pool) for pi in active}
+    nearest = {pi: min((distance for (ci, index), distance in distances.items()
+                       if index == pi and distance is not None), default=float("inf"))
+               for pi in active}
+    allowed = {(ci, pi) for (ci, pi), distance in distances.items()
+               if distance is not None
+               and distance <= nearest[pi] + _candidate_axis_tolerance(pool[ci])}
+    edges = {pi: pin_edge(bbox, pins, pi, evidence) for pi in active}
+    owners = {}
+    for ci, cand in enumerate(pool):
+        eligible = [pi for pi in active if (ci, pi) in allowed]
+        if not eligible:
+            continue
+        def rank(pi):
+            anchor = pin_anchor(pins, pi, evidence)
+            return (distances[(ci, pi)], _candidate_axis_gap(cand, edges[pi], anchor),
+                    abs(along(bbox, edges[pi], *anchor)
+                        - along(bbox, edges[pi], *cand["center"])))
+        owners[ci] = edges[min(eligible, key=rank)]
+    groups = {}
+    for edge in EDGES:
+        pl = sorted((pi for pi in active if edges[pi] == edge),
+                    key=lambda pi: along(bbox, edge, *pin_anchor(pins, pi, evidence)))
+        cl = sorted((ci for ci, owner in owners.items() if owner == edge),
+                    key=lambda ci: along(bbox, edge, *pool[ci]["center"]))
+        groups[edge] = (pl, cl)
+    indices = {id(cand): ci for ci, cand in enumerate(pool)}
+    def directional_score(cand, pi):
+        ci = indices[id(cand)]
+        if (ci, pi) not in allowed:
+            return 0.0
+        rect = _candidate_rectangle(cand)
+        glyph = max(4.0, min(rect[2] - rect[0], rect[3] - rect[1]))
+        return score_of(cand, pi) / (1.0 + distances[(ci, pi)] / glyph)
+    return groups, directional_score
+
+
 def group_by_edge(bbox: Sequence[float], pins: Sequence[Sequence[float]],
                   pool: Sequence[dict], pin_evidence: Optional[Sequence[dict]] = None,
                   eligible_pins: Optional[Sequence[int]] = None,
@@ -319,13 +504,16 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
            gap_pen: float = 0.0, cover: float = 0.0, demote: float = 0.15,
            majority: float = 0.6, ladder: bool = True,
            pin_evidence: Optional[Sequence[dict]] = None,
-           prioritize_trusted: bool = False) -> Tuple[Dict[int, int], List[dict]]:
+           prioritize_trusted: bool = False,
+           name_frame_guard: bool = True,
+           frame_rejected_name_pins: Optional[List[int]] = None) -> Tuple[Dict[int, int], List[dict]]:
     """按边分组，用「单调对齐」与「阶梯重排」各出一个整体方案，**按总分取优**。
 
     pool 每项要有 `center`；`value_of(cand) -> str` 给候选读出来的串；
     `score_of(cand, pin_index) -> float` 给收益。返回 `({引脚下标: 候选下标}, 待仲裁)`。
     """
-    evidence = normalize_pin_evidence(pins, pin_evidence)
+    evidence = (normalize_name_evidence(bbox, pins, pin_evidence) if prioritize_trusted
+                else normalize_pin_evidence(pins, pin_evidence))
     if evidence and prioritize_trusted:
         # The first pass can only take labels aligned with a trusted contact.
         # The second pass uses the remaining labels. A closer uncertain point
@@ -334,11 +522,27 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
         uncertain = [i for i, rec in enumerate(evidence) if rec["trust"] == "uncertain"]
         chosen: Dict[int, int] = {}
         ambiguous: List[dict] = []
-        remaining = list(range(len(pool)))
+        calibrated_sides = confirmed_frame_sides(bbox, evidence)
+        frame_sides = calibrated_sides if name_frame_guard else {}
+        # Both phases share eligibility. A crossing rectangle must not be
+        # rejected by a trusted contact and then named by an uncertain point.
+        # Keep original pool indices so assignment records remain aligned.
+        remaining = [i for i, cand in enumerate(pool)
+                     if candidate_inside_confirmed_frame(cand, frame_sides)]
+        had_rejected_names = len(remaining) < len(pool)
+        # Legacy callers may provide centres without text rectangles. Keep
+        # their historical name ranking rather than inventing a corridor.
+        valid_rectangles = all(_candidate_rectangle(cand) is not None for cand in pool)
         for active, gate in ((trusted, True), (uncertain, False)):
             subset = [pool[i] for i in remaining]
+            # A phase with incomplete calibration keeps historical ranking.
+            # Trusted/uncertain phases fall back independently; the frame guard
+            # still uses whichever sides have actually been confirmed.
+            directional = valid_rectangles and bool(active) and all(
+                _frame_anchor_usable(evidence[pi], bbox)
+                and evidence[pi]["edge"] in calibrated_sides for pi in active)
             groups = group_by_edge(bbox, pins, subset, evidence, active,
-                                   axis_gate=gate, normal_gate=True)
+                                   axis_gate=gate, normal_gate=True) if not directional else None
             def phase_score(cand, pi):
                 if not _candidate_faces_edge(cand, bbox, pin_edge(bbox, pins, pi, evidence)):
                     return 0.0
@@ -347,8 +551,12 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
                         pin_anchor(pins, pi, evidence)) > _candidate_axis_tolerance(cand):
                     return 0.0
                 return score_of(cand, pi)
+            if directional:
+                groups, phase_score = _directional_name_groups(
+                    bbox, pins, subset, evidence, active, score_of)
             plan, amb = _rebind_groups(groups, subset, value_of, phase_score,
-                                       gap_pen, cover, demote, majority, ladder and not gate)
+                                       gap_pen, cover, demote, majority,
+                                       ladder and not gate and not directional)
             chosen.update({pi: remaining[ci] for pi, ci in plan.items()})
             for item in amb:
                 mapped = dict(item, cand=remaining[item["cand"]],
@@ -356,6 +564,17 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
                 ambiguous.append(mapped)
             used = set(plan.values())
             remaining = [ci for index, ci in enumerate(remaining) if index not in used]
+        if frame_rejected_name_pins is not None and had_rejected_names:
+            # Exact counterfactual, only when the guard rejected a rectangle:
+            # report contacts whose former name was rejected and is now empty.
+            # This lets assembly release only those newly emptied duplicates,
+            # without promoting unrelated historically unnamed contacts.
+            unguarded, _ = rebind(
+                bbox, pins, pool, value_of, score_of, gap_pen, cover, demote,
+                majority, ladder, evidence, True, name_frame_guard=False)
+            frame_rejected_name_pins.extend(
+                pi for pi, ci in unguarded.items()
+                if pi not in chosen and not candidate_inside_confirmed_frame(pool[ci], frame_sides))
         return chosen, ambiguous
     active = ([i for i, rec in enumerate(evidence) if rec["trust"] != "rejected"]
               if evidence else None)

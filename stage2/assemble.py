@@ -517,9 +517,11 @@ def _box_number_winners(raw: Sequence[dict]) -> Dict[int, int]:
     """Choose one existing contact per read number without joining their nets.
 
     A complete later read may replace a complete earlier read when both have
-    usable confidence and the later number/name pair ranks higher. An unnamed
-    first read still consumes its number, preserving the existing output filter.
-    Equal or unknown quality preserves the original first-wins behavior.
+    usable confidence and the later number/name pair ranks higher. A complete
+    read can also replace an unnamed first read if the frame guard just rejected
+    that first contact's false name and output requires names. Other historically
+    unnamed contacts keep the original policy; equal or unknown complete-read
+    quality keeps the original first-wins behavior.
     """
     winners: Dict[int, int] = {}
     for i, r in enumerate(raw):
@@ -533,9 +535,9 @@ def _box_number_winners(raw: Sequence[dict]) -> Dict[int, int]:
             continue
         old = raw[prev]
         quality, old_quality = r.get("quality"), old.get("quality")
-        if (BOX_PIN_DUPLICATE_BEST and r["nm"] and old["nm"]
-                and quality is not None and old_quality is not None
-                and quality > old_quality):
+        if (BOX_PIN_DUPLICATE_BEST and r["nm"] and quality is not None
+                and ((not old["nm"] and BOX_PIN_NEED_NAME and old.get("name_rejected_by_frame") is True)
+                     or (old["nm"] and old_quality is not None and quality > old_quality))):
             winners[v] = i
     return winners
 
@@ -620,7 +622,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             rec = pinfo.get(k) or pinfo.get(str(k)) or {}
             num = ((rec.get("number") or {}).get("text") or "").strip()
             nm = ((rec.get("name") or {}).get("text") or "").strip()
-            raw.append({"num": num, "nm": nm, "quality": _pin_read_quality(rec)})
+            raw.append({"num": num, "nm": nm, "quality": _pin_read_quality(rec),
+                        "name_rejected_by_frame": rec.get("name_rejected_by_frame") is True})
         # **结构期望**（2025-10 按官方 Q&A 重定）。
         #
         # 旧口径下这里有一条「OCR 必须交出完整的 1..N 排列才采信」的门控，理由是

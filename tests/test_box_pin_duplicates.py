@@ -52,10 +52,56 @@ class BoxPinDuplicateTests(unittest.TestCase):
                           self.read("2", "2", .998, .999)])
         self.assertEqual(doc["pins"]["U1"]["pin_2"]["pinname"], "2")
 
-    def test_unnamed_incumbent_is_not_promoted_into_new_output(self):
+    def test_frame_rejected_incumbent_cannot_block_complete_same_number_contact(self):
+        # A frame guard can reject the first contact's mixed number/marker
+        # name. Another physical contact still has a valid complete read.
+        for first in (self.read("8", "", .4, .4),
+                      {"number": {"text": "8", "conf": .99}, "name": None}):
+            first["name_rejected_by_frame"] = True
+            for string_keys in (False, True):
+                with self.subTest(first=first, string_keys=string_keys):
+                    doc = self.build([first, self.read("8", "GND")], string_keys=string_keys)
+                    self.assertEqual(doc["pins"]["U1"], {
+                        "pin_8": {"pinname": "GND", "point": {"x": 212., "y": 120.}}})
+                    self.assertEqual(doc["__pin_index"]["ic"], {"1": "pin_8"})
+                    self.assertEqual(len(doc["nets"]), 1)
+                    net = next(iter(doc["nets"].values()))
+                    self.assertEqual(net["hyperGraph"], "(U1.8)")
+                    self.assertEqual(next(iter(net["edges"].values()))[0]["y"], 120.)
+
+    def test_historically_unnamed_incumbent_keeps_original_policy(self):
         doc = self.build([self.read("8", "", .4, .4), self.read("8", "GND")])
         self.assertEqual(doc["pins"]["U1"], {})
         self.assertEqual(doc["__pin_index"], {})
+
+    def test_unknown_complete_read_cannot_promote_unnamed_incumbent(self):
+        for invalid in (None, "bad", float("nan"), float("inf"), -1, 2):
+            with self.subTest(conf=invalid):
+                first = dict(self.read("8", ""), name_rejected_by_frame=True)
+                doc = self.build([first, self.read("8", "GND", invalid)])
+                self.assertEqual(doc["pins"]["U1"], {})
+                self.assertEqual(doc["__pin_index"], {})
+
+    def test_disabled_switch_keeps_unnamed_incumbent_policy(self):
+        first = dict(self.read("8", ""), name_rejected_by_frame=True)
+        doc = self.build([first, self.read("8", "GND")], enabled=False)
+        self.assertEqual(doc["pins"]["U1"], {})
+        self.assertEqual(doc["__pin_index"], {})
+
+    def test_names_optional_preserves_frame_rejected_first_contact(self):
+        raw = [{"num": "8", "nm": "", "quality": .99, "name_rejected_by_frame": True},
+               {"num": "8", "nm": "GND", "quality": .99}]
+        with patch.object(assemble, "BOX_PIN_NEED_NAME", False), \
+                patch.object(assemble, "BOX_PIN_DUPLICATE_BEST", True):
+            self.assertEqual(assemble._box_number_winners(raw), {8: 0})
+
+    def test_valid_complete_successors_still_use_existing_quality_order(self):
+        raw = [{"num": "8", "nm": "", "quality": None, "name_rejected_by_frame": True},
+               {"num": "8", "nm": "GND", "quality": .5},
+               {"num": "8", "nm": "VOUT", "quality": .9}]
+        with patch.object(assemble, "BOX_PIN_NEED_NAME", True), \
+                patch.object(assemble, "BOX_PIN_DUPLICATE_BEST", True):
+            self.assertEqual(assemble._box_number_winners(raw), {8: 2})
 
     def test_unnamed_later_duplicate_cannot_replace_complete_read(self):
         doc = self.build([self.read("8", "GND", .4, .4), self.read("8", "")])

@@ -892,8 +892,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         # ★★ 引脚列记录（`stage1/pincol.py`）：`plist[i]` 与 `_pcr[i]` 一一对应
         # （`pincol.merge_into` 就是按记录顺序写进去的，未被认领的老触点补在末尾）。
         _pcr = (pincol or {}).get(cid) or []
-        _pe = (structmatch.normalize_pin_evidence(
-            plist, (pin_evidence or {}).get(cid)) if PIN_TRUST_BIND else [])
+        _pe = (structmatch.normalize_name_evidence(
+            c["bbox"], plist, (pin_evidence or {}).get(cid)) if PIN_TRUST_BIND else [])
         pinfo = {i: {"number": None, "name": None} for i in range(len(plist))}
         rec["pins"] = pinfo
         take = lambda t: (t.get("bbox") is not None
@@ -1014,9 +1014,13 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 return c["score"] / (1.0 + d / _dec)
 
             cov = PIN_COVER if slot == "number" else PIN_COVER * 0.5
+            frame_rejected_names = []
             bound, amb = structmatch.rebind(
                 c["bbox"], plist, pool, lambda cc: cc["text"], score_of, cover=cov,
-                pin_evidence=_slot_pe, prioritize_trusted=slot == "name")
+                pin_evidence=_slot_pe, prioritize_trusted=slot == "name",
+                frame_rejected_name_pins=frame_rejected_names if slot == "name" else None)
+            for pi in frame_rejected_names:
+                pinfo[pi]["name_rejected_by_frame"] = True
             if os.environ.get("STAGE2_DBG_CID") == cid:
                 print("      [pin:%s] nplist=%d pool=%d cov=%.2f bound=%d amb=%d"
                       % (role, len(plist), len(pool), cov, len(bound), len(amb)))
