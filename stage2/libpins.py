@@ -12,8 +12,11 @@
   最差 0167 −2.924）**、官方 20 合计 **+1.3045**；交付链（真 `fusion.run`，官方 9 张）**+1.60**。
   门槛是「官方为正 且 派生不为负」。`STAGE2_LIB_PINS_FUZZY=1.0`（只用精确键）与默认 0.85
   在两档上几乎相同（派生 +0.0616 vs +0.0609），故保持 0.85。
-⇒ 仍要记住的风险：库是 1.76 MB 的**外部数据**（交付包必须一起带，路径默认解析到仓库根
-  `work\data\cpntLibrary.json`，与 CWD 无关），而下面两条规则的
+⇒ 仍要记住的风险：库是 1.76 MB 的**外部数据**，2026-10-12 起随仓库提交在
+  `eda-pcb/data/cpntLibrary.json`，路径解析走 `assets.cpnt_library()` 的候选链
+  （环境变量 `STAGE2_CPNT_LIB` → **包内** → 本机 `work\data\` → `赛题资料\`），与 CWD
+  无关；**旧默认指的就是本机那个 `work\data\`，容器里必然不存在 ⇒ 静默丢分**。而下面
+  两条规则的
 触发条件依赖「元件型号名被读对」。stage2 直出的 `Name` 是 OCR 原文（官方 9 张实测
 17 个 box 里只有 1 个能命中库），真正被读对是**融合层**补强之后的事 —— 所以收益
 主要在交付链（`build_doc` 也被 `fusion/run.py` 调用，见 `fusion/run.py:63/128`），
@@ -61,12 +64,13 @@ except ImportError:                           # 直接跑脚本自检
 # `STAGE2_LIB_PINS`（默认 "1"=开，2026-10-09 翻）：本通道总闸。见模块 docstring。
 LIB_PINS = env_on("STAGE2_LIB_PINS", "1")
 
-# 库文件路径。默认 = 仓库根 `work\data\cpntLibrary.json`（1,755,587 B / 337 键）。
-# 相对路径按 `eda-pcb\stage2\libpins.py` 上溯两级（= `eda-pcb\`）再上溯一级（= 仓库根）
+# 库文件路径。候选链见 `assets.cpnt_library()`：**包内 `eda-pcb/data/cpntLibrary.json`
+# （1,755,587 B / 337 键，随仓库提交 ⇒ 进镜像）** → 本机 `WORKSPACE\work\data\` →
+# `WORKSPACE\赛题资料\` → 数据集目录。相对路径按 `eda-pcb\stage2\libpins.py` 上溯两级
 # 解析，所以**与当前工作目录无关**（stage2 会被 `cd eda-pcb` 之后以 `-m stage2.run`
 # 调用，也会被 `submission\run.py` 从别处调用）。
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_LIB = _REPO_ROOT / "work" / "data" / "cpntLibrary.json"
+_PKG_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_LIB = _PKG_ROOT / "data" / "cpntLibrary.json"
 LIB_PATH = env_str("STAGE2_CPNT_LIB", "") or ""
 
 _NON_ALNUM = re.compile(r"[^0-9a-z]")
@@ -82,8 +86,24 @@ def norm(s) -> str:
 
 
 def lib_path() -> Path:
-    """解析库文件路径（`STAGE2_CPNT_LIB` 优先，否则仓库根的默认位置）。"""
-    return Path(LIB_PATH) if LIB_PATH else DEFAULT_LIB
+    """解析库文件路径：`STAGE2_CPNT_LIB` → 包内候选链（见 `assets.cpnt_library()`）。
+
+    ★ 2026-10-12 修：**默认不再是 `WORKSPACE\\work\\data\\cpntLibrary.json`**。`work\\`
+    不进仓库也不进镜像 ⇒ 容器里那条路径必然不存在，而本通道缺席时只打印一行就跳过，
+    等于在判题机上白丢 +1.60（官方 9 张交付链实测）。现在与两个权重共用
+    `assets.resolve()` 的规则（环境变量 → **包内相对候选** → 本机兜底），
+    `eda-pcb/data/cpntLibrary.json` 随仓库提交，于是「拷整个 eda-pcb 进 /submission」
+    这一条就够。
+    """
+    if LIB_PATH:
+        return Path(LIB_PATH)
+    try:
+        from assets import cpnt_library            # 包根（eda-pcb）已在 sys.path 上
+    except ImportError:                            # 直接按文件路径加载本模块时
+        import sys as _s
+        _s.path.insert(0, str(_PKG_ROOT))
+        from assets import cpnt_library
+    return Path(cpnt_library(must_exist=False))
 
 
 # ── 惰性加载的库上下文 ────────────────────────────────────────────────────
@@ -117,7 +137,9 @@ class LibCtx:
             import json                                    # 只有真的要用才 import
             raw = json.loads(Path(p).read_text(encoding="utf-8"))
         except (OSError, ValueError) as e:                 # 缺文件 / 坏 JSON 都不该炸管线
-            print("[libpins] 库不可用（%s）：%s —— 本通道自动跳过" % (p, e))
+            print("[libpins] 库不可用（%s）：%s —— 本通道自动跳过（引脚先验/改名全部失效，"
+                  "官方 9 张约 −1.6 分）。用 STAGE2_CPNT_LIB 指定库文件；"
+                  "包内应有 eda-pcb/data/cpntLibrary.json" % (p, e))
             return False
         self._raw = raw
         self._index = _build_index(raw)

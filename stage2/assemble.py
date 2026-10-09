@@ -187,8 +187,11 @@ BOX_PIN_NEED_NAME = env_on("STAGE2_BOX_PIN_NEED_NAME", "1")
 #   官方 10GT 10 张 62.5743→**65.1834（+2.6091，7 涨 0 跌**；pin tp 38→47 / fp 42→38 / fn 98→89）；
 #   另 10 张官方（`10_GTcase`）逐位不变；派生 200 张 31.3691→**31.4300（+0.0609**，24 涨 25 跌，
 #   最差 0167 −2.924）；官方 20 合计 **+1.3045**；交付链（真 `fusion.run`）官方 9 张 **+1.60**。
-#   门槛（官方为正 且 派生不为负）**已过**。库文件路径 `STAGE2_CPNT_LIB`，默认仓库根的
-# `work\data\cpntLibrary.json`（1,755,587 B / 337 键）⇒ **交付包必须带这个文件**（21 MB 内）。
+#   门槛（官方为正 且 派生不为负）**已过**。库文件路径 `STAGE2_CPNT_LIB`，默认走
+# `assets.cpnt_library()` 的候选链：**包内 `eda-pcb\data\cpntLibrary.json`**（1,755,587 B /
+#   337 键，2026-10-12 起随仓库提交）→ 本机 `work\data\` → `赛题资料\`。旧的写死默认是
+#   本机 `work\data\cpntLibrary.json`，**容器里不存在**（`work\` 不进镜像）⇒ 默认开也白开。
+#   改路径的动机见 `eda-pcb\docs\COMPETITION_RULES.md`（「交付包必须带」那条）。
 #   关掉（`STAGE2_LIB_PINS=0`）时本文件不会 import `stage2.libpins`，产物与不挂接这条通道时
 #   **逐字节一致**。两条规则与唯一性判据见 `stage2/libpins.py` 的模块 docstring。
 #   挂接点在 `build_doc` 的 box 引脚路径：规则 A 在「局部采信 + 位置号补位」之后**就地补号**，

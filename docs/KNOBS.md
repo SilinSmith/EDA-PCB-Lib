@@ -137,29 +137,29 @@
 | `STAGE2_BOX_PIN_PARTIAL` | `"1"` | `stage2/assemble.py:136` |
 | `STAGE2_CKPT` | `r"Y:\workspace\EDA\work\ocr_mix\runs\best.pt"` | `stage2/text.py:42` |
 | `STAGE2_DBG_CID` | — *(6 处)* | `stage2/assign.py:855` |
-| `STAGE2_DBG_PINS` | — *(3 处)* | `stage2/assemble.py:861` |
+| `STAGE2_DBG_PINS` | — *(3 处)* | `stage2/assemble.py:864` |
 | `STAGE2_DEMOTE_HARD` | `"0.05"` | `stage2/structmatch.py:35` |
 | `STAGE2_DESIG_MAXW` | `"6.0"` | `stage2/assign.py:164` |
 | `STAGE2_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:54` |
-| `STAGE2_EDGE_ANG` | `"6.0"` | `stage2/assemble.py:301` |
-| `STAGE2_EDGE_JOIN` | `"40.0"` | `stage2/assemble.py:300` |
-| `STAGE2_EDGE_MERGE` | `"0"` | `stage2/assemble.py:299` |
-| `STAGE2_EDGE_SNAP` | `"20.0"` | `stage2/assemble.py:318` |
-| `STAGE2_EDGE_SNAP_ANG` | `"45.0"` | `stage2/assemble.py:319` |
+| `STAGE2_EDGE_ANG` | `"6.0"` | `stage2/assemble.py:304` |
+| `STAGE2_EDGE_JOIN` | `"40.0"` | `stage2/assemble.py:303` |
+| `STAGE2_EDGE_MERGE` | `"0"` | `stage2/assemble.py:302` |
+| `STAGE2_EDGE_SNAP` | `"20.0"` | `stage2/assemble.py:321` |
+| `STAGE2_EDGE_SNAP_ANG` | `"45.0"` | `stage2/assemble.py:322` |
 | `STAGE2_FREE_STEAL` | `"1"` | `stage2/assign.py:222` |
 | `STAGE2_GLOBAL_MATCH` | `"0"` | `stage2/assign.py:747` |
 | `STAGE2_GROW_MIN` | `"0.9"` | `stage2/run.py:31` |
 | `STAGE2_GROW_PER_COMP` | `"4"` | `stage2/run.py:33` |
-| `STAGE2_LIB_PINS` | `"1"` *(2 处)* | `stage2/assemble.py:196` |
-| `STAGE2_LIB_PINS_DBG` | `"0"` | `stage2/assemble.py:198` |
-| `STAGE2_LIB_PINS_FUZZY` | `"0.85"` | `stage2/libpins.py:148` |
-| `STAGE2_MIN_EDGE_LEN` | `"20"` | `stage2/assemble.py:273` |
+| `STAGE2_LIB_PINS` | `"1"` *(2 处)* | `stage2/assemble.py:199` |
+| `STAGE2_LIB_PINS_DBG` | `"0"` | `stage2/assemble.py:201` |
+| `STAGE2_LIB_PINS_FUZZY` | `"0.85"` | `stage2/libpins.py:170` |
+| `STAGE2_MIN_EDGE_LEN` | `"20"` | `stage2/assemble.py:276` |
 | `STAGE2_MULTI_H` | `"0.43"` | `stage2/text.py:95` |
 | `STAGE2_MULTI_W` | `"0.15"` | `stage2/text.py:94` |
 | `STAGE2_NETLABEL_MIN_H` | `"9"` | `stage2/assign.py:304` |
 | `STAGE2_NETLABEL_MIN_W` | `"12"` | `stage2/assign.py:303` |
-| `STAGE2_NET_DROP_PWRONLY` | `"1"` | `stage2/assemble.py:236` |
-| `STAGE2_NET_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:225` |
+| `STAGE2_NET_DROP_PWRONLY` | `"1"` | `stage2/assemble.py:239` |
+| `STAGE2_NET_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:228` |
 | `STAGE2_NODELETE` | `"1"` | `stage2/structmatch.py:33` |
 | `STAGE2_OWN_ASSIGN` | `"0"` | `stage2/assign.py:87` |
 | `STAGE2_OWN_BBOX` | `"1"` | `stage2/assign.py:68` |
@@ -186,12 +186,12 @@
 | `STAGE2_PIN_COVER` | `"0.15"` | `stage2/assign.py:178` |
 | `STAGE2_PIN_RESIDUAL` | `"0"` | `stage2/assign.py:186` |
 | `STAGE2_PIN_RESIDUAL_MIN` | `"0"` | `stage2/assign.py:187` |
-| `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:454` |
+| `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:457` |
 | `STAGE2_PREFIX` | `"strict"` | `stage2/assign.py:38` |
 | `STAGE2_PREFIX_SKEL` | `"0"` | `stage2/assign.py:48` |
-| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1098` |
+| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1101` |
 | `STAGE2_STEAL` | `"80"` | `stage2/assign.py:220` |
-| `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:259` |
+| `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:262` |
 | `STAGE2_TIGHT_ROLES` | `"pin_number,pin_name"` | `stage2/text.py:129` |
 | `STAGE2_TP_LEDGER` | `"0"` | `stage2/assemble.py:120` |
 | `STAGE2_TP_TRUST_EVIDENCE` | `"1"` | `stage2/assemble.py:117` |

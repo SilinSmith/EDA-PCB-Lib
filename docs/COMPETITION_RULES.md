@@ -101,7 +101,7 @@ FinalScore               = FinalScore_Accuracy + FinalScore_Data   # Data ≤ 10
 | 资产 | 位置 | 状态 |
 | --- | --- | --- |
 | 10 GT + 200 训练案例（图 + `_target.json`） | `eda-pcb\yolo_part\Dataset(waitforpreprocess)\`、`赛题资料\压缩文件\赛题六公开数据集.zip`（33.7 MB，636 条目） | 已用 |
-| **官方元器件库 `cpntLibrary.json`** + `cpntLibrary.md` + 数据集 `README.md` | 已解出到 `work\data\cpntLibrary.json`（1,755,587 B / 337 键）、`work\data\cpntLibrary.md`、`work\data\public_dataset_README.md` | **已体检：当整名/整号语料 = 0；当「补号 / 改名」两条规则 = +2.46 分（见 §6）** |
+| **官方元器件库 `cpntLibrary.json`** + `cpntLibrary.md` + 数据集 `README.md` | **包内 `eda-pcb\data\cpntLibrary.json`**（1,755,587 B / 337 键）+ `eda-pcb\data\cpntLibrary.md`（**2026-10-12 起随仓库提交**）；本机另有 `work\data\cpntLibrary.json`、`work\data\public_dataset_README.md`（★ 旧默认路径写死在本机 `work\`，容器里不存在 ⇒ 已修） | **已体检：当整名/整号语料 = 0；当「补号 / 改名」两条规则 = +2.46 分（见 §6）** |
 | 元器件库的 200 案例派生物（360 个符号，`esym_path` + `pins`） | `work\data\BoxICLibrary_200cases.json` | **全仓库无引用（grep 0 命中）** |
 | 官方 Q&A | `docs\QA_2025.txt`（源自 `赛题Q&A(1).docx`） | 已用（构成 `metrics.py` 的口径默认值） |
 | 数据贡献指南 | `赛题资料\数据收集指南0915.docx` | 未读 |
