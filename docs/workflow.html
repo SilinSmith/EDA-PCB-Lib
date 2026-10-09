@@ -200,14 +200,16 @@ textarea{resize:vertical;min-height:170px}
    "title": "输入 PNG + 坐标系",
    "sub": "每 case 一张图 + 可选 GT；坐标 y 向上（已实测无歧义）",
    "x": 40,
-   "y": 2126,
+   "y": 2570,
    "w": 280,
    "file": "submission/run.py",
    "ins": [],
    "outs": [
     {
      "id": "img",
-     "label": "原图"
+     "label": "原图",
+     "kind": "image",
+     "role": "produce"
     }
    ],
    "params": [
@@ -228,7 +230,8 @@ textarea{resize:vertical;min-height:170px}
     "只有 `-fusion llm` 才置 `FUSION_CROPFIX=1 / FUSION_LLM=1` ⇒ 默认下 `cropfix`/`llm_judge`/`rescan`/`audit` **一次都没跑**",
     "坐标系：`_axistest.py` 实测 10 个评测 case **全部 y 向上**胜出 ⇒ 无歧义",
     "`submission/run.py` 471 行；`assets.py` 解析两个推理权重"
-   ]
+   ],
+   "code": "submission/run.py:main"
   },
   {
    "id": "ev_sym",
@@ -237,19 +240,22 @@ textarea{resize:vertical;min-height:170px}
    "title": "① 符号检测",
    "sub": "YOLO + CV 复核 / 去多假设：元件符号的框与类型",
    "x": 432,
-   "y": 2356,
+   "y": 2143,
    "w": 280,
    "file": "stage1/detect.py + stage1/bigic.py",
    "ins": [
     {
      "id": "img",
-     "label": "原图"
+     "label": "原图",
+     "kind": "image"
     }
    ],
    "outs": [
     {
      "id": "det",
-     "label": "元件框+类型"
+     "label": "元件框+类型",
+     "kind": "det",
+     "role": "produce"
     }
    ],
    "params": [
@@ -278,7 +284,8 @@ textarea{resize:vertical;min-height:170px}
     "至少漏一颗的图 **181/213 = 85.0%**",
     "conf 0.25→0.01 时 `box` 类输出**仍 0 个** ⇒ **能力缺口，不是阈值问题**",
     "⛔ `cd<=12` 去重被 19 张否掉（`0103` 并掉 2 颗各自独立的 GND 符号，**−0.77**）"
-   ]
+   ],
+   "code": "stage1/detect.py:Detector"
   },
   {
    "id": "ev_text",
@@ -287,19 +294,22 @@ textarea{resize:vertical;min-height:170px}
    "title": "② 文字区域定位",
    "sub": "cvparts/textbox.py：只定位「哪里有字」，不识别",
    "x": 432,
-   "y": 1617,
+   "y": 1879,
    "w": 280,
    "file": "cvparts/textbox.py",
    "ins": [
     {
      "id": "img",
-     "label": "原图"
+     "label": "原图",
+     "kind": "image"
     }
    ],
    "outs": [
     {
      "id": "boxes",
-     "label": "文字框"
+     "label": "文字框",
+     "kind": "boxes",
+     "role": "produce"
     }
    ],
    "params": [
@@ -318,7 +328,8 @@ textarea{resize:vertical;min-height:170px}
     "几何上检出框比真值**每边小约 5px**",
     "下游代价：这是「文字框系统性偏小」的源头，`ev_crop` 与 `cropfix` 整条线都在补它",
     "中位 IoU 只有 **0.36**"
-   ]
+   ],
+   "code": "cvparts/textbox.py:detect_boxes"
   },
   {
    "id": "ev_crop",
@@ -327,23 +338,27 @@ textarea{resize:vertical;min-height:170px}
    "title": "③ 裁剪尺度归一",
    "sub": "pad_box + crop_gray：线上比直调低 68%，峰在 +3，现默认已越峰",
    "x": 824,
-   "y": 40,
+   "y": 2470,
    "w": 280,
    "file": "stage2/text.py pad_box + textrec/dataset.py",
    "ins": [
     {
      "id": "img",
-     "label": "原图"
+     "label": "原图",
+     "kind": "image"
     },
     {
      "id": "boxes",
-     "label": "文字框"
+     "label": "文字框",
+     "kind": "boxes"
     }
    ],
    "outs": [
     {
      "id": "boxes",
-     "label": "裁剪框"
+     "label": "裁剪框",
+     "kind": "boxes",
+     "role": "produce"
     }
    ],
    "params": [
@@ -382,7 +397,8 @@ textarea{resize:vertical;min-height:170px}
     "⛔「墨迹归一」三版全败（行投影 0.146 / 暗游程 0.36 / 形态学抠线 0.378）；`g/H` 的 p5..p95 = 0.47..1.36 **不是常数**",
     "★「训练/推理二次外扩」假设**已被两条独立尺子证伪**（去掉 `pad_box` 崩 39% ⇒ 它是**承重的**）",
     "★ 引脚号这条路的**垂直比例项应归零**：`(2,0,3,0)` 0.6866 > 现默认 `(2,0,3,.20)` 0.6716"
-   ]
+   ],
+   "code": "stage2/text.py:pad_box"
   },
   {
    "id": "ev_ocr",
@@ -391,23 +407,27 @@ textarea{resize:vertical;min-height:170px}
    "title": "④ CRNN 识别",
    "sub": "textrec：5 角色 CRNN+CTC；颜色即语义（绿线/暗红框/蓝位号/黑脚号）",
    "x": 1216,
-   "y": 859,
+   "y": 793,
    "w": 280,
    "file": "textrec/infer.py",
    "ins": [
     {
      "id": "img",
-     "label": "原图"
+     "label": "原图",
+     "kind": "image"
     },
     {
      "id": "boxes",
-     "label": "文字框"
+     "label": "文字框",
+     "kind": "boxes"
     }
    ],
    "outs": [
     {
      "id": "reads",
-     "label": "读法+置信"
+     "label": "读法+置信",
+     "kind": "reads",
+     "role": "produce"
     }
    ],
    "params": [
@@ -447,7 +467,8 @@ textarea{resize:vertical;min-height:170px}
     "★ 判据只能是**颜色**，不是几何：**绿 = 导线与 no-connect 叉**、**暗红 = 元件外框**、**蓝 = 位号/型号**、**黑 = 引脚号**",
     "★ 描边剔除只对 `pin_number,pin_name` 有效（全部 5 角色一起切会把 `component` 0.9403→0.9025，因为位号是**蓝字**）",
     "⛔ CTRN 到顶：485 个「GT 有真名但没配上」里，80px 内能读出该键的只有 **13 个 = 2.7%**"
-   ]
+   ],
+   "code": "textrec/infer.py:Recognizer"
   },
   {
    "id": "ev_vlm",
@@ -455,24 +476,28 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "⑤ LLM / VLM 读取",
    "sub": "qwen3.5-9b：位号 / 值 / 器件型号 / 逐引脚号名 —— 只是证据源之一，不是终审",
-   "x": 432,
-   "y": 1190,
+   "x": 1216,
+   "y": 366,
    "w": 280,
    "file": "vlm/enrich.py（753 行）",
    "ins": [
     {
      "id": "img",
-     "label": "原图"
+     "label": "原图",
+     "kind": "image"
     },
     {
      "id": "engine",
-     "label": "请求方式"
+     "label": "请求方式",
+     "kind": "engine"
     }
    ],
    "outs": [
     {
      "id": "reads",
-     "label": "读法+置信"
+     "label": "读法+置信",
+     "kind": "reads",
+     "role": "produce"
     }
    ],
    "params": [
@@ -506,7 +531,8 @@ textarea{resize:vertical;min-height:170px}
     "⚠ **无任何磁盘/内存缓存**：220 张 ≈ **9658 次请求**（位号 4094 / 值 3492 / 引脚网格 1051 / 型号 1021）",
     "★ 位号冲突消解只认「无人争抢」(`:464 solo = {g: ks[0] ... if len(ks)==1}`) ⇒ 两颗读出同一位号时**两颗一起放弃**",
     "component F1 0.5416→0.6182，pin tp 178→206（端点默认 `http://127.0.0.1:1234/v1`）"
-   ]
+   ],
+   "code": "vlm/enrich.py:enrich_dir"
   },
   {
    "id": "ev_wire",
@@ -515,19 +541,22 @@ textarea{resize:vertical;min-height:170px}
    "title": "⑥ 导线与结点",
    "sub": "wires.py：线过碎片化 → 规则 5；★ 色相询问曾是无界黑洞（315s→8.3s）",
    "x": 432,
-   "y": 1881,
+   "y": 1404,
    "w": 280,
    "file": "stage1/wires.py",
    "ins": [
     {
      "id": "img",
-     "label": "原图"
+     "label": "原图",
+     "kind": "image"
     }
    ],
    "outs": [
     {
      "id": "segs",
-     "label": "线段+结点"
+     "label": "线段+结点",
+     "kind": "segments",
+     "role": "produce"
     }
    ],
    "params": [
@@ -559,7 +588,8 @@ textarea{resize:vertical;min-height:170px}
     "⛔ 直接抬 `WIRE_TOL=10` 是**零和交换**（官方 +0.82 / 派生 −0.75）：会把电容**两块平行极板**并上 ⇒ case 10 长出 **11 脚巨块**",
     "⛔ `weld` / `ext` 桥接证伪（`WELD 24→54.33`、`EXT 20→53.55`）：40 个共线长缺口候选**几乎全坐在元件本体上** ⇒ 抬 weld = **把所有串联元件短路**",
     "★ 教训：**「距离」是坏闸门，「形状关系」才是好闸门**"
-   ]
+   ],
+   "code": "stage1/wires.py:extract_wires"
   },
   {
    "id": "ev_pin",
@@ -568,27 +598,32 @@ textarea{resize:vertical;min-height:170px}
    "title": "⑦ 引脚点",
    "sub": "引脚：pin+netH = 60% 权重同一根因；★ 三分账 = 不产出 23 / 读错 22 / 没检测 6；读法全对的上界 +4.60",
    "x": 1216,
-   "y": 1456,
+   "y": 1390,
    "w": 280,
    "file": "stage1/pintrace.py",
    "ins": [
     {
      "id": "img",
-     "label": "原图"
+     "label": "原图",
+     "kind": "image"
     },
     {
      "id": "det",
-     "label": "元件框"
+     "label": "元件框",
+     "kind": "det"
     },
     {
      "id": "segs",
-     "label": "线段"
+     "label": "线段",
+     "kind": "segments"
     }
    ],
    "outs": [
     {
      "id": "pins",
-     "label": "引脚点+所属元件"
+     "label": "引脚点+所属元件",
+     "kind": "pins",
+     "role": "produce"
     }
    ],
    "params": [
@@ -622,7 +657,8 @@ textarea{resize:vertical;min-height:170px}
     "⚠ **`VLM_PIN_CHANNEL` 默认关**，且**替换模式**三种网格全判负（不加 39.06 / 8×4 35.47 / 4×2 36.41 / 2×1 35.47）；但 `_pinsweep` 在**正确的引脚点**上读号+名 **0.826**（`inner=160`），而 **merge 模式从未真正 A/B 过**（`_vlmab2.py` 的 `pins` 臂 `pin=True` 根本没设 = 空臂）",
     "⛔ **「把 box 引脚点吸附回元件框边」在官方档也判负**（`_pinsnap.py --split 10GT`：T0 原样 28 → T1/T2/T4 = 0、T3 外扩 8 才 15、T5 最优 (1,1) = 29）；派生档同结论（T0 178 / T1 8 / T2 5 / T5 (0,0) = 178）",
     "⛔ **「GT 点 = 引脚名/号文字框心」「GT 点在 bbox 边线上」都被证伪**（`_pintext.py`：号框心 7.4% / 名框心 **0.0%** / 中点 1.6%；落在边线 **0%**、到最近边线 p50 **12px**）。真实形态是**框边往外每边一个固定桩距**（case 1 `U1` 左 x0−15 / 右 x1+20），而我们的点只差 **8px** 量级 ⇒ 点不是主因（IC 预测引脚 75 根里点已对 54 = 72%）"
-   ]
+   ],
+   "code": "stage1/pintrace.py:trace_from_boxes"
   },
   {
    "id": "ev_net",
@@ -637,21 +673,26 @@ textarea{resize:vertical;min-height:170px}
    "ins": [
     {
      "id": "det",
-     "label": "元件框"
+     "label": "元件框",
+     "kind": "det"
     },
     {
      "id": "pins",
-     "label": "引脚点"
+     "label": "引脚点",
+     "kind": "pins"
     },
     {
      "id": "segs",
-     "label": "线段"
+     "label": "线段",
+     "kind": "segments"
     }
    ],
    "outs": [
     {
      "id": "nets",
-     "label": "初始网络"
+     "label": "初始网络",
+     "kind": "nets",
+     "role": "produce"
     }
    ],
    "params": [
@@ -680,7 +721,8 @@ textarea{resize:vertical;min-height:170px}
     "⛔ **这一次询问曾经是整个管线的黑洞**：对**整张原图**发、用全局 `VLM_TIMEOUT=600`、重试 4 次，而 `vlm/client.py:161` 又把一切异常吞成 `\"ERR:...\"` **字符串正常返回** ⇒ 失败不报错、只表现为「这张图莫名多了 5 分钟」。`0003`（4491×3173）单张 **315.73 s**，而同一张 `timing` 里yolo+cv+wires+rays+text+bigic+pins 加起来只有 **4.31 s**；cProfile 定位到 `wires.py:230 _hint_wire_hue → vlm/client.py:161 ask → urlopen → socket.recv_into`（303.4 s）",
     "✅ 已修：先缩到最大边 `STAGE1_WIRE_HUE_MAXSIDE=1024` + 独立超时 `STAGE1_WIRE_HUE_TIMEOUT=30`（不再用全局 600）+ 连续失败 `STAGE1_WIRE_HUE_MAXFAIL=3` 次**熔断** ⇒ `0003` **8.3 s**；220 张 stage1 一共 **416.5 s**（1.89 s/张）。220 张里 **168 张**会触发（52 张灰度图跳过），>2000px 的 **23 张**，最大 **17.4 MPx**；整图首发实测 **121.98 s 换来 `HTTP 400`**，缩到 1024 后 **0.55 s**",
     "★ 教训：**任何发到进程外的调用都要自带超时、上界与熔断，失败必须计数。** 失败一旦被吞成字符串，它就不会以报错的形式出现，只会以「这里有段时间不见了」的形式存在"
-   ]
+   ],
+   "code": "stage1/nets.py:build_nets"
   },
   {
    "id": "know",
@@ -689,14 +731,16 @@ textarea{resize:vertical;min-height:170px}
    "title": "★ 常识与先验表",
    "sub": "priors.py 的六类先验 + 三条闸（逐条列在下面）",
    "x": 40,
-   "y": 982,
+   "y": 1426,
    "w": 300,
    "file": "fusion/priors.py（911 行）",
    "ins": [],
    "outs": [
     {
      "id": "priors",
-     "label": "约束规则"
+     "label": "约束规则",
+     "kind": "priors",
+     "role": "produce"
     }
    ],
    "params": [
@@ -747,7 +791,8 @@ textarea{resize:vertical;min-height:170px}
     "★ **形状惩罚原来是个静默 no-op**（`priors.py` 只写 `ev['形状分']` 与 `st['shape_pen']`，**不动 `a.score`**）—— **已修成可用的机制，但 A/B 判负，默认关**：新增 `FUSION_SHAPE_W`（**默认 0.0**）与 `FUSION_SHAPE_FLOOR`（默认 0.35），`k = FLOOR + (1-FLOOR)·f` 后 `a.score *= (1-W) + W·k` 并**重排 `alts`**（`best()` 是 `alts[0]`，不重排会返回分更低那个）。**只降不升**（`f=1 → ×1`）",
     "★ **实测（`--no-vlm` + `FUSION_LLM=0`，归档 `work/_fast_base/{sw0,sw35,sw100,sw0_19,sw100_19}.json`）**：官方 10GT 9 张上 `W=0` / `0.35` / `1.0` **逐位相同**（51.06）⇒ 对 10GT 毫无影响；19 张档 `W=1.0` **30.16**（pin 0.1841 / netH 0.2539）vs `W=0` **30.73**（pin 0.1974 / netH 0.2599），tp 引脚 36→42、网络 204→211 ⇒ **压分反而掉 0.57**（形状分低的候选里有用的是「分数低但对」的那些）。⇒ 机制保留、**默认取 0**",
     "⚠ **踩坑**：同一环境同一参数，`sw0`（9 张单跑）= **51.06**，而 `sw0_19`（19 张合跑）报的 10GT 子集 = **51.74** —— **小于约 1 分的差值在采信前必须重复测量**"
-   ]
+   ],
+   "code": "fusion/priors.py:Priors"
   },
   {
    "id": "pool",
@@ -762,45 +807,56 @@ textarea{resize:vertical;min-height:170px}
    "ins": [
     {
      "id": "det",
-     "label": "元件框"
+     "label": "元件框",
+     "kind": "det"
     },
     {
      "id": "boxes",
-     "label": "文字框"
+     "label": "文字框",
+     "kind": "boxes"
     },
     {
      "id": "reads",
-     "label": "文字读法"
+     "label": "文字读法",
+     "kind": "reads"
     },
     {
      "id": "segs",
-     "label": "线段"
+     "label": "线段",
+     "kind": "segments"
     },
     {
      "id": "pins",
-     "label": "引脚点"
+     "label": "引脚点",
+     "kind": "pins"
     },
     {
      "id": "nets",
-     "label": "网络"
+     "label": "网络",
+     "kind": "nets"
     },
     {
      "id": "answer",
-     "label": "LLM 的判断"
+     "label": "LLM 的判断",
+     "kind": "answer"
     },
     {
-     "id": "fix",
-     "label": "字符串修正"
+     "id": "fixed",
+     "label": "字符串修正",
+     "kind": "object"
     },
     {
      "id": "back",
-     "label": "重扫回来的新证据"
+     "label": "重扫回来的新证据",
+     "kind": "back"
     }
    ],
    "outs": [
     {
      "id": "claims",
-     "label": "证据集"
+     "label": "证据集",
+     "kind": "claims",
+     "role": "produce"
     }
    ],
    "params": [
@@ -823,7 +879,8 @@ textarea{resize:vertical;min-height:170px}
     "✅ `claims.py:616-629` 的 `keep=False` 让 stage2 的 OCR 引脚读数被**整条丢弃**（`priors.py:700 b = pool.best(sid)` 永远 `None`）⇒ 「先验补空位」被打成「**先验全覆盖**」—— **复核：这不是缺口**，`keep=True` 会让 220 张 28.4973→**27.6871**（pin 0.0821→0.0783、netH 0.2163→**0.1966**），注释在 `:739-746`",
     "✅ `:590 score=_f(d.get('score'),1.0)` 缺分数给**满分**，同族 `:551` 给 0.0 —— **已修**（注释在 `:694-699`）",
     "⚠ `:544-550` 形状闸两种模式语义相反：`PR.SHAPE_SCORE` 默认空 ⇒ **整条删除候选**；设了 env 变成「保留并压分」"
-   ]
+   ],
+   "code": "fusion/claims.py:from_stage2"
   },
   {
    "id": "solve",
@@ -838,21 +895,27 @@ textarea{resize:vertical;min-height:170px}
    "ins": [
     {
      "id": "claims",
-     "label": "证据集"
+     "label": "证据集",
+     "kind": "claims"
     },
     {
      "id": "priors",
-     "label": "约束规则"
+     "label": "约束规则",
+     "kind": "priors"
     }
    ],
    "outs": [
     {
      "id": "sol",
-     "label": "自洽解"
+     "label": "自洽解",
+     "kind": "sol",
+     "role": "produce"
     },
     {
      "id": "bad",
-     "label": "低置信项"
+     "label": "低置信项",
+     "kind": "bad",
+     "role": "produce"
     }
    ],
    "params": [
@@ -874,7 +937,8 @@ textarea{resize:vertical;min-height:170px}
     "⚠ `gap_fill`(`:258-260`) 在**负分槽位**整条静默失效（`if sc <= 0.0: continue`）—— **已加计数** `st['gap_skip_negative']`，保守行为保留但不再静默",
     "★ `open_questions`(`:322-364`) **要求槽位至少两个不同值的候选**（`:337 if not alts: continue`、`:347 if second is None: continue`）⇒ **零候选槽位永远问不到 LLM** = 「box 引导重扫」缺的那一环",
     "局部贪心的代价（10GT case 1）：`C151–C156` 最左那颗没检出，位号被贪心分给右边 ⇒ 中心距 **115~117px**，`C154`/`C158` missing。验证 `python work\\tools\\diag\\_caserows.py 1 C15`"
-   ]
+   ],
+   "code": "fusion/solve.py:solve"
   },
   {
    "id": "plausible",
@@ -889,17 +953,21 @@ textarea{resize:vertical;min-height:170px}
    "ins": [
     {
      "id": "sol",
-     "label": "自洽解"
+     "label": "自洽解",
+     "kind": "sol"
     },
     {
      "id": "claims",
-     "label": "全部证据"
+     "label": "全部证据",
+     "kind": "claims"
     }
    ],
    "outs": [
     {
      "id": "susp",
-     "label": "可疑点+依据+优先级"
+     "label": "可疑点+依据+优先级",
+     "kind": "susp",
+     "role": "produce"
     }
    ],
    "params": [
@@ -928,7 +996,8 @@ textarea{resize:vertical;min-height:170px}
     "VCC-GND 短接是**强信号**（值得整段重扫）；参数离群是**弱信号**（必须交 `llm_judge`）",
     "★ 用户 m12477 原话：『VCC 和 GND 短接了，那肯定说明识别错了』⇒ 这正是纯几何拿不到的那类判据",
     "⚠ 必须先量**可疑点命中率**（用户要求「时间-精度-token 平衡」，平衡不了就别做）"
-   ]
+   ],
+   "code": "fusion/plausible.py:check"
   },
   {
    "id": "fixstr",
@@ -943,13 +1012,16 @@ textarea{resize:vertical;min-height:170px}
    "ins": [
     {
      "id": "claims",
-     "label": "文字读法"
+     "label": "文字读法",
+     "kind": "claims"
     }
    ],
    "outs": [
     {
      "id": "fixed",
-     "label": "修正后的读法（带依据）"
+     "label": "修正后的读法（带依据）",
+     "kind": "object",
+     "role": "produce"
     }
    ],
    "params": [
@@ -978,7 +1050,9 @@ textarea{resize:vertical;min-height:170px}
     "实测（220 张里键匹配上的 **425 个 IC 元件**的 `Name`）：**对不上 193 个 = 45.4%**，编辑距离**众数是 4**（不是 1）",
     "「距离 ≤2 且差异字符在混淆表（`O↔0 I↔1 S↔5 B↔8 Z↔2 G↔6`）」的候选是 **0 个**；最常见替换 `6↔8`、`F↔P`",
     "⇒ 降级为「等有真实依据（同图多数票 / 已知型号表）再做」；复跑见 `eda-pcb\\vlm\\README.md`"
-   ]
+   ],
+   "impl": false,
+   "stub": "已证否"
   },
   {
    "id": "conflict",
@@ -993,17 +1067,21 @@ textarea{resize:vertical;min-height:170px}
    "ins": [
     {
      "id": "bad",
-     "label": "低置信项"
+     "label": "低置信项",
+     "kind": "bad"
     },
     {
      "id": "susp",
-     "label": "可疑点"
+     "label": "可疑点",
+     "kind": "susp"
     }
    ],
    "outs": [
     {
-     "id": "q",
-     "label": "待重读清单"
+     "id": "plan",
+     "label": "待重读清单",
+     "kind": "plan",
+     "role": "produce"
     }
    ],
    "params": [
@@ -1024,7 +1102,8 @@ textarea{resize:vertical;min-height:170px}
     "分发：`solve.bad` → `conflict.bad` → `llm_judge.q` / `audit.susp`",
     "⚠ **没有任何模块会为「还没有候选」的槽位新建框**（`solve.py:351 reg = pool.region(sid)` 用的仍是 `claims` 建好的框）",
     "★ 没有这一步，重扫就只是**把同一个问题再问一遍**（`desig_all` 就这样亏）"
-   ]
+   ],
+   "code": "fusion/solve.py:open_questions"
   },
   {
    "id": "llm_judge",
@@ -1033,31 +1112,38 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ LLM 判断 + 定位 + 排序",
    "sub": "llm_judge.py：候选二选一 + **上下文块（官方 9 张 +0.79）**；整表判负",
    "x": 3960,
-   "y": 1142,
+   "y": 850,
    "w": 300,
    "file": "fusion/llm_judge.py（484 行）",
    "ins": [
     {
-     "id": "q",
-     "label": "冲突/缺口"
+     "id": "plan",
+     "label": "冲突/缺口",
+     "kind": "plan"
     },
     {
      "id": "claims",
-     "label": "全部证据"
+     "label": "全部证据",
+     "kind": "claims"
     },
     {
      "id": "engine",
-     "label": "请求方式"
+     "label": "请求方式",
+     "kind": "engine"
     }
    ],
    "outs": [
     {
      "id": "answer",
-     "label": "直接判断"
+     "label": "直接判断",
+     "kind": "answer",
+     "role": "produce"
     },
     {
      "id": "plan",
-     "label": "重读计划（带优先级）"
+     "label": "重读计划（带优先级）",
+     "kind": "plan",
+     "role": "produce"
     }
    ],
    "params": [
@@ -1097,7 +1183,8 @@ textarea{resize:vertical;min-height:170px}
     "　代价：case 1 单张墙钟 **27.3 s → 37.3 s**（judge 自身 7.2 → 11.1 s）⇒ 约 **+10 s/张**、220 张约 **+37 min**",
     "⛔ **整表（contact sheet）判负**：4 张实测 **55.32 vs 59.62**（sheet 更差 −1.07，case 7 元件 0.9167 → 0.8333、tp 元件 74 → 72），且更慢（160.5 s vs 83.6 s）⇒ 默认 **关**（`FUSION_JUDGE_SHEET_MIN=9999`），要试就 `FUSION_JUDGE_MODE=sheet`。归档 `work/_fast_base/{sheet1,sheet0}.json`",
     "⚠ 上下文里的「冲突内容」在 **round 1 基本是空的**（`n_ctx_slot: 0`）：`judge` 跑在 `pool.apply()`/`plausible.check(pool, pred)` **之前**，而 `solve` 已经把重号解掉了 ⇒ 真正吃到的是**类型 / 同件其他字段 / 邻近元件 / 已定位号**这四样"
-   ]
+   ],
+   "code": "fusion/llm_judge.py:judge"
   },
   {
    "id": "rescan",
@@ -1111,18 +1198,22 @@ textarea{resize:vertical;min-height:170px}
    "file": "fusion/rescan.py（336 行）",
    "ins": [
     {
-     "id": "q",
-     "label": "重读计划"
+     "id": "plan",
+     "label": "重读计划",
+     "kind": "plan"
     },
     {
      "id": "engine",
-     "label": "请求方式"
+     "label": "请求方式",
+     "kind": "engine"
     }
    ],
    "outs": [
     {
      "id": "r",
-     "label": "新证据"
+     "label": "新证据",
+     "kind": "object",
+     "role": "produce"
     }
    ],
    "params": [
@@ -1147,7 +1238,8 @@ textarea{resize:vertical;min-height:170px}
     "⚠ 风险门控：不能盲目向邻居广播（case 1 那排 `C151–C156` 是 `10nF ×5 + 1uF ×1`，`C156` 我们本来读对，广播会把对的改错）",
     "⚠ 它**不产生新框**，`t.get('crop') or RESCAN_CROP` 只在 `tight`/`window`(`:42`) 之间切；`pool.region(sid)`(`:211`) **没有取景框的槽位直接跳过**",
     "`pool.add(..., source='vlm:rescan', score=1.2)`（`:247-254`）；`value_outlier` **默认关**，`FUSION_RESCAN_VALUE=1` 才排"
-   ]
+   ],
+   "code": "fusion/rescan.py:run"
   },
   {
    "id": "iterate",
@@ -1162,13 +1254,16 @@ textarea{resize:vertical;min-height:170px}
    "ins": [
     {
      "id": "r",
-     "label": "新证据"
+     "label": "新证据",
+     "kind": "object"
     }
    ],
    "outs": [
     {
      "id": "back",
-     "label": "回证据池"
+     "label": "回证据池",
+     "kind": "back",
+     "role": "produce"
     }
    ],
    "params": [
@@ -1194,7 +1289,8 @@ textarea{resize:vertical;min-height:170px}
     "VLM 位号调用 4094 次、耗时 **3916 s** ⇒ 重扫必须**只打低置信项**",
     "✅ **已修（`FUSION_CONV_EXACT` 默认 `1`）**：收敛判据改成**用本轮结束时的题面** —— `q_next = SV.open_questions(pool, sol['assign'])`，`q_hard` 从 `q_next` 里挑，`if not tasks and not q_hard: break`，`q_first = q_next`。报告里多记 `n_q_next`。现在「第 2 轮到底跑不跑」在报告里可查，不用再靠实跑猜",
     "✅ **已修**：`LJ.judge` 与 `RS.run` **各自包进 try**（`r['judge']={'err':...}` / `r['rescan']={'err':...}` + `log('[judge] 跳过：%s')`）。原来 `judge` 一抛异常，该 case **一份融合产物都没有**"
-   ]
+   ],
+   "code": "fusion/run.py:run_case"
   },
   {
    "id": "batch",
@@ -1203,14 +1299,16 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 请求合并与预算闸门",
    "sub": "请求合并：引脚网格已合并（4025→1051）；值通道拼图实测判负",
    "x": 40,
-   "y": 2440,
+   "y": 982,
    "w": 280,
    "file": "vlm/enrich.py",
    "ins": [],
    "outs": [
     {
      "id": "plan",
-     "label": "请求方式（批次大小/布局/超时）"
+     "label": "请求方式（批次大小/布局/超时）",
+     "kind": "plan",
+     "role": "produce"
     }
    ],
    "params": [
@@ -1246,7 +1344,8 @@ textarea{resize:vertical;min-height:170px}
     "　`batch=6` margin 45 side 640 覆盖 **53/84 = 0.6310**（0.9138，21 次）",
     "⇒ 拼图**不伤写回精度**（0.984→0.979）而**伤覆盖率**（−0.12~−0.18）：邻格位号被报给本格的值后被「位号一致」门控挡掉；`value_refill` 救不了",
     "**剩下可合并对象**：位号 4094 / 型号 1021（都是单点读数、裁片本来就小，要单独 A/B，建议先量型号）"
-   ]
+   ],
+   "code": "vlm/enrich.py:enrich_dir"
   },
   {
    "id": "assemble",
@@ -1261,13 +1360,16 @@ textarea{resize:vertical;min-height:170px}
    "ins": [
     {
      "id": "sol",
-     "label": "自洽解"
+     "label": "自洽解",
+     "kind": "sol"
     }
    ],
    "outs": [
     {
      "id": "doc",
-     "label": "pred 文档"
+     "label": "pred 文档",
+     "kind": "doc",
+     "role": "produce"
     }
    ],
    "params": [
@@ -1289,7 +1391,8 @@ textarea{resize:vertical;min-height:170px}
     "三种映射的覆盖率（case 0001-0005，840 个引脚位）：**插入序 0.560 ｜ 按点匹配 0.462 ｜ 按 OCR 原文 0.318** ⇒ 都不能安全改键",
     "要修必须让 `build_doc` 导出 `doc['pin_num']`（一行），代价是 stage2 重跑（**纯 CPU、无 VLM**）",
     "⚠ `VALUE_LIKE`(`:89`) 要求带字母或 `Ω/μ` ⇒ `1.51`/`104` 这种纯数字读法被丢成 `null`（**写值通道的已知漏口**）"
-   ]
+   ],
+   "code": "stage2/assemble.py:build_doc"
   },
   {
    "id": "export",
@@ -1304,13 +1407,16 @@ textarea{resize:vertical;min-height:170px}
    "ins": [
     {
      "id": "doc",
-     "label": "pred 文档"
+     "label": "pred 文档",
+     "kind": "doc"
     }
    ],
    "outs": [
     {
      "id": "file",
-     "label": "<case>_Pred.json"
+     "label": "<case>_Pred.json",
+     "kind": "file",
+     "role": "produce"
     }
    ],
    "params": [
@@ -1334,7 +1440,8 @@ textarea{resize:vertical;min-height:170px}
     "打分为零会**强制置零分**；每张图独立 `try/except`",
     "⚠ **这层是「静默降级」**：某层缺产物就自动往下一层退，**导出成功的张数不区分来自哪一层** ⇒ `_submit_out220r36` 就这样交了纯 stage2（25.9861）而看不出问题",
     "⛔ **不要在阶段三之前接补强** —— 阶段三不是拷贝阶段二产物，而是从 `_assigned` + stage1 **重建**，接早了会被冲掉"
-   ]
+   ],
+   "code": "submission/run.py:main"
   },
   {
    "id": "metrics",
@@ -1343,13 +1450,14 @@ textarea{resize:vertical;min-height:170px}
    "title": "官方标尺 metrics.py",
    "sub": "官方标尺：加权 F1 之和，不在管线里；一笔 mismatch 亏三处",
    "x": 3960,
-   "y": 2285,
+   "y": 1993,
    "w": 260,
    "file": "schematic_parser/metrics.py",
    "ins": [
     {
      "id": "file",
-     "label": "<case>_Pred.json"
+     "label": "<case>_Pred.json",
+     "kind": "file"
     }
    ],
    "outs": [],
@@ -1388,7 +1496,8 @@ textarea{resize:vertical;min-height:170px}
     "调试：`python work\\tools\\debug\\dbg.py --case 0001`；总览 `work\\debug\\index.html`",
     "**口径表（必须连 case 集一起说）**：220 张 stage2-only **25.9861** ｜ 220 张端到端带 VLM 27.9843（外扩改默认前）｜ 10GT(9) 无 VLM 48.5981 → **49.3516**（带 VLM 59.35）｜ 19 张 28.9338 → **29.4111**",
     "⚠ 两个 220 张数字都是**改外扩之前**跑的 ⇒ 换生产默认前应复核 220 张"
-   ]
+   ],
+   "code": "schematic_parser/metrics.py:evaluate_case"
   },
   {
    "id": "cropfix",
@@ -1397,23 +1506,27 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 裁切方向反馈",
    "sub": "cropfix.py：唯一「LLM 引导重框+重识别」；安全但惰性，生产默认关",
    "x": 1608,
-   "y": 912,
+   "y": 1191,
    "w": 280,
    "file": "fusion/cropfix.py（456 行）",
    "ins": [
     {
      "id": "reads",
-     "label": "各读取器读数"
+     "label": "各读取器读数",
+     "kind": "reads"
     },
     {
      "id": "hint",
-     "label": "audit 提的候选"
+     "label": "audit 提的候选",
+     "kind": "hint"
     }
    ],
    "outs": [
     {
-     "id": "boxes",
-     "label": "修正后的框/读数"
+     "id": "fixread",
+     "label": "修正后的框/读数",
+     "kind": "reads",
+     "role": "produce"
     }
    ],
    "params": [
@@ -1449,7 +1562,8 @@ textarea{resize:vertical;min-height:170px}
     "实测 `0001` 可疑 18 条 / 槽位 459、`0005` 可疑 2 条，试 7 个槽位**增益 0** ⇒ **安全但惰性**，单槽 **1.3–2.0 s**",
     "⚠ 已知盲区：`C151 → C51/C15/C5` 这类**漏字不会被判可疑**（那是 CRNN 吞窄 `1`，扩框救不回来）",
     "★ 有候选时走**带提示**那版：`audit` 的 `FIX` 当 `hint` ⇒ **候选由模型提，对不对由图裁决**"
-   ]
+   ],
+   "code": "fusion/cropfix.py:run"
   },
   {
    "id": "audit",
@@ -1458,27 +1572,33 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 现实规律判断（电学合理性）",
    "sub": "audit.py：问的是「电学上成不成立」，只提候选不改结论",
    "x": 4352,
-   "y": 1366,
+   "y": 1658,
    "w": 300,
    "file": "fusion/audit.py（588 行）",
    "ins": [
     {
      "id": "susp",
-     "label": "可疑点"
+     "label": "可疑点",
+     "kind": "susp"
     },
     {
-     "id": "judge",
-     "label": "裁决记录"
+     "id": "answer",
+     "label": "裁决记录",
+     "kind": "answer"
     }
    ],
    "outs": [
     {
-     "id": "fix",
-     "label": "候选修正"
+     "id": "fixed",
+     "label": "候选修正",
+     "kind": "object",
+     "role": "produce"
     },
     {
-     "id": "q",
-     "label": "要重裁的槽位"
+     "id": "plan",
+     "label": "要重裁的槽位",
+     "kind": "plan",
+     "role": "produce"
     }
    ],
    "params": [
@@ -1514,7 +1634,8 @@ textarea{resize:vertical;min-height:170px}
     "实测 `case 0001` 10 条 30 s **全 `suspect`**（`15pF与周围0.1uF电容参数差异巨大，极可能是识别错误。`）—— `FIX` 是**工程偏好不是「我读错了」** ⇒ 重裁无增益（`n_fix=0`），9 张上 `cropfix`+`audit` 合计**恰好中性**",
     "✅ `run.py:150 j = LJ.judge(...)` **不在任何 try 里** ⇒ 抛异常则该 case **一份融合产物都没有** —— **已修**（见 `iterate` 条目）",
     "⚠ `run.py:71 VLM_DIR` 默认 `work\\_fusion_vlm`，**与 submission 用的 `runs\\stage3_vlm` 不是同一目录**且**无同链校验**"
-   ]
+   ],
+   "code": "fusion/audit.py:run"
   },
   {
    "id": "boxscan",
@@ -1523,27 +1644,33 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 围绕元件 box 的重扫（融合层缺的那一环）",
    "sub": "已实现①建取景框+②零候选问路，实测打平偏负（−0.01 / +0.05）⇒ 默认关",
    "x": 824,
-   "y": 1400,
+   "y": 905,
    "w": 300,
    "file": "（要补）fusion/boxscan.py 或 claims.from_stage2 第 5 步",
    "ins": [
     {
      "id": "claims",
-     "label": "证据集"
+     "label": "证据集",
+     "kind": "claims"
     },
     {
      "id": "det",
-     "label": "元件框"
+     "label": "元件框",
+     "kind": "det"
     }
    ],
    "outs": [
     {
      "id": "region",
-     "label": "新取景框"
+     "label": "新取景框",
+     "kind": "region",
+     "role": "produce"
     },
     {
      "id": "reads",
-     "label": "重扫读数"
+     "label": "重扫读数",
+     "kind": "reads",
+     "role": "produce"
     }
    ],
    "params": [
@@ -1593,7 +1720,9 @@ textarea{resize:vertical;min-height:170px}
     "★★ **旧记录的 ③ 经复核是错的，而且照它改会引入 bug**（`work/tools/diag/_pinbox.py`）：融合层的 `doc` 是 `runs/stage1/<case>.stage1.json`（`fusion/run.py:186`），那份文档的 `pins` 键**就是 `cid`** —— case 1/4/7/10 = **22/22、25/25、24/24、30/30** 命中，且 **113/90/67/85 个点全是真坐标**；反过来拿位号当键命中 **0**。只有 `runs/stage2/<case>.json` 的 `pins` 才以位号为键。⇒ **引脚取景框一直是正常的，①②才是真缺口**",
     "取景框构成（0001，共 **445** 个）：`comp.key: 83` ｜ `comp.partname: 25` ｜ `comp.value: 34` ｜ `pin.name: 142` ｜ `pin.number: 118` ｜ `netlabel: 43`",
     "★ 即使修好取景框，**引脚裁决仍进不了交付文档** ⇒ **boxscan 的第一优先级是位号，不是引脚**"
-   ]
+   ],
+   "impl": false,
+   "stub": "要补"
   },
   {
    "id": "own",
@@ -1608,17 +1737,22 @@ textarea{resize:vertical;min-height:170px}
    "ins": [
     {
      "id": "det",
-     "label": "元件框+类型"
+     "label": "元件框+类型",
+     "kind": "det"
     }
    ],
    "outs": [
     {
      "id": "det",
-     "label": "去争后的框"
+     "label": "去争后的框",
+     "kind": "det",
+     "role": "produce"
     },
     {
      "id": "ledger",
-     "label": "归属账（留痕）"
+     "label": "归属账（留痕）",
+     "kind": "ledger",
+     "role": "sink"
     }
    ],
    "params": [
@@ -1647,7 +1781,8 @@ textarea{resize:vertical;min-height:170px}
     "**19 张档同向**：改判 11 个元件，现状 **3 对 2 错**、这一臂 **1 对 5 错**（位号数 163 → 164，多出来的那个落在 GT 里根本没有的元件上）。合计 现状 **5 对 2 错** vs 这一臂 **1 对 7 错**",
     "★★ **位号通道的天花板测量（`_ownasgn.py --headroom --gt`）—— 这才是「不是归属问题」的铁证**：官方 9 张按 `corners` 口径认到 **124 颗**有 GT 位号的元件，**读对 104 / 没读 11 / 读错 9**；其中**候选池里本来就有正确读法的只有 1 颗**，另外 **19 颗是识别器压根没给出正确字符串**（10 个什么都没读出、9 个读成了别的）",
     "⇒ **位号这一路剩下的分全在 CRNN 识别率上，不在归属/tie-break 上**。任何「更聪明的一对一/重排」最多值 1 颗元件。同一把尺子该拿去量引脚号那一路"
-   ]
+   ],
+   "code": "cvparts/own.py:thin"
   },
   {
    "id": "ev_bridge",
@@ -1656,19 +1791,22 @@ textarea{resize:vertical;min-height:170px}
    "title": "⑥b 并网的形状判据（规则 5）",
    "sub": "labels.py:_overshoot_unions：端点微越过目标段 + 不平行才并",
    "x": 824,
-   "y": 535,
+   "y": 40,
    "w": 280,
    "file": "stage1/labels.py · stage1/nets.py",
    "ins": [
     {
      "id": "segs",
-     "label": "线段"
+     "label": "线段",
+     "kind": "segments"
     }
    ],
    "outs": [
     {
      "id": "segs",
-     "label": "并好的段"
+     "label": "并好的段",
+     "kind": "segments",
+     "role": "produce"
     }
    ],
    "params": [
@@ -1702,7 +1840,8 @@ textarea{resize:vertical;min-height:170px}
     "★★ **修法（已落地）**：`stage2/assemble.py` 新增 `STAGE2_EDGE_SNAP`（默认 **20**，0=关）与 `STAGE2_EDGE_SNAP_ANG`（默认 45°）+ `snap_edge_ends(nets, radius, max_ang)` —— 把每条边的首/尾点**吸附到同 net 里另一条边的中心线**上，只吸**近似垂直**的邻居（平行的邻居是同一条导线的重复描边，吸过去会把枝拉歪）",
     "★★ A/B（`_nldup.py` 离线重打分，基线 50.0598 / 导线 0.0649）：`snap12` 0.1582/**50.99** ｜ **`snap20` 0.1648/51.0589** ｜ `snap24` 0.1617/51.03 ｜ `snap30` 0.1536/50.95 ｜ `snap40` 0.1475/50.89 ｜ `col16`（焊共线）反而掉到 0.0950 ｜ `par3`（并描边）0.0868/**把 case 2 打成 0** ｜ `par3+snap20` 0.1879/51.29 但同样爆 0 ⇒ **取 snap20、不合并描边**；19 张档 48.7337 → 49.6574（导线 0.0563 → 0.1487）。**逐张都 ≥ 基线，没有任何一张被它打成 0**",
     "⛔ 别指望「把两条描边并成一条中心线」：`par1..par5` 全在 0.065~0.088（`par3+col16` 才 0.0895），因为**边形状不是瓶颈**；而且 `par*` 会把 case 2 的导线打成 0"
-   ]
+   ],
+   "code": "stage1/labels.py:wire_groups"
   },
   {
    "id": "pincol",
@@ -1711,27 +1850,32 @@ textarea{resize:vertical;min-height:170px}
    "title": "⑦b 引脚列枚举（格点补脚）",
    "sub": "pincol.py：按引脚列等距格点补出漏检的脚，再交给并网",
    "x": 1608,
-   "y": 1940,
+   "y": 1742,
    "w": 280,
    "file": "stage1/pincol.py",
    "ins": [
     {
      "id": "det",
-     "label": "元件框"
+     "label": "元件框",
+     "kind": "det"
     },
     {
      "id": "pins",
-     "label": "引脚点"
+     "label": "引脚点",
+     "kind": "pins"
     },
     {
      "id": "segs",
-     "label": "线段"
+     "label": "线段",
+     "kind": "segments"
     }
    ],
    "outs": [
     {
      "id": "pins",
-     "label": "补全后的引脚点"
+     "label": "补全后的引脚点",
+     "kind": "pins",
+     "role": "produce"
     }
    ],
    "params": [
@@ -1762,7 +1906,8 @@ textarea{resize:vertical;min-height:170px}
     "⚠ `PIN_JOIN_DIST=12`（`stage1/nets.py`）**比一格还大** ⇒ 会**跨脚认领**；`PIN_JOIN_SYNTH=3`（格点补出来的脚只能用更紧半径认领）",
     "⚠ `STAGE1_PINC_*` 约 **22 个**旋钮",
     "自检 `python eda-pcb\\stage1\\pincol.py` → **23 过 / 0 不过**"
-   ]
+   ],
+   "code": "stage1/pincol.py:enumerate_pins"
   },
   {
    "id": "ownnum",
@@ -1771,27 +1916,32 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 引脚号候选：归属 + 沿边对齐",
    "sub": "assign.py / structmatch.py：谁贴在这颗元件上，以及号怎么排",
    "x": 1608,
-   "y": 1463,
+   "y": 2198,
    "w": 300,
    "file": "stage2/assign.py · stage2/structmatch.py",
    "ins": [
     {
      "id": "reads",
-     "label": "文字读法"
+     "label": "文字读法",
+     "kind": "reads"
     },
     {
      "id": "pins",
-     "label": "引脚点"
+     "label": "引脚点",
+     "kind": "pins"
     },
     {
      "id": "det",
-     "label": "元件框"
+     "label": "元件框",
+     "kind": "det"
     }
    ],
    "outs": [
     {
      "id": "reads",
-     "label": "引脚号归属"
+     "label": "引脚号归属",
+     "kind": "reads",
+     "role": "produce"
     }
    ],
    "params": [
@@ -1821,7 +1971,8 @@ textarea{resize:vertical;min-height:170px}
     "⛔ 按「同 text 且中心差 ≤3px」去重是 **−1.80**（`PINNUM_DUP`）：重复副本在**多占坑**（同一块文字绑两根脚，一 tp 一 fp），而 `pin_f1` 里**丢 tp 比多 fp 更贵**",
     "参数：`PIN_COVER=0.15` ｜ `PINNUM_NEAR=60` ｜ `PINCOL_GUIDE=0`（`STAGE2_PINCOL=1` 重测 **56.08**，仍不采纳）",
     "**没做的**：宽框拆分重读（见「④ CRNN 识别」）"
-   ]
+   ],
+   "code": "stage2/structmatch.py:rebind"
   },
   {
    "id": "boxpinprior",
@@ -1829,20 +1980,23 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "★ IC 不补位置号",
    "sub": "priors.py：稀疏封装号是印出来的，位置先验会覆盖它",
-   "x": 1608,
-   "y": 2396,
+   "x": 1216,
+   "y": 2942,
    "w": 300,
    "file": "fusion/priors.py",
    "ins": [
     {
      "id": "det",
-     "label": "元件框+类型"
+     "label": "元件框+类型",
+     "kind": "det"
     }
    ],
    "outs": [
     {
      "id": "priors",
-     "label": "先验规则"
+     "label": "先验规则",
+     "kind": "priors",
+     "role": "produce"
     }
    ],
    "params": [
@@ -1864,7 +2018,8 @@ textarea{resize:vertical;min-height:170px}
     "**修法**：`BOX_PIN_PRIOR = env_on('FUSION_BOX_PIN_PRIOR','0')` + `_PRIOR_IC_TYPES = ('box','ic','boxic','bigic')`；`pinrun` 循环体开头取 `pool.meta['comp.%s.key' % cid]['type']`，落在 IC 类型就 `st['pin_prior_skip_ic'] += 1; continue`（非 box 引脚号不进 `pin_f1`，官方 Q2）",
     "**效果**：官方 9 **44.16→53.41**（pin F1 0.0350→0.2942、netH 0.4105→0.4866）",
     "★ **教训**：IC 的引脚号是**图上印出来的封装号**，天然稀疏（BGA / QFN 只画一部分球）；先验「位置即编号」**只适用于那些位置就是编号的符号**"
-   ]
+   ],
+   "code": "fusion/priors.py:slot_boxes"
   },
   {
    "id": "gtcheck",
@@ -1872,20 +2027,23 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "★★ GT 保真度检查（自造 GT 会骗你）",
    "sub": "在派生档上调参前先量 GT 保真度：80.3% 的失配数学上不可赢",
-   "x": 4352,
-   "y": 1916,
+   "x": 3960,
+   "y": 2432,
    "w": 300,
    "file": "work/tools/diag/_desigsrc.py · _boxkey.py · _desigabsent.py",
    "ins": [
     {
      "id": "file",
-     "label": "GT + 我们的产物"
+     "label": "GT + 我们的产物",
+     "kind": "file"
     }
    ],
    "outs": [
     {
      "id": "faith",
-     "label": "可赢/不可赢账"
+     "label": "可赢/不可赢账",
+     "kind": "faith",
+     "role": "sink"
     }
    ],
    "params": [
@@ -1915,7 +2073,8 @@ textarea{resize:vertical;min-height:170px}
     "`0048` / `0057` / `0062` / `0102`（全是 `Datasheet` 档）的裁片里**图上根本没有任何位号**：`0048` 只有引脚名、`0057` 只有型号 `S-8225B`、`0102` 上画的是符号名 `Flash`",
     "**`∅` 的号是随机生成的（赛题 Q6 明说）**：`∅202 pin_202 ('P_31',{1079,276})`、`∅121 pin_119 ('P_20',{77,897})` … 号与名都是人造 ⇒ 419 个 GT 网成员里 **92 个 (22.0%) 数学上不可赢**",
     "★ **在派生档上调参前必须先量 GT 保真度**。报告 `work\\reports\\GT保真度与位号上限.md`、`work\\reports\\引脚号回归与桩偏移.md`"
-   ]
+   ],
+   "code": "tools/diag/_desigsrc.py"
   }
  ],
  "links": [
@@ -2051,12 +2210,12 @@ textarea{resize:vertical;min-height:170px}
   },
   {
    "from": "fixstr.fixed",
-   "to": "pool.fix",
+   "to": "pool.fixed",
    "kind": "data"
   },
   {
-   "from": "conflict.q",
-   "to": "llm_judge.q",
+   "from": "conflict.plan",
+   "to": "llm_judge.plan",
    "kind": "data"
   },
   {
@@ -2071,7 +2230,7 @@ textarea{resize:vertical;min-height:170px}
   },
   {
    "from": "llm_judge.plan",
-   "to": "rescan.q",
+   "to": "rescan.plan",
    "kind": "data"
   },
   {
@@ -2087,17 +2246,17 @@ textarea{resize:vertical;min-height:170px}
   {
    "from": "batch.plan",
    "to": "ev_vlm.engine",
-   "kind": "ctrl"
+   "kind": "param"
   },
   {
    "from": "batch.plan",
    "to": "llm_judge.engine",
-   "kind": "ctrl"
+   "kind": "param"
   },
   {
    "from": "batch.plan",
    "to": "rescan.engine",
-   "kind": "ctrl"
+   "kind": "param"
   },
   {
    "from": "assemble.doc",
@@ -2130,7 +2289,7 @@ textarea{resize:vertical;min-height:170px}
    "kind": "data"
   },
   {
-   "from": "cropfix.boxes",
+   "from": "cropfix.fixread",
    "to": "pool.reads",
    "kind": "data"
   },
@@ -2141,17 +2300,17 @@ textarea{resize:vertical;min-height:170px}
   },
   {
    "from": "llm_judge.answer",
-   "to": "audit.judge",
+   "to": "audit.answer",
    "kind": "data"
   },
   {
-   "from": "audit.fix",
-   "to": "pool.fix",
+   "from": "audit.fixed",
+   "to": "pool.fixed",
    "kind": "data"
   },
   {
-   "from": "audit.q",
-   "to": "rescan.q",
+   "from": "audit.plan",
+   "to": "rescan.plan",
    "kind": "data"
   },
   {
@@ -2167,7 +2326,7 @@ textarea{resize:vertical;min-height:170px}
   {
    "from": "boxscan.region",
    "to": "ev_vlm.engine",
-   "kind": "ctrl"
+   "kind": "param"
   },
   {
    "from": "boxscan.reads",
@@ -2190,7 +2349,7 @@ textarea{resize:vertical;min-height:170px}
    "kind": "data"
   },
   {
-   "from": "ev_pin.det",
+   "from": "own.det",
    "to": "pincol.det",
    "kind": "data"
   },
@@ -2230,7 +2389,7 @@ textarea{resize:vertical;min-height:170px}
    "kind": "data"
   },
   {
-   "from": "ev_pin.det",
+   "from": "own.det",
    "to": "boxpinprior.det",
    "kind": "data"
   },
@@ -2240,7 +2399,7 @@ textarea{resize:vertical;min-height:170px}
    "kind": "data"
   },
   {
-   "from": "metrics.file",
+   "from": "export.file",
    "to": "gtcheck.file",
    "kind": "data"
   }
@@ -2345,19 +2504,41 @@ function renderLinks(){
   const svg = document.getElementById('links');
   let s = '<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" '
         + 'markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5b6d"/></marker></defs>';
+  const bad = [];
   for(const L of G.links){
     const a = portPos(L.from, 'out'), b = portPos(L.to, 'in');
-    if(!a || !b) continue;
+    if(!a || !b){ bad.push((L.from||'?')+' -> '+(L.to||'?')); continue; }   // ★ 不再静默跳过
     const d = curve(a,b);
-    const col = L.kind==='ctrl' ? '#d29922' : '#4a5b6d';
+    // data 实线灰；param 虚线（配置/请求方式，不是数据产物）；ctrl 琥珀
+    const col = L.kind==='ctrl' ? '#d29922' : (L.kind==='param' ? '#8b949e' : '#4a5b6d');
+    const dash = L.kind==='param' ? ' stroke-dasharray="5 4"' : '';
     const isSel = sel && sel.type==='link' && sel.id === linkId(L);
     s += '<path class="hit" data-link="'+linkId(L)+'" d="'+d+'"></path>';
-    s += '<path class="wire'+(isSel?' sel':'')+'" d="'+d+'" stroke="'+col+'" marker-end="url(#ah)"></path>';
+    s += '<path class="wire'+(isSel?' sel':'')+'" d="'+d+'" stroke="'+col+'"'+dash+' marker-end="url(#ah)"></path>';
+  }
+  // ★ 连线自检：解析不到的端点必须**看得见**（以前是 continue，页面默默少一条线）
+  window.__LINKWARN = {total:G.links.length, unresolved:bad};
+  if(bad.length){
+    console.warn('[workflow] 有 '+bad.length+' 条连线的端点解析不到：', bad);
+    s += '<rect x="8" y="8" width="'+(Math.max(240, bad.length*90))+'" height="26" rx="5" '
+       + 'fill="#3d1418" stroke="#f85149"/>'
+       + '<text x="18" y="26" fill="#f85149" font-size="14">⚠ '+bad.length+'/'+G.links.length
+       + ' 条连线端点找不到：'+esc(bad.slice(0,3).join('  '))+(bad.length>3?' …':'')+'</text>';
   }
   svg.innerHTML = s;
   svg.querySelectorAll('path.hit').forEach(p=>{
     p.onclick = ev=>{ ev.stopPropagation(); sel={type:'link', id:p.dataset.link}; renderAll(); };
   });
+  // 连线自检状态条（自己建，不依赖 _wfbuild 的工具栏补丁）
+  let st = document.getElementById('linkstat');
+  if(!st){
+    st = document.createElement('div'); st.id = 'linkstat';
+    st.style.cssText = 'position:fixed;left:10px;bottom:8px;z-index:20;'
+      + 'font:11px/16px ui-monospace,Consolas,monospace;color:#8b949e;background:#0d1117cc;'
+      + 'border:1px solid #30363d;border-radius:4px;padding:2px 6px';
+    document.body.appendChild(st);
+  }
+  st.textContent = '连线 '+G.links.length+(bad.length? '（⚠ '+bad.length+' 条解析不到）':'（全部可解析）');
 }
 
 function curve(a,b){
@@ -2367,7 +2548,9 @@ function curve(a,b){
 
 function portPos(ref, dir){
   const [nid, pid] = ref.split('.');
-  const el = document.querySelector('.port[data-node="'+nid+'"][data-port="'+pid+'"]');
+  // ★ 先用 data-dir 定位（同名的 in/out 端口才不会串位），取不到再退回旧写法
+  const el = document.querySelector('.port[data-node="'+nid+'"][data-port="'+pid+'"][data-dir="'+dir+'"]')
+          || document.querySelector('.port[data-node="'+nid+'"][data-port="'+pid+'"]');
   const n = nodeById(nid);
   if(!el || !n) return null;
   return {x: n.x + (dir==='out' ? (n.w||210) : 0), y: n.y + el.offsetTop + el.offsetHeight/2};

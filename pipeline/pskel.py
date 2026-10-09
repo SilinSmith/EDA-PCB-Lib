@@ -115,6 +115,65 @@ def chroma(bgr: np.ndarray) -> np.ndarray:
     return (b.max(axis=2) - b.min(axis=2)).astype(np.float32)
 
 
+def colour_edge(bgr: np.ndarray, blur: float = 1.2) -> np.ndarray:
+    """**彩色梯度**幅值（Di Zenzo 结构张量）—— 不依赖亮度。
+
+    灰度自适应阈值只能看见「亮度跳变」。等亮度但不同色的边界（浅色细走线压在浅色
+    网格上、扫描偏色的印刷、低对比底纹上的彩线）在灰度里根本不存在，而在彩色梯度里
+    是最强的一类边界 —— 这正是用户 m40034 说的「按像素颜色跳变判导线」。
+
+    做法：对 B/G/R 三通道各求 Sobel，像素级 2x2 结构张量
+    `[[Σgx², Σgxgy], [Σgxgy, Σgy²]]` 的最大特征值开方，即「任一通道变化的最大响应」。
+    纯灰度边界（三通道同向变化）与纯色边界（等亮度反色）都会得到正响应。
+    """
+    f = bgr.astype(np.float32)
+    if blur and blur > 0:
+        f = cv2.GaussianBlur(f, (0, 0), float(blur))
+    gx = cv2.Sobel(f, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(f, cv2.CV_32F, 0, 1, ksize=3)
+    gxx = (gx * gx).sum(axis=2)
+    gyy = (gy * gy).sum(axis=2)
+    gxy = (gx * gy).sum(axis=2)
+    tmp = np.sqrt(np.maximum(0.0, (gxx - gyy) ** 2 + 4.0 * gxy * gxy))
+    return np.sqrt(np.maximum(0.0, 0.5 * (gxx + gyy + tmp)))
+
+
+def colour_edge_mask(bgr: np.ndarray, ink: np.ndarray, max_half_width: float = 2.6,
+                     rel: float = 0.55, abs_min: float = 10.0,
+                     close: bool = True):
+    """彩色边缘 → **细笔画**掩膜（与灰度路径取并用，只加不减）。返回 `(mask, thr)`。
+
+    阈值是**相对**的：`max(abs_min, rel * p90(幅度 | 墨迹))`。写死阈值在扫描偏色/低对比
+    图上必然失效，而「以本图墨迹内的 p90 为尺」在两种极端下都能自适应（彩色图上边缘
+    响应高 ⇒ 门槛随之抬高，不会把整张纸都判成边缘）。
+    """
+    mag = colour_edge(bgr)
+    v = ink > 0
+    if v.any():
+        p = float(np.percentile(mag[v], 90))
+    else:
+        p = float(np.percentile(mag, 99)) if mag.size else 0.0
+    thr = max(float(abs_min), float(rel) * p)
+    ce = ((mag >= thr) * 255).astype(np.uint8)
+    if close:
+        ce = cv2.morphologyEx(ce, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    thin, _dt = thin_stroke_mask(bgr, ce, max_half_width)
+    return thin, thr
+
+
+def chroma_floor(bgr: np.ndarray, ink: np.ndarray, rel: float = 0.35,
+                 abs_min: float = 12.0):
+    """**相对**彩度门（替代写死的 `22.0`）。返回 `(阈值, 彩度图)`。
+
+    写死的 22.0 在两种图上都是错的：低饱和扫描件里真导线只有 ~10，高饱和矢量图里
+    底纹就有 ~40。改用「墨迹内彩度 p95」为尺，两者都能分开。
+    """
+    ch = chroma(bgr)
+    v = ink > 0
+    p = float(np.percentile(ch[v], 95)) if v.any() else 0.0
+    return max(float(abs_min), float(rel) * p), ch
+
+
 def thin_stroke_mask(bgr: np.ndarray, ink: np.ndarray, max_half_width: float = 1.6):
     """Keep only ink whose half stroke width (2*EDT) is <= *max_half_width*."""
     dt = cv2.distanceTransform((ink > 0).astype(np.uint8), cv2.DIST_L2, 3)
@@ -164,6 +223,12 @@ def wire_colour_mask(bgr: np.ndarray, ink: np.ndarray, hue_tol: float = 42.0):
         return None
     ch = chroma(bgr)
     v = (ink > 0)
+    if mode in ("rel", "chroma_rel"):
+        # ★ 相对彩度门（2026-10-10）：写死的 22.0 对低饱和扫描件太高、对高饱和矢量图太低。
+        t, ch = chroma_floor(bgr, ink)
+        if not v.any():
+            return None
+        return (((ch >= t) & v) * 255).astype(np.uint8)
     if not v.any() or float(np.percentile(ch[v], 90)) < 22.0:
         return None
     if mode == "chroma":
@@ -369,10 +434,18 @@ class WireExtractor:
                  use_colour: bool = True, rdp_eps: float = 1.6, snap: bool = True,
                  min_branch_len: float = 3.0, close_ink: bool = False,
                  close_thin: bool = False, dilate_to: int = 0, adap_c: int = 8,
-                 adap_k: int = 31, scale: float = 1.0, max_thin_iter: int = 200):
+                 adap_k: int = 31, scale: float = 1.0, max_thin_iter: int = 200,
+                 colour_edge: bool | None = None):
         self.ink_mode = ink_mode
         self.thin_w = thin_w
         self.use_colour = use_colour
+        # ★ 彩色边缘证据通道（env `STAGE1_WIRE_EDGE`，默认关；见 `foreground` 里的长注释）
+        if colour_edge is None:
+            colour_edge = os.environ.get("STAGE1_WIRE_EDGE", "0").strip().lower() in (
+                "1", "true", "on", "yes")
+        self.colour_edge = bool(colour_edge)
+        self.last_edge_thr = 0.0
+        self.last_edge_add = 0
         self.rdp_eps = rdp_eps
         self.snap = snap
         self.min_branch_len = min_branch_len
@@ -398,6 +471,39 @@ class WireExtractor:
             if cm is not None:
                 has_chroma = True
                 thin = cv2.bitwise_and(thin, cm)
+        # ★ 2026-10-10（用户 m40034：「你不能指望灰度……我一直以为你是通过检测像素的颜色
+        #   跳变来判断的」）：加一条**彩色边缘证据**通道 —— 灰度自适应阈值看不见「等亮度但
+        #   不同色」的边界，彩色梯度（Di Zenzo）看得见。它是**并集**（只加不减），所以
+        #   灰度路径已经找到的像素一个都不会丢；门槛是相对本图的（阈值随图自适应）。
+        #   与 `use_colour` 独立：`use_colour=0` 时这条通道仍然可用（它不依赖色相假设）。
+        if self.colour_edge:
+            try:
+                _er = float(os.environ.get("STAGE1_WIRE_EDGE_REL", "0.55"))
+            except ValueError:
+                _er = 0.55
+            try:
+                _em = float(os.environ.get("STAGE1_WIRE_EDGE_MIN", "10.0"))
+            except ValueError:
+                _em = 10.0
+            ce, self.last_edge_thr = colour_edge_mask(
+                bgr, ink, self.thin_w, rel=_er, abs_min=_em)
+            # ★ 关键约束（2026-10-10 首测教训）：彩色边缘**只能补「灰度墨迹附近的像素」**。
+            #   首测（`work\tools\dev\_wireedge.py`，官方 case 1/2）把整张图的彩色边缘都并进来，
+            #   段覆盖 R 从 0.9225 掉到 0.7887 —— 原因不是「多了真导线」，而是 `occlude_boxes`
+            #   用四角中位色涂元件框，**涂色与局部背景有差** ⇒ 框边界本身成了强彩色边缘，
+            #   凭空长出骨架分支，把真导线的分段打碎（判据要求整条 GT 边的采样点落在同一段上）。
+            #   所以默认 `STAGE1_WIRE_EDGE_NEAR=2`：只保留离灰度墨迹 ≤2px 的彩色边缘像素，
+            #   「补空心/连断点」而不「发明结构」。0 = 关闭该限制（首测那种裸并集）。
+            try:
+                _nr = int(os.environ.get("STAGE1_WIRE_EDGE_NEAR", "2"))
+            except ValueError:
+                _nr = 2
+            if _nr > 0:
+                _k = np.ones((2 * _nr + 1, 2 * _nr + 1), np.uint8)
+                ce = cv2.bitwise_and(ce, cv2.dilate(ink, _k))
+            n_add = int(((ce > 0) & (thin == 0)).sum())
+            self.last_edge_add = n_add
+            thin = cv2.bitwise_or(thin, ce)
         if self.close_thin:
             # repair the 1px gaps thinning leaves at stroke crossings --
             # a closing keeps a pixel only when its whole 3x3 neighbourhood is set

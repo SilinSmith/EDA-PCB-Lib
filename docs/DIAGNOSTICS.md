@@ -1072,6 +1072,13 @@ $env:FUSION_LLM='0'               # 关 LLM 裁决
 
 ## 5. 常用现场核对工具
 
+- **相邻信息尺子** `tools\diag\adjmeas.py`（`--assigned/_assigned 目录 --cases-file --radius 60 --poolscan`）：
+  量「位号的邻座有没有信号」。默认模式按同前缀的**行/列 run**分桶（run 内 GT 位号 2.5%，
+  邻座插值能补的只有 **0.3%** ⇒ 生成式相邻信息 ≈ 0）；`--poolscan` 换成
+  「正确读法去哪了」：`chosen_ok 39.7%` / `near_not_chosen 12.2%`（★ 被**邻座的号**顶掉，
+  典型 `R1→R2`、`C151→C152`）/ `not_in_pool 37.4%` / `no_slot 10.0%`。
+  结论：相邻信息是**归属（一对一）**问题，不是生成先验问题。读数见 `RESULTS.md` §2.9。
+
 | 问题 | 脚本 |
 |---|---|
 | 这张图的网络长什么样 | `tools/diag/_netside.py --case N` |

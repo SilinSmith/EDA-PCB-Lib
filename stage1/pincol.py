@@ -74,6 +74,23 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
+# ★ 「不删除，只削弱」的全局账本（owner m23945，`docs/reports/工程哲学.md:41`/`:94`）。
+#   `pincol` 是**最容易静默丢东西**的地方：整颗 IC 因为「有号码文字的边不足 MIN_NUM」
+#   被 `continue` 掉、引脚列并入触点时有 `extra` 被挪到末尾 —— 历史上这些只体现在
+#   一个计数里，看不出**丢的是谁**。允许独立 import（探针/自检）。
+try:
+    from cvparts.hypo import DEMOTE_SOFT, LEDGER
+except Exception:                       # pragma: no cover
+    class _NullLedger:
+        def demote(self, *a, **k):
+            return None
+
+        def record(self, *a, **k):
+            return None
+
+    LEDGER = _NullLedger()
+    DEMOTE_SOFT = 0.15
+
 # 框外搜索带宽度（像素）：引脚桩一般 8~12px，留到 22 够用且不会够到图纸别的笔画
 BAND = float(os.environ.get("STAGE1_PINC_BAND", "22"))
 # 一个「桩」在搜索带里至少要占几个像素
@@ -674,6 +691,24 @@ def enumerate_pins(bgr: np.ndarray, comps: Sequence[dict], texts: Sequence = Non
         recs = enumerate_component(mask, bb, texts, cid=str(c.get("id")))
         # 还要有**真号码候选**兜底：一条边的号一个都没检到，那条边就是纯几何外推。
         if recs and sum(1 for r in recs if r.get("out_texts")) < MIN_NUM:
+            # ★★ 「不删除，只削弱」：这里是**整颗 IC 被丢掉**的地方，而它以前是
+            #   **静默**的 —— `pincol` 里从此没有这颗元件，复核者分不清「没枚举出
+            #   引脚列」和「枚举出来了但没过闸门」。现在把丢掉的是谁、枚举出几条边、
+            #   每条边有几个号码候选、判据是什么，写进全局账本（值本身留在 `before`
+            #   里，降权分取 `DEMOTE_SOFT > 0`，绝不取 0）。
+            LEDGER.record("drop", f"pincol:{c.get('id')}",
+                          before=[{"side": r.get("side"),
+                                   "n_out": len(r.get("out_texts") or []),
+                                   "x": round(float(r.get("x", 0.0)), 1),
+                                   "y": round(float(r.get("y", 0.0)), 1)}
+                                  for r in recs],
+                          after=None,
+                          reason=f"有号码文字的边 < MIN_NUM={MIN_NUM}，整颗 IC 的引脚列被丢弃",
+                          by="pincol:enumerate_pins", at="stage1:pincol")
+            LEDGER.demote(f"pincol:{c.get('id')}", c.get("type"),
+                          float(len(recs)), DEMOTE_SOFT,
+                          reason="引脚列不合格（证据留在 drop 事件的 before 里）",
+                          by="pincol:enumerate_pins", at="stage1:pincol")
             continue
         if recs:
             out[str(c.get("id"))] = recs
@@ -712,6 +747,7 @@ def merge_into(comp_pins: Dict[str, list], cols: Dict[str, list],
         old = out.get(cid) or []
         used = [False] * len(old)
         merged: List[Tuple[float, float]] = []
+        n_kept = n_added = 0
         for r in recs:
             rx, ry = float(r["x"]), float(r["y"])
             stats["enum"] += 1
@@ -727,18 +763,32 @@ def merge_into(comp_pins: Dict[str, list], cols: Dict[str, list],
                 merged.append(old[bj])
                 flags[cid].append(0)
                 stats["kept"] += 1
+                n_kept += 1
             else:
                 merged.append((rx, ry))
                 # `synth`：格点位置在框边外侧没有墨 ⇒ 悬空补脚。即便枚举时
                 # 有「号字」被当成证据，也不能当成导线接点。
                 flags[cid].append(1 if r.get("synth") else 0)
                 stats["added"] += 1
+                n_added += 1
         for j, p in enumerate(old):
             if not used[j]:
                 merged.append(p)
                 flags[cid].append(0)
                 stats["extra"] += 1
         out[cid] = merged
+        # ★ merge 事件（owner 要求「每次 merge/split 必须写一条
+        #   `{kind, before, after, reason}`」）：这里把「几何触点」与「枚举格点」
+        #   两种来源合成一张引脚表，`kept` = 用触点坐标的那部分、`added` = 补出来的
+        #   格点、`extra` = 没被认领但**原样保留**的触点。账目进全局账本。
+        LEDGER.record("merge", f"comp:{cid}",
+                      before=[{"n_old": len(old), "n_recs": len(recs)}],
+                      after={"n_merged": len(merged), "kept": n_kept,
+                             "added": n_added,
+                             "extra": len(merged) - n_kept - n_added,
+                             "n_synth": sum(flags[cid])},
+                      reason="引脚列枚举并入几何触点（枚举点附近 snap 内有触点则用触点）",
+                      by="pincol:merge_into", at="stage1:pincol")
     return out, flags, stats
 
 

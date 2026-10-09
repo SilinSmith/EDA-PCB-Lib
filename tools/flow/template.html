@@ -213,19 +213,41 @@ function renderLinks(){
   const svg = document.getElementById('links');
   let s = '<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" '
         + 'markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5b6d"/></marker></defs>';
+  const bad = [];
   for(const L of G.links){
     const a = portPos(L.from, 'out'), b = portPos(L.to, 'in');
-    if(!a || !b) continue;
+    if(!a || !b){ bad.push((L.from||'?')+' -> '+(L.to||'?')); continue; }   // ★ 不再静默跳过
     const d = curve(a,b);
-    const col = L.kind==='ctrl' ? '#d29922' : '#4a5b6d';
+    // data 实线灰；param 虚线（配置/请求方式，不是数据产物）；ctrl 琥珀
+    const col = L.kind==='ctrl' ? '#d29922' : (L.kind==='param' ? '#8b949e' : '#4a5b6d');
+    const dash = L.kind==='param' ? ' stroke-dasharray="5 4"' : '';
     const isSel = sel && sel.type==='link' && sel.id === linkId(L);
     s += '<path class="hit" data-link="'+linkId(L)+'" d="'+d+'"></path>';
-    s += '<path class="wire'+(isSel?' sel':'')+'" d="'+d+'" stroke="'+col+'" marker-end="url(#ah)"></path>';
+    s += '<path class="wire'+(isSel?' sel':'')+'" d="'+d+'" stroke="'+col+'"'+dash+' marker-end="url(#ah)"></path>';
+  }
+  // ★ 连线自检：解析不到的端点必须**看得见**（以前是 continue，页面默默少一条线）
+  window.__LINKWARN = {total:G.links.length, unresolved:bad};
+  if(bad.length){
+    console.warn('[workflow] 有 '+bad.length+' 条连线的端点解析不到：', bad);
+    s += '<rect x="8" y="8" width="'+(Math.max(240, bad.length*90))+'" height="26" rx="5" '
+       + 'fill="#3d1418" stroke="#f85149"/>'
+       + '<text x="18" y="26" fill="#f85149" font-size="14">⚠ '+bad.length+'/'+G.links.length
+       + ' 条连线端点找不到：'+esc(bad.slice(0,3).join('  '))+(bad.length>3?' …':'')+'</text>';
   }
   svg.innerHTML = s;
   svg.querySelectorAll('path.hit').forEach(p=>{
     p.onclick = ev=>{ ev.stopPropagation(); sel={type:'link', id:p.dataset.link}; renderAll(); };
   });
+  // 连线自检状态条（自己建，不依赖 _wfbuild 的工具栏补丁）
+  let st = document.getElementById('linkstat');
+  if(!st){
+    st = document.createElement('div'); st.id = 'linkstat';
+    st.style.cssText = 'position:fixed;left:10px;bottom:8px;z-index:20;'
+      + 'font:11px/16px ui-monospace,Consolas,monospace;color:#8b949e;background:#0d1117cc;'
+      + 'border:1px solid #30363d;border-radius:4px;padding:2px 6px';
+    document.body.appendChild(st);
+  }
+  st.textContent = '连线 '+G.links.length+(bad.length? '（⚠ '+bad.length+' 条解析不到）':'（全部可解析）');
 }
 
 function curve(a,b){
@@ -235,7 +257,9 @@ function curve(a,b){
 
 function portPos(ref, dir){
   const [nid, pid] = ref.split('.');
-  const el = document.querySelector('.port[data-node="'+nid+'"][data-port="'+pid+'"]');
+  // ★ 先用 data-dir 定位（同名的 in/out 端口才不会串位），取不到再退回旧写法
+  const el = document.querySelector('.port[data-node="'+nid+'"][data-port="'+pid+'"][data-dir="'+dir+'"]')
+          || document.querySelector('.port[data-node="'+nid+'"][data-port="'+pid+'"]');
   const n = nodeById(nid);
   if(!el || !n) return null;
   return {x: n.x + (dir==='out' ? (n.w||210) : 0), y: n.y + el.offsetTop + el.offsetHeight/2};

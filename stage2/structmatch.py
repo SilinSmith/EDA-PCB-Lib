@@ -23,8 +23,28 @@
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import Dict, List, Optional, Sequence, Tuple
+
+# ★★ 「不删除，只削弱」（owner m23945，`docs/reports/工程哲学.md:41`/`:94`）：
+#   `stage2` 侧的落点。`NODELETE=0` 恢复历史行为（离群候选**清零** = 删除），
+#   仅用于 A/B 对照；默认 1 = 离群候选只乘一个**严格为正**的系数。
+NODELETE = os.environ.get("STAGE2_NODELETE", "1").strip().lower() not in (
+    "0", "off", "false", "no", "")
+DEMOTE_HARD = float(os.environ.get("STAGE2_DEMOTE_HARD", "0.05"))
+
+try:                                    # 允许单独 import（自检 / 离线探针）
+    from cvparts.hypo import LEDGER
+except Exception:                       # pragma: no cover
+    class _NullLedger:                  # 独立跑时账本退化成空操作
+        def demote(self, *a, **k):
+            return None
+
+        def record(self, *a, **k):
+            return None
+
+    LEDGER = _NullLedger()
 
 EDGES = ("left", "top", "right", "bottom")
 _NUM_RE = re.compile(r"^\d{1,3}$")
@@ -32,6 +52,21 @@ _NUM_RE = re.compile(r"^\d{1,3}$")
 # 最近一次 `rebind` 的**残差回填**明细（`{"pin","cand","d","edge"}`）。只给调试用，
 # 不参与返回签名（`rebind` 的返回元数被 stage2 与自检依赖）。
 LAST_RESIDUAL: List[dict] = []
+# 最近一次 `rebind` 的**降权**（被削弱而不是被删掉的候选）明细，只给调试与产物用。
+LAST_DEMOTED: List[dict] = []
+# 重扫队列的**消费者输入**：本趟被移出活动集、但证据仍在的候选（含降权后的分）。
+# `stage2/assign.py` 在 `STAGE2_PIN_RESIDUAL > 0` 时会把它们当作残差回填的候选源。
+LAST_RESERVE: List[dict] = []
+# 一次 `assign`（= 一个 case）内跨多次 `rebind` 的**累计**降权/保留池，
+# 由 `assign` 开头调用 `clear_hist()` 清空，产物写进 `_assigned/<case>.json` 的
+# `no_delete` 块（复核与重扫都读它）。
+HIST_DEMOTED: List[dict] = []
+HIST_RESERVE: List[dict] = []
+
+
+def clear_hist() -> None:
+    HIST_DEMOTED.clear()
+    HIST_RESERVE.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +247,8 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
     out: Dict[int, int] = {}
     ambiguous: List[dict] = []
     LAST_RESIDUAL.clear()
+    LAST_DEMOTED.clear()
+    LAST_RESERVE.clear()
 
     for e, (pl, cl) in groups.items():
         if not pl or not cl:
@@ -235,11 +272,52 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
             if direction and sum(keep) < len(nums_all):
                 kept = sum(1 for i in range(n) if vals[i] is not None and keep[i])
                 hard = len(nums_all) >= 4 and kept >= majority * len(nums_all)
+                # ★★ 这里是「不删除，只削弱」的关键一行。历史写法是
+                #   `w[i][j] = 0.0 if hard else w[i][j] * demote`，而 `align_monotone`
+                #   把 `w<=0` 当作「**不可配**」⇒ `hard` 分支实际是**删除**：
+                #   同一分组里离群的候选从此不存在（实测就是「同边引脚号重启组」：
+                #   case 1 的 U1 左列 `7 16 26 28 39 47 51 52 69 79 101 122` 之后
+                #   又从 `8 67 15 9 66` 重启，池子里 `8`(.70)/`13`(.77)/`14`(.80)/
+                #   `10`(.81) 分数都不低，却全被清零，`bound=18/34`）。
+                #
+                #   owner 的规矩（`docs/reports/工程哲学.md:94` 第 ① 条）给的机制是
+                #   「**追加降权记录 + 从活动集移出**」——两条都要：
+                #     * 活动集：仍然移出（`w=0` 不可配），否则 DP 里 `cover=0.15`
+                #       比降权分还大，离群候选会被**倒着**配进来（`_selftest` 的
+                #       「数值最大的离群候选」夹具就是反例，实测会配成 `0:0`）；
+                #     * 证据：降权分取**严格为正**的 `DEMOTE_HARD`/`demote`，
+                #       连同 `before/after/判据` 写进全局账本，候选本体进
+                #       `LAST_RESERVE`（重扫队列的消费者：`STAGE2_PIN_RESIDUAL`）。
+                #   所以「不删除」= 不在这一趟 DP 里用，而不是把它从世界上抹掉。
+                mult = (DEMOTE_HARD if hard else demote)
                 for i in range(n):
                     if vals[i] is None or keep[i]:
                         continue
                     for j in range(m):
-                        w[i][j] = 0.0 if hard else w[i][j] * demote
+                        if w[i][j] <= 0.0:      # 本来就是 0 的（score_of 给了 0）不算削弱
+                            continue
+                        before = w[i][j]
+                        after = before * mult if hard else before * demote
+                        w[i][j] = 0.0           # 从活动集移出（行为与历史一致）
+                        rec = {"edge": e, "cand": cl[i], "pin": pl[j],
+                               "value": value_of(pool[cl[i]]),
+                               "before": round(before, 4), "after": round(after, 4),
+                               "hard": bool(hard),
+                               "reason": ("数值破坏严格单调" if hard
+                                          else "与主流数值不一致")}
+                        if NODELETE:
+                            LAST_DEMOTED.append(rec)
+                            LAST_RESERVE.append(dict(rec))
+                            LEDGER.demote(f"{e}:cand{cl[i]}", value_of(pool[cl[i]]),
+                                          before, after,
+                                          reason=rec["reason"] + ("（hard）" if hard else ""),
+                                          by="structmatch:monotone_keep",
+                                          at="stage2:structmatch")
+                            LEDGER.record("drop", f"{e}:cand{cl[i]}",
+                                          before=[value_of(pool[cl[i]])], after=None,
+                                          reason=rec["reason"] + "（证据留在 reserve）",
+                                          by="structmatch:monotone_keep",
+                                          at="stage2:structmatch")
                 pairs = align_monotone(w, gap_pen, cover)
 
         # ★ 2026-07 审计修复：这里原来还有一行 `pos = {pl[j]: j for j in range(m)}`，
@@ -307,15 +385,22 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
                 ambiguous.append({"pin": p, "cand": c, "alt": other, "by": name})
         out.update(chosen)
 
+    # 累计到本 case 的历史（`assign` 开头 `clear_hist()`）：产物 `_assigned/<case>.json`
+    # 的 `no_delete` 块读它，复核者能看到「这一张图一共削弱了多少候选、都是谁」。
+    HIST_DEMOTED.extend(LAST_DEMOTED)
+    HIST_RESERVE.extend(LAST_RESERVE)
     return out, ambiguous
 
 
 # ---------------------------------------------------------------------------
 def _selftest() -> int:
     fails: List[str] = []
+    n_ok = [0]
 
     def chk(c, m):
-        if not c:
+        if c:
+            n_ok[0] += 1
+        else:
             fails.append(m)
 
     # --- align_monotone 基础 ---
@@ -385,6 +470,22 @@ def _selftest() -> int:
     chk(got2.get(1) == 1 and got2.get(2) == 2 and got2.get(3) == 3,
         "离群候选 5 不该被配上: %r" % (got2,))
     chk(got2.get(0) != 0, "位置最上的引脚不该配到数值最大的离群候选: %r" % (got2,))
+    # ★ 「不删除，只削弱」：离群候选被移出**活动集**（所以上面两条断言不变），
+    #   但降权分严格为正、候选本体留在 `LAST_RESERVE`、事件进全局账本。
+    chk(bool(LAST_RESERVE) and all(r["after"] > 0.0 for r in LAST_RESERVE),
+        "被削弱的候选降权分必须 > 0（0 等于删除）: %r" % (LAST_RESERVE[:2],))
+    chk(any(r["value"] == "5" for r in LAST_RESERVE),
+        "离群候选 5 必须留在 reserve 里: %r" % ([r["value"] for r in LAST_RESERVE],))
+    chk(all(r["before"] > r["after"] for r in LAST_RESERVE),
+        "降权必须真的降了: %r" % (LAST_RESERVE[:2],))
+    try:
+        from cvparts.hypo import LEDGER as _L
+        chk(_L.n_events > 0 and _L.n_demotions > 0 and _L.stats()["strictly_positive"],
+            "全局账本应记下 drop/demote（%r）" % (_L.stats(),))
+        chk("left:cand0" in " ".join(_L.touched_slots()) or _L.touched_slots(),
+            "重扫队列应非空: %r" % (_L.touched_slots(),))
+    except ImportError:
+        pass
 
     # 数值确实递减（右边缘引脚号 24->21）时应全留、且不许交叉
     pins3 = [[210, 60], [210, 140], [210, 220], [210, 300]]
@@ -400,7 +501,7 @@ def _selftest() -> int:
     got4, _ = rebind(bb2, pins, pool4, lambda c: c["t"], score, cover=0.25)
     chk(got4 == {0: 0, 1: 1, 2: 2, 3: 3}, "非数值走位置对齐: %r" % (got4,))
 
-    print("自检 %d 项：%s" % (24, "全部通过" if not fails else "失败"))
+    print("自检 %d 项：%s" % (n_ok[0] + len(fails), "全部通过" if not fails else "失败"))
     for f in fails:
         print("  FAIL", f)
     return 1 if fails else 0

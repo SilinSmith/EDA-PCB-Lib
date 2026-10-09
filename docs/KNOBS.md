@@ -172,6 +172,8 @@
 | `STAGE2_PIN_COVER` | `"0.15"` | `stage2/assign.py:178` |
 | `STAGE2_PIN_RESIDUAL` | `"0"` | `stage2/assign.py:182`（残差回填：把「读对但没绑上」的号按沿边距离回填给空槽；28 张 A/B **净负**，见 `reports\引脚号通道三层归因与残差回填.md` §3） |
 | `STAGE2_PIN_RESIDUAL_MIN` | `"0"` | `stage2/assign.py:183`（残差回填的候选最低分闸门） |
+| `STAGE2_NODELETE` | `"1"` | `stage2/structmatch.py`（**不删除只削弱**：被判「硬剔出」的候选不丢，改写为一条**严格为正**的降权记录 + 保留池 + `{kind:"drop",before,after,reason}` 事件，落盘在 `_assigned/<case>.json` 的 `no_delete` 里；见 `reports\工程哲学.md` §94 的机制 (d)。设为 `"0"` 则只做判定不记账 —— 二者**分数逐位相同**） |
+| `STAGE2_DEMOTE_HARD` | `"0.05"` | `stage2/structmatch.py`（硬剔出时记入账本的降权倍率；只影响记录的数字，不影响判据） |
 | `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:454` |
 | `STAGE2_PREFIX` | `"strict"` | `stage2/assign.py:38` |
 | `STAGE2_PREFIX_SKEL` | `"0"` | `stage2/assign.py:48` |

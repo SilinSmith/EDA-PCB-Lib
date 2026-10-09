@@ -49,6 +49,22 @@ from stage1 import detect as det_mod           # noqa: E402
 
 DET = None   # 每个进程一份
 
+
+def _no_delete_dump() -> dict:
+    """「不删除，只削弱」账本的紧凑快照（写进 `doc["no_delete"]`）。
+
+    见 `cvparts/hypo.py` 的 `Ledger`：owner m23945 的规矩是「可以削弱内容的置信度，
+    但不能轻易覆盖」「超限项必须留在系统里，附一个可比较的标量，由下游降权或复核」
+    （`docs/reports/工程哲学.md:41`、`:94`）。这里只是把账本原样交出来给复核层，
+    **不参与评分、不改任何判据**。
+    """
+    try:
+        from cvparts.hypo import LEDGER
+        return LEDGER.dump()
+    except Exception as e:              # 账本永远不该让主链挂掉
+        return {"error": "%s: %s" % (type(e).__name__, e)}
+
+
 # 大 IC 几何补检（`stage1/bigic.py`）。默认 **on**：YOLO 对 `box` 类的召回不够
 # （220 张里 960 个 GT IC 框有 446 个整颗没检出），而一颗 IC 的键配不上就带走它
 # 全部引脚 —— 引脚权重 0.25，一张图直接从 25 分掉到 0。实测代价 0.02 s/张。
@@ -128,6 +144,13 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
     #   静默清零（`build_pins`/`build_nets` 抛异常时 comp_pins/nets 直接变空，
     #   端到端只会表现为「这张图这些项是 0」，与「这张图本来就没有引脚」不可区分）。
     errs: list[str] = []
+    # ★★ 「不删除，只削弱」账本（m40034 第四项）：**每个 case 清零**（ProcessPool 的
+    #   worker 会被复用，不清就会把上一张图的事件带进这一张）。
+    try:
+        from cvparts.hypo import reset_ledger
+        reset_ledger(case.case_id)
+    except Exception:
+        pass
     bgr = cv2.imread(str(case.png_path), cv2.IMREAD_COLOR)
     if bgr is None:
         raise RuntimeError(f"读不出图: {case.png_path}")
@@ -354,8 +377,13 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         "pincol": pincol_cols,
         "pincol_stat": pincol_stat,
         "hypotheses": hyps.to_dict(),
-        "timing": tm,
-        # ★ 审计项②：非空就说明这张图的某一块被降级跑过（`stats` 里的 0 可能是
+        # ★★ 「不删除，只削弱」的账本（m40034 第四项）：这一张图里所有「本来会被丢掉」
+        #   的东西都在这里留痕 —— `pincol` 整颗 IC 被闸门丢掉、引脚列并入时的补脚与
+        #   未认领触点、槽位改写、候选溢出。每条都带**严格为正**的降权分
+        #   （0 在很多下游等于「删除」）+ 判据 + 重扫队列。**不参与评分**，
+        #   只是让「丢了什么」在交付前的产物里可查。
+        "no_delete": _no_delete_dump(),
+        "timing": tm,        # ★ 审计项②：非空就说明这张图的某一块被降级跑过（`stats` 里的 0 可能是
         #   「真没有」也可能是「抛异常」，看这里区分）。空列表 = 全链路正常。
         "errors": errs,
         "stats": {"n_components": len(comps), "n_texts": len(texts),

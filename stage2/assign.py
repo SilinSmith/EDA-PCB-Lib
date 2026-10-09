@@ -745,6 +745,12 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
     """
     if global_match is None:
         global_match = env_on("STAGE2_GLOBAL_MATCH", "0")
+    # ★ 「不删除只削弱」：一个 case 的降权/保留池从零开始累计（`structmatch.HIST_*`），
+    #   产物 `_assigned/<case>.json` 的 `no_delete` 块读它。
+    try:
+        structmatch.clear_hist()
+    except Exception:
+        pass
     comps = []
     for c in components:
         b = c.get("bbox_img")

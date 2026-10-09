@@ -259,6 +259,22 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
     # 再把选定值回填后重新 `build_doc`（改名会牵动 `pins` 的键和 net 的 hyperGraph，
     # 所以只能重装配，不能事后改字符串）。
     (out_dir / "_assigned").mkdir(exist_ok=True)
+    # ★ 「不删除，只削弱」账本（m40034 第四项）：随 `_assigned` 旁路落盘，**不进交付物**
+    #   （`pred` 已在上面 `build_doc` 时定稿，这里只动旁路 dict `a`）。
+    #   内容 = `cvparts.hypo.LEDGER`（改写/截断/丢弃事件 + 降权分）+ `structmatch`
+    #   的降权候选与保留池（`HIST_RESERVE` = 重扫队列的输入）。
+    try:
+        from cvparts.hypo import LEDGER as _LG
+        from . import structmatch as _sm
+        _nd = _LG.dump()
+        _nd["demotions_pin"] = len(_sm.HIST_DEMOTED)
+        _nd["reserve_pin"] = len(_sm.HIST_RESERVE)
+        _nd["demoted"] = _sm.HIST_DEMOTED[-60:]
+        _nd["reserve"] = _sm.HIST_RESERVE[-60:]
+        _nd["residual"] = list(_sm.LAST_RESIDUAL)[-40:]
+        a["no_delete"] = _nd
+    except Exception as _e:
+        a["no_delete"] = {"error": "%s: %s" % (type(_e).__name__, _e)}
     (out_dir / "_assigned" / ("%s.json" % case)).write_text(
         json.dumps(a, ensure_ascii=False), encoding="utf-8")
 
