@@ -87,12 +87,25 @@ def _find_stage1(run: Path, cid: str):
     return None
 
 
+def _side_out(bb, p):
+    """点 `p` 相对元件框 `bb` 的（边, 外伸量）。JSON 帧（y 向上），外伸为正 = 在框外。"""
+    if not bb or len(bb) < 4 or p is None:
+        return None, None
+    x0, y0, x1, y1 = [float(v) for v in bb]
+    dists = [("L", abs(p[0] - x0)), ("R", abs(p[0] - x1)),
+             ("T", abs(p[1] - y1)), ("B", abs(p[1] - y0))]
+    side = min(dists, key=lambda kv: kv[1])[0]
+    out = {"L": x0 - p[0], "R": p[0] - x1, "T": y1 - p[1], "B": p[1] - y0}[side]
+    return side, float(out)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", required=True)
     ap.add_argument("--split", default="10GT")
     ap.add_argument("--n", type=int, default=10)
     ap.add_argument("--show", type=int, default=0, help="打印前 N 条缺号明细")
+    ap.add_argument("--showpos", type=int, default=0, help="打印前 N 条位置错明细")
     a = ap.parse_args()
     run = Path(a.run)
 
@@ -102,6 +115,9 @@ def main() -> int:
     miss_why = collections.Counter()
     near_pairs = collections.Counter()
     shown = 0
+    posshown = 0
+    posdx = collections.Counter()
+    posdetail = collections.defaultdict(list)
     print("%-5s %-6s | %-24s | %s" % ("case", "pinF1", "tp/fp/fn", "缺号 多号 名错 位置错"))
     print("-" * 78)
     for c in [x for x in discover(DEFAULT_DATA_ROOT) if x.split == a.split][:a.n]:
@@ -179,6 +195,26 @@ def main() -> int:
                 ga, pb = _pt(gi.get("point")), _pt(pi.get("point"))
                 if ga and pb and math.hypot(ga[0] - pb[0], ga[1] - pb[1]) > cfg.pin_tol:
                     st["pos"] += 1
+                    if a.showpos and posshown < a.showpos:
+                        posshown += 1
+                        _bb = ((gt.get("components") or {}).get(comp) or {}).get("bbox") or []
+                        _s, _go = _side_out(_bb, ga)
+                        _s2, _po = _side_out(_bb, pb)
+                        posdetail[c.case_id].append((_s, _go, _po))
+                        print("   位置错 %-5s %-6s pin_%-4s gt名=%-10s 侧=%s GT=(%.1f,%.1f) 我=(%.1f,%.1f) "
+                              "d=(%+.1f,%+.1f) |d|=%.1f 外伸 GT=%s 我=%s bbox=%s" %
+                              (c.case_id, comp, num, (g[num] or {}).get("pinname"), _s,
+                               ga[0], ga[1], pb[0], pb[1],
+                               pb[0] - ga[0], pb[1] - ga[1],
+                               math.hypot(ga[0] - pb[0], ga[1] - pb[1]),
+                               ("%.1f" % _go) if _go is not None else "?",
+                               ("%.1f" % _po) if _po is not None else "?",
+                               [round(float(v), 1) for v in _bb]))
+                    else:
+                        _bb = ((gt.get("components") or {}).get(comp) or {}).get("bbox") or []
+                        _s, _go = _side_out(_bb, ga)
+                        _s2, _po = _side_out(_bb, pb)
+                        posdetail[c.case_id].append((_s, _go, _po))
                 else:
                     st["tp"] += 1
         f1 = 2.0 * st["tp"] / max(1, 2 * st["tp"] + st["extra"] + st["name"] * 2 +
@@ -206,6 +242,22 @@ def main() -> int:
         print("名字错的形态（我方→GT，前 12）：")
         for k, v in bykind.most_common(12):
             print("   %-34s %d" % (k, v))
+    if posdetail:
+        print()
+        print("位置错的外伸量（GT vs 我，单位 px；只看能定位到框的）：")
+        print("   %-5s %5s | %-28s | %s" % ("case", "n", "GT 外伸 (n/中位/min/max)", "我 外伸 (n/中位/min/max)"))
+        for case in sorted(posdetail, key=lambda s: int(s) if s.isdigit() else 99):
+            rows = [r for r in posdetail[case] if r[1] is not None and r[2] is not None]
+            if not rows:
+                continue
+            g = sorted(r[1] for r in rows)
+            o = sorted(r[2] for r in rows)
+            med = lambda v: v[len(v) // 2] if v else float("nan")
+            sides = collections.Counter(r[0] for r in rows)
+            print("   %-5s %5d | %3d/%6.1f/%6.1f/%6.1f | %3d/%6.1f/%6.1f/%6.1f  %s" %
+                  (case, len(rows), len(g), med(g), g[0], g[-1],
+                   len(o), med(o), o[0], o[-1],
+                   dict(sides)))
     return 0
 
 

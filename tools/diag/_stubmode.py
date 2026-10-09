@@ -86,11 +86,14 @@ def main(argv=None) -> int:
     ap.add_argument("--free", action="store_true",
                     help="桩证据改用「抹掉文字框」的墨迹（pincol.text_free_ink）")
     ap.add_argument("--pad", type=float, default=0.0, help="text_free_ink 的外扩 px")
+    ap.add_argument("--byside", action="store_true",
+                    help="额外按 L/R/T/B 汇总 tp/fp/fn（看缺脚缺在哪一侧）")
     a = ap.parse_args(argv)
 
     modes = [m.strip() for m in a.modes.split(",") if m.strip()]
     tot = {m: [0, 0, 0] for m in modes}          # mode -> [tp, fp, fn]
     tot_n = {m: 0 for m in modes}
+    tot_sd = {m: {s: [0, 0, 0] for s in ("L", "R", "T", "B")} for m in modes}
     for cid in [c.strip() for c in a.cases.split(",") if c.strip()]:
         s1p = Path(a.run) / "runs" / "stage1" / ("%s.stage1.json" % cid)
         gtj = None
@@ -131,6 +134,7 @@ def main(argv=None) -> int:
                 pairs.append((c, bb, bk))
 
         line = ["case %-3s IC=%d" % (cid, len(pairs))]
+        csd = {s: [0, 0, 0] for s in ("L", "R", "T", "B")} if a.byside else None
         for mode in modes:
             set_mode(mode)
             P.CLUSTER_IC = a.ci
@@ -155,6 +159,7 @@ def main(argv=None) -> int:
                     gg = sorted(gt.get(sd) or [])
                     pp = sorted(got.get(sd) or [])
                     used = [False] * len(gg)
+                    s_tp = s_fp = 0
                     for v in pp:
                         hit = -1
                         for i, gv in enumerate(gg):
@@ -164,14 +169,28 @@ def main(argv=None) -> int:
                         if hit >= 0:
                             used[hit] = True
                             tp += 1
+                            s_tp += 1
                         else:
                             fp += 1
-                    fn += sum(1 for u in used if not u)
+                            s_fp += 1
+                    s_fn = sum(1 for u in used if not u)
+                    fn += s_fn
+                    tot_sd[mode][sd][0] += s_tp
+                    tot_sd[mode][sd][1] += s_fp
+                    tot_sd[mode][sd][2] += s_fn
+                    if csd is not None:
+                        csd[sd][0] += s_tp
+                        csd[sd][1] += s_fp
+                        csd[sd][2] += s_fn
             tot[mode][0] += tp
             tot[mode][1] += fp
             tot[mode][2] += fn
             tot_n[mode] += n_pts
             line.append("%s:%d/%d/%d(n=%d)" % (mode, tp, fp, fn, n_pts))
+        if csd is not None:
+            line.append("| " + " ".join(
+                "%s %d/%d/%d" % (sd, csd[sd][0], csd[sd][1], csd[sd][2])
+                for sd in ("L", "R", "T", "B") if sum(csd[sd])))
         print("  ".join(line))
 
     print()
@@ -182,6 +201,18 @@ def main(argv=None) -> int:
         f = 2 * p * r / (p + r) if p + r else 0.0
         print("  %-8s CI=%-4g tp=%3d fp=%3d fn=%3d  P=%.4f R=%.4f F1=%.4f  点数 %d"
               % (mode, a.ci, tp, fp, fn, p, r, f, tot_n[mode]))
+    if a.byside:
+        print()
+        print("  按侧汇总（gt 侧按离框边最近的边判定，我方点按框外所在边判定）")
+        for mode in modes:
+            print("  --- %s" % mode)
+            for s in ("L", "R", "T", "B"):
+                tp, fp, fn = tot_sd[mode][s]
+                if tp + fp + fn == 0:
+                    continue
+                rr = tp / float(tp + fn) if tp + fn else 0.0
+                pp = tp / float(tp + fp) if tp + fp else 0.0
+                print("      %s  tp=%3d fp=%3d fn=%3d  P=%.3f R=%.3f" % (s, tp, fp, fn, pp, rr))
     return 0
 
 

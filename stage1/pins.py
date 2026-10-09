@@ -214,7 +214,7 @@ TWO_PIN = frozenset({"r", "c", "l", "d", "led", "fuse", "crystal_2pin", "battery
 ONE_PIN = frozenset({"gnd", "v", "vcc", "vbus_in", "net_input", "net_output", "pin",
                      "testpoint", "tp", "net_bidirection", "block", "other"})
 
-# ★★ 「两脚元件的脚必在长轴两端」（`STAGE1_PIN_AXIS`，默认 0 = 关）。
+# ★★ 「两脚元件的脚必在长轴两端」（`STAGE1_PIN_AXIS`，默认 1 = 开）。
 #   动机：`pins_from_touch` 是「哪条导线段贴着框的哪条边，就在那一边生一个脚」——
 #   两脚元件周围除了真正的主力引线（长轴两端），还常有**符号自身笔画/极板/短线头**
 #   残留在框外（框是检测器给的，常常比符号紧），于是同一个电容会拿到 4 个候选脚
@@ -226,9 +226,36 @@ ONE_PIN = frozenset({"gnd", "v", "vcc", "vbus_in", "net_input", "net_output", "p
 #   （V/V 100 + H/H 25 = 125/125）；而 stage1 的候选脚里 **232/495（46.9%）在短轴上**。
 #   修法：类型不在 `ONE_PIN`、不是 IC、且框主轴比 >= `PIN_AXIS_RATIO` 时，只留主轴
 #   两端最近的各一个候选脚，其余进 `pins_latent`（只移出活动集，**不删除**，账本留痕）。
+# ★★ 2026-10-10 交付 A/B（`work/_pinab13.ps1`，官方 10 张 + 派生 10 张，`-vlm-pin` 开）：
+#   `ax1` = 官方 **8 涨 / 2 平 / 0 跌**，COMMON10 73.27 → **76.17（+2.90/案）**；
+#   通道 `net_hypergraph` 0.7289 → **0.7902**、`pin` 0.6424 → 0.6564；派生 10 张 +2.13。
+#   机制：幻影单脚网络整批消掉（官方 10 张候选脚 723 → 683；case 1 的最终网 17 → 9、
+#   单成员网 12 → 0）。旧读数「`--no-vlm` 下判负」是在「补桩还没抹文字」的口径下量的，
+#   已作废。⇒ **默认翻成 1**。
+#   ⚠ 2026-10-10 补充（`work/_pinab14.ps1`）：贴章发号修复（`STAGE2_STAMP_ONE_SIDE`，见
+#   `stage2/assemble.py`）**修的是同一片幻影网** —— `sfix1`（贴章修复、AXIS 关）与 `ax1`
+#   逐案完全相同（都 76.17），且贴章修复已在位时 AXIS 0→1 在 case 1/4/8/9/10 上 VLM-free
+#   **逐位相同**；泄漏无关派生 val（19 张 VLM-free）**+0.02/案**（基本中性）。两者都保留
+#   （各自单独就到 76.17，合起来 `ax1B` 复现 76.17，不叠加、也不冲突）。
 PIN_AXIS = os.environ.get("STAGE1_PIN_AXIS",
-                          "0").strip().lower() not in ("", "0", "false", "off", "no", "none")
+                          "1").strip().lower() not in ("", "0", "false", "off", "no", "none")
 PIN_AXIS_RATIO = float(os.environ.get("STAGE1_PIN_AXIS_RATIO", "1.2"))
+
+# ★★ 两脚元件的脚是「框边 ∓ PIN_OUT、长轴中线上的一个点」（`STAGE1_PIN_MAJOR`，默认 1）。
+#   取证（官方 10GT）：两脚元件 `{r,c,l,d,led,fuse,crystal_2pin}` 125 个、引脚 250 个 ——
+#   **250/250 落在 bbox 长轴**，沿轴外伸 p10=p25=p50=p75=p90=max=**10.0**，短轴偏移
+#   p50/p90/p99/max=**0.00**（「外伸=10 且短轴偏移=0」238/250=95.2%，其余是四舍五入残留）。
+#   所以与其从触点/桩里猜，不如**直接盖章**这两个点。离线按网判（`_leadrule.py --bynet`，
+#   官方 10 张）：current 109 OK / 132 落错网 / 32 未挂 → ideal(od=10) 116 / 79 / 55
+#   （+7 tp / −53 fp）。
+#   交付 A/B（官方 10 张，`maj1` = PIN_AXIS=1 + 贴章修复已在位）：`ax1B` 76.17 → **77.20**
+#   （+1.03/案，7 涨 / 2 平 / 1 跌：1 +0.65、4 +0.20、5 +1.56、6 +1.63、7 +2.56、9 +4.26、
+#   10 −0.60；3、8 平）；`net_hypergraph` 0.4816 → **0.4961**、20 张合计 47.48 → 48.00；
+#   派生 10 张 +0.20。⚠ case 7 那 +2.56 里有 VLM 引脚名抽样的成分（同一臂重跑可达 ±3.85），
+#   别单看这一案 —— 机制证据是「250/250 在长轴、外伸恰 10.0」这条几何律。
+PIN_MAJOR = os.environ.get("STAGE1_PIN_MAJOR",
+                           "1").strip().lower() not in ("", "0", "false", "off", "no", "none")
+PIN_MAJOR_TYPES = frozenset({"r", "c", "l", "fuse", "crystal_2pin", "crystal", "d", "led"})
 
 
 def _axis_split(bbox, pins):
@@ -529,6 +556,7 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
         #   符号笔画/极板当成了引线，会让一个元件凭空多出单脚网络。**只移出活动集**，
         #   原候选进模块级 `LATENT` 并记 `LEDGER.demote`（工程哲学：不删除、只降权）。
         _latent: List[Tuple[float, float]] = []
+        _latent_why = ""
         if PIN_AXIS and not _is_ic:
             _t = str(c.get("type") or "").split(":")[0].lower()
             _b = [float(v) for v in bb]
@@ -540,6 +568,26 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
                     dedup = _keep
                     _latent = _drop
                     _ev["axis_drop"] = len(_drop)          # 供账本/dbg 计数
+                    _latent_why = ("短轴候选脚 %d 个（符号笔画/极板，非长轴引线；"
+                                   "GT 非 IC 引脚 100%% 沿主轴）" % len(_drop))
+        # ★★ 两脚元件的脚是「框边 ∓ PIN_OUT、长轴中线上的一点」（见 `PIN_MAJOR` 的长注释）：
+        #   直接盖章这两个点（每侧恰好一个 ⇒ `stamp_pins` 不再撞号），旧候选整体进 `LATENT`。
+        if PIN_MAJOR and not _is_ic:
+            _tm = str(c.get("type") or "").split(":")[0].lower()
+            if _tm in PIN_MAJOR_TYPES:
+                _bm = [float(v) for v in bb]
+                _mx, _my = (_bm[0] + _bm[2]) / 2.0, (_bm[1] + _bm[3]) / 2.0
+                if (_bm[2] - _bm[0]) >= (_bm[3] - _bm[1]):
+                    _ideal = [(_bm[0] - _od, _my), (_bm[2] + _od, _my)]
+                else:
+                    _ideal = [(_mx, _bm[1] - _od), (_mx, _bm[3] + _od)]
+                _gone = [q for q in dedup if q not in _ideal]
+                if _gone:
+                    _latent = list(_latent) + _gone
+                    _latent_why = ("长轴盖章：%d 个旧候选移出活动集（GT 两脚元件引脚恒为"
+                                   "「框边 ∓ PIN_OUT、长轴中线」，官方 250/250）" % len(_gone))
+                dedup = _ideal
+                _ev["major"] = len(_ideal)
         out[c["id"]] = dedup[:MAX_PINS]
         if _latent:
             LATENT[c["id"]] = list(_latent)
@@ -574,8 +622,8 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
                 # 下游要复核时可以按 where=pins_latent 把它们捞回来。
                 LEDGER.demote(where="pins_latent", value=c.get("id"),
                               score_before=1.0, score_after=DEMOTE_SOFT,
-                              reason="短轴候选脚 %d 个（符号笔画/极板，非长轴引线；GT 非 IC 引脚 100%% 沿主轴）"
-                                     % len(_latent),
+                              reason=(_latent_why or
+                                      "短轴候选脚 %d 个移出活动集" % len(_latent)),
                               by="stage1/pins.py:find_pins")
                 LEDGER.record("evidence", where="pin:%s" % c["id"],
                               before={"n": len(out[c["id"]]) + len(_latent)},
@@ -642,10 +690,16 @@ def _selftest() -> int:
     chk("方框 1 脚", pins_from_prior((1074.0, 286.0, 1084.0, 296.0), "v"),
         [(1079.0, 276.0)])
 
-    print("9) 有导线时不走先验（即使类型是 r）")
+    print("9) 两脚元件：有导线触框时也走主轴盖章（`STAGE1_PIN_MAJOR`）")
     comps = [{"id": "c1", "type": "r", "bbox_img": [100, 100, 200, 300]}]
     got = find_pins(comps, [[[100, 200], [0, 200]]], use_prior=True)["c1"]
-    chk("触到就不兜底", got, [(90.0, 200.0)])
+    if PIN_MAJOR:
+        # ★ 行为变更（2026-10-10，默认 1）：两脚元件的脚**不再**取「贴着框的那条导线段」，
+        # 而是按 GT 几何律盖章「框边 ∓ PIN_OUT、长轴中线」——官方 10GT 里 250/250 个两脚
+        # 引脚都长这样（外伸恰 10.0、短轴偏移 0.00），而贴框的常是文字笔画。见 `PIN_MAJOR`。
+        chk("盖章主轴两端", got, [(150.0, 90.0), (150.0, 310.0)])
+    else:
+        chk("触到就不兜底", got, [(90.0, 200.0)])
 
     print("10) 一根线都没有时走先验")
     got = find_pins(comps, [], use_prior=True)["c1"]

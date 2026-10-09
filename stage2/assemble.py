@@ -179,7 +179,28 @@ BOX_PIN_DROP_CAP = _DROP_MODE in ("cap", "max", "ceiling")
 #     逐张：3 +2.20 / 4 +3.99 / 5 +3.51 / 9 +4.58 / 7 +1.01 / 8 +1.66 / 10 +1.07 / 1 +0.48
 #           2 **−4.17**（netH 0.4107→0.2895）/ 0024 −1.34 / 0103 −0.82
 #     ⇒ 8 张赚 3 张亏、净值 +0.67（相对无 pincol 的 23.30 基线）。**默认改为开**。
-BOX_PIN_NEED_NAME = env_on("STAGE2_BOX_PIN_NEED_NAME", "1")
+#     （旧的 `BOX_PIN_NEED_NAME = env_on(...)` 已被下面的三态解析取代，见 `_BOX_NEED_NAME_MODE`。）
+# ★★★ 「迟到版」`STAGE2_BOX_PIN_NEED_NAME=2`（`late`/`lib`，**现为默认**）：**把闸门挪到规则 B 之后**。
+#     动机（2026-10-10，交付账本 `_pinledger.py --run work\_fast_out_fin`）：缺号 37 个里
+#     **18 个（49%）**是「号读到了、闸门把桩丢了」。逐槽查 case 2 的 U1/U4 发现形态是
+#     **号与名落在相邻的两个候选槽里**（`num='4'` 在 slot 5、`name='SDA'` 在 slot 3）⇒
+#     这一支的号是**真的**，只是名字没跟过来；而规则 B（官方 box/IC 库 `(型号, 号) → 名`，
+#     只在唯一时才改名、`_libnum.py` 实测 20/20 正确）正好能把这个名字补上，
+#     但它在 `:953` 的闸门**之后**执行 ⇒ 现在这些桩根本没机会拿到库名。
+#     语义：`0` = 从不丢；`1` = 老行为（没名就丢，库名救不回来）；`2` = 只在
+#     「库里也补不出名字」时才丢（仍不发射「拿号当名」的桩 —— 那必然 name_mismatch）。
+# ★★★ 交付 A/B（官方 10 张，`work\_pinab12.ps1`，三臂都带 VLM：`补强 10 张、失败 0 张`）：
+#     `1` **73.27（与§2.17 的出厂默认逐案逐位相同 ⇒ no-op，A/B 干净）**
+#     `2` **73.60**（+3.28，+0.33/案；pin micro 0.6424→**0.6564**；涨 3 平 6 跌 1：
+#          case 2 +0.72 / case 4 +2.50 / case 8 +0.58 / case 5 −0.50）
+#     `0` 73.53（+2.55；涨 3 平 4 **跌 3**：case 10 −2.17 / case 5 −1.38 / case 2 −0.31
+#          ⇒ 「从不丢」会把「拿号当名」的桩发出去，正是 name_mismatch 的 fp+fn）
+#     ⇒ **`2` 最优且唯一退步只有 −0.50**，故把默认从 `1` 改成 `2`。
+#     天花板（`work\tools\dev\_gateceiling.py`，交付跑 723 个槽）：能补出名的只有 1 条
+#     （case 2），能补出号的只有 3 条 ⇒ 这条通道的本质收益就是「把库能认的那几根脚救回来」。
+_BOX_NEED_NAME_MODE = os.environ.get("STAGE2_BOX_PIN_NEED_NAME", "2").strip().lower()
+BOX_PIN_NEED_NAME = _BOX_NEED_NAME_MODE not in ("", "0", "false", "off", "none")
+BOX_PIN_NEED_NAME_LATE = _BOX_NEED_NAME_MODE in ("2", "late", "lib", "after")
 
 # ★ 官方元器件库（`cpntLibrary`）引脚先验的**总闸**：`STAGE2_LIB_PINS`，**默认 `1`（开）**。
 # ★★ 默认值在 2026-10-09 **从 `0` 翻成 `1`**，依据是 220 张回归（`work\tools\diag\_libpins_cpu.py`
@@ -462,14 +483,24 @@ PIN_STAMP_SPAN = {"fuse": 21.0}
 PIN_STAMP_DEFAULT_SPAN = 20.0
 # 关掉就退回「用 stage1 的附着点当引脚点位」（旧行为）
 PIN_STAMP_ON = env_on("STAGE2_PIN_STAMP", "1")
+# ★★ 每一侧只保留「沿轴投影绝对值最大」的候选（最贴轴的那个），旁侧幻影脚不发号。
+# 2026-10 实测（`work/tools/dev/_stampchk.py`，官方 10 张）：旧逻辑按候选顺序贪心
+# 发号，`pts` 的 `side=[F,F,T,F]` 会变成 `[2,1,2,1]` —— **两个真脚都拿到 `2`**、
+# 两个垂直旁侧的幻影脚拿到 `1`；`num_of[(cid,0)] == num_of[(cid,2)]` 于是让两条
+# stage1 网在 `merge_shared_pins` 里被**合并**（case 1：六颗去耦电容的电源梳
+# `net_31` 被并进 U1 的 `net_20` ⇒ 短路），而只含幻影脚的碎片网活下来冒充 `C151.1`。
+# 规模：贴章元件 126 ｜ 同号冲突 **28（22.2%）** ｜ 幻影抢号 46。
+STAMP_ONE_PER_SIDE = os.environ.get("STAGE2_STAMP_ONE_SIDE", "1").strip().lower() \
+    not in ("", "0", "false", "off", "no", "none")
 
 
-def stamp_pins(c: dict, ctype: str, pts_img: Sequence,
-               H: float) -> Optional[List[Tuple[str, Tuple[float, float]]]]:
+def stamp_pins(c: dict, ctype: str, pts_img: Sequence, H: float
+               ) -> Optional[List[Optional[Tuple[str, Tuple[float, float]]]]]:
     """两脚贴章元件的官方引脚点位。
 
-    返回 `[(引脚号, (x, y)), ...]`，顺序与 `pts_img` 一一对应（图像坐标入参，
-    返回的是 **json 坐标**）；不适用时返回 None。
+    返回 `[(引脚号, (x, y)) | None, ...]`，顺序与 `pts_img` 一一对应（图像坐标入参，
+    返回的是 **json 坐标**）；`None` = 该候选没拿到号（旁侧幻影脚，调用方必须跳过，
+    但**下标不能压缩**）；不适用时返回 None。
 
     引脚号按官方约定给：−SPAN 一侧是 `1`、+SPAN 一侧是 `2`（`d`/`led` 反过来）。
     我们自己的附着点落在哪一侧，就继承那个号 —— 这一步决定了 net 超图里
@@ -495,9 +526,11 @@ def stamp_pins(c: dict, ctype: str, pts_img: Sequence,
     else:
         p1, p2 = (cx + s1 * span, cy), (cx - s1 * span, cy)
 
+    projs = []
     side = []
     for p in pts_img:
         proj = (float(H) - float(p[1]) - cy) if axis_y else (float(p[0]) - cx)
+        projs.append(proj)
         side.append(True if proj * s1 > 0 else False)
     # 这一类元件的 GT 引脚数**恒为 2**（r 3398/2、c 3313/2、l 230/2 …），
     # stage1 给 1 个或 3 个附着点都只是几何噪声 —— 一律按图章输出 pin_1/pin_2。
@@ -514,7 +547,7 @@ def stamp_pins(c: dict, ctype: str, pts_img: Sequence,
     if len(side) == 2 and side[0] == side[1]:
         # 两个附着点落在同一侧（我们自己的点太糙）—— 退回按顺序给号
         side = [True, False]
-    else:
+    if not STAMP_ONE_PER_SIDE:
         seen = [False, False]
         fixed = []
         for want1 in side:
@@ -522,8 +555,26 @@ def stamp_pins(c: dict, ctype: str, pts_img: Sequence,
                 want1 = not want1
             seen[0 if want1 else 1] = True
             fixed.append(want1)
-        side = fixed
-    return [(("1", p1) if want1 else ("2", p2)) for want1 in side]
+        return [(("1", p1) if want1 else ("2", p2)) for want1 in fixed]
+    # 每一侧只留 |proj| 最大的候选（最贴轴的那个）。多余的候选**不发号**：它们的
+    # stage1 网因此失去引用，在 assemble 里被当「无引用的网」丢掉，不再冒充
+    # `C151.1`；而两个真脚各拿一个号 ⇒ 两条网不再共享引用、不再被 merge。
+    best: Dict[bool, Tuple[float, int]] = {}
+    for i, want1 in enumerate(side):
+        a = abs(projs[i]) if i < len(projs) else 0.0
+        cur = best.get(want1)
+        if cur is None or a > cur[0]:
+            best[want1] = (a, i)
+    out: List[Optional[Tuple[str, Tuple[float, float]]]] = [None] * len(pts_img)
+    for want1, num, xy in ((True, "1", p1), (False, "2", p2)):
+        b = best.get(want1)
+        if b is None:
+            # 该侧一个候选都没有：把理想图章点补在候选之后（下标 ≥ len(pts_img)
+            # ⇒ 没有 stage1 网会引用这个下标），保证引脚文档仍是两脚。
+            out.append((num, xy))
+        else:
+            out[b[1]] = (num, xy)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -811,7 +862,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         _st = stamp_pins(c, ctype, pts, H)
         if _st is not None:
             _g: Dict[str, dict] = {}
-            for k, (num, xy) in enumerate(_st):
+            for k, _item in enumerate(_st):
+                if _item is None:
+                    continue          # 旁侧幻影候选：不发号、不注册槽位（保持 k 对齐）
+                num, xy = _item
                 _g["pin_%s" % num] = {
                     "pinname": num,
                     "point": {"x": round(float(xy[0]), 2),
@@ -950,7 +1004,11 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             if (not r.get("kept", True)) and BOX_PIN_DROP_UNREAD \
                     and (not BOX_PIN_DROP_MIXED_ONLY or _anykept):
                 continue
-            if ctype == "box" and BOX_PIN_NEED_NAME and not r.get("nm"):
+            # ★★★ 「迟到闸门」：`BOX_PIN_NEED_NAME_LATE` 时**不在**这里丢，挪到规则 B 之后
+            #     （见下方同名判断）—— 让库的 `(型号, 号) → 名` 先有机会把这个桩救活。
+            _lib_named = False
+            if (ctype == "box" and BOX_PIN_NEED_NAME
+                    and not BOX_PIN_NEED_NAME_LATE and not r.get("nm")):
                 continue
             nm = r["nm"] or num
             # ★ **规则 B（改名）**：这个桩的**号读到了**（`num` 是 1..999 的整数，或者
@@ -968,9 +1026,20 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                     _new = _LIB_CTX.name_for_num(_lkey, num)
                     if _new:
                         nm = _new
+                        _lib_named = True
                         if os.environ.get("STAGE2_DBG_PINS") or LIB_PINS_DBG:
                             print("[libpins] 规则B 元件=%r 号=%s 名改 %r → %r"
                                   % (name, num, r["nm"] or "", _new))
+            # ★★★ 「迟到闸门」（下半）：到这里桩还没名字、库也没能补出名字，**才**丢。
+            #     语义：`BOX_PIN_NEED_NAME_LATE` 时不再要求「读到的名字」，
+            #     而是要求「有名字 —— 读到的或库里补的都算」；仍然**不**发射
+            #     「拿号当名」的桩，因为号≠名必然 `name_mismatch` = fp+fn 双罚。
+            if (ctype == "box" and BOX_PIN_NEED_NAME and BOX_PIN_NEED_NAME_LATE
+                    and not r.get("nm") and not _lib_named):
+                if os.environ.get("STAGE2_DBG_PINS") or LIB_PINS_DBG:
+                    print("[libpins] 迟到闸门 元件=%r 号=%s（号读到了、名没有、库也没补出）→ 丢"
+                          % (name, num))
+                continue
             pk = "pin_%s" % num
             base = pk
             while pk in group:

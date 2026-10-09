@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **626** 个脚本。
+共 **630** 个脚本。
 
 
 <a id="data"></a>
@@ -93,7 +93,7 @@
 
 <a id="diag"></a>
 
-## `tools/diag/`（484 个脚本）
+## `tools/diag/`（488 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -274,6 +274,8 @@
 | `_labelaudit_gt` | 458 | 全类别 GT 错标体检 —— 扫描 + 逐框指标 + CSV。 |
 | `_labelaudit_gt_report` | 363 | GT 错标体检 —— 汇总与报告生成。 |
 | `_labelaudit_gt_visual` | 141 | 肉眼复核工具：把可疑 GT 框渲染成 ASCII 字符网格（或放大裁图）。 |
+| `_leadmiss` | 187 | **两脚元件引脚候选审计**：为什么 r/c/l/d/led 的引脚总是挂不上网（`_netdiff.py` 的 |
+| `_leadrule` | 293 | **远场引线规则**（`STAGE1_PIN_LEAD` 的设计验证，只读、不跑流水线）。 |
 | `_leakpair` | 79 | 对照 train 侧的 `synth_<id>` 与 val 侧的 `200_train_cases-<id>__full` 的标注直方图。 |
 | `_lencal` | 142 | 长度律的**域校准**：`fusion/charwidth.py` 是从**标注框**（manifest）拟合的， |
 | `_libcov` | 195 | 元器件库（官方 `cpntLibrary` / BoxIC 库）对 GT 的覆盖率体检（`--lib <file>` 可换库）。 |
@@ -390,7 +392,7 @@
 | `_pinlabel` | 130 | GT 的 IC 引脚名**在图上到底有没有被我们检出文字**，以及它落在元件框内还是框外。 |
 | `_pinlands` | 22 |  |
 | `_pinlat` | 151 | GT 的 IC 引脚排布有多「规则」？—— 决定「按库补缺失引脚」这条路值不值得走。 |
-| `_pinledger` | 214 | **引脚失分账本**：把 `pin_f1` 的 fn/fp 逐条拆到「缺号 / 多号 / 名字错 / 位置错」， |
+| `_pinledger` | 266 | **引脚失分账本**：把 `pin_f1` 的 fn/fp 逐条拆到「缺号 / 多号 / 名字错 / 位置错」， |
 | `_pinloss` | 221 | 引脚失分分解：把 220 张的 `pin.missing`（8335）拆成 |
 | `_pinmap` | 53 |  |
 | `_pinmatch1` | 58 | 逐脚对账：我们的某个元件 vs GT —— 号对不对、名对不对。只读。 |
@@ -463,6 +465,7 @@
 | `_shapechk` | 56 | 形状闸落地前后的键对照（只读）。 |
 | `_shapekeys` | 52 | 形状闸诊断：0001 的 comp.*.key 候选表 + solve 结果，闸开/闸关各一遍。 |
 | `_shapekeys2` | 47 | 形状闸诊断 v2：把 comp.c0003.key / comp.c0048.key 的**全部候选**连证据打全。 |
+| `_shortchk` | 159 | **自短接体检**：某颗两脚元件（r/c/l/d/led/fuse/crystal_2pin）的**两个端脚出现在同 |
 | `_skeleton` | 11 |  |
 | `_slotcount` | 40 | 数一数 stage2 产物里到底有多少个真歧义槽位（决定 LLM 预算）。 |
 | `_slotdbg` | 46 | 把一个位号槽位的原始证据全部摊开：desig_slots 原文、stage1 的文字框、本体框。 |
@@ -475,9 +478,10 @@
 | `_stage220` | 152 | 把一次 `submission\run.py` 全量跑的**关键阶段**逐个抽出来看（用户 m31144 的要求）。 |
 | `_stages` | 205 | 全量 220 张的**阶段漏斗**分析 —— 不跑管线，只读已经打好的分。 |
 | `_stale` | 12 |  |
+| `_stampchk` | 114 | **贴章元件引脚槽位审计**：`stage2/assemble.py:stamp_pins` 把「stage1 的 4 个 |
 | `_stampshape` | 152 | 图章形状勘察：官方 GT 的每类 bbox 到底是「正方形」还是「长方形」。 |
 | `_stubfill` | 139 | Could geometric *pin stubs* fill the pins that have no wire attached? |
-| `_stubmode` | 190 | `STAGE1_PIN_STUB` 各模式对 **stage1 引脚点集**的影响（按侧对齐量 P/R vs GT）。 |
+| `_stubmode` | 221 | `STAGE1_PIN_STUB` 各模式对 **stage1 引脚点集**的影响（按侧对齐量 P/R vs GT）。 |
 | `_stubreach` | 155 | 引脚桩「远场判据」(`STAGE1_PINC_STUB_REACH`) 的离线取证。 |
 | `_subst` | 48 | 按「字面子串」替换文件内容（避开 PowerShell 引号地狱）。 |
 | `_suite_diag` | 60 | 按套看某一臂的 per-case 诊断分布（pin/component 的 missing/extra/mismatch 计数）。 |
