@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""交付级等价 A/B（**纯 CPU**，不碰 GPU / LM Studio），并产出可打分的 JSON 目录。
+"""交付级等价 A/B（**纯 CPU**，不碰 GPU / LM Studio）；`--lib` 换库文件（换默认库就是用它量的）。
 
 为什么它等价于交付链：`fusion/run.py:128` 就是 `base = build_doc(s1_doc, assigned, case)`，
 本脚本用**同一份输入**（`work\_fast_out_reg9\runs\stage1\<case>.stage1.json` +

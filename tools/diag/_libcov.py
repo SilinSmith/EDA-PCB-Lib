@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""元器件库（官方 cpntLibrary）对 GT 的覆盖率体检。
+"""元器件库（官方 `cpntLibrary` / BoxIC 库）对 GT 的覆盖率体检（`--lib <file>` 可换库）。
 
 回答三个问题：
   1) GT 里 box/IC 的 Name 有多少能命中官方库（精确 / 归一化 / 模糊）？

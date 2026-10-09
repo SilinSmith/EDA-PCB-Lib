@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **595** 个脚本。
+共 **609** 个脚本。
 
 
 <a id="data"></a>
@@ -54,7 +54,7 @@
 
 <a id="dev"></a>
 
-## `tools/dev/`（26 个脚本）
+## `tools/dev/`（29 个脚本）
 
 开发辅助（本目录的生成器）。
 
@@ -63,6 +63,7 @@
 | `_compdump` | 70 | 把单个 case 的 GT 元件 / 预测元件 / keymap 并排打印，用来定位「为什么普通位号配不上」。 |
 | `_compgap` | 107 | component 失分溯源：GT 里哪些元件一个都没配上（连坐标都没配上），按「伪元件 ∅NNN / 普通位号」分开。 |
 | `_cropchk` | 95 | **裁片口径核对**：同一条语料裁片，分别用两个权重读一遍。 |
+| `_ctlib` | 131 | 容器式**库路径解析**回归测试（用户 m42543「各种灾难性现场」）。 |
 | `_desacc` | 128 | **位号挂载体检**：把 GT 元件与产物元件按 JSON 坐标 IoU 配对，统计 |
 | `_desceil` | 203 | **位号重解的天花板探针**：对每个「没挂上位号 / 挂了错位号」的 GT 元件，看它附近 |
 | `_desceiling220` | 16 | 把 `eda-pcb/tools/diag/_des_ceiling.py` 指到 220 张的 stage1 产物上跑（原工具写死 work\stage1_all14）。 |
@@ -71,6 +72,8 @@
 | `_engchk` | 101 | **口径对照**：同一条框，走「语料口径（裸框裁片）」与「stage2 运行口径（`pad_box` 外扩）」 |
 | `_fontfit` | 174 | 官方渲染用的是哪一款字体？—— 拿真实裁片（GT 文本已知）去套候选字体的字形。 |
 | `_fontsheet` | 80 | 把真实裁片和候选字体的渲染并排画出来，肉眼看哪个像（`_fontfit.py` 的数字靠这个兜底）。 |
+| `_hardtest` | 200 | 灾难现场加固的**故障注入**测试（用户 m42543）。 |
+| `_libmerge` | 51 | 把官方两份元件库合成本地开发用的第三份（**只做测量，不改交付**）。 |
 | `_offtext_eval` | 109 | 在**官方渲染图的域内语料**上评一个 CRNN 权重：只走生产路径（`textrec.infer.Recognizer`）。 |
 | `_padchk` | 179 | 2x2 探针：{交付权重, 域内微调权重} x {紧框裁片, 管线外扩裁片}。 |
 | `_pindiag` | 191 | **引脚失分归因**：官方口径 `pin_f1` 只统计 GT 里 type 为 box 的元件 |
@@ -79,7 +82,7 @@
 | `_textrate` | 175 | 量「CRNN 在官方渲染图上读文字的错读率」——按套（10GT / 10_GTcase / train200）× role 分开。 |
 | `audit_labels` | 277 | Training-label quality audit for a YOLO dataset — "错误的标号" triage. |
 | `build_trainset_v4` | 599 | Assemble `work/trainset_v4` = `trainset_v3` (optionally label-repaired) + `新补充训练集`. |
-| `gen_knobs` | 94 | 扫描源码里所有环境开关，生成 `docs/KNOBS.md`。 |
+| `gen_knobs` | 97 | 扫描源码里所有环境开关，生成 `docs/KNOBS.md`。 |
 | `gen_toolindex` | 96 | 生成 `docs/TOOLS.md` —— `tools/` 下每个脚本的索引（含首行 docstring）。 |
 | `gpu_gate` | 363 | GPU 串行闸门：**同一时刻只允许一个自己起的吃卡任务**，且起之前先确认显存够。 |
 | `mix_crnn_manifest` | 180 | 把「真实语料」和「合成语料里挑出来的那几类」混成一份 CRNN 训练清单。 |
@@ -89,7 +92,7 @@
 
 <a id="diag"></a>
 
-## `tools/diag/`（458 个脚本）
+## `tools/diag/`（468 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -110,6 +113,7 @@
 | `_basecmp` | 15 |  |
 | `_basemean` | 67 | 汇总 work/_fast_base/*.json 的均分与四个分项（fast.py --save 存的 per-case 列表）。 |
 | `_bbgate` | 107 | 量「差一点点没过 IoU 0.5 闸门」的元件有多少。 |
+| `_bgstat` | 94 | 背景估计体检：解释 bglab 在 0037-Datasheet 上把导线通道打崩的原因。 |
 | `_box_pin_diag` | 110 | `box`（IC）引脚为什么只 recall 0.47 —— 一次性诊断。 |
 | `_boxcrop` | 108 | 把 GT 某个元件的框（含四周留白）裁出来放大，看**位号到底画没画在图上**。 |
 | `_boxdesig` | 289 | 位号归因：GT 的大 IC（`box`）为什么**检出了却键对不上**。 |
@@ -126,6 +130,7 @@
 | `_c1src` | 89 | `_assigned/<case>.json` 的**出处归因**：每个字段到底是哪一层定的。 |
 | `_caserows` | 54 | 一次性：把某个 case 的元件对账里某一批键打出来。 |
 | `_cfrep` | 29 |  |
+| `_chainmeas` | 223 | `_chainmeas.py` —— 「导线 ↔ 元件 ↔ 引脚」链式单点失效的**量化**（用户 m42009 第二问）。 |
 | `_charfit` | 150 | 从 38.8 万条真实「框 + 文本」标注里**拟合逐字符的宽度**，替换 axis.py 里那个 |
 | `_cmp.cmp` | 16 |  |
 | `_cmp9` | 78 | 逐张对比两个 stage2_eval --json 产物（用法：python work\_cmp9.py <A.json> <B.json>）。 |
@@ -136,6 +141,7 @@
 | `_conn_check` | 96 | 定位「消融里的连通 R」和「stage1_conn_eval 里的连通 R」为什么差 2~9 倍。 |
 | `_conn_comp` | 97 | 连通分量的结构诊断：我的段图到底是不是「一坨」。 |
 | `_conn_reconcile` | 96 | 对账：为什么 60 张消融说 all12 的连通 F1 是 0.5421，而端到端评测器说 0.1457？ |
+| `_cpntlib` | 202 | 官方元件库 `赛题资料/cpntLibrary` 到底能救多少 **box(IC) 引脚名**。 |
 | `_crnneval` | 138 | CRNN 验证集快速评测——训练用的那份 manifest（work\ocr_real\manifest.jsonl， |
 | `_crop` | 12 |  |
 | `_cropfixtest` | 82 | 裁切方向反馈的现场试验：对可疑槽位问方向、按方向做外扩阶梯、看能不能读回完整串。 |
@@ -242,6 +248,7 @@
 | `_icview` | 102 | 把「GT 是 IC、键没配上」的元件在原图上画出来，人眼核对**图上到底有没有印那个位号**。 |
 | `_imgdbg` | 23 | 临时探针：看 stage1 doc 的 image.path 能不能读出来。 |
 | `_imgdbg2` | 24 | 临时探针 2：看 from_file 之后 pool.bgr 到底有没有。 |
+| `_inboxsel` | 187 | _inboxsel.py -- 被框涂白吃掉的导线边，能不能用「独立证据」挑回来？ |
 | `_inkband` | 89 | 量「墨迹高度 g / 标注框高度 H」的稳定性。 |
 | `_inkcheck` | 114 | v3 vs v4：框是不是真的套在墨迹上（recenter 修复的定量体检）。 |
 | `_inkdiag` | 143 | 归一的逐条诊断：把 val 拆成「归一几乎没动框」和「归一大幅改了框」两组， |
@@ -269,7 +276,7 @@
 | `_libcov` | 195 | 元器件库（官方 `cpntLibrary` / BoxIC 库）对 GT 的覆盖率体检（`--lib <file>` 可换库）。 |
 | `_libnum` | 240 | 官方元器件库当「引脚号来源」的机会 —— 只针对**名读到了、号没有**的引脚。 |
 | `_libopp` | 187 | 量化「官方元器件库能给我方当前产物补多少分」的机会。 |
-| `_libpins_cpu` | 107 | 交付级等价 A/B（**纯 CPU**，不碰 GPU / LM Studio），并产出可打分的 JSON 目录；`--lib` 换库文件（**换默认库就是用它量的**）。 |
+| `_libpins_cpu` | 107 | 交付级等价 A/B（**纯 CPU**，不碰 GPU / LM Studio）；`--lib` 换库文件（换默认库就是用它量的）。 |
 | `_libsim` | 294 | **不改管线**的模拟：把「官方库给出的引脚号」直接补进交付 JSON，再打分。 |
 | `_lineprobe` | 163 | 为什么 NetLineF1 只有 0.019？ |
 | `_lineweld` | 170 | `net_line`（权重 0.10）爆 0 的对策实验：把「共线且首尾相接」的导线片段焊成整条直线。 |
@@ -314,6 +321,7 @@
 | `_numread` | 340 | 引脚号（pin_number）识别精度的直接基准 + **按框宽分桶** + 裁剪外扩网格扫描。 |
 | `_numsweep` | 146 | 引脚号码识别：真值取自 GT 的 `pin_<n>`（按 y 配对，权威），扫「裁剪几何」看 exact。 |
 | `_numtruth` | 90 | 把 stage1 的「引脚号码框」按 y 位置对到 GT 的 `pin_<n>` 上，得到**权威真值**， |
+| `_occpol` | 139 | _occpol.py -- 「我们自己的框该不该在提线前涂白」的口径实验（用户 m42009 的互相等待）。 |
 | `_ocr_boxcmp` | 120 | CRNN 到底行不行？把「在 GT 的紧框上读」与「在检测框上读」分开量。 |
 | `_ocr_boxtune` | 126 | 检出框该怎么修，才能让 CRNN 读对？ |
 | `_ocr_conf` | 141 | 量「CRNN 置信度能不能把**文字框**与**符号误检框**分开」。 |
@@ -410,6 +418,7 @@
 | `_prof1` | 68 | 给单张图的 stage1 做 cProfile，找出 total_s 之外的「黑洞」。 |
 | `_prof_wires` | 33 | 对最慢的 case 做 cProfile，定位 pskel 到底慢在哪。用法：python _prof_wires.py 0107 |
 | `_prpeek` | 11 |  |
+| `_prunepol` | 159 | _prunepol.py -- 判别「框内 GT 导线边到底死在哪一道过滤上」。 |
 | `_psympin` | 12 |  |
 | `_pwhy` | 137 | 兜底键（pNNN）的 2191 个元件到底缺什么——逐条查 `_assigned`。 |
 | `_pwrfilter` | 195 | 电源节点「怎么放」的稳健性实验：把电源符号写进净图有多少种放法，各种放法在 |
@@ -455,6 +464,8 @@
 | `_stubfill` | 139 | Could geometric *pin stubs* fill the pins that have no wire attached? |
 | `_subst` | 48 | 按「字面子串」替换文件内容（避开 PowerShell 引号地狱）。 |
 | `_suite_diag` | 60 | 按套看某一臂的 per-case 诊断分布（pin/component 的 missing/extra/mismatch 计数）。 |
+| `_swapceil` | 243 | 位号**归属**可修性测量（GT 锚定版）：`_adjmeas --poolscan` 的 78 个 |
+| `_swapmeas` | 353 | 一对一归属的**天花板**测量：把「元件 ↔ 位号实例」从独立最近邻改成邻域内双射， |
 | `_symcmp` | 12 |  |
 | `_symdbg` | 13 |  |
 | `_symdbg2` | 19 |  |
@@ -527,6 +538,7 @@
 | `_wirecand` | 260 | _wirecand.py —— 端点精度的三个最小候选，官方 9 张离线重算（不动管线/不改产物）。 |
 | `_wirecount` | 54 | stage1 提出来的线 vs 最终进网络的边：差在哪一步？ |
 | `_wirecover` | 91 | _wirecover.py —— 我们的一条 GT 边被几条预测边覆盖？预测边比 GT 边短多少？ |
+| `_wireedge` | 200 | `_wireedge.py` —— 导线掩膜的**彩色边缘证据通道** A/B（用户 m40034 的第一项）。 |
 | `_wireeval19` | 49 | _wireeval19.py —— 用官方评测器口径对派生 19 张汇总（stage2_eval 的 --cases 按 stem 过滤，这里自己配）。 |
 | `_wirefix` | 99 |  |
 | `_wirefunnel` | 125 | _wirefunnel.py —— 逐 case 漏斗：stage1 线段 → stage1 网 → stage2 → fusion → 输出 net_line。 |
@@ -553,6 +565,7 @@
 | `_wlen` | 96 | 量「位号框宽度 / 字高」能不能预测位号字符串长度。 |
 | `_wlen2` | 98 | 位号框「宽/高」能不能预测真实位号的字符数 —— 决定连号窗口能不能靠几何定案。 |
 | `_zerocount` | 42 | 数一数 220 张里每个分项**爆 0 / 近 0** 的图有多少（用当前最佳产物）。 |
+| `adjmeas` | 433 | **相邻信息度量**：位号候选的「行 / 列 run」结构里，邻座的号能不能救回读不出来的号。 |
 
 <a id="eval"></a>
 
@@ -594,7 +607,7 @@
 
 <a id="flow"></a>
 
-## `tools/flow/`（3 个脚本）
+## `tools/flow/`（4 个脚本）
 
 `docs/workflow.html` 的构建与校验。
 
@@ -603,6 +616,7 @@
 | `_merge_own` | 96 | 把 `own`（独家归属）节点并进**内容更全的那一版** graph，再写回 `graph.json`。 |
 | `_recover` | 70 | 从旧 `workflow.html` 里把内嵌的 graph 抠出来，和 `graph.json` 逐节点对比。 |
 | `build` | 78 | 把 `graph.json` 灌进 `template.html`，产出一个自包含的工作流编辑器。 |
+| `graphcheck` | 342 | `graphcheck.py` —— 工作流图的**接口注册表 + 统一 + 校验器**（用户 m40034 第二项）。 |
 
 <a id="gnd"></a>
 
