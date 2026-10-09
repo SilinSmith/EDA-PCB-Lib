@@ -84,6 +84,54 @@ def estimate_bg(bgr: np.ndarray) -> np.ndarray:
     return np.median(ring, axis=0).astype(np.float32)
 
 
+def estimate_bg_local(bgr: np.ndarray, k: int = 51) -> np.ndarray:
+    """**局部**背景（纸面）估计：中值模糊。
+
+    `k` 必须远大于笔画宽度（导线 2~6px、文字 ~14px），中值才会把笔画整个滤掉、
+    只留下纸面。白纸有渐晕/偏色/网格底纹，边框环形中值（`estimate_bg`）在纸中央
+    会偏，局部估计不会。
+    """
+    h, w = bgr.shape[:2]
+    k = int(k)
+    if k % 2 == 0:
+        k += 1
+    k = max(3, min(k, (min(h, w) // 2) * 2 + 1))
+    return cv2.medianBlur(bgr, k)
+
+
+def bg_distance(bgr: np.ndarray, bg: np.ndarray | None = None, space: str = 'lab',
+                k: int = 51) -> np.ndarray:
+    """**与背景的偏离量**（任意颜色方向）—— 前景判据的本来面目。
+
+    用户 m40034：「背景是白色的，而导线的颜色不确定……只要从背景过渡到任意颜色，
+    都有可能是导线」。所以判据既不是灰度、也不是某个颜色，而是**离背景多远**：
+    亮度偏、彩度偏、色相偏、任意组合偏，都算前景。
+
+    * ``space='lab'`` —— Lab 里的欧氏距离（ΔE，感知均匀：亮度与彩度同权，不会像
+      灰度那样把「等亮度但不同色」的边界判成背景，也不会像逐通道最大差那样把
+      单通道的大偏色放大）。
+    * ``space='bgr'`` —— 旧的逐通道最大绝对差（`bgdiff` 语义，保留兼容）。
+
+    ``bg=None`` ⇒ 用**局部**背景（`estimate_bg_local`）；给了 `bg` 就用它（例如边框
+    环形中值）。
+
+    ⚠ 陷阱：`cv2.cvtColor` 对 **CV_32F** 输入用另一套刻度（L∈0..100、a/b∈−127..127），
+    把 0..255 的 float 白纸喂进去会得到 ΔE≈238 的假距离（整张图全成前景）。所以
+    Lab 转换一律走 uint8，只在算距离时转 float。
+    """
+    if bg is None:
+        bg = estimate_bg_local(bgr, k)
+    bg = np.asarray(bg, dtype=np.float32)
+    if bg.ndim == 1:
+        bg = bg.reshape(1, 1, 3)
+    if space == 'bgr':
+        return np.abs(bgr.astype(np.float32) - bg).max(axis=2)
+    bgu = np.clip(bg, 0, 255).astype(np.uint8)
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    lab_bg = cv2.cvtColor(bgu, cv2.COLOR_BGR2LAB).astype(np.float32)
+    return np.sqrt(((lab - lab_bg) ** 2).sum(axis=2))
+
+
 def ink_mask(bgr: np.ndarray, mode: str = 'adaptive', k: int = 31,
              diff_tol: int = 26, c: int = 8) -> np.ndarray:
     """Foreground = everything that is not the sheet background.
@@ -92,7 +140,17 @@ def ink_mask(bgr: np.ndarray, mode: str = 'adaptive', k: int = 31,
                  vignetting / gradient backgrounds of the photographed sheets)
     ``otsu``     global Otsu on the inverted grey level
     ``bgdiff``   per-channel distance from the border-ring background colour
+    ``bglab``    ★ Lab ΔE from the **local** background, Otsu on the distance map
+                 （用户 m40034 的判据：从背景过渡到**任意颜色**都可能是导线。
+                 灰度自适应只能看见亮度跳变；这一模式把亮度/彩度/色相的偏离
+                 等权地当候选，再由下游的细笔画 + 交叉验证决定是不是导线。）
     """
+    if mode == 'bglab':
+        d = bg_distance(bgr, bg=None, space='lab')
+        dn = np.clip(d * 4.0, 0, 255).astype(np.uint8)
+        t, _ = cv2.threshold(dn, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        thr = max(float(diff_tol), float(t) / 4.0)
+        return ((d >= thr) * 255).astype(np.uint8)
     g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     inv = 255 - g
     if mode == 'otsu':
@@ -100,7 +158,7 @@ def ink_mask(bgr: np.ndarray, mode: str = 'adaptive', k: int = 31,
         return m
     if mode == 'bgdiff':
         bg = estimate_bg(bgr)
-        d = np.abs(bgr.astype(np.float32) - bg).max(axis=2)
+        d = bg_distance(bgr, bg=bg, space='bgr')
         return ((d > diff_tol) * 255).astype(np.uint8)
     return cv2.adaptiveThreshold(g, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
                                  cv2.THRESH_BINARY_INV, k, c)
@@ -456,6 +514,8 @@ class WireExtractor:
         self.adap_k = adap_k
         self.scale = scale
         self.max_thin_iter = max_thin_iter
+        self.last_colour_drop = 0
+        self.last_colour_keep = 0
 
     def foreground(self, bgr: np.ndarray):
         if self.scale and self.scale != 1.0:
@@ -470,7 +530,35 @@ class WireExtractor:
             cm = wire_colour_mask(bgr, ink)
             if cm is not None:
                 has_chroma = True
-                thin = cv2.bitwise_and(thin, cm)
+                # ★ 2026-10-10（用户 m40034：「你还要用其他手段交叉验证才能得出这是导线」）：
+                #   色相门以前是**一票否决**（`thin &= cm`）——主色相猜错就整张图的导线全灭
+                #   （见 `wire_colour_mask` docstring 里 case 0001 的 6px 事故）。颜色只是
+                #   **一条证据**，不该有否决权。`STAGE1_WIRE_UNCONF` 提供三种口径：
+                #     veto（默认，旧行为）/ keep（颜色不定，全部留）/ near（只留离已确认
+                #     像素 ≤`STAGE1_WIRE_UNCONF_NEAR`(3)px 的未确认像素 —— 靠**连通性**交叉验证）
+                pol = os.environ.get("STAGE1_WIRE_UNCONF", "veto").strip().lower()
+                if pol not in ("veto", "keep", "near"):
+                    pol = "veto"
+                conf = cv2.bitwise_and(thin, cm)
+                unc = cv2.bitwise_and(thin, cv2.bitwise_not(cm))
+                n_unc = int((unc > 0).sum())
+                if pol == "veto":
+                    self.last_colour_drop = n_unc
+                    thin = conf
+                else:
+                    if pol == "keep":
+                        keep = unc
+                    else:
+                        try:
+                            _unr = int(os.environ.get("STAGE1_WIRE_UNCONF_NEAR", "3"))
+                        except ValueError:
+                            _unr = 3
+                        keep = unc if _unr <= 0 else cv2.bitwise_and(
+                            unc, cv2.dilate(conf, np.ones((2 * _unr + 1,) * 2, np.uint8)))
+                    n_keep = int((keep > 0).sum())
+                    self.last_colour_drop = n_unc - n_keep
+                    self.last_colour_keep = n_keep
+                    thin = cv2.bitwise_or(conf, keep)
         # ★ 2026-10-10（用户 m40034：「你不能指望灰度……我一直以为你是通过检测像素的颜色
         #   跳变来判断的」）：加一条**彩色边缘证据**通道 —— 灰度自适应阈值看不见「等亮度但
         #   不同色」的边界，彩色梯度（Di Zenzo）看得见。它是**并集**（只加不减），所以

@@ -54,12 +54,27 @@ def _background_colour(bgr: np.ndarray) -> np.ndarray:
 
 
 def occlude_boxes(bgr: np.ndarray, boxes, pad: float = 2.0) -> np.ndarray:
-    """把给定的框（图像坐标 [x1,y1,x2,y2]）涂成背景色。"""
+    """把给定的框（图像坐标 [x1,y1,x2,y2]）涂成背景色。
+
+    ★ `STAGE1_OCC_LOCAL=1`：用**框周围环带的局部纸色**涂（纸色中值模糊图
+    `pskel.estimate_bg_local` 在环带上的中值），而不是整张图一个常量。理由：白纸有
+    渐晕/偏色，常量填充会在框边界留下一条与局部背景的**色差接缝**——灰度自适应
+    阈值基本看不见它，但任何「与背景的偏离」判据（`bgdiff` / `bglab` / 彩色边缘）
+    都会把这条接缝当墨迹，凭空长出骨架分支。默认 `0`（旧行为），A/B 后再定。
+    """
     out = bgr.copy()
     if not boxes:
         return out
     h, w = out.shape[:2]
     bg = _background_colour(bgr)
+    _loc = os.environ.get("STAGE1_OCC_LOCAL", "0").strip().lower() in ("1", "true", "on", "yes")
+    bg_loc = None
+    if _loc:
+        try:
+            from pipeline.pskel import estimate_bg_local
+            bg_loc = estimate_bg_local(bgr, 51)
+        except Exception:
+            bg_loc = None
     for b in boxes:
         try:
             x1, y1, x2, y2 = (float(v) for v in b[:4])
@@ -70,12 +85,235 @@ def occlude_boxes(bgr: np.ndarray, boxes, pad: float = 2.0) -> np.ndarray:
         x2 = int(min(w, math.ceil(x2 + pad)))
         y2 = int(min(h, math.ceil(y2 + pad)))
         if x2 > x1 and y2 > y1:
-            out[y1:y2, x1:x2] = bg
+            fill = bg
+            if bg_loc is not None:
+                m = max(6, int(0.12 * max(x2 - x1, y2 - y1)))
+                rx1, ry1 = max(0, x1 - m), max(0, y1 - m)
+                rx2, ry2 = min(w, x2 + m), min(h, y2 + m)
+                ring = bg_loc[ry1:ry2, rx1:rx2].reshape(-1, 3)
+                box_px = (rx2 - rx1) * (ry2 - ry1)
+                if ring.size and box_px > 0:
+                    keep = np.ones(ring.shape[0], bool)
+                    ix1, iy1 = x1 - rx1, y1 - ry1
+                    ix2, iy2 = x2 - rx1, y2 - ry1
+                    grid = np.zeros((ry2 - ry1, rx2 - rx1), bool)
+                    grid[max(0, iy1):max(0, iy2), max(0, ix1):max(0, ix2)] = True
+                    keep = ~grid.reshape(-1)
+                    if keep.sum() >= 8:
+                        fill = np.median(ring[keep], axis=0)
+            out[y1:y2, x1:x2] = fill
     return out
 
 
 def _seg_len(a, b) -> float:
     return math.hypot(float(b[0]) - float(a[0]), float(b[1]) - float(a[1]))
+
+
+def _dist_to_boxes(seg, occlude=None, erase=None) -> float:
+    """线段两端点到最近的「元件框 / 文字框」的距离（原图像素）。没有框时返回 1e9。
+
+    用途：量化「这根短桩是在离所有框多远的地方被删掉的」——即 `rescue_pad` 要多大
+    才能救它。用户 m42009 的链式单点失效诊断（`wires.py:534`）需要这个数。
+    """
+    boxes = list(occlude or []) + list(erase or [])
+    if not boxes:
+        return 1e9
+    best = 1e9
+    for p in seg:
+        px, py = float(p[0]), float(p[1])
+        for bx in boxes:
+            try:
+                x1, y1, x2, y2 = (float(v) for v in bx[:4])
+            except (TypeError, ValueError):
+                continue
+            dx = max(x1 - px, 0.0, px - x2)
+            dy = max(y1 - py, 0.0, py - y2)
+            d = math.hypot(dx, dy)
+            if d < best:
+                best = d
+    return best
+
+
+def _dist_rect(p, rect) -> float:
+    """点 `p` 到矩形（框外为正、框内为 0）的距离。"""
+    x1, y1, x2, y2 = rect
+    px, py = float(p[0]), float(p[1])
+    dx = max(x1 - px, 0.0, px - x2)
+    dy = max(y1 - py, 0.0, py - y2)
+    return math.hypot(dx, dy)
+
+
+def _unit(a, b):
+    L = _seg_len(a, b)
+    if L <= 1e-6:
+        return (0.0, 0.0)
+    return ((float(b[0]) - float(a[0])) / L, (float(b[1]) - float(a[1])) / L)
+
+
+def _ang_deg(u, v) -> float:
+    nu, nv = math.hypot(u[0], u[1]), math.hypot(v[0], v[1])
+    if nu <= 1e-6 or nv <= 1e-6:
+        return 180.0
+    c = max(-1.0, min(1.0, (u[0] * v[0] + u[1] * v[1]) / (nu * nv)))
+    return math.degrees(math.acos(c))
+
+
+def bridge_boxes(bgr, segments, boxes, *, near: float = 8.0, max_frac: float = 0.9,
+                 angle: float = 30.0, ink_min: float = 0.5, de_min: float = 22.0,
+                 min_side: float = 24.0, pad: float = 6.0, thick_max: float = 9.0):
+    """★ 2026-10-10（用户 m42009 的「互相等待」）——框内导线的**交叉验证桥接**。
+
+    病灶（实测，28 张）：`occlude_boxes` 在提线**之前**把**我们自己检出的元件框**
+    涂成背景色 ⇒ 落在框内的 GT 导线边 662/3786 条里只有 17 条拿到覆盖
+    （框内 R=0.0257 vs 框外 R=0.3444）。不是代码成环（`detect.py`/`bigic.py` 对
+    ink/wire 零引用，元件先定稿、无任何回写），而是「拿假设去删证据」的自我实现：
+    我认定这里有元件 ⇒ 把框内导线证据涂掉 ⇒ 框内那个连接永远得不到导线确认。
+
+    修法不是「把框内像素全放回来」（首测证明会凭空长结构：元件本体轮廓/丝印都被
+    当成导线），而是**只接受能双向交叉验证的桥**，四条证据同时成立才连：
+      ① 两端各有一根**框外**已确认线段贴着框（≤ `near`）；
+      ② 这两根的走向都要指向框内，且与桥的方向夹角 ≤ `angle`（共线）；
+      ③ 桥的中点必须落在框内（确实穿过本体）；
+      ④ 桥沿线必须真的「离背景有偏离」（Lab ΔE ≥ `de_min`）且**细**（距离变换 ≤
+         `thick_max`，排除实心色块/元件填充）。
+    框外线段 + 框内墨迹互为证据 —— 这就是「用其他手段交叉验证」。
+
+    返回 `(bridges, info)`；`bridges` 是原图像素坐标的 `[[x1,y1],[x2,y2]]` 列表。
+    默认**不启用**（`STAGE1_WIRE_BRIDGE`），由 A/B 决定是否转正。
+    """
+    info = {"n_box": 0, "n_attach": 0, "n_pair": 0, "n_ok": 0,
+            "rej": {"len": 0, "mid": 0, "angle": 0, "ink": 0, "thick": 0}}
+    bridges: list = []
+    if not segments or not boxes:
+        return bridges, info
+    bgr = np.asarray(bgr)
+    H, W = bgr.shape[:2]
+    import sys as _sys
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if root not in _sys.path:
+        _sys.path.insert(0, root)
+    try:
+        from pipeline import pskel
+        bg = pskel.estimate_bg_local(bgr, k=51)
+        dE = np.asarray(pskel.bg_distance(bgr, bg=bg, space="lab"), np.float32)
+    except Exception:
+        return bridges, info
+    thin = None
+    try:
+        mast = (dE >= float(de_min)).astype(np.uint8)
+        thin = cv2.distanceTransform(mast, cv2.DIST_L2, 3)
+    except Exception:
+        thin = None
+
+    def _ix(p):
+        x = int(round(float(p[0])))
+        y = int(round(float(p[1])))
+        return min(max(x, 0), W - 1), min(max(y, 0), H - 1)
+
+    def _side(p, rect):
+        """贴框端点贴在哪条边上（必须在框外）：0 上 / 1 下 / 2 左 / 3 右 / -1 框内。"""
+        x1, y1, x2, y2 = rect
+        px, py = float(p[0]), float(p[1])
+        if x1 <= px <= x2 and y1 <= py <= y2:
+            return -1
+        if py < y1:
+            return 0
+        if py > y2:
+            return 1
+        if px < x1:
+            return 2
+        return 3
+
+    for bx in boxes:
+        try:
+            x1, y1, x2, y2 = (float(v) for v in bx[:4])
+        except (TypeError, ValueError):
+            continue
+        if x2 < x1:
+            x1, x2 = x2, x1
+        if y2 < y1:
+            y1, y2 = y2, y1
+        w, h = x2 - x1, y2 - y1
+        if min(w, h) < float(min_side):
+            continue
+        diag = math.hypot(w, h)
+        rect = (x1, y1, x2, y2)
+        info["n_box"] += 1
+        att = []
+        for si, (a, b) in enumerate(segments):
+            for p, q in ((a, b), (b, a)):
+                dd = _dist_rect(p, rect)
+                if dd <= near:
+                    sd = _side(p, rect)
+                    if sd >= 0:
+                        att.append((si, (float(p[0]), float(p[1])), _unit(q, p), sd, dd))
+        info["n_attach"] += len(att)
+        if len(att) < 2:
+            continue
+        cand = []
+        for i in range(len(att)):
+            for j in range(i + 1, len(att)):
+                si, p1, u1, s1, d1 = att[i]
+                sj, p2, u2, s2, d2 = att[j]
+                if si == sj or s1 == s2:
+                    # 同一条线段自己配自己、或两端贴同一条边（那只是沿边的小缺口，
+                    # 不是「穿过元件本体」的桥）都跳过。
+                    continue
+                vx, vy = p2[0] - p1[0], p2[1] - p1[1]
+                L = math.hypot(vx, vy)
+                if L < 6.0 or L > max_frac * diag:
+                    info["rej"]["len"] += 1
+                    continue
+                # 桥必须真的穿过本体：采样点里至少 60% 落在**严格框内**。
+                npt, n_in, hit, fat = 11, 0, 0, 0
+                for k in range(1, npt + 1):
+                    t = k / (npt + 1.0)
+                    px, py = p1[0] + vx * t, p1[1] + vy * t
+                    if x1 < px < x2 and y1 < py < y2:
+                        n_in += 1
+                    ix, iy = _ix((px, py))
+                    if dE[iy, ix] >= de_min:
+                        hit += 1
+                        if thin is not None and float(thin[iy, ix]) > thick_max:
+                            fat += 1
+                if n_in < 0.6 * npt:
+                    info["rej"]["mid"] += 1
+                    continue
+                a1 = _ang_deg(u1, (vx, vy))
+                a2 = _ang_deg(u2, (-vx, -vy))
+                if a1 > angle or a2 > angle:
+                    info["rej"]["angle"] += 1
+                    continue
+                sup = hit / float(npt)
+                if sup < ink_min:
+                    info["rej"]["ink"] += 1
+                    continue
+                if fat > 1:
+                    info["rej"]["thick"] += 1
+                    continue
+                sc = sup * math.cos(math.radians(max(a1, a2)))
+                cand.append((sc, i, j, p1, p2, sup, max(a1, a2), (n_in, npt, d1, d2)))
+        info["n_pair"] += len(cand)
+        used = set()
+        for sc, i, j, p1, p2, sup, ang, extra in sorted(cand, key=lambda z: -z[0]):
+            if i in used or j in used:
+                continue
+            used.add(i)
+            used.add(j)
+            bridges.append([list(p1), list(p2)])
+            info["n_ok"] += 1
+            try:
+                from cvparts.hypo import LEDGER
+                LEDGER.record("bridge", "wire:box", before=list(p1), after=list(p2),
+                              reason=("框内交叉验证通过：沿线墨迹支持 %.2f（框内采样 %d/%d），"
+                                      "最大共线偏差 %.1f°，贴框距离 %.1f/%.1f px，"
+                                      "框 %.0f,%.0f,%.0f,%.0f"
+                                      % (sup, extra[0], extra[1], ang, extra[2], extra[3],
+                                         x1, y1, x2, y2)),
+                              by="stage1/wires.py:bridge_boxes")
+            except Exception:
+                pass
+    return bridges, info
 
 
 def _axis_dev(a, b) -> float:
@@ -381,6 +619,16 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
         _thin_w = thin_w
     _close_thin = os.environ.get("STAGE1_WIRE_CLOSE_THIN", "0").strip().lower() in (
         "1", "true", "on", "yes")
+    # ★ 2026-10-10（用户 m40034：「背景是白的，导线颜色不确定，只要从背景过渡到任意颜色
+    #   都有可能是导线」）：前景判据可选。`bglab` = 与**局部背景**的 Lab ΔE + Otsu，
+    #   亮度/彩度/色相的偏离等权当候选 —— 灰度自适应看不见「等亮度不同色」的边界。
+    #   `STAGE1_WIRE_INK_MODE` 覆盖调用方传入的 `ink_mode`；默认空 = 用调用方的值（adaptive）。
+    #   ★ 名字必须带 `_MODE`：`STAGE1_WIRE_INK` 已被 `stage1/labels.py:133` 占用（那是个
+    #     布尔闸门，`env_on`）。曾经本开关叫 `STAGE1_WIRE_INK`，A/B 臂设 `=bglab` 时顺带
+    #     把 labels 的焊接墨迹判据关掉了（`env_on("…","bglab")` = 假）⇒ 读数被污染。
+    _ink_env = os.environ.get("STAGE1_WIRE_INK_MODE", "").strip().lower()
+    if _ink_env in ("adaptive", "otsu", "bgdiff", "bglab"):
+        ink_mode = _ink_env
     try:
         _dilate = int(os.environ.get("STAGE1_WIRE_DILATE", "0"))
     except ValueError:
@@ -435,6 +683,7 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
     # 2) 采样要打**膨胀后的墨迹**，不能打骨架中心线 —— RDP 之后的线段是折线的弦，
     #    中点常常偏离 1px 宽的骨架，采不到标签就会把真导线整条丢掉（0101 上 F1 归零）。
     n_comp = n_comp_dropped = n_comp_cand = 0
+    stubs_latent: list = []
     if min_extent > 0:
         _t, ink, _c = ex.foreground(src)
         ink = cv2.dilate((np.asarray(ink) > 0).astype(np.uint8),
@@ -483,6 +732,7 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
 
         keep = []
         _n_bsegs = len(bsegs)
+        stubs_latent = []
         for a, b in bsegs:
             votes: dict = {}
             for t in (0.1, 0.3, 0.5, 0.7, 0.9):
@@ -492,31 +742,91 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
                     v = int(lab[iy, ix])
                     if v > 0:
                         votes[v] = votes.get(v, 0) + 1
-            big = bool(votes) and diag[max(votes, key=votes.get)] >= min_extent
+            _v = max(votes, key=votes.get) if votes else None
+            big = bool(votes) and diag[_v] >= min_extent
             if big or not votes or _near(a) or _near(b):
                 keep.append([a, b])        # 采不到标签时不删，宁可保守
+            else:
+                # ★ 2026-10-10（用户 m42009：「导线在等元件确认、元件在等导线确认」）：
+                #   这条线段被「小分量 + 不贴任何框」删掉了。它以前只进 `n_comp_dropped`
+                #   这个**计数器**（`wires.py:540`），没有任何留痕 —— 于是链断在这里：
+                #   元件框被漏检 ⇒ 短桩不贴框 ⇒ 桩删 ⇒ 该元件没有导线触点 ⇒
+                #   `pins.py:251` 返回空 ⇒ 网消失。**改成「降权 + 保留池」**：
+                #   桩本身不进本轮 `segments`（保持旧行为、分数逐位不变），但记下
+                #   端点、分量对角线与「离最近框多远」，供**第二轮交叉验证**用
+                #   （`pipeline.py` 的 latent 促进步：引脚/文字/网络证据反过来救桩）。
+                _dg = float(diag[_v]) * inv if _v is not None else 0.0
+                _db = _dist_to_boxes([a, b], occlude, erase)
+                stubs_latent.append({"seg": [[float(a[0]), float(a[1])],
+                                             [float(b[0]), float(b[1])]],
+                                     "diag": round(_dg, 1), "dbox": round(_db, 1)})
         bsegs = keep
+        if stubs_latent:
+            try:
+                from cvparts.hypo import LEDGER, DEMOTE_HARD
+                for _st in stubs_latent:
+                    LEDGER.demote(where="wire:stub", value=("%.0f,%.0f" % (_st["seg"][0][0],
+                                                                           _st["seg"][0][1])),
+                                  score_before=1.0, score_after=DEMOTE_HARD,
+                                  reason=("小分量(diag=%.0f<min_extent=%.0f)且不贴任何框"
+                                          "(dbox=%.1f)" % (_st["diag"], min_extent, _st["dbox"])),
+                                  by="stage1/wires.py:534")
+            except Exception:
+                pass
         # ★ 审计项⑤：`n_dropped_comp` 现在记的是**真正被删掉的线段数**（分量太小、
         #   且不贴着任何元件/文字框因而没被 `_near()` 豁免）。候选分量数另记
         #   `n_comp_cand`。以前直接拿「候选分量个数」当删除数，调参会看错。
         n_comp_dropped = _n_bsegs - len(bsegs)
 
     # --- 上游裁剪 ---
+    # ★ 2026-10-10（用户 m42009「两边互相等」）：这三道闸门以前只留一个**计数器**
+    #   （`n_dropped_len/axis/frame`），被删的线段本身没有任何留痕 ⇒ 一条真导线因为
+    #   角度偏心或贴边被删掉时，下游「引脚在等导线」永远等不到、而且查不出原因。
+    #   现在每一条都进 `stubs_pruned`（含原因与到最近框的距离）+ 账本降权记录，
+    #   供第二轮交叉验证（引脚/文字/网络证据反过来救桩）使用。**不改 `segments`**。
     n_len = n_axis = n_frame = 0
+    stubs_pruned: list = []
     segments = []
     for a, b in bsegs:
         L = _seg_len(a, b)
         if L < min_len:
             n_len += 1
+            stubs_pruned.append({"seg": [[float(a[0]), float(a[1])], [float(b[0]), float(b[1])]],
+                                 "reason": "len", "L": round(float(L), 1),
+                                 "dbox": round(_dist_to_boxes([a, b], occlude, erase), 1)})
             continue
         dev = _axis_dev(a, b)
         if dev > max_axis_dev:
             n_axis += 1
+            stubs_pruned.append({"seg": [[float(a[0]), float(a[1])], [float(b[0]), float(b[1])]],
+                                 "reason": "axis", "dev": round(float(dev), 1),
+                                 "dbox": round(_dist_to_boxes([a, b], occlude, erase), 1)})
             continue
         if drop_frame and _is_frame(a, b, W, H, frame_margin_frac, frame_len_frac):
             n_frame += 1
+            stubs_pruned.append({"seg": [[float(a[0]), float(a[1])], [float(b[0]), float(b[1])]],
+                                 "reason": "frame", "L": round(float(L), 1),
+                                 "dbox": round(_dist_to_boxes([a, b], occlude, erase), 1)})
             continue
         segments.append([a, b])
+    if stubs_pruned:
+        try:
+            from cvparts.hypo import LEDGER, DEMOTE_HARD
+            for _sp in stubs_pruned:
+                LEDGER.demote(where="wire:prune", value=("%.0f,%.0f" % (_sp["seg"][0][0],
+                                                                        _sp["seg"][0][1])),
+                              score_before=1.0, score_after=DEMOTE_HARD,
+                              reason=("上游裁剪 %s（%s，dbox=%.1f）"
+                                      % (_sp["reason"],
+                                         ("L=%.1f<min_len=%.1f" % (_sp["L"], min_len))
+                                         if _sp["reason"] == "len" else
+                                         (("dev=%.1f>max_axis_dev=%.1f" % (_sp["dev"], max_axis_dev))
+                                          if _sp["reason"] == "axis" else
+                                          ("贴边图框线 L=%.1f" % _sp["L"])),
+                                         _sp["dbox"])),
+                              by="stage1/wires.py:prune")
+        except Exception:
+            pass
 
     # 折线：整条丢掉才丢，只要还有一段保留就保留（保守）
     kept = {(round(a[0], 1), round(a[1], 1), round(b[0], 1), round(b[1], 1))
@@ -525,6 +835,25 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
                  if any((round(pl[i][0], 1), round(pl[i][1], 1),
                          round(pl[i + 1][0], 1), round(pl[i + 1][1], 1)) in kept
                         for i in range(len(pl) - 1))]
+
+    # ★ 2026-10-10（用户 m42009 的「互相等待」）：框内交叉验证桥接。
+    #   默认关（`STAGE1_WIRE_BRIDGE=0`）。理由见 `bridge_boxes` 文档：框内导线证据
+    #   被我们自己涂掉，28 张实测框内 R=0.0257 vs 框外 R=0.3444 —— 但「放回全部框内
+    #   像素」会凭空长结构，所以只接受双向交叉验证通过的桥。
+    bridges: list = []
+    b_info: dict = {}
+    if env_on("STAGE1_WIRE_BRIDGE", "0"):
+        bridges, b_info = bridge_boxes(
+            bgr, segments, occlude,
+            near=float(os.environ.get("STAGE1_WIRE_BRIDGE_NEAR", "8")),
+            max_frac=float(os.environ.get("STAGE1_WIRE_BRIDGE_FRAC", "0.9")),
+            angle=float(os.environ.get("STAGE1_WIRE_BRIDGE_ANGLE", "30")),
+            ink_min=float(os.environ.get("STAGE1_WIRE_BRIDGE_INK", "0.5")),
+            de_min=float(os.environ.get("STAGE1_WIRE_BRIDGE_DE", "22")),
+            min_side=float(os.environ.get("STAGE1_WIRE_BRIDGE_MIN_SIDE", "24")),
+            thick_max=float(os.environ.get("STAGE1_WIRE_BRIDGE_THICK", "9")))
+        if bridges:
+            segments = list(segments) + [[list(b[0]), list(b[1])] for b in bridges]
 
     # --- 在 T 形分叉处切段（`STAGE1_SPLIT_JUNCTIONS=1`）---
     # 病根：pskel 的 snap 会把一条走线接成一整段，即使它中间经过了一个 T 形分叉。
@@ -557,9 +886,21 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
         "n_dropped_axis": n_axis,
         "n_dropped_frame": n_frame,
         "n_segments_split": n_split,
+        "n_bridges": len(bridges),
+        "bridges": bridges,
+        "bridge_info": b_info,
         "n_components": n_comp,
         "n_dropped_comp": n_comp_dropped,
         "n_comp_cand": n_comp_cand,
+        # ★ 保留池：被「小分量 + 不贴框」删掉的短桩（端点/分量对角线/离最近框多远）。
+        #   不进本轮 `segments`（旧行为不变），留给 `pipeline.py` 的**第二轮交叉验证**
+        #   在引脚/文字/网络证据齐了之后反过来救它们。
+        "stubs_latent": stubs_latent,
+        "n_stubs_latent": len(stubs_latent),
+        # ★ 2026-10-10（用户 m42009）：被上游三道裁剪（min_len / max_axis_dev / _is_frame）
+        #   删掉的线段也进保留池，附原因与到最近框的距离。以前只有计数器，删了就没了。
+        "stubs_pruned": stubs_pruned,
+        "n_stubs_pruned": len(stubs_pruned),
         "n_endpoints": len(endpoints),
         "n_junctions": len(junctions),
         "n_nodes": int(r.n_nodes),

@@ -235,9 +235,28 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         # 只要端点贴着已检出元件框就仍然保留。ext>=80 + rescue 8 在 6 个 case 上
         # **全部优于**不设门槛的基线（0101 0.223→0.252、0107 0.096→0.111、
         # 0001 0.158→0.165、0059 0.193→0.315、0050 0.216→0.295、0011 0.036→0.049）。
+        # ★ 2026-10-10（用户 m42009「导线等元件、元件等导线」）：**涂白口径可选**。
+        #   `all`（默认 = 历史行为）= 涂掉所有已检出元件框；
+        #   `keep` = 一根都不涂；`big` = 只涂大框（min side >= `STAGE1_OCC_BIG`，默认 60）。
+        #   28 张导线级实测（`work\tools\dev\_occpol.py`）：不涂时 GT 边覆盖 1093→1240
+        #   （**+147 条，R 0.2887→0.3275**），但假阳段多 1615 条（P 0.3577→0.2629），
+        #   F1 反而 0.3195→0.2917 ⇒ 端到端要不要换口径必须 A/B 判，不能凭通道读数定。
+        #   框内证据确实死在我们自己的框上；上游三道闸门已排除（`_prunepol.py`：框内覆盖
+        #   恒为 17/662，`min_extent`/`max_axis_dev`/`_is_frame` 一条框内边都没吃掉）。
+        _occ_mode = os.environ.get("STAGE1_OCC_MODE", "all").strip().lower()
+        _occ_boxes = [c["bbox_img"] for c in comps]
+        if _occ_mode in ("keep", "none", "off", "0", ""):
+            _occ_boxes = []
+        elif _occ_mode == "big":
+            try:
+                _occ_big = float(os.environ.get("STAGE1_OCC_BIG", "60"))
+            except ValueError:
+                _occ_big = 60.0
+            _occ_boxes = [b for b in _occ_boxes
+                          if min(float(b[2]) - float(b[0]), float(b[3]) - float(b[1])) >= _occ_big]
         w, t_w = wires_mod.extract_wires(
             bgr, max_pixels=max_pixels,
-            occlude=[c["bbox_img"] for c in comps], erase=texts, erase_pad=1.0,
+            occlude=_occ_boxes, erase=texts, erase_pad=1.0,
             drop_frame=True,
             max_axis_dev=12.0, min_extent=80.0, rescue_pad=8.0)
 

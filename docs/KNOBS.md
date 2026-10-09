@@ -6,18 +6,18 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **309** 个开关。
+共 **323** 个开关。
 
 ## 目录
 
-- [stage1](#stage1)（85）
+- [stage1](#stage1)（97）
 - [stage2](#stage2)（70）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（113）
 - [vlm](#vlm)（12）
 - [textrec](#textrec)（13）
 - [cvparts](#cvparts)（6）
-- [pipeline](#pipeline)（7）
+- [pipeline](#pipeline)（9）
 - [submission](#submission)（1）
 
 <a id="stage1"></a>
@@ -49,6 +49,9 @@
 | `STAGE1_GROUP_TOL` | `"1.5"` | `stage1/labels.py:47` |
 | `STAGE1_MERGE_TP` | `"0"` | `stage1/detect.py:120` |
 | `STAGE1_NMS_IOU` | `"0.5"` | `stage1/detect.py:81` |
+| `STAGE1_OCC_BIG` | `"60"` | `stage1/pipeline.py:252` |
+| `STAGE1_OCC_LOCAL` | `"0"` | `stage1/wires.py:70` |
+| `STAGE1_OCC_MODE` | `"all"` | `stage1/pipeline.py:246` |
 | `STAGE1_OWN_DEMOTE` | `"0.85"` | `stage1/detect.py:75` |
 | `STAGE1_PINC` | `"1"` | `stage1/pipeline.py:81` |
 | `STAGE1_PINC_BAND` | `"22"` | `stage1/pincol.py:95` |
@@ -89,28 +92,37 @@
 | `STAGE1_PIN_OUT_BOX` | `"12.0"` | `stage1/pins.py:55` |
 | `STAGE1_PIN_STUB` | `"sparse"` | `stage1/pins.py:116` |
 | `STAGE1_PIN_STUB_RATIO` | `"0.6"` | `stage1/pins.py:120` |
-| `STAGE1_SPLIT_JUNCTIONS` | `"1"` | `stage1/wires.py:540` |
-| `STAGE1_SPLIT_TOL` | `"1.5"` | `stage1/wires.py:542` |
-| `STAGE1_WIRE_CLOSE_THIN` | `"0"` | `stage1/wires.py:382` |
-| `STAGE1_WIRE_COLOUR` | `"hint"` | `stage1/wires.py:275` |
+| `STAGE1_SPLIT_JUNCTIONS` | `"1"` | `stage1/wires.py:869` |
+| `STAGE1_SPLIT_TOL` | `"1.5"` | `stage1/wires.py:871` |
+| `STAGE1_WIRE_BRIDGE` | `"0"` | `stage1/wires.py:845` |
+| `STAGE1_WIRE_BRIDGE_ANGLE` | `"30"` | `stage1/wires.py:850` |
+| `STAGE1_WIRE_BRIDGE_DE` | `"22"` | `stage1/wires.py:852` |
+| `STAGE1_WIRE_BRIDGE_FRAC` | `"0.9"` | `stage1/wires.py:849` |
+| `STAGE1_WIRE_BRIDGE_INK` | `"0.5"` | `stage1/wires.py:851` |
+| `STAGE1_WIRE_BRIDGE_MIN_SIDE` | `"24"` | `stage1/wires.py:853` |
+| `STAGE1_WIRE_BRIDGE_NEAR` | `"8"` | `stage1/wires.py:848` |
+| `STAGE1_WIRE_BRIDGE_THICK` | `"9"` | `stage1/wires.py:854` |
+| `STAGE1_WIRE_CLOSE_THIN` | `"0"` | `stage1/wires.py:620` |
+| `STAGE1_WIRE_COLOUR` | `"hint"` | `stage1/wires.py:513` |
 | `STAGE1_WIRE_COS` | `"-0.75"` | `stage1/labels.py:130` |
-| `STAGE1_WIRE_DILATE` | `"0"` | `stage1/wires.py:385` |
+| `STAGE1_WIRE_DILATE` | `"0"` | `stage1/wires.py:633` |
 | `STAGE1_WIRE_EXT` | `"8.0"` | `stage1/labels.py:95` |
 | `STAGE1_WIRE_EXT_NEAREST` | `"0"` | `stage1/labels.py:97` |
 | `STAGE1_WIRE_EXT_PERP` | `"2.0"` | `stage1/labels.py:96` |
-| `STAGE1_WIRE_HUE_MAXFAIL` | `"3"` | `stage1/wires.py:233` |
-| `STAGE1_WIRE_HUE_MAXSIDE` | `"1024"` | `stage1/wires.py:251` |
-| `STAGE1_WIRE_HUE_TIMEOUT` | `"30"` | `stage1/wires.py:232` |
+| `STAGE1_WIRE_HUE_MAXFAIL` | `"3"` | `stage1/wires.py:471` |
+| `STAGE1_WIRE_HUE_MAXSIDE` | `"1024"` | `stage1/wires.py:489` |
+| `STAGE1_WIRE_HUE_TIMEOUT` | `"30"` | `stage1/wires.py:470` |
 | `STAGE1_WIRE_INK` | `"1"` | `stage1/labels.py:133` |
 | `STAGE1_WIRE_INK_FRAC` | `"0.5"` | `stage1/labels.py:134` |
+| `STAGE1_WIRE_INK_MODE` | `""` | `stage1/wires.py:629` |
 | `STAGE1_WIRE_OVER` | `"12"` | `stage1/labels.py:157` |
 | `STAGE1_WIRE_OVER_COS` | `"0.9"` | `stage1/labels.py:164` |
 | `STAGE1_WIRE_OVER_CROSS` | `"0"` | `stage1/labels.py:163` |
 | `STAGE1_WIRE_PERP` | `"1.5"` | `stage1/labels.py:129` |
-| `STAGE1_WIRE_THIN_W` | `""` | `stage1/wires.py:379` |
+| `STAGE1_WIRE_THIN_W` | `""` | `stage1/wires.py:617` |
 | `STAGE1_WIRE_TOL` | `"1.5"` | `stage1/labels.py:94` |
 | `STAGE1_WIRE_WELD` | `"16.0"` | `stage1/labels.py:128` |
-| `VLM_TIMEOUT` | `"600"` | `stage1/wires.py:229` |
+| `VLM_TIMEOUT` | `"600"` | `stage1/wires.py:467` |
 
 <a id="stage2"></a>
 
@@ -376,12 +388,14 @@
 
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
-| `STAGE1_WIRE_COLOUR` | `"hint"` | `pipeline/pskel.py:214` |
-| `STAGE1_WIRE_DEBUG` | — | `pipeline/pskel.py:280` |
-| `STAGE1_WIRE_EDGE` | `"0"` | `pipeline/pskel.py:444` |
-| `STAGE1_WIRE_EDGE_MIN` | `"10.0"` | `pipeline/pskel.py:485` |
-| `STAGE1_WIRE_EDGE_NEAR` | `"2"` | `pipeline/pskel.py:498` |
-| `STAGE1_WIRE_EDGE_REL` | `"0.55"` | `pipeline/pskel.py:481` |
+| `STAGE1_WIRE_COLOUR` | `"hint"` | `pipeline/pskel.py:272` |
+| `STAGE1_WIRE_DEBUG` | — | `pipeline/pskel.py:338` |
+| `STAGE1_WIRE_EDGE` | `"0"` | `pipeline/pskel.py:502` |
+| `STAGE1_WIRE_EDGE_MIN` | `"10.0"` | `pipeline/pskel.py:573` |
+| `STAGE1_WIRE_EDGE_NEAR` | `"2"` | `pipeline/pskel.py:586` |
+| `STAGE1_WIRE_EDGE_REL` | `"0.55"` | `pipeline/pskel.py:569` |
+| `STAGE1_WIRE_UNCONF` | `"veto"` | `pipeline/pskel.py:539` |
+| `STAGE1_WIRE_UNCONF_NEAR` | `"3"` | `pipeline/pskel.py:553` |
 | `WINDIR` | `r'C:\Windows'` | `pipeline/pglyph.py:30` |
 
 <a id="submission"></a>

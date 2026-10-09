@@ -338,20 +338,52 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
         # IC 的引脚间距只有 ~10px，不能用 12px 的合并半径（会把邻脚并掉）
         _cr = CLUSTER_IC if _is_ic else cluster_r
         pins = pins_from_touch(bb, pts, touch_tol, _cr, _od)
+        _ev = {"touch": len(pins), "prior": 0, "stub": 0}
         if not pins and use_prior:
             pins = pins_from_prior(bb, c.get("type") or "")
+            _ev["prior"] = len(pins)
         if STUB_FILL and ink is not None and _is_ic:
             _sp = _stub_points(bb, ink, _od)
             _few = (STUB_SPARSE and _sp
                     and len(pins) < STUB_SPARSE_RATIO * len(_sp))
             if STUB_UNION or not pins or _few:
+                _b4 = len(pins)
                 pins = _merge_stubs(pins, bb, ink, _od)
+                _ev["stub"] = max(0, len(pins) - _b4)
         # 去重（同一位置只留一个），再截断
         dedup: List[Tuple[float, float]] = []
         for p in pins:
             if not any(math.hypot(p[0] - q[0], p[1] - q[1]) <= 3.0 for q in dedup):
                 dedup.append(p)
         out[c["id"]] = dedup[:MAX_PINS]
+        # ★ 2026-10-10（用户 m42009）：「引脚在等导线交叉验证」必须留下证据链。
+        #   每个元件的引脚来源进账本：`touch` = 上游导线真的触到框边（交叉验证通过）；
+        #   `prior` = 没有任何导线证据、纯类型先验造出来的（**未确认**，按「只削弱不删除」
+        #   记 `score_after=DEMOTE_UNCONFIRMED`，仍留在池里）；`stub` = 几何小桩（半证据）；
+        #   三者全 0 = 这个元件在 stage1 里**一个引脚都没有**，下游网络/引脚通道全空 ——
+        #   正是「元件与导线互相等」的终点，以前这里什么都不记。
+        try:
+            from cvparts.hypo import LEDGER, DEMOTE_HARD, DEMOTE_SOFT
+            _n = len(out[c["id"]])
+            _src = ("touch" if _ev["touch"] else
+                    ("prior" if _ev["prior"] else ("stub" if _ev["stub"] else "none")))
+            LEDGER.record("evidence", where="pin:%s" % c["id"],
+                          before={"type": c.get("type"), "n": _n},
+                          after={"src": _src, **{k: _ev[k] for k in ("touch", "prior", "stub")}},
+                          reason="引脚来源：%s" % _src,
+                          by="stage1/pins.py:find_pins")
+            if _src == "none":
+                LEDGER.demote(where="pin:%s" % c["id"], value=c.get("id"),
+                              score_before=1.0, score_after=DEMOTE_HARD,
+                              reason="没有任何导线触点/先验/几何桩 —— 该元件无引脚，下游网络为空",
+                              by="stage1/pins.py:find_pins")
+            elif _src == "prior":
+                LEDGER.demote(where="pin:%s" % c["id"], value=c.get("id"),
+                              score_before=1.0, score_after=DEMOTE_SOFT,
+                              reason="仅类型先验（无导线交叉验证）",
+                              by="stage1/pins.py:find_pins")
+        except Exception:
+            pass
     return out
 
 
