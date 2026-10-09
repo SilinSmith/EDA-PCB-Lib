@@ -170,6 +170,8 @@
 | `STAGE2_PINNUM_TIGHT_SAT` | `"60"` | `stage2/text.py:118` |
 | `STAGE2_PIN_ALONG` | `"1"` | `stage2/assign.py:174` |
 | `STAGE2_PIN_COVER` | `"0.15"` | `stage2/assign.py:178` |
+| `STAGE2_PIN_RESIDUAL` | `"0"` | `stage2/assign.py:182`（残差回填：把「读对但没绑上」的号按沿边距离回填给空槽；28 张 A/B **净负**，见 `reports\引脚号通道三层归因与残差回填.md` §3） |
+| `STAGE2_PIN_RESIDUAL_MIN` | `"0"` | `stage2/assign.py:183`（残差回填的候选最低分闸门） |
 | `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:454` |
 | `STAGE2_PREFIX` | `"strict"` | `stage2/assign.py:38` |
 | `STAGE2_PREFIX_SKEL` | `"0"` | `stage2/assign.py:48` |

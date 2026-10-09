@@ -219,7 +219,16 @@ class CropDataset(Dataset):
         if img is not None:
             self._cache.move_to_end(path)
             return img
-        img = Image.open(path).convert("L")
+        p = Path(path)
+        if not p.is_absolute():
+            # 相对路径按仓库根（eda-pcb 的上一级）解析：语料清单里的路径是相对 EDA 根写的，
+            # 而训练常在 eda-pcb 目录下启动（cwd 不同），直接 open 会 FileNotFoundError。
+            root = Path(__file__).resolve().parents[2]
+            for cand in (root / p, root.parent / p):
+                if cand.exists():
+                    p = cand
+                    break
+        img = Image.open(p).convert("L")
         self._cache[path] = img
         if len(self._cache) > self.cache_size:
             self._cache.popitem(last=False)

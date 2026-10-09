@@ -29,6 +29,10 @@ from typing import Dict, List, Optional, Sequence, Tuple
 EDGES = ("left", "top", "right", "bottom")
 _NUM_RE = re.compile(r"^\d{1,3}$")
 
+# 最近一次 `rebind` 的**残差回填**明细（`{"pin","cand","d","edge"}`）。只给调试用，
+# 不参与返回签名（`rebind` 的返回元数被 stage2 与自检依赖）。
+LAST_RESIDUAL: List[dict] = []
+
 
 # ---------------------------------------------------------------------------
 def edge_of_point(bbox: Sequence[float], px: float, py: float) -> str:
@@ -192,15 +196,22 @@ def _ladder(nums: Sequence[Tuple[int, int]], n_pins: int) -> Optional[List[Tuple
 def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
            pool: Sequence[dict], value_of, score_of,
            gap_pen: float = 0.0, cover: float = 0.0, demote: float = 0.15,
-           majority: float = 0.6, ladder: bool = True) -> Tuple[Dict[int, int], List[dict]]:
+           majority: float = 0.6, ladder: bool = True,
+           resid: float = 0.0, resid_min: float = 0.0) -> Tuple[Dict[int, int], List[dict]]:
     """按边分组，用「单调对齐」与「阶梯重排」各出一个整体方案，**按总分取优**。
 
     pool 每项要有 `center`；`value_of(cand) -> str` 给候选读出来的串；
     `score_of(cand, pin_index) -> float` 给收益。返回 `({引脚下标: 候选下标}, 待仲裁)`。
+
+    `resid > 0` 时再跑一遍**残差回填**：把上面两个方案之外仍然悬空的引脚，与同一分组里
+    没被用到的候选按「沿边距离最近」一对一配掉（距离 <= `resid`、原始收益 > `resid_min`）。
+    明细写进模块级 `LAST_RESIDUAL`；动机见 `rebind` 里的长注释：同一排引脚号会分组重启，
+    单调假设在重启处失效。
     """
     groups = group_by_edge(bbox, pins, pool)
     out: Dict[int, int] = {}
     ambiguous: List[dict] = []
+    LAST_RESIDUAL.clear()
 
     for e, (pl, cl) in groups.items():
         if not pl or not cl:
@@ -250,6 +261,44 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
             chosen, name = plan_lad, "ladder"
         else:
             chosen, name = plan_pos, "monotone"
+
+        # --- 残差回填 -------------------------------------------------------
+        # ★ 动机（2026-07，10GT case 1 的 `U1` 实测定位）：同一排引脚号会**分组重启**。
+        #   U1 左列是 `7 16 26 28 39 47 51 52 69 79 101 122`（沿边坐标单调增），紧接着
+        #   同一列又从 `8 67 15 9 66` 重新开始（y 544~750）。上面的 `monotone_keep`
+        #   把重启组判成「破坏严格单调的离群」并**清零**它们的收益（`hard=True` 分支），
+        #   于是这些号永远绑不上 —— 而它们明明就在池子里、分数也不低
+        #   （`8` .70 / `13` .77 / `14` .80 / `10` .81，`bound=18/34`）。
+        #   代价实测：官方 9 的 120 个 GT `box` 引脚里有 **24 个（20%）** 是
+        #   「号读对了、脚也枚举出来了，就是没绑上」（`work\tools\dev\_numcover.py`）。
+        # 这里只做「同分组内、沿边距离最近、一对一」的贪心兜底：不改变已经配好的单调解，
+        # 只吃剩下的空位，所以对既有正确绑定零影响。
+        if resid > 0.0 and chosen:
+            used_c = set(chosen.values())
+            free_p = [j for j in range(m) if pl[j] not in chosen]
+            if free_p:
+                cands: List[Tuple[float, float, int, int]] = []
+                for j in free_p:
+                    pj, qj = pins[pl[j]][0], pins[pl[j]][1]
+                    a_p = along(bbox, e, pj, qj)
+                    for i in range(n):
+                        if cl[i] in used_c:
+                            continue
+                        cc = pool[cl[i]]
+                        raw = float(score_of(cc, pl[j]))
+                        if raw <= resid_min:
+                            continue
+                        dd = abs(a_p - along(bbox, e, cc["center"][0], cc["center"][1]))
+                        if dd > resid:
+                            continue
+                        cands.append((dd, -raw, pl[j], cl[i]))
+                cands.sort()
+                for _dd, _nr, p, ci in cands:
+                    if p in chosen or ci in used_c:
+                        continue
+                    chosen[p] = ci
+                    used_c.add(ci)
+                    LAST_RESIDUAL.append({"pin": p, "cand": ci, "d": _dd, "edge": e})
 
         # 两种方案在同一引脚上给出不同候选 -> 交给阶段三
         for p, c in chosen.items():

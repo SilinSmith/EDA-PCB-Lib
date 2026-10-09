@@ -176,6 +176,15 @@ MAX_ALTS = 6         # 每个元件最多保留几个位号候选（交给阶段
 # 结构化重绑定时「每配上一对」的固定加分（`stage2\\structmatch.py` 的 `cover`）：
 # 它让「一条自洽、把整排引脚都配上、每对都稍远」的方案压过「只配最近的那几对」。
 PIN_COVER = float(os.environ.get("STAGE2_PIN_COVER", "0.15"))
+# ★★ 引脚号**残差回填**（`STAGE2_PIN_RESIDUAL`，默认 `0` = 关；>0 时是最大沿边距离，px）。
+# 动机与实测见 `stage2\structmatch.py` 里 `rebind` 的那段长注释：同一排引脚号会**分组重启**
+# （10GT case 1 的 `U1` 左列 `7 16 … 122` 之后又从 `8 67 15 9 66` 重新开始，y 544~750），
+# `monotone_keep` 把重启组当成「破坏严格单调的离群」并清零它们的收益 ⇒ 这些号明明就在
+# 候选池里、分数也不低（`8` .70 / `13` .77 / `14` .80 / `10` .81）却永远绑不上。
+# 代价（`work\tools\dev\_numcover.py`，官方 9 张 120 个 GT `box` 引脚）：**24 个（20%）**
+# 是「号读对了、脚也枚举出来了，就是没绑上」。只对 `pin_number` 角色开，`pin_name` 不动。
+PIN_RESIDUAL = float(os.environ.get("STAGE2_PIN_RESIDUAL", "0"))
+PIN_RESIDUAL_MIN = float(os.environ.get("STAGE2_PIN_RESIDUAL_MIN", "0"))
 # ★★ 引脚列窗口引导（`stage1/pincol.py`）。默认 **on**。
 # 开了之后，「第 i 个脚的号码 / 名字」直接由 pincol 算好的矩形（`out_win`/`in_win`）
 # 做包含判定归位，不再靠 `structmatch` 的整排单调对齐去猜 —— 后者在引脚数太少时
@@ -1091,10 +1100,15 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
 
             cov = PIN_COVER if slot == "number" else PIN_COVER * 0.5
             bound, amb = structmatch.rebind(
-                c["bbox"], plist, pool, lambda cc: cc["text"], score_of, cover=cov)
+                c["bbox"], plist, pool, lambda cc: cc["text"], score_of, cover=cov,
+                resid=PIN_RESIDUAL if slot == "number" else 0.0,
+                resid_min=PIN_RESIDUAL_MIN)
             if os.environ.get("STAGE2_DBG_CID") == cid:
                 print("      [pin:%s] nplist=%d pool=%d cov=%.2f bound=%d amb=%d"
                       % (role, len(plist), len(pool), cov, len(bound), len(amb)))
+                for rs in structmatch.LAST_RESIDUAL:
+                    print("        [resid] pin[%2d] <- %s  along_d=%.1f edge=%s"
+                          % (rs["pin"], pool[rs["cand"]]["text"], rs["d"], rs["edge"]))
                 for bi, (pi, ci) in enumerate(sorted(bound.items())):
                     cc = pool[ci]
                     print("        pin[%2d] <- %-8s s=%.3f c=(%.0f,%.0f)  pt=(%.0f,%.0f)"

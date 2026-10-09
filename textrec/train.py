@@ -216,9 +216,6 @@ def main(argv=None) -> int:
     ctc = nn.CTCLoss(blank=0, reduction="mean", zero_infinity=True)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr,
                             weight_decay=args.weight_decay)
-    sched = torch.optim.lr_scheduler.OneCycleLR(
-        opt, max_lr=args.lr, total_steps=max(1, args.epochs * len(train_dl)),
-        pct_start=0.1, anneal_strategy="cos")
 
     start_epoch = 0
     if args.resume:
@@ -228,6 +225,17 @@ def main(argv=None) -> int:
             opt.load_state_dict(ck["opt"])
         start_epoch = int(ck.get("epoch", 0))
         print("[resume] 从 %s 的第 %d 轮继续" % (args.resume, start_epoch))
+
+    # OneCycle 的步数按「本次还要跑几轮」算，不按 --epochs 的绝对值：
+    # 续训时 start_epoch 很大（例如 57），若按绝对值 `--epochs 58` 算 total_steps，
+    # warmup（pct_start=0.1）会落在本次训练之外，整个这一轮的学习率只有峰值的
+    # 1/10 ~ 1/30（实测 e57 起步 lr 6e-6、峰值 1.5e-4），等于没训。
+    remain = max(1, args.epochs - start_epoch)
+    sched = torch.optim.lr_scheduler.OneCycleLR(
+        opt, max_lr=args.lr, total_steps=max(1, remain * len(train_dl)),
+        pct_start=0.1, anneal_strategy="cos")
+    print("[sched] 本次 %d 轮 × %d 步 = %d 步，OneCycle 峰值 lr %.2e"
+          % (remain, len(train_dl), remain * len(train_dl), args.lr))
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)

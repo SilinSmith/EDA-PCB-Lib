@@ -910,6 +910,26 @@ gnd 496 个、v 211 个是**按设计**用 ∅NNN 伪键（靠坐标匹配），
   **教训：任何「用 GT 造语料再评自己」的实验，必须先按 case 切干净，再看数字**（切分要用**案例级**，
   不能用「同一张图的不同框」）。
 
+### 换 stage2 读数的 A/B 必须**重建下游模型缓存**（`stage3_vlm`），否则测的是「缓存失配」
+
+- 事实：交付口径 A/B 一直用**固定**的 `FUSION_VLM_DIR=work\_full220\runs\stage3_vlm`（220 张），
+  而那份缓存是 `vlm.enrich` 从**旧** stage2 臂（`work\_full220\runs\stage2`，即 `ocr_real`）生成的。
+  ⇒ 每次换 CRNN 权重，都是「缓存已对齐的旧臂」比「缓存不对齐的新臂」：VLM 补强写的是
+  **旧权重的读数**，新权重更好的读数被顶掉。
+- 症状：**同一批改动出现唯一一个反向读数**。
+  `ocr_pipe_v1` vs `ocr_mix`（同 20 张、同 `_assigned`）：VLM 开 **−0.4178**（46.9383 vs 47.3561，
+  官方 10 张 −0.5365）；**VLM 关**（`FUSION_VLM_DIR` 指向空目录，`work\_novlm_ab.ps1`）
+  **+1.5318**（45.9800 vs 44.4482，`train200` 派生 10 张 **+2.9949**、`10GT` +0.0686；
+  逐张 A 好 11 / 差 9）；stage2 侧 +1.94 ⇒ 三个同向，只有一个反向。
+- 规则：**任何改 stage2 读数的 A/B（权重 / 裁片 / 绑定额）**，要么重建下游缓存，要么把下游层关掉
+  并写明「偏离交付配置」；**反向读数出现在装置不对称的地方，先怀疑装置，再怀疑结论**。
+- 工具：`work\tools\dev\_mkcache.py --stage2 <臂目录> --out <缓存目录> --cases-file …`
+  （包 `vlm.enrich.enrich_dir`；图源 `work\_submit_in220\<case>.png`），
+  之后 `FUSION_VLM_DIR=<该臂缓存>` + `FUSION_ASSIGNED_DIR=<该臂 _assigned>` 再融合；
+  三臂公平驱动见 `work\_fairab.ps1`。
+- 交付路径本身没有这个问题：`submission\run.py -vlm` 写的是 `runs/stage3_vlm`，对**当前** stage2
+  **现算** ⇒ 「比赛口径 = 每臂自己的缓存」。固定缓存复用的装置**不模拟交付**。
+
 ### `net_line`（权重 0.10，长期爆 0）
 
 ```powershell
