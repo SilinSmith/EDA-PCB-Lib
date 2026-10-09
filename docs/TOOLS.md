@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **625** 个脚本。
+共 **626** 个脚本。
 
 
 <a id="data"></a>
@@ -93,7 +93,7 @@
 
 <a id="diag"></a>
 
-## `tools/diag/`（483 个脚本）
+## `tools/diag/`（484 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -135,7 +135,7 @@
 | `_charfit` | 150 | 从 38.8 万条真实「框 + 文本」标注里**拟合逐字符的宽度**，替换 axis.py 里那个 |
 | `_cmp.cmp` | 16 |  |
 | `_cmp9` | 78 | 逐张对比两个 stage2_eval --json 产物（用法：python work\_cmp9.py <A.json> <B.json>）。 |
-| `_cmpab` | 80 | 多臂基线对比：`work\_fast_base\<arm>.json`（`fast.py --save <arm>` 的产物）。 |
+| `_cmpab` | 93 | 多臂基线对比：`work\_fast_base\<arm>.json`（`fast.py --save <arm>` 的产物）。 |
 | `_cmpcfg` | 13 |  |
 | `_comp_diag` | 51 | 连通分量到底有多大？在「墨迹掩膜」上量，还是「骨架」上量？ |
 | `_compextra` | 185 | 把 `component.extra`（我们多出来的元件 = 纯 fp）按**类别 / 尺寸 / 与已匹配框的关系**分桶。 |
@@ -477,6 +477,7 @@
 | `_stale` | 12 |  |
 | `_stampshape` | 152 | 图章形状勘察：官方 GT 的每类 bbox 到底是「正方形」还是「长方形」。 |
 | `_stubfill` | 139 | Could geometric *pin stubs* fill the pins that have no wire attached? |
+| `_stubmode` | 190 | `STAGE1_PIN_STUB` 各模式对 **stage1 引脚点集**的影响（按侧对齐量 P/R vs GT）。 |
 | `_stubreach` | 155 | 引脚桩「远场判据」(`STAGE1_PINC_STUB_REACH`) 的离线取证。 |
 | `_subst` | 48 | 按「字面子串」替换文件内容（避开 PowerShell 引号地狱）。 |
 | `_suite_diag` | 60 | 按套看某一臂的 per-case 诊断分布（pin/component 的 missing/extra/mismatch 计数）。 |

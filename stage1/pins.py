@@ -84,7 +84,14 @@ CLUSTER_R = 12.0
 # ⚠️ 亏的 case 7 是「小半径 ⇒ 簇变多 ⇒ `STUB_SPARSE_RATIO=0.6` 不再触发 ⇒ 丢掉几何桩补出的脚」，
 # 试过 `STAGE1_PIN_STUB=union` 把桩全并回来：case 7 救回（69.71）但整体 **−0.90**
 # （0 涨 / 7 平 / 3 跌，case 2 76.24→68.52）⇒ 不加桩才是对的。详见 `docs\RESULTS.md` §2.16。
-CLUSTER_IC = float(os.environ.get("STAGE1_PIN_CLUSTER_IC", "5.0"))
+# ★★★★ 2026-10-10 **又翻了回去：默认 5.0 → 12.0**。把桩证据换成「抹掉文字框」的墨迹
+#     之后（`STAGE1_PIN_STUB_TEXT=1` + `gapfill`，见下面 ★★★★ 注释），12.0 反超 5.0：
+#       交付口径 × 官方 10 张：`free+gapfill+CI=12` **73.27** ｜ `free+gapfill+CI=5` 72.77
+#       派生 12 张（`--no-vlm`）：25.82 ｜ 25.80（两个尺子一致指向 12.0）
+#     机制：§2.16 那 +1.34 里的一部分本来就是「小半径把**文字簇**拆开 ⇒ 触点变多」的副作用，
+#     文字证据被抹掉后这段收益消失，而 gapfill 把欠检的桩脚补回来 ⇒ 半径回到 12.0 不再丢行。
+#     ⇒ 旧读数（12.0 68.55 / 4.0=5.0=6.0 69.89）**只在 raw 墨迹下成立**，别再引用。
+CLUSTER_IC = float(os.environ.get("STAGE1_PIN_CLUSTER_IC", "12.0"))
 # 采样步长（像素）
 SAMPLE_STEP = 3.0
 # 每个元件最多输出多少个引脚（防毛刺炸开）
@@ -126,11 +133,74 @@ MAX_PINS = 64
 #       | 19 张 无VLM   | 28.60 (pin .1320) | **28.85 (pin .1329)** |
 #     比例扫描（10GT 带 VLM）：0.3 → 58.05（等于没触发）｜0.4 → 57.79｜0.5 → 58.23｜
 #     **0.6 → 59.00**｜0.7 → 58.18｜0.8 → 57.98｜1.0 → 58.74。0.6 之外都不稳。
-_STUB_MODE = os.environ.get("STAGE1_PIN_STUB", "sparse").strip().lower()
+#     ⇒ 2026-10-10 交付判决后**默认改成 `gapfill`**（+ 抹字，见 ★★★★）：官方 10 张 69.89→**73.27**。
+_STUB_MODE = os.environ.get("STAGE1_PIN_STUB", "gapfill").strip().lower()
 STUB_FILL = _STUB_MODE not in ("", "0", "false", "off", "none")
 STUB_UNION = _STUB_MODE in ("union", "all", "add")
 STUB_SPARSE = _STUB_MODE in ("sparse", "gap", "short")
 STUB_SPARSE_RATIO = float(os.environ.get("STAGE1_PIN_STUB_RATIO", "0.6"))
+
+# ★★★ 2026-10-10 把 `CLUSTER_IC` 12→5 试了一轮（后来**又翻回 12**，见上面 CLUSTER_IC
+#     的长注释；这条注释保留是因为它暴露的缺口与半径无关）之后暴露出的真缺口：
+#     `sparse` 的触发条件比的是**簇计数**（`len(接触点) < 0.6*len(几何桩)`），
+#     而簇半径变小 ⇒ 接触点变多 ⇒ 这条判据**反而不再触发**。
+#     case 7 的 U1（`MP2236CGJ-Z`，GT 8 脚）就是这样丢掉整行（`_pinfill.py` 复现）：
+#       `CI=12`：接触 10 + 补桩 12 = **22** 点（GT 8 脚里对 3）
+#       `CI=5` ：接触 15 + 补桩  0 = **15** 点 ⇒ y≈383 那一行（GT `pin_3 SW`/`pin_6 EN`）没了
+#     正确判据应是「**有没有没被接触点覆盖的桩**」，而不是比总数 ⇒ 新模式 `gapfill`：
+#     只并入「**长桩**（`pintrace.Pin.ln >= STAGE1_PIN_STUB_MINLEN`）**且离任何已有点都
+#     超过 `STAGE1_PIN_STUB_GAPTOL` px**」的桩。`ln` = 框边±4px 起点 → 该行带内最外侧
+#     墨像素的距离：官方图上真桩 ≥19px，而**引脚号数字只贴框边 ~9px**（case 8 逐像素
+#     取证，见 `stage1/pincol.py` 的 `STAGE1_PINC_STUB_REACH` 注释）⇒ 这个阈值剔号字。
+#     `STAGE1_PIN_STUB_MINLEN` **默认 8**（只在 `gapfill` 模式下生效）：抹字之后长度
+#     阈值变得不敏感（官方 CI=5 的 gap4/gap6/gap8/gap10 全是 127/137/9），8 是
+#     「真桩 ≥19px、号字 ~9px」两个分布之间的平台中点。
+STUB_GAP = _STUB_MODE in ("gapfill", "gap_only", "covered")
+STUB_MINLEN = float(os.environ.get("STAGE1_PIN_STUB_MINLEN", "8"))
+STUB_GAPTOL = float(os.environ.get("STAGE1_PIN_STUB_GAPTOL", "4.0"))
+
+# ★★★★ 2026-10-10 桩幻影的真正主因是**文字**，不是长度：`pintrace.find_pins` 只看
+#     「框外 `band` 内的墨」，而**引脚号数字 / 型号文字**也画在框边外 ⇒ 整行文字被当成
+#     一堆桩。逐桩取证（`work\tools\dev\_stubtext.py`，`pincol.text_free_ink` 抹掉
+#     `texts` 里的文字框再喂给 `find_pins`）：
+#       case 7 的 U1：raw 22 桩（tp 7 / fp 15，顶边那 11 个是型号文字行）
+#                    →**抹字后 8 桩，tp 8 / fp 0 / fn 0**（= GT 的 8 脚，一根不差）
+#       case 8 的 U1：raw 31 桩（tp 13 / fp 18）→ 抹字后 8 桩（tp 7 / fp 1 / fn 9）
+#     官方 10 张离线（`tools\diag\_stubmode.py --free`，按侧对位 tol 5px）：
+#       raw  sparse CI=5  tp 122 fp 178 fn 14  F1 0.5596   ← 当前默认
+#       free gapfill CI=5 tp 127 fp 137 fn  9  F1 0.6350
+#       free gapfill CI=12 tp 127 fp  77 fn  9  F1 **0.7471**   ← 离线最优
+#     ★★★★ 2026-10-10 **交付端到端判决（官方 10 张，`work\_pinab9.out` / `_pinab10.out`）**：
+#       base（§2.16 出厂默认 = raw sparse CI=5）                      **69.89**
+#       `free + gapfill + MINLEN=8 + CI=5`（`f5`）                    72.77（+2.88，6涨/3平/1跌）
+#       `free + sparse  + CI=12`（`f12s`，只抹字 + 大半径）            72.45（+2.56，5涨/3平/2跌）
+#       **`free + gapfill + MINLEN=8 + CI=12`（`f12`，采用）        73.27（+3.39，6涨/2平/2跌）**
+#       再叠 `STAGE1_PINC_FILL=0`（`f12nf`）                         73.37（只多 case 8 的 +0.98，
+#         但派生集是 −0.47 ⇒ 那份 FILL 不动）
+#     通道 micro（全 10 案）：pin **0.5250 (57/40/79) → 0.6424 (69/33/67)**、
+#     netH 0.7175 (314/74/173) → **0.7289 (322/73/165)**（幻影网络同步减少）；
+#     逐案 pin 变好在 2/3/4/6/7/10（case 3 → **1.0000**、case 7 +8.30），只在 case 8 退（−1.67，
+#     抹字把「号字正好压在引线墨上」的真桩一起抹掉）；case 1 离线 fp 16→8 但端到端**一动不动**
+#     ⇒ 那一案的引脚失分在下游装配/名字绑定，不在候选集。
+#     派生 12 张（`--no-vlm`，`work\_findv3.out`）：25.92 → `df12` 25.82 / `df5` 25.80（−0.1/案，
+#     基本中性；且两个尺子都判 `CI=12 ≥ CI=5`）⇒ 这就是判决依据。
+#     注意：`pincol.enumerate_pins` 那条路也要同样处理（`STAGE1_PINC_*`），但两条路的
+#     证据源不同（这里用 `pintrace`，那里用逐列墨计数）。
+STUB_FREE = os.environ.get("STAGE1_PIN_STUB_TEXT", "1").strip().lower() not in (
+    "", "0", "false", "off", "no", "none")
+STUB_FREE_PAD = float(os.environ.get("STAGE1_PIN_STUB_TEXT_PAD", "0.0"))
+
+# ★ 更激进的一档：**整条 `find_pins`**（触点路径 + 桩路径）都用抹掉文字的墨迹。
+#   与 `STUB_FREE` 的区别是触点也去字 —— 触点路径同样会被引脚号/型号文字骗到
+#   （case 7 的 U1 在 CI=5 下触点 15 个、GT 只有 8 脚）。风险是「引脚号正好压在
+#   引线墨上」的真桩会被一起抹掉（case 8 的实测），所以做成独立旋钮、默认关。
+#   ★ 2026-10-10 实测（`work\_pinab11.ps1`，交付 × 官方 10 张）：在 `STAGE1_PIN_STUB_TEXT=1`
+#     + `gapfill` 已经成立的前提下，`INK_TEXT=1` + CI=12 与 `f12` **逐位相同**（73.27，
+#     连 `pin` micro 0.6424 都一样）⇒ 触点路径上**没有**可抹的幻影；CI=5 时反而
+#     72.39 < 72.77（`pin` 0.6141 < 0.6295）⇒ 与 `STAGE1_PINC_STUB_REACH` 同向，默认仍 0。
+INK_FREE = os.environ.get("STAGE1_PIN_INK_TEXT", "0").strip().lower() not in (
+    "", "0", "false", "off", "no", "none")
+INK_FREE_PAD = float(os.environ.get("STAGE1_PIN_INK_TEXT_PAD", "0.0"))
 
 # 两脚元件：引脚在长轴两端
 TWO_PIN = frozenset({"r", "c", "l", "d", "led", "fuse", "crystal_2pin", "battery",
@@ -339,8 +409,12 @@ def pins_from_prior(bbox, ctype: str):
     return []
 
 
-def _stub_points(bb, ink, out_dist):
-    """`pintrace.find_pins` 的几何引脚桩，统一重排到「框外 `out_dist` px」。"""
+def _stub_points(bb, ink, out_dist, min_len=0.0):
+    """`pintrace.find_pins` 的几何引脚桩，统一重排到「框外 `out_dist` px」。
+
+    `min_len > 0` 时只保留 `pintrace.Pin.ln >= min_len` 的桩（长桩 = 真引线，
+    短桩 = 贴在框边的引脚号数字，见 `STAGE1_PIN_STUB_MINLEN` 注释）。
+    """
     try:
         from . import pintrace as _pt
     except ImportError:                                   # pragma: no cover
@@ -348,6 +422,8 @@ def _stub_points(bb, ink, out_dist):
     x0, y0, x1, y1 = [float(v) for v in bb]
     out = []
     for p in _pt.find_pins(ink, [list(bb)]):
+        if min_len > 0 and float(getattr(p, "ln", 0.0)) < min_len:
+            continue
         if p.dx < 0:
             q = (x0 - out_dist, float(p.y))
         elif p.dx > 0:
@@ -381,11 +457,21 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
               ink=None):
     """给每个元件找引脚。返回 {comp_id: [(x, y), ...]}（图像坐标）。
 
-    `texts` 目前不参与（引脚号/引脚名要 OCR，属于第二阶段），留着是为了以后把
-    「框边外的文字框」当成一个额外的引脚证据。
+    `texts` 用于「文字不是引脚/桩」的两档处理：`STAGE1_PIN_STUB_TEXT=1` 只让**桩证据**
+    去字（默认关，见 `STUB_FREE` 的长注释），`STAGE1_PIN_INK_TEXT=1` 让**整条 find_pins**
+    （触点 + 桩）都去字（默认关，见 `INK_FREE`）。
 
     `ink` 非空且 `STAGE1_PIN_STUB=1` 时，对 `box`/`bigic` 追加几何引脚桩。
     """
+    if INK_FREE and ink is not None and texts:
+        try:
+            from . import pincol as _pc
+        except ImportError:                               # pragma: no cover
+            import pincol as _pc
+        try:
+            ink = _pc.text_free_ink(ink, texts, pad=INK_FREE_PAD)
+        except Exception:                                 # pragma: no cover
+            pass
     pts = sample_segments(segments, sample_step)
     out: Dict[str, List[Tuple[float, float]]] = {}
     LATENT.clear()                     # 每次调用重置（ProcessPool worker 会复用进程）
@@ -404,13 +490,36 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
             pins = pins_from_prior(bb, c.get("type") or "")
             _ev["prior"] = len(pins)
         if STUB_FILL and ink is not None and _is_ic:
-            _sp = _stub_points(bb, ink, _od)
-            _few = (STUB_SPARSE and _sp
-                    and len(pins) < STUB_SPARSE_RATIO * len(_sp))
-            if STUB_UNION or not pins or _few:
-                _b4 = len(pins)
-                pins = _merge_stubs(pins, bb, ink, _od)
-                _ev["stub"] = max(0, len(pins) - _b4)
+            # ★ 文字不是桩（见 STUB_FREE 的长注释）：抹掉 `texts` 里的文字框再找桩
+            _ink_s = ink
+            if STUB_FREE and texts:
+                try:
+                    from . import pincol as _pc
+                except ImportError:                       # pragma: no cover
+                    import pincol as _pc
+                try:
+                    _ink_s = _pc.text_free_ink(ink, texts, pad=STUB_FREE_PAD)
+                except Exception:                         # pragma: no cover
+                    _ink_s = ink
+            _sp = _stub_points(bb, _ink_s, _od,
+                               min_len=(STUB_MINLEN if STUB_GAP else 0.0))
+            _ev["stub_seen"] = len(_sp)
+            if STUB_GAP:
+                # gapfill：只补「没被任何已有触点覆盖」的长桩（见上面 ★★★ 注释）
+                _add = [q for q in _sp
+                        if not any(math.hypot(q[0] - r[0], q[1] - r[1]) <= STUB_GAPTOL
+                                   for r in pins)]
+                if _add:
+                    pins = list(pins) + _add
+                    _ev["stub"] = len(_add)
+                    _ev["stub_gap"] = len(_add)
+            else:
+                _few = (STUB_SPARSE and _sp
+                        and len(pins) < STUB_SPARSE_RATIO * len(_sp))
+                if STUB_UNION or not pins or _few:
+                    _b4 = len(pins)
+                    pins = _merge_stubs(pins, bb, _ink_s, _od)
+                    _ev["stub"] = max(0, len(pins) - _b4)
         # 去重（同一位置只留一个），再截断
         dedup: List[Tuple[float, float]] = []
         for p in pins:

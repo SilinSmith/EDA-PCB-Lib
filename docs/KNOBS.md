@@ -6,11 +6,11 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **354** 个开关。
+共 **360** 个开关。
 
 ## 目录
 
-- [stage1](#stage1)（104）
+- [stage1](#stage1)（110）
 - [stage2](#stage2)（92）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（113）
@@ -90,15 +90,21 @@
 | `STAGE1_PINC_TIP_TOL` | `"6.0"` | `stage1/pincol.py:149` |
 | `STAGE1_PIN_ATTR` | `"nearest"` | `stage1/nets.py:67` |
 | `STAGE1_PIN_ATTR_SLACK` | `"6"` | `stage1/nets.py:68` |
-| `STAGE1_PIN_AXIS` | `"0"` | `stage1/pins.py:159` |
-| `STAGE1_PIN_AXIS_RATIO` | `"1.2"` | `stage1/pins.py:161` |
-| `STAGE1_PIN_CLUSTER_IC` | `"5.0"` | `stage1/pins.py:87` |
+| `STAGE1_PIN_AXIS` | `"0"` | `stage1/pins.py:229` |
+| `STAGE1_PIN_AXIS_RATIO` | `"1.2"` | `stage1/pins.py:231` |
+| `STAGE1_PIN_CLUSTER_IC` | `"12.0"` | `stage1/pins.py:94` |
+| `STAGE1_PIN_INK_TEXT` | `"0"` | `stage1/pins.py:201` |
+| `STAGE1_PIN_INK_TEXT_PAD` | `"0.0"` | `stage1/pins.py:203` |
 | `STAGE1_PIN_JOIN_DIST` | `"12"` | `stage1/nets.py:37` |
 | `STAGE1_PIN_JOIN_FAR` | `"0"` | `stage1/nets.py:49` |
 | `STAGE1_PIN_JOIN_SYNTH` | `"3"` | `stage1/nets.py:59` |
 | `STAGE1_PIN_OUT_BOX` | `"12.0"` | `stage1/pins.py:55` |
-| `STAGE1_PIN_STUB` | `"sparse"` | `stage1/pins.py:129` |
-| `STAGE1_PIN_STUB_RATIO` | `"0.6"` | `stage1/pins.py:133` |
+| `STAGE1_PIN_STUB` | `"gapfill"` | `stage1/pins.py:137` |
+| `STAGE1_PIN_STUB_GAPTOL` | `"4.0"` | `stage1/pins.py:160` |
+| `STAGE1_PIN_STUB_MINLEN` | `"8"` | `stage1/pins.py:159` |
+| `STAGE1_PIN_STUB_RATIO` | `"0.6"` | `stage1/pins.py:141` |
+| `STAGE1_PIN_STUB_TEXT` | `"1"` | `stage1/pins.py:189` |
+| `STAGE1_PIN_STUB_TEXT_PAD` | `"0.0"` | `stage1/pins.py:191` |
 | `STAGE1_SPLIT_JUNCTIONS` | `"1"` | `stage1/wires.py:869` |
 | `STAGE1_SPLIT_TOL` | `"1.5"` | `stage1/wires.py:871` |
 | `STAGE1_WIRE_BRIDGE` | `"0"` | `stage1/wires.py:845` |

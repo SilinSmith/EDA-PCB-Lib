@@ -42,36 +42,49 @@ def main(argv):
             row.append("%12.2f" % s if s is not None else "%12s" % "-")
         print("%-7s" % c + "".join(row))
     print()
+    # 只跑子集的臂：通道均值与 Δ 必须在**所有臂都跑过的公共 case** 上算，否则
+    # 把缺的 case 当 0 会读出 −200 这种假读数（2026-10-10 踩过）。
+    common = [c for c in cases
+              if all((d.get(c) or {}).get("score") is not None for _n, d in arms)]
     for ch in ("component", "pin", "net_hypergraph", "net_line"):
         line = []
         for _n, d in arms:
-            vs = [(e.get(ch) or {}).get("f1") for e in d.values()]
+            vs = [(d[c].get(ch) or {}).get("f1") for c in common]
             vs = [v for v in vs if v is not None]
             line.append("%12.4f" % (sum(vs) / len(vs)) if vs else "%12s" % "-")
         print("%-7s" % ch + "".join(line))
-    line = []
+    line, nline = [], []
     for _n, d in arms:
         vs = [e.get("score") for e in d.values() if e.get("score") is not None]
-        line.append("%12.2f" % (sum(vs) / len(vs)))
+        line.append("%12.2f" % (sum(vs) / len(vs)) if vs else "%12s" % "-")
+        nline.append("%12d" % len(vs))
     print("%-7s" % "TOTAL" + "".join(line))
-    # 逐案单调性（相对第一臂）
-    print("\n相对 %s 的逐案 Δ（涨/平/跌）：" % base_name)
+    print("%-7s" % "n" + "".join(nline))
+    cline = []
+    for _n, d in arms:
+        vs = [d[c].get("score") for c in common]
+        cline.append("%12.2f" % (sum(vs) / len(vs)) if vs else "%12s" % "-")
+    print("%-7s" % ("COMMON%d" % len(common)) + "".join(cline))
+    # 逐案单调性（相对第一臂；只在两者都跑过的 case 上比）
+    print("\n相对 %s 的逐案 Δ（只算两臂都跑过的 case）：" % base_name)
     for n, d in arms[1:]:
-        up = dn = eq = 0
+        up = dn = eq = nc = 0
+        tot = 0.0
         for c in cases:
             s0 = (base.get(c) or {}).get("score")
             s1 = (d.get(c) or {}).get("score")
             if s0 is None or s1 is None:
                 continue
+            nc += 1
+            tot += s1 - s0
             if s1 > s0 + 1e-9:
                 up += 1
             elif s1 < s0 - 1e-9:
                 dn += 1
             else:
                 eq += 1
-        tot0 = sum((base.get(c) or {}).get("score") or 0.0 for c in cases)
-        tot1 = sum((d.get(c) or {}).get("score") or 0.0 for c in cases)
-        print("  %-12s Δ总分 %+7.2f  涨 %d / 平 %d / 跌 %d" % (n, tot1 - tot0, up, eq, dn))
+        print("  %-12s sum %+8.2f (n=%d)  mean %+6.2f  涨 %d / 平 %d / 跌 %d"
+              % (n, tot, nc, (tot / nc if nc else 0.0), up, eq, dn))
     return 0
 
 

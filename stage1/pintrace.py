@@ -51,6 +51,10 @@ class Pin:
     y: float
     dx: float
     dy: float
+    # 桩长（px）=「框边 ±4px 的起点」到「该行带内最靠外的墨像素(尖端)」的距离。
+    # 用来区分「真桩」（从框边往外画 ~20px）与「引脚号数字」（只贴框边 ~9px，见
+    # `stage1/pins.py` 的 STAGE1_PIN_STUB_MINLEN 注释）。旧调用方不看这个字段。
+    ln: float = 0.0
 
 
 # --------------------------------------------------------------- 找引脚
@@ -92,7 +96,8 @@ def find_pins(ink, boxes, band=BAND, min_run=MIN_RUN, min_stub=MIN_STUB):
                 x_start = sx + (4 if dx > 0 else -4)          # 从框边稍外开始，跳开框线本身
                 if abs(tip - x_start) < min_stub:
                     continue
-                pins.append(Pin(bi, float(x_start), float(yy), dx, 0.0))
+                pins.append(Pin(bi, float(x_start), float(yy), dx, 0.0,
+                                ln=float(abs(tip - x_start))))
 
         # ---- 上下两条边：沿 x 扫 ----
         for side, sy, dy in (("T", y0, -1.0), ("B", y1, 1.0)):
@@ -115,7 +120,8 @@ def find_pins(ink, boxes, band=BAND, min_run=MIN_RUN, min_stub=MIN_STUB):
                 y_start = sy + (4 if dy > 0 else -4)
                 if abs(tip - y_start) < min_stub:
                     continue
-                pins.append(Pin(bi, float(xx), float(y_start), 0.0, dy))
+                pins.append(Pin(bi, float(xx), float(y_start), 0.0, dy,
+                                ln=float(abs(tip - y_start))))
     return pins
 
 
