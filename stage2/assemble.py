@@ -30,28 +30,33 @@ VALUE_TYPES = ("r", "c", "l", "fuse", "crystal_2pin", "crystal_3pin",
                "crystal_4pin", "crystal")
 LABEL_TOL = 16.0        # 网络标签离走线自由端多远还算「贴在这条线上」
 FREE_TOL = 2.0          # 两个端点离多近算「接上了」
-# 位号没读出来时**要不要**输出这颗元件（默认**输出**，键用 `pNNN` 兜底）。
+# 位号没读出来时**要不要**输出这颗元件（默认**丢掉**，兜底键本来是 `pNNN`）。
 #
-# 旧口径（`schematic_parser/metrics.py` 第一版）下默认是「丢掉」，理由是：
-# 官方 component_f1 遍历 `set(gt) | set(pred)` 的键并集，键一字符之差就是
-# 「多一个 + 少一个」；GT 里 44% 的元件键是画面上根本不存在的 `∅NNN`
-# （全局对象计数器，不可复现），我们永远给不出那些键，输出它们只会白送 FP。
-# 当时实测：只丢兜底键元件 7.2861 → 8.2617，连 net 超图里的引用一起剪
-# 8.2617 → 9.7805（合计 +2.49 分）。
+# ★ 2026-10-13 官方评测机返给我们的第 6 次提交报告把它**翻了回来**，这次是硬读数
+#   （`20261009引入\...\scoring_result (5)\report\submission\20261009T140206Z\<case>.json`）：
+#   * 官方 component 是**纯键匹配**：case 1 里 GT 的 8 个 `∅NNN`（5 gnd + 3 v）
+#     全部记 `component.missing`，我们输出的 8 个 `pNNN` 全部记 `component.extra`
+#     （`component f1 tp 6`、`key_f1 tp 7`、`fn 16 = 22 − 6`）；
+#   * 我们的 `pNNN` 与 GT 的 `∅NNN` **坐标几乎重合**（3 个 v 差 ≤1.2px），
+#     所以「靠坐标匹配」在这一版 scorer 上**对 `p` 键没有发生**；
+#   * 机制上是必然的：`pNNN` 永远不可能是 tp ⇒ 只贡献 fp；它的引脚在 net 超图里
+#     也永远配不上 GT 的 `∅NNN.<随机号>`（官方 Q&A：编号是随机生成的）。
+#   把 10 张官方 case 的 `pNNN` 元件 + 引脚 + 超图引用整体删掉、用官方尺重打
+#   （`work\tools\dev\_offscore.py --engine official`）：
+#     **52.3666 → 62.9713（+10.6047）**，逐案全正（最大 case 2 +14.30），
+#     四个通道一起变好。
 #
-# **2025-10 官方 Q&A 推翻了这条**（`docs/QA_2025.txt` 评测 Q5）：
-# 「新的10个golden case仍有大量 component key 是无法根据图片得到的内部编号
-# 如 ∅109，请问这些组件如何进行 componentF1 的判分？」→
-# **「Vcc和gnd是∅，直接是坐标匹配」**；评测 Q6 又补「GND的序号名字不影响评分」。
-# 也就是说**那 44% 的 `∅NNN` 根本不靠键匹配、靠坐标匹配**，弃掉它们等于把
-# 一半的 GT 直接扔掉。实测（220 张、官方口径 `--unkeyed-match gt`）：
-#   `STAGE2_DROP_UNKEYED=1` → **15.5084**（component F1 0.2610 tp 1747）
-#   `STAGE2_DROP_UNKEYED=0` → **21.1165**（component F1 0.5077 tp 5077）
-# 足足 **+5.61 分**（component 的 tp 翻了近三倍，`component.missing` 6594→3270）。
-# netH / line 各掉一点点（pred 引脚变多、FP 变多），但远不抵 component 的收益。
+# 旧口径（`schematic_parser/metrics.py` 的 `unkeyed_match='gt'`）下默认是「输出」：
+# 那条尺子**自己给无名元件做了坐标匹配**（这一版官方 scorer 没有），220 张实测
+# `=1` 15.5084 vs `=0` 21.1165 ⇒ 结论正好相反，**该实测已作废**（同一批官方 pred
+# 上旧尺 comp 0.946 vs 官方 0.488，总分 58.16 vs 44.29，见 `schematic_parser/official.py`）。
 #
-# ⇒ 默认改成 **0（输出）**。`STAGE2_DROP_UNKEYED=1` 可退回旧行为做对照。
-DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "0")
+# ⚠️ 唯一没被证伪的替代解释：scorer 只在**双方键都是 `∅` 形态**时才坐标匹配
+#   （官方 2025 Q&A 说过「Vcc和gnd是∅，直接是坐标匹配」）。要押这条就把兜底键
+#   改回 `∅NNN` 形态 —— 但实测我们的 gnd 框在 JSON 系里比 GT 高 ~14px（`v` 框只差
+#   1.2px），10 张里能靠坐标配上的只有三分之一左右，收益远小于丢掉它们的 +10.6，
+#   所以默认仍是**丢掉**。`STAGE2_DROP_UNKEYED=0` 可退回输出 `pNNN` 做对照。
+DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "1")
 
 # ---------------------------------------------------------------------------
 # ★★ 内部合并类 `tp` 的**文本闸门**（只跟 `STAGE1_MERGE_TP=1` 配套，默认 off）。
@@ -252,7 +257,11 @@ FKEY_RE = re.compile(r"^p\d{3,4}$")
 #      ⇒ 电源节点在折叠口径下确实值钱。
 #    * 代价（诚实记录）：万一官方仍是字面口径，同一改动是 **−4.44**（57.0646 vs 61.5084）。
 #      缓解见下面的 `NET_DROP_PWRONLY`：只保留「挂在真实成员上」的电源引用。
-# 注意：component 那一项**始终要输出这些元件**（它们靠坐标匹配拿 tp），这里只管 net 引用。
+# ⚠️ 2026-10-13 起 `STAGE2_DROP_UNKEYED=1`（默认）**已经把这批元件整个丢掉**，
+#    连 `keymap` 都没有条目 ⇒ `:1104` 的 `keymap.get(cid)` 直接落空，引用本来就不会
+#    写进超图，本开关只在 `DROP_UNKEYED=0`（退回输出 `pNNN`）时才有意义。
+#    同时「component 靠坐标匹配拿 tp」这条前提已被官方报告证伪（见文件顶
+#    `DROP_UNKEYED` 的长注释：官方 case 1 的 8 个 `∅NNN` 全记 `missing`）。
 NET_DROP_UNKEYED = env_on("STAGE2_NET_DROP_UNKEYED", "0")
 
 # ★ **只由电源/地符号组成的孤立网要不要丢**（`STAGE2_NET_DROP_PWRONLY`，默认 `1`）。

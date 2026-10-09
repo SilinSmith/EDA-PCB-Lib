@@ -51,6 +51,16 @@ BASE_DIR = ROOT / "work" / "_fast_base"
 METRICS = ["component", "pin", "net_hypergraph", "net_line"]
 SHORT = {"component": "元件", "pin": "引脚", "net_hypergraph": "网络", "net_line": "导线"}
 
+# ★ 打分引擎：`official` = `schematic_parser/official.py`，逐位复刻官方 scorer
+#   （2026-10-13 用官方评测机返回的那批 `*_Pred.json` 标定：comp/pin/connectivity
+#   三个通道的 10 案均值与逐案 F1 **精确命中**官方 report，wire 只在 1 案上有
+#   0.0078 的差 —— 那是匈牙利配对并列最优时的打破方式不同，soft_tp 完全相同）。
+#   `legacy` = 老的 `metrics.py`（`bbox_tol=20`、`unkeyed_match='gt'`、
+#   非 box 引脚号折叠），在**同一批官方 pred** 上给出 comp 0.946 vs 官方 0.488、
+#   总分 58.16 vs 44.29 ⇒ 老尺子松得离谱，**新 A/B 一律用 official**；
+#   只有要和历史 `work/_fast_base/*.json` 对比时才用 `--engine legacy`。
+ENGINE = "official"
+
 
 def lookup(cid, exact, digits):
     """`0092` 这种带前导零的名字，`resolve` 只试原样和去非数字，试不出 `92`。"""
@@ -111,12 +121,19 @@ def score(cases, cfg):
             continue
         gt = load_json(Path(case.json_path))
         pr = load_json(pp)
-        sc = evaluate_case(gt, pr, case_id=case.case_id, cfg=cfg)
+        if ENGINE == "official":
+            from schematic_parser import official as OFF
+            sc = OFF.evaluate_case(gt, pr, case_id=case.case_id)
+            chans = {"component": sc.component, "pin": sc.pin,
+                     "net_hypergraph": sc.connectivity, "net_line": sc.wire}
+        else:
+            sc = evaluate_case(gt, pr, case_id=case.case_id, cfg=cfg)
+            chans = {m: getattr(sc, m) for m in METRICS}
         rows.append({
             "case": case.case_id, "split": case.split, "score": sc.score,
-            "out": str(OUT_DIR),
-            **{m: {"f1": getattr(sc, m).f1, "tp": getattr(sc, m).tp,
-                   "fp": getattr(sc, m).fp, "fn": getattr(sc, m).fn} for m in METRICS},
+            "out": str(OUT_DIR), "engine": ENGINE,
+            **{m: {"f1": chans[m].f1, "tp": chans[m].tp,
+                   "fp": chans[m].fp, "fn": chans[m].fn} for m in METRICS},
             "diag": dict(sc.diagnostic or {}),
         })
     return rows
@@ -187,11 +204,15 @@ def main(argv=None):
     ap.add_argument("--save", default="", help="把本次成绩存为基线 <名字>")
     ap.add_argument("--cmp", default="", help="和基线 <名字> 比")
     ap.add_argument("--list", action="store_true", help="只打印默认 case 列表")
+    ap.add_argument("--engine", default="official", choices=("official", "legacy"),
+                    help="official（默认）= 与官方评测机逐位一致的尺子；"
+                         "legacy = 老的 metrics.py（只用于和历史基线比）")
     a = ap.parse_args(argv)
 
-    global OUT_DIR
+    global OUT_DIR, ENGINE
     if a.out:
         OUT_DIR = ROOT / "work" / ("_fast_out_" + a.out.strip().rstrip("/\\"))
+    ENGINE = a.engine
 
     cases = [c.strip() for c in a.cases.split(",") if c.strip()] or DEFAULT_CASES
     if a.list:
@@ -200,6 +221,7 @@ def main(argv=None):
 
     _, names = ensure_inputs(cases)
     print("case 集合（%d 张）：%s" % (len(names), " ".join(names)))
+    print("打分引擎：%s" % ENGINE)
     if not a.score_only:
         extra = []
         if a.no_vlm:
@@ -216,6 +238,10 @@ def main(argv=None):
         bp = BASE_DIR / (a.cmp + ".json")
         if bp.exists():
             base = {r["case"]: r for r in json.loads(bp.read_text(encoding="utf-8"))}
+            be = {r.get("engine", "legacy") for r in base.values()}
+            if be and ENGINE not in be:
+                print("!! 基线 %s 是用 %s 尺子打的，本次是 %s ⇒ Δ 不可比，重打基线！"
+                      % (a.cmp, "/".join(sorted(be)), ENGINE))
         else:
             print("! 找不到基线 %s" % bp)
     table(rows, base)

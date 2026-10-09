@@ -417,6 +417,19 @@ def _dir_at(walk: Sequence[Tuple[int, int]], from_end: int, k: int = 7):
 
 # ---------------------------------------------------------------- fitting
 
+def _cross2(a, b) -> float:
+    """二维叉积的 z 分量：a.x*b.y - a.y*b.x。
+
+    ★ 不能用 `np.cross`：numpy 自 2.0 起对 2 元素向量弃用（DeprecationWarning），
+    到评测容器里的 **numpy 2.5.3** 直接抛
+      `ValueError: Both input arrays must be (arrays of) 3-dimensional vectors,
+       but they are 2 and 2 dimensional instead.`
+    第六次提交（第一次真正跑起来）就死在这一行上 —— `rdp` 是骨架拟合的必经之路，
+    阶段一 10 张图全 FAIL、耗时 31.4 s、导出 0 份。手算与旧版 `np.cross` 完全等价。
+    """
+    return float(a[0]) * float(b[1]) - float(a[1]) * float(b[0])
+
+
 def rdp(points: Sequence[Tuple[float, float]], eps: float = 1.6) -> List[Tuple[float, float]]:
     if len(points) < 3:
         return list(points)
@@ -427,7 +440,7 @@ def rdp(points: Sequence[Tuple[float, float]], eps: float = 1.6) -> List[Tuple[f
     if L < 1e-9:
         dists = [float(np.hypot(*(np.asarray(p, dtype=float) - p0))) for p in points]
     else:
-        dists = [abs(float(np.cross(d, np.asarray(p, dtype=float) - p0))) / L for p in points]
+        dists = [abs(_cross2(d, np.asarray(p, dtype=float) - p0)) / L for p in points]
     i = int(np.argmax(dists))
     if dists[i] <= eps:
         return [points[0], points[-1]]

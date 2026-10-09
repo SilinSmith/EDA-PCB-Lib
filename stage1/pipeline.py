@@ -481,6 +481,22 @@ def _mark(r) -> str:
     return f"ok*{n}" if n else "ok"
 
 
+def _blame(r):
+    """★ 失败时把 error / tb 打出来（评测机踩坑后补的：`FAIL` 后面必须有下文）。
+
+    原先 `run_cases` 只打 `_mark(r)`，`FAIL` 后面就没有下文了，而 `_worker` 早就把
+    `error` 和 `tb` 塞进了返回字典（见 `:505`）—— 于是「哪张图、为什么挂」在容器日志里
+    完全不可见（第 5 次提交就是 10 张图全是同一个 FAIL，只能从 decision_log.json 反查）。
+    这里只加日志，不改任何判定。
+    """
+    if r.get("ok"):
+        return
+    print(f"      !! error: {r.get('error')}", flush=True)
+    tb = (r.get("tb") or "").rstrip()
+    for line in tb.splitlines():
+        print(f"      !! {line}", flush=True)
+
+
 def _worker(job):
     """进程池 worker：job = (case_dict, out_dir, kwargs)。"""
     case, out_dir, kw = job
@@ -516,6 +532,7 @@ def _worker(job):
 def _report_one(r):
     print(f"  {r['case']:<20}{_mark(r)}  "
           f"{r.get('timing', {}).get('total_s', '?')} s", flush=True)
+    _blame(r)
 
 
 def run_cases(cases, out_dir, workers: int = 1, **kw):
