@@ -117,7 +117,7 @@ FinalScore               = FinalScore_Accuracy + FinalScore_Data   # Data ≤ 10
 
 ## 6. 官方元器件库：当「整名/整号语料」没用（0），当「补号 / 改名」的两条规则值 **+2.46**（2026-10 结论修正）
 
-体检工具（都在 `work\tools\diag\`，需从仓库根跑；库路径默认 `work\data\cpntLibrary.json`）：
+体检工具（都在 `work\tools\diag\`，需从仓库根跑；库路径默认 `eda-pcb\data\cpntLibrary.json`，见 `assets.cpnt_library()` 的候选链）：
 `_libcov.py`（库对 GT 的覆盖率）、`_libopp.py`（库对我方交付产物的机会上界）、
 `_pinlat.py`（IC 引脚排布的规则性）、`_pinpos.py`（引脚点距误差分解）、
 `_pinmiss.py`（55 个缺失引脚的分桶）、`_libnum.py`（库当引脚号来源的上界）、
@@ -160,7 +160,9 @@ FinalScore               = FinalScore_Accuracy + FinalScore_Data   # Data ≤ 10
 - 实现要点：规则 A 需要「桩 + 绑定到该桩的引脚名」（stage2 `_assigned` 的 `raw_pins[j].name`；
   ⚠️ 名字读数框**不在引脚点上**，用框中心判「名读到」会得到 0/55），规则 B 需要「读到的号」；
   两条规则都**不需要 GT**，且必须**唯一映射**才动手（多号时精度掉到 90%）。
-- 代价：交付包要带上 `work\data\cpntLibrary.json`（1.76 MB / 337 键），stage2 要能加载它。
+- 代价：交付包要带上库文件（1.76 MB / 337 键），stage2 要能加载它。★ 2026-10-12 起
+  **已随仓库提交在 `eda-pcb\data\cpntLibrary.json`**（镜像 `COPY eda-pcb → /submission` 即带上），
+  旧默认路径是本机 `work\data\`（不进仓也不进镜像）。
 
 **开工前先体检**：任何「接官方资产提分」的想法，先按上面这套（覆盖率 → 我方可修上界 → 交付级模拟）量一遍再写代码。
 反过来也成立：**一次判负不要封死整个资产**——本轮就是「整名语料判负」之后在同一份资产里找到 +2.46 的规则 A/B。

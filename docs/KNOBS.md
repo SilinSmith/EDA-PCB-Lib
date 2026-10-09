@@ -137,7 +137,7 @@
 | `STAGE2_BOX_PIN_PARTIAL` | `"1"` | `stage2/assemble.py:136` |
 | `STAGE2_CKPT` | `r"Y:\workspace\EDA\work\ocr_mix\runs\best.pt"` | `stage2/text.py:42` |
 | `STAGE2_DBG_CID` | — *(6 处)* | `stage2/assign.py:855` |
-| `STAGE2_DBG_PINS` | — *(3 处)* | `stage2/assemble.py:864` |
+| `STAGE2_DBG_PINS` | — *(3 处)* | `stage2/assemble.py:866` |
 | `STAGE2_DEMOTE_HARD` | `"0.05"` | `stage2/structmatch.py:35` |
 | `STAGE2_DESIG_MAXW` | `"6.0"` | `stage2/assign.py:164` |
 | `STAGE2_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:54` |
@@ -189,7 +189,7 @@
 | `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:457` |
 | `STAGE2_PREFIX` | `"strict"` | `stage2/assign.py:38` |
 | `STAGE2_PREFIX_SKEL` | `"0"` | `stage2/assign.py:48` |
-| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1101` |
+| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1103` |
 | `STAGE2_STEAL` | `"80"` | `stage2/assign.py:220` |
 | `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:262` |
 | `STAGE2_TIGHT_ROLES` | `"pin_number,pin_name"` | `stage2/text.py:129` |

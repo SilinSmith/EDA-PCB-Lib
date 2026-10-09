@@ -466,8 +466,12 @@ CRNN 在**真值紧框**上 exact **0.843**、在 `stage1` 紧框上只有 **0.1
     改动更少 116/305/720），说明派生档的回退**不是**模糊键造成的，故保持 0.85 不动。
 - **`stage2` 直出这条路上两条规则几乎不触发**（`Name` 是 OCR 原文，17 个 box 只有 1 个命中库），
   收益是在**交付链**上拿到的（融合层会重建文档，`fusion/run.py:63/128`）。
-- **交付包必须带 `work\data\cpntLibrary.json`**（1.76 MB）；`STAGE2_CPNT_LIB` 默认按
-  `stage2/libpins.py` 上溯到仓库根解析，**与 CWD 无关**（Linux 交付同样成立）。
+- **交付包必须带 `cpntLibrary.json`**（1.76 MB）；★ 2026-10-12 修：旧默认按 `stage2/libpins.py`
+  上溯到**仓库根** `work\data\` —— 那正是**不进仓库也不进镜像**的目录，容器里解析成
+  `/work/data/cpntLibrary.json` 必然缺失，`LibCtx.load()` 只打一行日志自动跳过 ⇒
+  **白丢实测 +1.60**。现已把库随仓库提交在 `eda-pcb\data\cpntLibrary.json`，并与两个权重
+  共用 `assets.resolve()` 的候选链（`STAGE2_CPNT_LIB` → 包内 → 本机兜底），**与 CWD 无关**
+  （Linux 交付同样成立）。
 
 ---
 

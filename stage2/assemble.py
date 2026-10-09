@@ -716,14 +716,16 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     # `tp` 闸门的台账（只在本函数内累计，退出前打印；`STAGE2_TP_LEDGER=1` 时）。
     _tp_ledger: List[dict] = []
 
-    # ★ `STAGE2_LIB_PINS`：官方元器件库（`cpntLibrary`）的引脚先验总闸。**默认关**。
-    # 关掉时 `libpins` 这个模块**根本不会被 import**（下面那个 `LIB_PINS` 常量只是
+    # ★ `STAGE2_LIB_PINS`：官方元器件库（`cpntLibrary`）的引脚先验总闸。**默认 `1`（开）**
+    # —— 2026-10-09 依据 220 张拆分回归从 0 翻过来（交付口径官方 9 张 +1.60、九张零回归）。
+    # 关掉时 `libpins` 这个模块**根本不会被 import**（上面那个 `LIB_PINS` 常量只是
     # 读一个环境变量，`libpins` 的模块级代码不会去读 1.76 MB 的库文件），于是
     # 产物与不挂接这条通道时逐字节一致。开的时候，整份文档**只加载库一次**
     # （`libpins.LibCtx` 自带惰性 + 幂等 `load()`）。
-    # 依据与两条规则见 `stage2/libpins.py` 的模块 docstring；为什么默认关见那里
-    # 「默认关的原因」（收益靠元件型号名被读对，stage2 直出的 `Name` 是 OCR 原文，
-    # 17 个 box 里只有 1 个能命中库 ⇒ 收益在融合层/交付链，不在 stage2 单跑）。
+    # 依据与两条规则见 `stage2/libpins.py` 的模块 docstring。★ 当初默认关的原因是
+    # 「收益靠元件型号名被读对，而 stage2 直出的 `Name` 是 OCR 原文，17 个 box 里只有
+    # 1 个能命中库」⇒ 收益在**融合层/交付链**（融合会重建文档），不在 stage2 单跑。
+    # 库文件路径见 `libpins.lib_path()`（包内 `data/cpntLibrary.json` 优先）。
     _LIB_CTX = None
     if LIB_PINS:
         from stage2 import libpins as _libpins

@@ -631,7 +631,7 @@ python -X utf8 work\tools\diag\_pinmiss.py --pred work\_fnew --assigned work\_fn
 |---|---|
 | 实现 | `eda-pcb\stage2\libpins.py`（新）+ `eda-pcb\stage2\assemble.py` `build_doc` 的 box 引脚路径 |
 | 总闸 | `STAGE2_LIB_PINS`，**默认 `"1"`（开）** —— 2026-10-09 依据下表 220 张拆分回归从 `0` 翻过来；`STAGE2_LIB_PINS=0` 时 `libpins` 根本不会被 import，产物逐字节不变 |
-| 库路径 | `STAGE2_CPNT_LIB`，默认仓库根 `work\data\cpntLibrary.json` |
+| 库路径 | `STAGE2_CPNT_LIB`；默认走 `assets.cpnt_library()` 候选链：**包内 `eda-pcb\data\cpntLibrary.json`** → 本机 `work\data\` → `赛题资料\` → 数据集目录（2026-10-12 前默认写死本机 `work\data\`，容器里必然缺） |
 | 模糊阈值 | `STAGE2_LIB_PINS_FUZZY`，默认 `0.85`（**只用来找库键**；某条引脚仍走「唯一」判定） |
 | 诊断 | `STAGE2_LIB_PINS_DBG=1` 打印补/改了哪几处；`python -X utf8 stage2\libpins.py` 跑自检 |
 
@@ -693,8 +693,11 @@ python -X utf8 work\tools\diag\_split220.py work\_libpins220\_score_off.json wor
 116/305/720）⇒ 派生档的回退不是模糊键造成的，阈值保持 0.85。另：**交付口径官方 9 张 +1.60
 九张零回归**（`RESULTS.md` §2.6 表；那才是真正决定分数的口径）。
 
-⚠️ **交付包必须带上 `work\data\cpntLibrary.json`（1.76 MB / 337 键）**：默认已开，
-它是运行时依赖，缺文件只打印一行 `[libpins] 库不可用` 并自动跳过（不炸管线，但也就没有收益）。
+⚠️ **交付包必须带上 `cpntLibrary.json`（1.76 MB / 337 键）**：默认已开，它是运行时依赖。
+**2026-10-12 修**：库已随仓库提交在 `eda-pcb\data\cpntLibrary.json`，`libpins.lib_path()` 与
+`assets.cpnt_library()` 都优先解析它。旧默认写死 `WORKSPACE\work\data\` ⇒ 官方镜像里解析成
+`/work/data/cpntLibrary.json`，**必然不存在**；缺文件只打印一行 `[libpins] 库不可用` 并自动
+跳过（不炸管线、能跑出分，但**白丢实测 +1.60**）—— 这是「测出来有分、交付里没有」的典型陷阱。
 
 ### 引脚坐标超差：**「发的是 base 不是 tip」被判负**（2026-10，`_pintip.py`）
 
