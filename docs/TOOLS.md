@@ -266,10 +266,10 @@
 | `_labelaudit_gt_visual` | 141 | 肉眼复核工具：把可疑 GT 框渲染成 ASCII 字符网格（或放大裁图）。 |
 | `_leakpair` | 79 | 对照 train 侧的 `synth_<id>` 与 val 侧的 `200_train_cases-<id>__full` 的标注直方图。 |
 | `_lencal` | 142 | 长度律的**域校准**：`fusion/charwidth.py` 是从**标注框**（manifest）拟合的， |
-| `_libcov` | 195 | 元器件库（官方 cpntLibrary）对 GT 的覆盖率体检。 |
+| `_libcov` | 195 | 元器件库（官方 `cpntLibrary` / BoxIC 库）对 GT 的覆盖率体检（`--lib <file>` 可换库）。 |
 | `_libnum` | 240 | 官方元器件库当「引脚号来源」的机会 —— 只针对**名读到了、号没有**的引脚。 |
-| `_libopp` | 187 | 量化「官方元器件库 cpntLibrary 能给我方当前产物补多少分」的机会。 |
-| `_libpins_cpu` | 107 | 交付级等价 A/B（**纯 CPU**，不碰 GPU / LM Studio），并产出可打分的 JSON 目录。 |
+| `_libopp` | 187 | 量化「官方元器件库能给我方当前产物补多少分」的机会。 |
+| `_libpins_cpu` | 107 | 交付级等价 A/B（**纯 CPU**，不碰 GPU / LM Studio），并产出可打分的 JSON 目录；`--lib` 换库文件（**换默认库就是用它量的**）。 |
 | `_libsim` | 294 | **不改管线**的模拟：把「官方库给出的引脚号」直接补进交付 JSON，再打分。 |
 | `_lineprobe` | 163 | 为什么 NetLineF1 只有 0.019？ |
 | `_lineweld` | 170 | `net_line`（权重 0.10）爆 0 的对策实验：把「共线且首尾相接」的导线片段焊成整条直线。 |

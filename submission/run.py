@@ -27,6 +27,12 @@
 整批失败都不会让 final_results 少产物。
 
 **每张图独立 try/except**：一张图炸掉不能拖垮整批（评测是整目录跑，2 小时预算）。
+★ 2026-10-14（用户 m42543「考虑各种灾难性现场」）—— 上面两条**曾经只是口号**，现已落实：
+`main` = `parse_args → _fix_device → try _run except _safety_net`，`_safety_net` 会对输入目录
+**每张图**补空壳 `_Pred.json` 并写 `decision_log.json`（`summary.fatal`）后返回 3；阶段一
+`run_cases` 的进程池崩溃改在本进程串行补跑；导出层对没有产物的 case 写空壳（不是 `continue`）；
+`_fix_device` 在无 CUDA 时把 `-device 0` 回退成 `cpu`；同名 case 去重；巨图走
+`stage1/pipeline.py:_imread_bgr` 的降采样护栏。故障注入测试见 `tools/dev/_hardtest.py`。
 """
 from __future__ import annotations
 
@@ -66,6 +72,25 @@ def discover_inputs(input_dir: Path):
         files = sorted(p for p in input_dir.rglob("*")
                        if p.is_file() and p.suffix.lower() in IMAGE_EXT)
     return [(p.stem, p) for p in files]
+
+
+def _dedupe_items(items):
+    """按 `<case_name>` 去重（保序，保留排序后的第一个）。返回 `(kept, dropped)`。
+
+    ★ 灾难现场加固（用户 m42543）：`a.png` + `a.jpg`（或递归到不同子目录的同名图）
+    会让 `stage1` 输出**同名互相覆盖**（`-workers>1` 时还是并发写同一个文件，
+    可能写出半个 JSON），最后只得到 1 份 `_Pred.json`，而 `run.py` 的导出计数
+    与 `ok1 = {r["case"] ...}` 都察觉不到。同名输入在评测端本身就是歧义（
+    `<case_name>_Pred.json` 只有一个名字），所以**保留第一个、把被丢弃的显式报出来**。
+    """
+    seen, kept, dropped = set(), [], []
+    for cid, p in items:
+        if cid in seen:
+            dropped.append((cid, str(p)))
+            continue
+        seen.add(cid)
+        kept.append((cid, p))
+    return kept, dropped
 
 
 def main(argv=None) -> int:
@@ -174,7 +199,38 @@ def main(argv=None) -> int:
                     type=float, default=0.0,
                     help="改为「给 LLM 留出 N MiB」；优先级高于 -gpu-frac。")
     a = ap.parse_args(argv)
+    _fix_device(a)
+    try:
+        return _run(a)
+    except Exception as e:                                          # noqa: BLE001
+        return _safety_net(a, e)
 
+
+def _fix_device(a) -> None:
+    """**CPU 回退**（灾难现场加固，用户 m42543）。
+
+    提交默认 `-device 0`；官方基线镜像里未必有 GPU。`ultralytics` 在 CUDA 不可用时对
+    显式指定的 `device=0` 是**直接抛 ValueError**（`torch_utils.py:326-346`），而
+    `stage1` 的 `_worker` 会把它吞成 `ok: False` ⇒ **220 张全失败、退出码 0、0 产物**。
+    这条我们自己的 `textrec.infer.normalize_device` 早就做了，语义不一致，这里对齐。
+    只改「看起来是卡号/cuda 的那种值」，显式 `cpu` 不动。
+    """
+    d = str(getattr(a, "device", "") or "").strip().lower()
+    if not (d.isdigit() or d.startswith("cuda")):
+        return
+    try:
+        import torch
+        ok = bool(torch.cuda.is_available())
+    except Exception:                                               # noqa: BLE001
+        ok = False
+    if not ok:
+        print("[run] ⚠️ 请求 device=%r 但本机 torch.cuda.is_available()=False ⇒ "
+              "回退 CPU（否则 YOLO 会对每张图抛 ValueError，整批 0 产物）"
+              % (a.device,), flush=True)
+        a.device = "cpu"
+
+
+def _run(a) -> int:
     # ★ 在碰 torch / ultralytics 之前把显存上限设好。LLM（LM Studio）和管线
     # 共用一张卡，PyTorch 默认会「能用多少用多少」，把 LLM 挤到 CPU 或自己 OOM。
     if a.gpu_headroom > 0:
@@ -208,6 +264,12 @@ def main(argv=None) -> int:
                  "并发把总量放大 %d 倍，LLM 会被挤。" % (a.workers, a.workers))
 
     items = discover_inputs(in_dir)
+    items, _dup = _dedupe_items(items)
+    if _dup:
+        _log(fp, "⚠️ 输入里 %d 张图与别的图**同名**（`<case_name>` 相同）：%s ⇒ 只保留第一个"
+                 "（同名无法产出两份独立的 `<case_name>_Pred.json`；`-workers>1` 时"
+                 "同名还会并发写同一个 stage1 文件）"
+             % (len(_dup), ", ".join("%s <- %s" % (c, p) for c, p in _dup[:6])))
     if a.cases:
         want = {c.strip() for c in a.cases.split(",") if c.strip()}
         items = [(c, p) for c, p in items if c in want]
@@ -223,7 +285,15 @@ def main(argv=None) -> int:
 
     from stage1.detect import DEFAULT_WEIGHTS
     from stage1.pipeline import run_cases
-    _log(fp, "权重 " + json.dumps(assets.describe(), ensure_ascii=False))
+    _assets = assets.describe()
+    _log(fp, "权重 " + json.dumps(_assets, ensure_ascii=False))
+    # ★ 加固：资产缺失**当时就喊**。三个资产里有任何一个不在，对应通道会静默降级
+    #   （YOLO 权重缺失 = stage1 全灭；CRNN 缺失 = 位号/值全空但产物齐全；
+    #   元件库缺失 = 引脚补号/改名白丢实测 +1.60）——「能跑出分但少一大截」最难查。
+    for _k, _v in (_assets or {}).items():
+        if isinstance(_v, dict) and _v.get("exists") is False:
+            _log(fp, "⚠️ 资产缺失：%s = %s —— 该通道会静默降级，"
+                     "请检查镜像里是否带上了这个文件" % (_k, _v.get("path")))
 
     # ---------------------------------------------------------- 阶段一
     cases = [Case(split="input", case_id=cid, png_path=str(p), json_path=None)
@@ -244,6 +314,7 @@ def main(argv=None) -> int:
     engine = TextEngine(device=a.device)
     _log(fp, "识别器 " + engine.describe())
     s2_rows = []
+    n_prog = 0
     t0 = time.time()
     for i, cid in enumerate([c.case_id for c in cases if c.case_id in ok1], 1):
         try:
@@ -251,10 +322,23 @@ def main(argv=None) -> int:
             s2_rows.append(r)
             _log(fp, "  [%d] %-28s 元件 %-4d 位号 %-4d %.1fs"
                  % (i, cid, r["n_components"], r["n_designator"], r["t_total"]))
+            # ★ 渐进导出（灾难现场加固，用户 m42543）：阶段三是 LLM（~30 s/张）、
+            #   VLM 补强 **~3.7 min/张**，19 张交付口径就要 55 min，220 张数小时；
+            #   被判题机按墙钟硬杀时**只有已经落进 `final_results/` 的才有分**。
+            #   这里每完成一张先把阶段二文档顶上去，后面各层照旧覆盖（导出优先序不变，
+            #   分数与非渐进路径逐位相同）⇒ 任何时刻被杀都不至于整批空手。
+            try:
+                shutil.copyfile(s2_dir / ("%s.json" % cid),
+                                final_dir / ("%s_Pred.json" % cid))
+                n_prog += 1
+            except Exception as _e:                               # noqa: BLE001
+                _log(fp, "  ⚠️ 渐进导出失败 %s: %s: %s"
+                     % (cid, type(_e).__name__, _e))
         except Exception as e:                                    # noqa: BLE001
             _log(fp, "  [%d] %-28s 阶段二失败 %s: %s" % (i, cid, type(e).__name__, e))
             fp.write(traceback.format_exc()[-800:] + "\n")
-    _log(fp, "阶段二完成 %d 张，用时 %.1fs" % (len(s2_rows), time.time() - t0))
+    _log(fp, "阶段二完成 %d 张，用时 %.1fs（渐进导出 %d 份）"
+         % (len(s2_rows), time.time() - t0, n_prog))
 
     # ---------------------------------------------------------- 阶段三
     from stage3.run import process as s3_process
@@ -446,10 +530,10 @@ def main(argv=None) -> int:
                             if x.get("case") not in _new]
                 _merged = sorted(_old + fusion_rows,
                                  key=lambda x: str(x.get("case") or ""))
-                _rp.write_text(
+                _atomic_write_text(
+                    _rp,
                     json.dumps({"cases": _merged, "run_dir": str(runs)},
-                               ensure_ascii=False, indent=1),
-                    encoding="utf-8")
+                               ensure_ascii=False, indent=1))
                 _log(fp, "  逐轮明细 %s（现共 %d 张）"
                      % (_rp.name, len(_merged)))
             except Exception as exc:                    # noqa: BLE001
@@ -463,6 +547,7 @@ def main(argv=None) -> int:
     # ---------------------------------------------------------- 导出
     _log(fp, "=== 导出 final_results ===")
     n_export = 0
+    n_shell = 0
     exported = set()
     for cid, _p in items:
         # 导出优先序：融合层 > VLM 补强 > 阶段三 > 阶段二。
@@ -475,12 +560,20 @@ def main(argv=None) -> int:
                 src = _cand
                 break
         if src is None:
-            _log(fp, "  %-28s 没有产物（阶段一/二失败）" % cid)
+            # ★ 加固：以前这里只记一行日志就 `continue` ⇒ 该 case 在
+            #   `final_results/` 里**一份文件都没有**。若评测端把「缺文件」当致命
+            #   错误，就是整批 0 分。现在写一份空壳（三个键齐全，`metrics.py` 直接
+            #   下标也解析得动），把「整批 0 分」压到「这一张 0 分」。
+            ok = _write_shell(final_dir, cid, note="阶段一/二没有产物，空壳兜底")
+            n_shell += 1 if ok else 0
+            _log(fp, "  %-28s 没有产物（阶段一/二失败）→ %s"
+                 % (cid, "已写空壳" if ok else "⚠️ 空壳也写失败"))
             continue
         shutil.copyfile(src, final_dir / ("%s_Pred.json" % cid))
         exported.add(cid)
         n_export += 1
-    _log(fp, "导出 %d 份 <case>_Pred.json" % n_export)
+    _log(fp, "导出 %d 份 <case>_Pred.json%s"
+         % (n_export, ("（另有 %d 份空壳兜底）" % n_shell) if n_shell else ""))
 
     # ---------------------------------------------------------- 决策日志
     cases_log = []
@@ -506,10 +599,85 @@ def main(argv=None) -> int:
     _write_decision(out_dir,
                     {"n_cases": len(items), "n_stage1_ok": len(ok1),
                      "n_stage2_ok": len(s2_rows), "n_stage3_ok": len(s3_rows),
-                     "n_exported": n_export, "wall_s": wall},
+                     "n_exported": n_export, "n_shell": n_shell, "wall_s": wall},
                     cases_log, a, t_start)
     print("产物 -> %s" % final_dir)
     return 0
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """先写同名 `.tmp` 再 `os.replace`（原子）。★ 加固：被硬杀在写一半时，
+    留下的是一个**半截 JSON**，比没有更糟（评测端解析失败可能连累整批判定）。
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(str(tmp), str(path))
+
+
+# ★ 空壳产物：`schematic_parser/metrics.py` 对 `components`/`pins`/`nets` 是**直接下标**
+#   （`:309 gc, pc = gt['components'], pred['components']`、`:455 flat(pred['pins'])`、
+#   `:552 pred['nets'].items()`）⇒ 缺一个键就可能整批解析失败。空壳三个键都在，
+#   得分是「这一张全 0」，而不是「整批 0」。用户 m42543 的灾难现场里这是底线。
+_EMPTY_DOC = {"components": {}, "pins": {}, "nets": {}}
+
+
+def _write_shell(final_dir: Path, cid: str, note: str = "") -> bool:
+    """给一张**没有任何产物**的图写一份空壳 `<case>_Pred.json`（尽力而为）。"""
+    try:
+        doc = dict(_EMPTY_DOC)
+        doc["case"] = cid
+        if note:
+            doc["note"] = note
+        final_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write_text(final_dir / ("%s_Pred.json" % cid),
+                           json.dumps(doc, ensure_ascii=False))
+        return True
+    except Exception:                                               # noqa: BLE001
+        return False
+
+
+def _safety_net(a, exc: Exception) -> int:
+    """**整进程兜底**（用户 m42543：「灾难性现场」）。`_run` 里任何未捕获异常都到这里。
+
+    做的事（全部尽力而为，任何一步失败都不再抛）：
+      1. 把异常与 traceback 打进 `final_results/run.log`；
+      2. 对输入目录里**每一张图**保证有 `<case>_Pred.json`（已有的不动，缺的写空壳）；
+      3. 写 `decision_log.json`（含 `fatal` 字段与 traceback）。
+    `main()` 以前是**整个函数体外无 try**（`run.py:71`），模块级 import 一炸
+    （`:224 from stage1.detect import DEFAULT_WEIGHTS`）就一份产物都没有、退出码 0。
+    """
+    try:
+        print(traceback.format_exc(), file=sys.stderr, flush=True)
+    except Exception:                                               # noqa: BLE001
+        pass
+    out_dir = Path(getattr(a, "output_dir", ".") or ".")
+    final_dir = out_dir / "final_results"
+    n_shell = 0
+    try:
+        final_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with (final_dir / "run.log").open("a", encoding="utf-8") as fp:
+                _log(fp, "!!! 致命异常 %s: %s" % (type(exc).__name__, exc))
+                fp.write(traceback.format_exc()[-4000:] + "\n")
+        except Exception:                                           # noqa: BLE001
+            pass
+        try:
+            in_dir = Path(getattr(a, "input_dir", ".") or ".")
+            for cid, _p in _dedupe_items(discover_inputs(in_dir))[0]:
+                if not (final_dir / ("%s_Pred.json" % cid)).exists():
+                    if _write_shell(final_dir, cid, note="run.py 致命异常，空壳兜底"):
+                        n_shell += 1
+        except Exception:                                           # noqa: BLE001
+            pass
+    except Exception:                                               # noqa: BLE001
+        pass
+    try:
+        _write_decision(out_dir, {"fatal": "%s: %s" % (type(exc).__name__, exc),
+                                  "n_shell": n_shell}, [], a, time.time(),
+                        note="fatal")
+    except Exception:                                               # noqa: BLE001
+        pass
+    return 3
 
 
 def _write_decision(out_dir: Path, summary: dict, cases_log: list,
@@ -545,8 +713,8 @@ def _write_decision(out_dir: Path, summary: dict, cases_log: list,
         "summary": summary,
         "cases": cases_log,
     }
-    (out_dir / "decision_log.json").write_text(
-        json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
+    _atomic_write_text(out_dir / "decision_log.json",
+                       json.dumps(doc, ensure_ascii=False, indent=1))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
-"""官方元器件库（`cpntLibrary`）的**引脚补号 / 引脚改名**先验。
+"""官方元器件库（`BoxICLibrary_200cases` / `cpntLibrary`）的**引脚补号 / 引脚改名**先验。
+
+★ 库 = **官方 box/IC 库 `BoxICLibrary_200cases.json`（360 键，默认）**，缺席时退到
+  `cpntLibrary.json`（337 键）。依据（`work\\tools\\diag\\_libpins_cpu.py` 三臂 A/B，
+  同一份 stage1 + `_assigned` 输入、只换库文件）：官方 9 张 68.7995（cpnt） → **69.0883**
+  （boxic），派生 220 张 33.2120 → **33.4364**；两份库合并（BoxIC 优先 + cpnt 补缺键）
+  在官方 9 张与 boxic **逐字节相同**、派生 220 张 33.4334（−0.003，无收益）⇒ 不合并。
+  覆盖率（`tools/diag/_libcov.py`）：IC 名命中 官方 9 张 85.7% vs 71.4%、200 案例
+  61.6% vs 30.9%；引脚名覆盖 99.2%/69.7% vs 99.0%/64.9%。官方 `pin_f1` 只考 box 元件。
 
 ★ 默认**开**（`STAGE2_LIB_PINS=1`，2026-10-09 从「默认关」翻过来；依据见下）。关掉时本模块
   * 不读库文件、不建索引、不 import 额外依赖（只有 `envflag`，那是仓内既有模块）；
@@ -12,9 +20,10 @@
   最差 0167 −2.924）**、官方 20 合计 **+1.3045**；交付链（真 `fusion.run`，官方 9 张）**+1.60**。
   门槛是「官方为正 且 派生不为负」。`STAGE2_LIB_PINS_FUZZY=1.0`（只用精确键）与默认 0.85
   在两档上几乎相同（派生 +0.0616 vs +0.0609），故保持 0.85。
-⇒ 仍要记住的风险：库是 1.76 MB 的**外部数据**，2026-10-12 起随仓库提交在
-  `eda-pcb/data/cpntLibrary.json`，路径解析走 `assets.cpnt_library()` 的候选链
-  （环境变量 `STAGE2_CPNT_LIB` → **包内** → 本机 `work\data\` → `赛题资料\`），与 CWD
+⇒ 仍要记住的风险：库是 1.8 MB 的**外部数据**，2026-10-12/14 起随仓库提交在
+  `eda-pcb/data/BoxICLibrary_200cases.json`（默认）与 `eda-pcb/data/cpntLibrary.json`
+  （兜底），路径解析走 `assets.libraries()` 的候选链（环境变量 `STAGE2_BOXIC_LIB` /
+  `STAGE2_CPNT_LIB` → **包内** → 本机 `work\data\` → `赛题资料\`），与 CWD
   无关；**旧默认指的就是本机那个 `work\data\`，容器里必然不存在 ⇒ 静默丢分**。而下面
   两条规则的
 触发条件依赖「元件型号名被读对」。stage2 直出的 `Name` 是 OCR 原文（官方 9 张实测
@@ -64,14 +73,22 @@ except ImportError:                           # 直接跑脚本自检
 # `STAGE2_LIB_PINS`（默认 "1"=开，2026-10-09 翻）：本通道总闸。见模块 docstring。
 LIB_PINS = env_on("STAGE2_LIB_PINS", "1")
 
-# 库文件路径。候选链见 `assets.cpnt_library()`：**包内 `eda-pcb/data/cpntLibrary.json`
-# （1,755,587 B / 337 键，随仓库提交 ⇒ 进镜像）** → 本机 `WORKSPACE\work\data\` →
-# `WORKSPACE\赛题资料\` → 数据集目录。相对路径按 `eda-pcb\stage2\libpins.py` 上溯两级
-# 解析，所以**与当前工作目录无关**（stage2 会被 `cd eda-pcb` 之后以 `-m stage2.run`
-# 调用，也会被 `submission\run.py` 从别处调用）。
+# 库文件路径。**2026-10-14 起默认是官方 box/IC 库 `BoxICLibrary_200cases.json`**
+# （用户 m42932「以新的这个为参考」）：官方 `pin_f1` 只考 box 元件，而这份库就是
+# box/IC 那一档（360 键），同口径实测比 `cpntLibrary`（337 键）好 —— 官方 9 张
+# 68.7995 → **69.0883**（+0.29）、派生 220 张 33.2120 → **33.4364**（+0.22）；
+# 合并两份（BoxIC 优先 + cpnt 补缺键）**没有额外收益**（官方 9 张逐字节相同、
+# 派生 220 张 −0.003）⇒ 不做合并，只按优先级取第一个存在的文件。
+# 候选链（`assets.libraries()`）：`STAGE2_BOXIC_LIB` / `STAGE2_CPNT_LIB`（显式指定，
+# **即使不存在也照用**，好让失败发声）→ **包内 `eda-pcb/data/BoxICLibrary_200cases.json`**
+# → 包内 `eda-pcb/data/cpntLibrary.json`（BoxIC 缺席时的兜底）→ 本机 `work\data\` →
+# `赛题资料\` → 数据集目录。相对路径按本文件上溯两级解析，**与当前工作目录无关**
+# （stage2 会被 `cd eda-pcb` 之后以 `-m stage2.run` 调用，也会被 `submission\run.py`
+# 从别处调用）。
 _PKG_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_LIB = _PKG_ROOT / "data" / "cpntLibrary.json"
-LIB_PATH = env_str("STAGE2_CPNT_LIB", "") or ""
+DEFAULT_LIB = _PKG_ROOT / "data" / "BoxICLibrary_200cases.json"   # 兼容旧引用
+LIB_PATH = env_str("STAGE2_CPNT_LIB", "") or ""       # 兼容旧名：显式指定库文件
+BOXIC_PATH = env_str("STAGE2_BOXIC_LIB", "") or ""    # 新名：显式指定 box/IC 库
 
 _NON_ALNUM = re.compile(r"[^0-9a-z]")
 
@@ -86,24 +103,35 @@ def norm(s) -> str:
 
 
 def lib_path() -> Path:
-    """解析库文件路径：`STAGE2_CPNT_LIB` → 包内候选链（见 `assets.cpnt_library()`）。
+    """解析库文件路径：显式环境变量 → 包内候选链（见 `assets.libraries()`）。
 
     ★ 2026-10-12 修：**默认不再是 `WORKSPACE\\work\\data\\cpntLibrary.json`**。`work\\`
     不进仓库也不进镜像 ⇒ 容器里那条路径必然不存在，而本通道缺席时只打印一行就跳过，
     等于在判题机上白丢 +1.60（官方 9 张交付链实测）。现在与两个权重共用
     `assets.resolve()` 的规则（环境变量 → **包内相对候选** → 本机兜底），
-    `eda-pcb/data/cpntLibrary.json` 随仓库提交，于是「拷整个 eda-pcb 进 /submission」
+    `eda-pcb/data/` 下的两份库都随仓库提交，于是「拷整个 eda-pcb 进 /submission」
     这一条就够。
+
+    ★ 2026-10-14：默认库换成 `BoxICLibrary_200cases.json`（用户 m42932）。候选链里
+    **BoxIC 缺席时自动退到 `cpntLibrary.json`**，所以只带旧库的镜像也还是开着的。
+    显式设了 `STAGE2_BOXIC_LIB` / `STAGE2_CPNT_LIB` 时**直接用那个路径**（不校验存在），
+    这样 A/B 指错文件会以「库不可用」的形态暴露，而不是悄悄换成另一份库。
     """
+    if BOXIC_PATH:
+        return Path(BOXIC_PATH)
     if LIB_PATH:
         return Path(LIB_PATH)
     try:
-        from assets import cpnt_library            # 包根（eda-pcb）已在 sys.path 上
-    except ImportError:                            # 直接按文件路径加载本模块时
+        from assets import libraries                   # 包根（eda-pcb）已在 sys.path 上
+    except ImportError:                                # 直接按文件路径加载本模块时
         import sys as _s
         _s.path.insert(0, str(_PKG_ROOT))
-        from assets import cpnt_library
-    return Path(cpnt_library(must_exist=False))
+        from assets import libraries
+    try:
+        cands = [Path(p) for p in libraries()]         # 只返回**存在**的，BoxIC 在前
+    except Exception:                                  # noqa: BLE001
+        cands = []
+    return cands[0] if cands else DEFAULT_LIB
 
 
 # ── 惰性加载的库上下文 ────────────────────────────────────────────────────
@@ -138,8 +166,9 @@ class LibCtx:
             raw = json.loads(Path(p).read_text(encoding="utf-8"))
         except (OSError, ValueError) as e:                 # 缺文件 / 坏 JSON 都不该炸管线
             print("[libpins] 库不可用（%s）：%s —— 本通道自动跳过（引脚先验/改名全部失效，"
-                  "官方 9 张约 −1.6 分）。用 STAGE2_CPNT_LIB 指定库文件；"
-                  "包内应有 eda-pcb/data/cpntLibrary.json" % (p, e))
+                  "官方 9 张约 −1.6 分）。用 STAGE2_BOXIC_LIB 指定 box/IC 库、"
+                  "STAGE2_CPNT_LIB 指定旧库；包内应有 eda-pcb/data/BoxICLibrary_200cases.json"
+                  "（兜底 eda-pcb/data/cpntLibrary.json）" % (p, e))
             return False
         self._raw = raw
         self._index = _build_index(raw)

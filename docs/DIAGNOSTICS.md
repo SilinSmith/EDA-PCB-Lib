@@ -541,6 +541,30 @@ RuntimeError: DataLoader worker (pid(s) 27632, 5412) exited unexpectedly
 
 ---
 
+### 交付入口的失效面：**5 个整进程死点 + 3 类静默降级**（2026-10-14，用户 m42543「考虑各种灾难性现场」）
+
+判题机**一次性给全部样例、允许并发**，所以「只挂一张图」和「整批 0 分」都要当成必须处理的现场。
+只读审计（`submission/run.py` + `stage1/pipeline.py`）查出的失效面：
+
+| 现场 | 旧行为 | 现在 |
+| --- | --- | --- |
+| 阶段一进程池崩（worker 段错误 / OOM-kill） | `stage1/pipeline.py:479 r = f.result()` 与 `run.py:233 run_cases(...)` 都**没有 try** ⇒ `BrokenProcessPool` 冒泡，**整进程死、退出码 0、`final_results/` 空** | `run_cases` 每个 future 单独 try + 池级 except ⇒ 余下 case 在**本进程串行补跑**；`run.py:main` 外层再套 `_safety_net` |
+| 阶段二/融合/导出抛异常 | 导出与 `decision_log.json` 还没写 ⇒ **整批 0 分**（`:296-302` 记的历史事故） | `main` = `parse_args → _fix_device → try _run except _safety_net`；`_safety_net` 对**输入目录每张图**补空壳 + 写 `decision_log.json`（`summary.fatal`）+ traceback 进 `run.log`，返回 **3** |
+| 无 CUDA 但默认 `-device 0` | ultralytics `torch_utils.py:326-346` 直接 `raise ValueError("Invalid CUDA 'device=0'")`，被 `_worker` 吞成 `ok:False` ⇒ 0 产物、退出码 0 | `_fix_device(a)`：`device` 是数字/`cuda*` 且 `torch.cuda.is_available()=False` ⇒ 打印警告并回退 `cpu`（与 `textrec/infer.py:78-101` 的既有语义对齐） |
+| 某张图根本没产物 | `run.py:471-479` 只 `_log("没有产物")` 后 continue ⇒ **该 case 一份 `_Pred.json` 都没有** | 导出循环写**空壳** `{"components":{},"pins":{},"nets":{}}`（+`case`/`note`）+ `n_shell` 计数；`metrics.py:309/:455/:552` 是直接下标，空壳三键必须齐全 |
+| 同名 case（`a.png` + `a.jpg`、多目录同名） | `discover_inputs` 只 `sorted` ⇒ 阶段一互相覆盖（workers>1 时并发写同一文件）、只出 1 份产物且 `:483` 的计数察觉不到 | `_dedupe_items()` 保序去重 + ⚠️ 日志报出被丢的项 |
+| 非 ASCII / 带空格路径 | `stage1/pipeline.py:154 cv2.imread(str(path))` 在 Windows 上**静默返回 None** ⇒ `RuntimeError` ⇒ 该图零产物（阶段二早就用 `stage2/text.py:181-187 imread_unicode`） | `_imread_bgr()`：`np.fromfile` + `cv2.imdecode`（PIL 只读文件头） |
+| 巨图 | 无像素上限，`imread` 直接吃 9 亿像素（硬 OOM-kill 不是异常，`except` 救不了） | `STAGE1_MAX_PIXELS_HARD`（默认 **8e7 = 80 MP**，只看文件头）⇒ 超过就按 1/2、1/4、1/8 解码（`IMREAD_REDUCED_COLOR_*`）。本地最大图 4491×3173=14 MP ⇒ **正常路径逐像素不变** |
+| 资产缺失（权重/库） | 权重缺失会联网下载或抛异常；**CRNN 静默降级**（`stage2/text.py:343 allow_missing=True`）⇒ 位号/值全空但「产物齐全、退出码 0」 | `run.py` 把 `assets.describe()` 逐项 `exists` 打进行首日志，缺失项打 ⚠️「该通道会静默降级」 |
+| 并发写盘 | `runs/fusion/_fusion_report.json` 读-改-写**无锁**；决策日志直接覆写 | 决策日志与 `_fusion_report.json` 改 `_atomic_write_text`（`.tmp` + `os.replace`）；阶段二主循环**渐进导出**（每张成功即拷贝一份 `_Pred.json`） |
+
+**验证**（`tools\dev\_hardtest.py`，五个现场 **21 项断言全过**）：非 ASCII 路径 `cv2.imread → None` 而
+`_imread_bgr` 与 ASCII 路径**逐像素相同**；坏图 ⇒ 退出码 0 + 空壳 + `decision_log.json`；同名 `same.png/same.jpg`
+⇒ 只导出 1 份；`_fix_device` 三种输入行为正确；注入 `run_cases` 抛异常 ⇒ `main` 返回 **3**、两张图各补空壳、
+`summary.fatal` 记录异常串。**回归**：`fast.py --cases 1 --no-vlm` 前后都是 **62.62**（逐位不变）。
+
+---
+
 ## 2. 上层归因：把失分拆开
 
 ### 网络（netH，权重 0.35 —— 四项里最重）
@@ -631,7 +655,7 @@ python -X utf8 work\tools\diag\_pinmiss.py --pred work\_fnew --assigned work\_fn
 |---|---|
 | 实现 | `eda-pcb\stage2\libpins.py`（新）+ `eda-pcb\stage2\assemble.py` `build_doc` 的 box 引脚路径 |
 | 总闸 | `STAGE2_LIB_PINS`，**默认 `"1"`（开）** —— 2026-10-09 依据下表 220 张拆分回归从 `0` 翻过来；`STAGE2_LIB_PINS=0` 时 `libpins` 根本不会被 import，产物逐字节不变 |
-| 库路径 | `STAGE2_CPNT_LIB`；默认走 `assets.cpnt_library()` 候选链：**包内 `eda-pcb\data\cpntLibrary.json`** → 本机 `work\data\` → `赛题资料\` → 数据集目录（2026-10-12 前默认写死本机 `work\data\`，容器里必然缺） |
+| 库路径 | `STAGE2_BOXIC_LIB`（新）/ `STAGE2_CPNT_LIB`（兼容旧名）；默认走 `assets.libraries()`：**包内 `eda-pcb\data\BoxICLibrary_200cases.json`**（1,826,150 B / 360 键，**2026-10-14 起为默认库**，用户 m42932）→ 包内 `eda-pcb\data\cpntLibrary.json`（兜底）→ 本机 `work\data\` → `赛题资料\` → 数据集目录（2026-10-12 前默认写死本机 `work\data\cpntLibrary.json`，容器里必然缺） |
 | 模糊阈值 | `STAGE2_LIB_PINS_FUZZY`，默认 `0.85`（**只用来找库键**；某条引脚仍走「唯一」判定） |
 | 诊断 | `STAGE2_LIB_PINS_DBG=1` 打印补/改了哪几处；`python -X utf8 stage2\libpins.py` 跑自检 |
 
@@ -693,11 +717,16 @@ python -X utf8 work\tools\diag\_split220.py work\_libpins220\_score_off.json wor
 116/305/720）⇒ 派生档的回退不是模糊键造成的，阈值保持 0.85。另：**交付口径官方 9 张 +1.60
 九张零回归**（`RESULTS.md` §2.6 表；那才是真正决定分数的口径）。
 
-⚠️ **交付包必须带上 `cpntLibrary.json`（1.76 MB / 337 键）**：默认已开，它是运行时依赖。
+⚠️ **交付包必须带上库文件**：默认已开，它是运行时依赖。
 **2026-10-12 修**：库已随仓库提交在 `eda-pcb\data\cpntLibrary.json`，`libpins.lib_path()` 与
 `assets.cpnt_library()` 都优先解析它。旧默认写死 `WORKSPACE\work\data\` ⇒ 官方镜像里解析成
 `/work/data/cpntLibrary.json`，**必然不存在**；缺文件只打印一行 `[libpins] 库不可用` 并自动
 跳过（不炸管线、能跑出分，但**白丢实测 +1.60**）—— 这是「测出来有分、交付里没有」的典型陷阱。
+**2026-10-14**：默认库再换成包内 `eda-pcb\data\BoxICLibrary_200cases.json`（360 键，用户 m42932）；
+`lib_path()` 的顺序是 `STAGE2_BOXIC_LIB` → `STAGE2_CPNT_LIB` → **包内 BoxIC** → 包内 cpnt → 本机兜底，
+**BoxIC 缺席时自动退到 cpnt**（只带旧库的镜像照样开着）。两个库文件都在 `submission\run.py` 的
+`assets.describe()` 里打进行首日志 ⇒ 缺哪个会直接现形。只换库文件的 A/B：官方 9 张
+68.7995 → **69.0883**、派生 220 张 33.2120 → **33.4364**（`COMPETITION_RULES.md` §6 尾）。
 
 ### 引脚坐标超差：**「发的是 base 不是 tip」被判负**（2026-10，`_pintip.py`）
 

@@ -17,8 +17,14 @@
   ⇒ 容器里按旧默认路径去找必然不存在，`STAGE2_LIB_PINS` 虽然默认开，也只会印一行
   「库不可用」然后**静默跳过** —— 白丢实测 +1.60（官方 9 张，交付链）/ +2.61（官方 10GT）。
   已复制一份到 `data/cpntLibrary.json` 随仓库提交，并把它并入本模块的候选链。
+* **官方 box/IC 库 `BoxICLibrary_200cases.json`**（1,826,150 B / 360 键，用户 m42932
+  「以新的这个为参考」）：同一套 `{esym_path, pins, same_hash_components}` schema，
+  但**覆盖的是 box/IC 那一档**，而官方 `pin_f1` 只考 box 元件。同口径实测（`_libcov.py`，
+  只统计能命中库的元件）：IC 名命中率 官方 9 张 **85.7% vs 71.4%**、200 训练案例
+  **61.6% vs 30.9%**；引脚名覆盖 **99.2%/69.7% vs 99.0%/64.9%**。⇒ 与 `cpntLibrary`
+  一起进包，由 `stage2/libpins.py` 合并使用（BoxIC 优先、cpnt 补缺键）。
 
-Docker 里只要把整个 `eda-pcb` 拷进 `/submission`，三件外部数据（两个权重 + 元件库）
+Docker 里只要把整个 `eda-pcb` 拷进 `/submission`，这些外部数据（两个权重 + 两份元件库）
 都在相对位置能找到。
 """
 from __future__ import annotations
@@ -35,6 +41,7 @@ WORKSPACE = REPO.parent
 YOLO_ENV = "YOLO_WEIGHTS"
 CRNN_ENV = "STAGE2_CKPT"
 CPNT_ENV = "STAGE2_CPNT_LIB"
+BOXIC_ENV = "STAGE2_BOXIC_LIB"
 
 
 def _candidates(kind: str) -> List[Path]:
@@ -50,6 +57,14 @@ def _candidates(kind: str) -> List[Path]:
             WORKSPACE / "work" / "data" / "cpntLibrary.json",
             WORKSPACE / "赛题资料" / "cpntLibrary",
             REPO / "yolo_part" / "Dataset(waitforpreprocess)" / "cpntLibrary",
+        ]
+    if kind == "boxic":
+        # 官方 box/IC 库（用户 m42932「以新的这个为参考」）。同 cpntlib：包内优先。
+        return [
+            REPO / "data" / "BoxICLibrary_200cases.json",
+            WORKSPACE / "work" / "data" / "BoxICLibrary_200cases.json",
+            WORKSPACE / "赛题资料" / "BoxICLibrary_200cases.json",
+            REPO / "yolo_part" / "Dataset(waitforpreprocess)" / "BoxICLibrary_200cases.json",
         ]
     return [
         REPO / "weights" / "textrec_best.pt",
@@ -98,11 +113,40 @@ def cpnt_library(must_exist: bool = False) -> str:
     return resolve("cpntlib", CPNT_ENV, must_exist=must_exist)
 
 
+def boxic_library(must_exist: bool = False) -> str:
+    """官方 box/IC 元件库（`BoxICLibrary_200cases.json`，1.83 MB / 360 键）的路径。
+
+    用户 m42932「以新的这个为参考」。与 `cpnt_library()` 同样是**允许缺席**的：
+    `stage2/libpins.py` 会把两份库合并使用（BoxIC 优先、cpnt 补缺键），
+    少一份只是覆盖变小，绝不能让整批 case 挂掉。
+    """
+    return resolve("boxic", BOXIC_ENV, must_exist=must_exist)
+
+
+def libraries() -> List[str]:
+    """`stage2/libpins.py` 要合并的库文件列表（按优先级，**前面的覆盖后面的**）。
+
+    顺序是 BoxIC 在前：官方 `pin_f1` 只考 box 元件，而 BoxIC 就是 box/IC 那一档的库
+    （IC 名命中率 85.7% vs 71.4%（官方 9 张）/ 61.6% vs 30.9%（200 案例））。
+    任一份不存在就跳过（`must_exist=False`），两份都没有时返回空表 ⇒ 调用方静默跳过本通道。
+    """
+    out: List[str] = []
+    for fn in (boxic_library, cpnt_library):
+        try:
+            p = fn(must_exist=False)
+        except Exception:                                        # noqa: BLE001
+            continue
+        if p and Path(p).exists() and p not in out:
+            out.append(p)
+    return out
+
+
 def describe() -> dict:
     out = {}
     for kind, env, fn in (("yolo", YOLO_ENV, yolo_weights),
                           ("textrec", CRNN_ENV, textrec_ckpt),
-                          ("cpntlib", CPNT_ENV, lambda: cpnt_library(must_exist=True))):
+                          ("cpntlib", CPNT_ENV, lambda: cpnt_library(must_exist=True)),
+                          ("boxic", BOXIC_ENV, lambda: boxic_library(must_exist=True))):
         try:
             p = fn()
             out[kind] = {"path": p, "exists": Path(p).exists(),

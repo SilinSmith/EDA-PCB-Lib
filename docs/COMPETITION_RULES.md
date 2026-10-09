@@ -101,14 +101,21 @@ FinalScore               = FinalScore_Accuracy + FinalScore_Data   # Data ≤ 10
 | 资产 | 位置 | 状态 |
 | --- | --- | --- |
 | 10 GT + 200 训练案例（图 + `_target.json`） | `eda-pcb\yolo_part\Dataset(waitforpreprocess)\`、`赛题资料\压缩文件\赛题六公开数据集.zip`（33.7 MB，636 条目） | 已用 |
-| **官方元器件库 `cpntLibrary.json`** + `cpntLibrary.md` + 数据集 `README.md` | **包内 `eda-pcb\data\cpntLibrary.json`**（1,755,587 B / 337 键）+ `eda-pcb\data\cpntLibrary.md`（**2026-10-12 起随仓库提交**）；本机另有 `work\data\cpntLibrary.json`、`work\data\public_dataset_README.md`（★ 旧默认路径写死在本机 `work\`，容器里不存在 ⇒ 已修） | **已体检：当整名/整号语料 = 0；当「补号 / 改名」两条规则 = +2.46 分（见 §6）** |
-| 元器件库的 200 案例派生物（360 个符号，`esym_path` + `pins`） | `work\data\BoxICLibrary_200cases.json` | **全仓库无引用（grep 0 命中）** |
+| **官方元器件库 `cpntLibrary.json`** + `cpntLibrary.md` + 数据集 `README.md` | **包内 `eda-pcb\data\cpntLibrary.json`**（1,755,587 B / 337 键）+ `eda-pcb\data\cpntLibrary.md`（**2026-10-12 起随仓库提交**；★ 2026-10-14 起**不再是默认库**，退为 BoxIC 缺席时的兜底）；本机另有 `work\data\cpntLibrary.json`、`work\data\public_dataset_README.md`（★ 旧默认路径写死在本机 `work\`，容器里不存在 ⇒ 已修） | **已体检：当整名/整号语料 = 0；当「补号 / 改名」两条规则 = +2.46 分（见 §6）** |
+| 元器件库的 200 案例派生物（360 个符号，`esym_path` + `pins`）＝**官方 box/IC 库** | **包内 `eda-pcb\data\BoxICLibrary_200cases.json`**（1,826,150 B / 360 键，**2026-10-14 起随仓库提交、且是 `libpins` 的默认库**，用户 m42932）；本机另有 `work\data\BoxICLibrary_200cases.json`、`赛题资料\BoxICLibrary_200cases.json` | **已用（默认）**：覆盖率官方 9 张 IC 名 **85.7%**、200 案例 **61.6%**，均优于 `cpntLibrary`（71.4% / 30.9%）；只换库文件的三臂 A/B 官方 9 张 **68.7995 → 69.0883**、派生 220 张 **33.2120 → 33.4364**（见 §6） |
 | 官方 Q&A | `docs\QA_2025.txt`（源自 `赛题Q&A(1).docx`） | 已用（构成 `metrics.py` 的口径默认值） |
 | 数据贡献指南 | `赛题资料\数据收集指南0915.docx` | 未读 |
 
 `cpntLibrary.md` 要点：键 = 元件型号名（`AMS1117-3.3`、`CH340C`、`1.25-2PWB`…，也有 `_C6186` 料号后缀变体）；
 值 = `{esym_path, pins[{pin_id,name,number,pin_type}], same_hash_components}`；
 **同一 `number` 可能对应多种 `name`（`VOUT`/`Out`/`Output`），条目数可能远大于物理引脚数**（多符号实例的聚合）。
+
+**两份库的关系（2026-10-14 定）**：`BoxICLibrary_200cases.json` 是 200 训练案例里 **box/IC 那一档**的符号库
+（360 键），`cpntLibrary.json` 是全类型混合库（337 键）。因为官方 `pin_f1` **只考 box 元件**
+（`schematic_parser/metrics.py:437-475`），所以默认取 box/IC 库；`stage2/libpins.py:lib_path()` 的
+顺序是 `STAGE2_BOXIC_LIB` → `STAGE2_CPNT_LIB` → 包内 BoxIC → 包内 cpnt → 本机 `work\data\` → `赛题资料\`，
+**BoxIC 缺席时自动退到 cpnt**（只带旧库的镜像也还是开着的）。两库合并（BoxIC 优先 + cpnt 补 192 个缺键）
+**无额外收益**（官方 9 张逐字节相同、派生 220 张 −0.003）⇒ 不做合并，按优先级取第一个存在的文件。
 
 `public_dataset_README.md` 要点：`10_GTcase` 是 **10 例** Golden Case（我们评的是 `1,2,3,4,5,7,8,9,10` 九张），
 `200_train_cases` 每例子文件夹内是 `<name>.png` + `<name>_target.json`；`edges`「每条线段由若干坐标点表示」（可 >2 点）。
@@ -117,7 +124,9 @@ FinalScore               = FinalScore_Accuracy + FinalScore_Data   # Data ≤ 10
 
 ## 6. 官方元器件库：当「整名/整号语料」没用（0），当「补号 / 改名」的两条规则值 **+2.46**（2026-10 结论修正）
 
-体检工具（都在 `work\tools\diag\`，需从仓库根跑；库路径默认 `eda-pcb\data\cpntLibrary.json`，见 `assets.cpnt_library()` 的候选链）：
+体检工具（都在 `work\tools\diag\`，需从仓库根跑；库路径默认 = `assets.libraries()[0]` ⇒ **包内
+`eda-pcb\data\BoxICLibrary_200cases.json`**，可用 `STAGE2_BOXIC_LIB` / `STAGE2_CPNT_LIB` 覆盖；旧的
+`_libcov/_libnum/_libopp/_libsim` 四个探针仍写死本机 `work\data\cpntLibrary.json`）：
 `_libcov.py`（库对 GT 的覆盖率）、`_libopp.py`（库对我方交付产物的机会上界）、
 `_pinlat.py`（IC 引脚排布的规则性）、`_pinpos.py`（引脚点距误差分解）、
 `_pinmiss.py`（55 个缺失引脚的分桶）、`_libnum.py`（库当引脚号来源的上界）、
@@ -160,9 +169,16 @@ FinalScore               = FinalScore_Accuracy + FinalScore_Data   # Data ≤ 10
 - 实现要点：规则 A 需要「桩 + 绑定到该桩的引脚名」（stage2 `_assigned` 的 `raw_pins[j].name`；
   ⚠️ 名字读数框**不在引脚点上**，用框中心判「名读到」会得到 0/55），规则 B 需要「读到的号」；
   两条规则都**不需要 GT**，且必须**唯一映射**才动手（多号时精度掉到 90%）。
-- 代价：交付包要带上库文件（1.76 MB / 337 键），stage2 要能加载它。★ 2026-10-12 起
+- 代价：交付包要带上库文件，stage2 要能加载它。★ 2026-10-12 起
   **已随仓库提交在 `eda-pcb\data\cpntLibrary.json`**（镜像 `COPY eda-pcb → /submission` 即带上），
   旧默认路径是本机 `work\data\`（不进仓也不进镜像）。
+- ★ 2026-10-14（用户 m42932）：**默认库换成包内 `eda-pcb\data\BoxICLibrary_200cases.json`**（1.83 MB /
+  360 键）。只换库文件、其余全同的三臂 A/B（`tools\diag\_libpins_cpu.py` + `tools\eval\stage2_eval.py`，
+  输入是带 VLM 读数的那份 `work\_fnew\_assigned`）：官方 9 张 `off` **67.3015** → `cpnt` **68.7995** →
+  `boxic` **69.0883**；派生 220 张 `cpnt` **33.2120** → `boxic` **33.4364**；两库合并与 `boxic`
+  **逐字节相同**（官方 9 张 md5 `fced1f946bc0e658`）⇒ 取 BoxIC 单库。`--no-vlm` 的真实管线
+  官方 9 张三臂都是 **63.02**（该口径下元件型号名读不对，通道本来就打不开 —— 这条是「零回归」证据，
+  不是收益证据；收益只在 VLM 读对型号名时才出现，见 `stage2/assemble.py:190-196` 的注释）。
 
 **开工前先体检**：任何「接官方资产提分」的想法，先按上面这套（覆盖率 → 我方可修上界 → 交付级模拟）量一遍再写代码。
 反过来也成立：**一次判负不要封死整个资产**——本轮就是「整名语料判负」之后在同一份资产里找到 +2.46 的规则 A/B。

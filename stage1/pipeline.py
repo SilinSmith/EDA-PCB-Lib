@@ -151,7 +151,7 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         reset_ledger(case.case_id)
     except Exception:
         pass
-    bgr = cv2.imread(str(case.png_path), cv2.IMREAD_COLOR)
+    bgr = _imread_bgr(case.png_path)
     if bgr is None:
         raise RuntimeError(f"读不出图: {case.png_path}")
     H, W = bgr.shape[:2]
@@ -418,6 +418,60 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
     return doc
 
 
+# ---------------------------------------------------------------- 读图（灾难现场加固）
+def _max_pixels_hard() -> int:
+    """巨图解码护栏阈值（像素数）。`STAGE1_MAX_PIXELS_HARD=0` 关掉这道护栏。"""
+    try:
+        return int(os.environ.get("STAGE1_MAX_PIXELS_HARD") or 80_000_000)
+    except Exception:                                               # noqa: BLE001
+        return 80_000_000
+
+
+def _imread_bgr(path):
+    """读成 BGR（`IMREAD_COLOR`）。**比 `cv2.imread` 多两道保险**（用户 m42543）：
+
+    1. **非 ASCII / 带空格路径**：`cv2.imread` 在 Windows 上对非 ASCII 路径会**静默
+       返回 `None`**（官方 case 名明确可能带空格），而 `np.fromfile` + `cv2.imdecode`
+       不看路径编码。读不出才退回 `imread`（保留旧行为，别把能跑的路堵死）。
+    2. **巨图护栏**：像素数超过 `STAGE1_MAX_PIXELS_HARD`（默认 8e7 = 80 MP，只看文件头，
+       不解码）时按 1/2、1/4、1/8 解码。硬 OOM 是 `except` 救不回来的死法
+       （进程被内核杀掉，整批 0 产物），宁可掉精度也要活着出分。本地最大图
+       4491x3173 = 14 MP，远在阈值下 ⇒ **正常路径逐像素不变**。
+    """
+    p = str(path)
+    buf = None
+    try:
+        buf = np.fromfile(p, dtype=np.uint8)
+    except Exception:                                               # noqa: BLE001
+        buf = None
+    if buf is not None and buf.size:
+        flag = cv2.IMREAD_COLOR
+        hw = None
+        try:
+            from PIL import Image
+            with Image.open(p) as im:                               # 只读文件头
+                hw = (im.height, im.width)
+        except Exception:                                           # noqa: BLE001
+            hw = None
+        if hw is not None:
+            lim = _max_pixels_hard()
+            pix = int(hw[0]) * int(hw[1])
+            if lim > 0 and pix > lim:
+                k = 2
+                while k < 8 and pix / float(k * k) > lim:
+                    k *= 2
+                flag = {2: cv2.IMREAD_REDUCED_COLOR_2,
+                        4: cv2.IMREAD_REDUCED_COLOR_4}.get(
+                            k, cv2.IMREAD_REDUCED_COLOR_8)
+                print("[stage1] ⚠️ 巨图 %dx%d = %.0f MP > %.0f MP，按 1/%d 解码"
+                      "（硬 OOM 会杀掉整个进程，整批 0 产物）"
+                      % (hw[1], hw[0], pix / 1e6, lim / 1e6, k), flush=True)
+        img = cv2.imdecode(buf, flag)
+        if img is not None:
+            return img
+    return cv2.imread(p, cv2.IMREAD_COLOR)
+
+
 # ---------------------------------------------------------------- 批
 def _mark(r) -> str:
     """控制台标记：`ok` / `ok*N`（跑通但有 N 处被降级的异常）/ `FAIL`。"""
@@ -459,27 +513,65 @@ def _worker(job):
             pass
 
 
+def _report_one(r):
+    print(f"  {r['case']:<20}{_mark(r)}  "
+          f"{r.get('timing', {}).get('total_s', '?')} s", flush=True)
+
+
 def run_cases(cases, out_dir, workers: int = 1, **kw):
-    """cases: list[Case]。workers>1 走进程池。"""
-    import dataclasses
+    """cases: list[Case]。workers>1 走进程池。
+
+    ★ 灾难现场加固（用户 m42543）：进程池的 `f.result()` 以前**没有 try**。
+    子进程被 OOM-kill / 段错误时抛的是 `BrokenProcessPool`，它会从 `as_completed`
+    冒到调用方（`submission/run.py:233` 也没 try）⇒ **整进程死、`final_results/`
+    一份产物都没有、退出码还是 0**（最坏的「整批 0 分」）。现在：
+      1. 每个 future 的 `result()` 单独 try，坏掉的那张记 `ok: False` + 原因，其余照跑；
+      2. 池级异常（`BrokenProcessPool`/`OSError`）也兜住，**余下没跑完的图在本进程
+         串行补跑** —— 慢，但能出分。`cancel_futures=True` 防止 shutdown 时二次抛。
+    """
     jobs = [(dict(case_id=c.case_id, split=c.split,
                   png_path=c.png_path, json_path=c.json_path), str(out_dir), kw)
             for c in cases]
     results = []
+    done = set()
     if workers <= 1:
         for j in jobs:
             r = _worker(j)
             results.append(r)
-            print(f"  {r['case']:<20}{_mark(r)}  "
-                  f"{r.get('timing', {}).get('total_s', '?')} s", flush=True)
+            done.add(j[0]["case_id"])
+            _report_one(r)
         return results
-    with ProcessPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(_worker, j): j[0]["case_id"] for j in jobs}
+    ex = ProcessPoolExecutor(max_workers=workers)
+    try:
+        futs = {ex.submit(_worker, j): j for j in jobs}
         for f in as_completed(futs):
-            r = f.result()
+            j = futs[f]
+            cid = j[0]["case_id"]
+            try:
+                r = f.result()
+            except Exception as e:                                  # noqa: BLE001
+                r = {"case": cid, "ok": False,
+                     "error": "worker 崩溃（%s: %s）" % (type(e).__name__, e)}
+            done.add(cid)
             results.append(r)
-            print(f"  {r['case']:<20}{_mark(r)}  "
-                  f"{r.get('timing', {}).get('total_s', '?')} s", flush=True)
+            _report_one(r)
+    except Exception as e:                                          # noqa: BLE001
+        left = [j for j in jobs if j[0]["case_id"] not in done]
+        print("[stage1] ⚠️ 进程池整体崩溃（%s: %s）—— 余下 %d 张改在本进程串行补跑"
+              % (type(e).__name__, e, len(left)), flush=True)
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except Exception:                                           # noqa: BLE001
+            pass
+    for j in jobs:                          # 串行补跑（池没坏时 left 为空，零开销）
+        cid = j[0]["case_id"]
+        if cid in done:
+            continue
+        r = _worker(j)
+        done.add(cid)
+        results.append(r)
+        _report_one(r)
     return results
 
 

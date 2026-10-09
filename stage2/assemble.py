@@ -187,10 +187,17 @@ BOX_PIN_NEED_NAME = env_on("STAGE2_BOX_PIN_NEED_NAME", "1")
 #   官方 10GT 10 张 62.5743→**65.1834（+2.6091，7 涨 0 跌**；pin tp 38→47 / fp 42→38 / fn 98→89）；
 #   另 10 张官方（`10_GTcase`）逐位不变；派生 200 张 31.3691→**31.4300（+0.0609**，24 涨 25 跌，
 #   最差 0167 −2.924）；官方 20 合计 **+1.3045**；交付链（真 `fusion.run`）官方 9 张 **+1.60**。
-#   门槛（官方为正 且 派生不为负）**已过**。库文件路径 `STAGE2_CPNT_LIB`，默认走
-# `assets.cpnt_library()` 的候选链：**包内 `eda-pcb\data\cpntLibrary.json`**（1,755,587 B /
-#   337 键，2026-10-12 起随仓库提交）→ 本机 `work\data\` → `赛题资料\`。旧的写死默认是
-#   本机 `work\data\cpntLibrary.json`，**容器里不存在**（`work\` 不进镜像）⇒ 默认开也白开。
+#   门槛（官方为正 且 派生不为负）**已过**。
+# ★★ 2026-10-14（用户 m42932「以新的这个为参考」）：默认库从 `cpntLibrary.json`（337 键）
+#   换成官方 box/IC 库 **`BoxICLibrary_200cases.json`（360 键）** —— `pin_f1` 只考 box 元件，
+#   这份库正是那一档。同口径三臂 A/B（只换库文件）：官方 9 张 68.7995 → **69.0883**、
+#   派生 220 张 33.2120 → **33.4364**；两库合并（BoxIC 优先 + cpnt 补缺键）无额外收益
+#   （官方 9 张逐字节相同、派生 220 张 −0.003）⇒ 不合并，按优先级取第一个存在的文件。
+#   库文件路径 `STAGE2_BOXIC_LIB` / `STAGE2_CPNT_LIB`，默认走 `assets.libraries()` 的候选链：
+#   **包内 `eda-pcb\data\BoxICLibrary_200cases.json`**（1,826,150 B / 360 键，2026-10-14 起随
+#   仓库提交）→ 包内 `eda-pcb\data\cpntLibrary.json`（兜底）→ 本机 `work\data\` → `赛题资料\`。
+#   旧的写死默认是本机 `work\data\cpntLibrary.json`，**容器里不存在**（`work\` 不进镜像）
+#   ⇒ 默认开也白开。
 #   改路径的动机见 `eda-pcb\docs\COMPETITION_RULES.md`（「交付包必须带」那条）。
 #   关掉（`STAGE2_LIB_PINS=0`）时本文件不会 import `stage2.libpins`，产物与不挂接这条通道时
 #   **逐字节一致**。两条规则与唯一性判据见 `stage2/libpins.py` 的模块 docstring。
@@ -716,16 +723,18 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     # `tp` 闸门的台账（只在本函数内累计，退出前打印；`STAGE2_TP_LEDGER=1` 时）。
     _tp_ledger: List[dict] = []
 
-    # ★ `STAGE2_LIB_PINS`：官方元器件库（`cpntLibrary`）的引脚先验总闸。**默认 `1`（开）**
-    # —— 2026-10-09 依据 220 张拆分回归从 0 翻过来（交付口径官方 9 张 +1.60、九张零回归）。
+    # ★ `STAGE2_LIB_PINS`：官方元器件库的引脚先验总闸。**默认 `1`（开）** —— 2026-10-09 依据
+    # 220 张拆分回归从 0 翻过来（交付口径官方 9 张 +1.60、九张零回归）；2026-10-14 默认库换成
+    # 官方 box/IC 库 `BoxICLibrary_200cases.json`（用户 m42932；官方 9 张 68.7995 → 69.0883）。
     # 关掉时 `libpins` 这个模块**根本不会被 import**（上面那个 `LIB_PINS` 常量只是
-    # 读一个环境变量，`libpins` 的模块级代码不会去读 1.76 MB 的库文件），于是
+    # 读一个环境变量，`libpins` 的模块级代码不会去读 1.83 MB 的库文件），于是
     # 产物与不挂接这条通道时逐字节一致。开的时候，整份文档**只加载库一次**
     # （`libpins.LibCtx` 自带惰性 + 幂等 `load()`）。
     # 依据与两条规则见 `stage2/libpins.py` 的模块 docstring。★ 当初默认关的原因是
     # 「收益靠元件型号名被读对，而 stage2 直出的 `Name` 是 OCR 原文，17 个 box 里只有
     # 1 个能命中库」⇒ 收益在**融合层/交付链**（融合会重建文档），不在 stage2 单跑。
-    # 库文件路径见 `libpins.lib_path()`（包内 `data/cpntLibrary.json` 优先）。
+    # 库文件路径见 `libpins.lib_path()`（包内 `data/BoxICLibrary_200cases.json` 优先，
+    # 缺席退包内 `data/cpntLibrary.json`）。
     _LIB_CTX = None
     if LIB_PINS:
         from stage2 import libpins as _libpins
