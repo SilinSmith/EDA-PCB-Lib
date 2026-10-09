@@ -133,6 +133,9 @@ from envflag import env_on                       # noqa: E402  (唯一权威假�
 # ★ 原来手写了 5 个词（缺 `no`/`disable`/`disabled`）—— 「差不多全」正是 drift 的
 #   温床。词表只有一处权威：`eda-pcb\envflag.py:FALSE_WORDS`。
 PIN_ALONG = env_on("STAGE2_PIN_ALONG", "1")
+# Stage1 may supply actual frame-contact evidence for NAME binding. Number
+# assignment retains the historical whole-row path; this switch supports A/B.
+PIN_TRUST_BIND = env_on("STAGE2_PIN_TRUST_BIND", "1")
 MAX_ALTS = 6         # 每个元件最多保留几个位号候选（交给阶段三仲裁）
 # 结构化重绑定时「每配上一对」的固定加分（`stage2\\structmatch.py` 的 `cover`）：
 # 它让「一条自洽、把整排引脚都配上、每对都稍远」的方案压过「只配最近的那几对」。
@@ -628,12 +631,16 @@ def _global_match(cands: Sequence[Tuple[str, str, float, dict]],
 
 def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[dict],
            near: float = NEAR, far: float = FAR,
-           global_match: bool = None, pincol: Dict[str, List] = None) -> dict:
+           global_match: bool = None, pincol: Dict[str, List] = None,
+           pin_evidence: Dict[str, List] = None) -> dict:
     """components: stage1 的元件表（要有 id/type/bbox_img）
     pins:       stage1 的 {cid: [[x,y], ...]}（图像坐标）
     texts:      `stage2.text.TextEngine.read` 的输出
     pincol:     stage1 的引脚列记录 {cid: [record, ...]}（`stage1/pincol.py`），
                 用来把引脚号/名直接按**窗口**归位（见下面 `PINCOL_GUIDE` 那段）。
+    pin_evidence: stage1 的逐点接框证据，与 pins 顺序对应；可信点先匹配名称，
+                  待定点仅使用剩余名称，拒绝点不匹配名称。编号保持原整排路径。
+                  旧缓存可省略。
 
     global_match 默认取环境变量 `STAGE2_GLOBAL_MATCH`（默认关）。
     220 张实测：见 `stage2/README.md`（这一项一直是关的，从未在当前管线上量过）。
@@ -885,6 +892,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         # ★★ 引脚列记录（`stage1/pincol.py`）：`plist[i]` 与 `_pcr[i]` 一一对应
         # （`pincol.merge_into` 就是按记录顺序写进去的，未被认领的老触点补在末尾）。
         _pcr = (pincol or {}).get(cid) or []
+        _pe = (structmatch.normalize_pin_evidence(
+            plist, (pin_evidence or {}).get(cid)) if PIN_TRUST_BIND else [])
         pinfo = {i: {"number": None, "name": None} for i in range(len(plist))}
         rec["pins"] = pinfo
         take = lambda t: (t.get("bbox") is not None
@@ -895,6 +904,10 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         for role, want_inside, fit_fn, slot in (
                 ("pin_name", True, fit_pinname, "name"),
                 ("pin_number", False, fit_pinnum, "number")):
+            # Geometry evidence changes name ownership only. Reusing calibrated
+            # anchors for the numeric ladder changed otherwise correct numbers
+            # in the official 7/8 audit and created duplicate output numbers.
+            _slot_pe = _pe if slot == "name" else []
             pool = []
             # 引脚名可以更长（`VDDA`/`GNDA`），引脚号可以离框更远（大 IC 印在框外 29~44px）。
             _wlim = PINNAME_MAXW if slot == "name" else MAX_BOX_W
@@ -944,7 +957,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             # stage1 对 0143 的 U1 只给 8 个点）时退化成「谁近归谁」。
             #
             # 只在命中率够高时才采信（否则整颗退回老路径，不让新机制把旧行为弄坏）。
-            if PINCOL_GUIDE and _pcr:
+            if PINCOL_GUIDE and _pcr and not _slot_pe:
                 _wk = "out_win" if slot == "number" else "in_win"
                 picks = []
                 for _i, _r in enumerate(_pcr):
@@ -979,6 +992,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             _cbb = c["bbox"]
 
             def score_of(c, pi, _pl=plist, _bb=_cbb,
+                         _ev=_slot_pe,
                          _dec=PINNUM_DECAY if slot == "number" else 20.0):
                 if PIN_ALONG:
                     # ★ 用**沿边**距离而不是 2D 距离。
@@ -989,8 +1003,9 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     # （正解 `pin[1](y494)<-VDDIO 沿边距3`、`pin[2](y512)<-VDDREG 距5`
                     # 被算成 `VDD(0.933)->494`、`VDDIO(0.882)->512`，A=1.337 vs
                     # B=1.245）；换成沿边距离后 A=2.849 vs B=3.224，正解胜。
-                    e = structmatch.edge_of_point(_bb, _pl[pi][0], _pl[pi][1])
-                    d = abs(structmatch.along(_bb, e, _pl[pi][0], _pl[pi][1])
+                    e = structmatch.pin_edge(_bb, _pl, pi, _ev)
+                    ax, ay = structmatch.pin_anchor(_pl, pi, _ev)
+                    d = abs(structmatch.along(_bb, e, ax, ay)
                             - structmatch.along(_bb, e, c["center"][0], c["center"][1]))
                 else:
                     dx = _pl[pi][0] - c["center"][0]
@@ -1000,7 +1015,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
 
             cov = PIN_COVER if slot == "number" else PIN_COVER * 0.5
             bound, amb = structmatch.rebind(
-                c["bbox"], plist, pool, lambda cc: cc["text"], score_of, cover=cov)
+                c["bbox"], plist, pool, lambda cc: cc["text"], score_of, cover=cov,
+                pin_evidence=_slot_pe, prioritize_trusted=slot == "name")
             if os.environ.get("STAGE2_DBG_CID") == cid:
                 print("      [pin:%s] nplist=%d pool=%d cov=%.2f bound=%d amb=%d"
                       % (role, len(plist), len(pool), cov, len(bound), len(amb)))

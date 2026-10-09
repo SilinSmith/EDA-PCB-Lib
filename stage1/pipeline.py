@@ -44,6 +44,7 @@ from stage1 import wires as wires_mod          # noqa: E402
 from stage1 import pintrace as ray_mod         # noqa: E402
 from stage1 import nets as nets_mod            # noqa: E402
 from stage1 import pincol as pincol_mod        # noqa: E402
+from stage1 import pin_evidence as evidence_mod  # noqa: E402
 from stage1.detect import Detector             # noqa: E402
 from stage1 import detect as det_mod           # noqa: E402
 
@@ -264,6 +265,7 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
     # = 0.70 分在结构上拿不到。这里补上「段 -> 连通分量 -> 挂引脚 -> net」这一步。
     comp_pins, nets, seg_groups, pin_s = {}, [], [], 0.0
     pincol_cols, pincol_stat, pin_synth = {}, {}, {}
+    pin_evidence = {}
     # ★★ 「不丢弃」的**留痕**通道（owner 哲学：证据不能被悄悄抹掉）。
     #   `build_nets` 会把「够不着任何导线而被硬截断的引脚」写进 `orphans`、
     #   把「软判据区间内勉强挂上的引脚」写进 `weak`。历史行为是 `if g < 0: continue`
@@ -315,6 +317,16 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
             comp_pins, nets, seg_groups = {}, [], []
         pin_s = round(time.time() - t_p, 2)
 
+        # Evidence ranks the FINAL merged sequence. Failure must not erase
+        # otherwise valid pins or nets, and no coordinates are changed here.
+        try:
+            pin_evidence = evidence_mod.build_pin_evidence(
+                comps, comp_pins, _ink, texts)
+        except Exception as e:
+            traceback.print_exc()
+            errs.append(f"pin_evidence: {type(e).__name__}: {e}")
+            pin_evidence = {}
+
     tm = dict(tm)
     tm["wires_s"] = round(t_w, 2)
     tm["rays_s"] = round(t_r, 2)
@@ -328,6 +340,7 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         "components": comps,
         "pins": {cid: [[round(float(p[0]), 1), round(float(p[1]), 1)] for p in pl]
                  for cid, pl in comp_pins.items()},
+        "pin_evidence": pin_evidence,
         "nets": nets,
         # ★ 引脚接线的「留痕」：`orphans` = 够不着导线而被截断的引脚（历史上直接消失）、
         #   `weak` = 软判据区间内勉强挂上的引脚（带 `d`，下游可降权）。**不参与评分**，

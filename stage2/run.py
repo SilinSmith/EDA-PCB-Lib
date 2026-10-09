@@ -226,7 +226,7 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                 r["reads"][k] = ("", conf)
 
     a = assign(doc.get("components") or [], doc.get("pins") or {}, reads,
-               pincol=doc.get("pincol"))
+               pincol=doc.get("pincol"), pin_evidence=doc.get("pin_evidence"))
     if recut in ("expect", "grow", "both") and do_ocr:
         extra = []
         if recut in ("expect", "both"):
@@ -240,7 +240,7 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                         r["reads"][k] = ("", conf)
             reads = list(reads) + list(extra)
             a = assign(doc.get("components") or [], doc.get("pins") or {}, reads,
-                       pincol=doc.get("pincol"))
+                       pincol=doc.get("pincol"), pin_evidence=doc.get("pin_evidence"))
     pred = build_doc(doc, a, case)
     pin_index = pred.pop("__pin_index", None)
     t3 = time.time()

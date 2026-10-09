@@ -23,6 +23,7 @@
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -44,15 +45,120 @@ def along(bbox: Sequence[float], edge: str, px: float, py: float) -> float:
     return float(py) if edge in ("left", "right") else float(px)
 
 
+def normalize_pin_evidence(pins: Sequence[Sequence[float]],
+                           evidence: Optional[Sequence[dict]]) -> List[dict]:
+    """Validate the stage1 evidence-to-point correspondence before trusting it.
+
+    An old cache, or a point list changed after evidence was built, must never
+    attach the confidence of one contact to another. A missing/invalid record
+    is uncertain; a length mismatch or wholly invalid correspondence disables
+    this optional path altogether. Valid uncertain geometry still stays active.
+    """
+    if not evidence or len(evidence) != len(pins):
+        return []
+    out = []
+    n_valid = 0
+    for point, rec in zip(pins, evidence):
+        fallback = {"trust": "uncertain"}
+        if not isinstance(rec, dict):
+            out.append(fallback)
+            continue
+        raw = rec.get("point_img")
+        try:
+            valid = (len(raw) == 2 and all(math.isfinite(float(v)) for v in raw)
+                     and math.hypot(float(raw[0]) - float(point[0]),
+                                    float(raw[1]) - float(point[1])) <= 1e-3)
+        except (TypeError, ValueError, OverflowError):
+            valid = False
+        if not valid or rec.get("edge") not in EDGES:
+            out.append(fallback)
+            continue
+        n_valid += 1
+        item = dict(rec)
+        if item.get("trust") not in ("trusted", "uncertain", "rejected"):
+            item["trust"] = "uncertain"
+        anchor = item.get("anchor_img")
+        try:
+            good_anchor = (len(anchor) == 2
+                           and all(math.isfinite(float(v)) for v in anchor))
+        except (TypeError, ValueError, OverflowError):
+            good_anchor = False
+        if not good_anchor:
+            item.pop("anchor_img", None)
+        out.append(item)
+    return out if n_valid else []
+
+
+def pin_edge(bbox: Sequence[float], pins: Sequence[Sequence[float]], index: int,
+             evidence: Optional[Sequence[dict]] = None) -> str:
+    rec = evidence[index] if evidence else {}
+    return rec.get("edge") or edge_of_point(bbox, *pins[index])
+
+
+def pin_anchor(pins: Sequence[Sequence[float]], index: int,
+               evidence: Optional[Sequence[dict]] = None) -> Sequence[float]:
+    rec = evidence[index] if evidence else {}
+    return rec.get("anchor_img") or pins[index]
+
+
+def _candidate_axis_gap(cand: dict, edge: str, anchor: Sequence[float]) -> float:
+    """Distance to the text's projection, independent of name length."""
+    rect = cand.get("bbox") or (cand.get("rec") or {}).get("bbox")
+    axis = 1 if edge in ("left", "right") else 0
+    if rect and len(rect) == 4:
+        lo, hi = float(rect[axis]), float(rect[axis + 2])
+        return max(lo - float(anchor[axis]), float(anchor[axis]) - hi, 0.0)
+    return abs(float(cand["center"][axis]) - float(anchor[axis]))
+
+
+def _candidate_axis_tolerance(cand: dict) -> float:
+    rect = cand.get("bbox") or (cand.get("rec") or {}).get("bbox")
+    if rect and len(rect) == 4:
+        # A small allowance for broken strokes/box localization, not a whole
+        # neighboring pin pitch. Rotated labels use their short dimension.
+        return max(4.0, 0.35 * min(abs(float(rect[2]) - float(rect[0])),
+                                  abs(float(rect[3]) - float(rect[1]))))
+    return 6.0
+
+
+def _candidate_faces_edge(cand: dict, bbox: Sequence[float], edge: str) -> bool:
+    """An internal label should not cross to its strongly opposite frame side.
+
+    Use the text rectangle's near boundary, not its centre: a long name can
+    extend over the symbol centre. Only compare opposing sides, so a corner
+    label remains eligible for its adjacent side. Missing geometry is neutral.
+    """
+    rect = cand.get("bbox") or (cand.get("rec") or {}).get("bbox")
+    if not rect or len(rect) != 4:
+        return True
+    try:
+        tx0, ty0, tx1, ty1 = (float(v) for v in rect)
+        bx0, by0, bx1, by1 = (float(v) for v in bbox)
+        if not all(math.isfinite(v) for v in (tx0, ty0, tx1, ty1, bx0, by0, bx1, by1)):
+            return True
+        if tx1 < tx0 or ty1 < ty0 or bx1 <= bx0 or by1 <= by0:
+            return True
+        gaps = {"left": max(tx0 - bx0, 0.0), "right": max(bx1 - tx1, 0.0),
+                "top": max(ty0 - by0, 0.0), "bottom": max(by1 - ty1, 0.0)}
+        opposite = {"left": "right", "right": "left", "top": "bottom", "bottom": "top"}
+        margin = 2.0 * _candidate_axis_tolerance(cand)
+        return gaps[edge] <= gaps[opposite[edge]] + margin
+    except (TypeError, ValueError, OverflowError):
+        return True
+
+
 def group_by_edge(bbox: Sequence[float], pins: Sequence[Sequence[float]],
-                  pool: Sequence[dict]) -> Dict[str, Tuple[List[int], List[int]]]:
+                  pool: Sequence[dict], pin_evidence: Optional[Sequence[dict]] = None,
+                  eligible_pins: Optional[Sequence[int]] = None,
+                  axis_gate: bool = False, normal_gate: bool = False) -> Dict[str, Tuple[List[int], List[int]]]:
     """引脚按所在边分组；**候选归到「离它最近的那个引脚所在的边」**。
 
     为什么不用「候选到 bbox 四条边的距离」定边：角落外侧的文字框会判给相邻的那条边，
     于是它跟自己真正要配的那排引脚分到两个组、永远配不上（合成用例 (b) 就是被这个
     抓出来的）。改成跟着最近的引脚走，角落问题自然消失。
     """
-    pin_edge = [edge_of_point(bbox, p[0], p[1]) for p in pins]
+    edges = [pin_edge(bbox, pins, i, pin_evidence) for i in range(len(pins))]
+    active = list(range(len(pins))) if eligible_pins is None else list(eligible_pins)
     # ★ 候选的「归属边」必须**全局**取最近的那个引脚。
     # 原先的写法把 argmin 限制在本边的 `pl` 里，于是紧随其后的
     # `if pin_edge[k] == e` 恒为真 —— 每个候选都被塞进**每一条**非空边组，
@@ -65,17 +171,36 @@ def group_by_edge(bbox: Sequence[float], pins: Sequence[Sequence[float]],
     # `rebind`（:194）里是**无条件调用**的（空判断 :199 在它**之后**），
     # stage2 自己那条调用路径恰好有 `assign.py:677-679 if not plist: continue` 挡着，
     # 所以现在打不到；但作为公开函数这不成立。这里直接返回全空分组。
-    if not pins:
+    if not active:
         return {e: ([], []) for e in EDGES}
     for c in pool:
         cx, cy = c["center"]
-        k = min(range(len(pins)),
-                key=lambda i: (pins[i][0] - cx) ** 2 + (pins[i][1] - cy) ** 2)
-        near_edge.append(pin_edge[k])
+        eligible = active
+        if normal_gate:
+            eligible = [i for i in eligible if _candidate_faces_edge(c, bbox, edges[i])]
+        if axis_gate:
+            tol = _candidate_axis_tolerance(c)
+            eligible = [i for i in eligible
+                        if _candidate_axis_gap(c, edges[i],
+                                               pin_anchor(pins, i, pin_evidence)) <= tol]
+        if not eligible:
+            near_edge.append("")
+            continue
+        def distance(i):
+            px, py = pin_anchor(pins, i, pin_evidence)
+            # Keep the historical center metric when there is no evidence.
+            rect = c.get("bbox") or (c.get("rec") or {}).get("bbox")
+            if axis_gate and rect and len(rect) == 4:
+                dx = max(float(rect[0]) - px, px - float(rect[2]), 0.0)
+                dy = max(float(rect[1]) - py, py - float(rect[3]), 0.0)
+                return dx * dx + dy * dy
+            return (px - cx) ** 2 + (py - cy) ** 2
+        k = min(eligible, key=distance)
+        near_edge.append(edges[k])
     out: Dict[str, Tuple[List[int], List[int]]] = {}
     for e in EDGES:
-        pl = [i for i in range(len(pins)) if pin_edge[i] == e]
-        pl.sort(key=lambda i: along(bbox, e, pins[i][0], pins[i][1]))
+        pl = [i for i in active if edges[i] == e]
+        pl.sort(key=lambda i: along(bbox, e, *pin_anchor(pins, i, pin_evidence)))
         cds = [ci for ci in range(len(pool)) if near_edge[ci] == e] if pl else []
         cds.sort(key=lambda i: along(bbox, e, pool[i]["center"][0], pool[i]["center"][1]))
         out[e] = (pl, cds)
@@ -192,13 +317,56 @@ def _ladder(nums: Sequence[Tuple[int, int]], n_pins: int) -> Optional[List[Tuple
 def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
            pool: Sequence[dict], value_of, score_of,
            gap_pen: float = 0.0, cover: float = 0.0, demote: float = 0.15,
-           majority: float = 0.6, ladder: bool = True) -> Tuple[Dict[int, int], List[dict]]:
+           majority: float = 0.6, ladder: bool = True,
+           pin_evidence: Optional[Sequence[dict]] = None,
+           prioritize_trusted: bool = False) -> Tuple[Dict[int, int], List[dict]]:
     """按边分组，用「单调对齐」与「阶梯重排」各出一个整体方案，**按总分取优**。
 
     pool 每项要有 `center`；`value_of(cand) -> str` 给候选读出来的串；
     `score_of(cand, pin_index) -> float` 给收益。返回 `({引脚下标: 候选下标}, 待仲裁)`。
     """
-    groups = group_by_edge(bbox, pins, pool)
+    evidence = normalize_pin_evidence(pins, pin_evidence)
+    if evidence and prioritize_trusted:
+        # The first pass can only take labels aligned with a trusted contact.
+        # The second pass uses the remaining labels. A closer uncertain point
+        # on another edge therefore cannot steal EN from a real left pin.
+        trusted = [i for i, rec in enumerate(evidence) if rec["trust"] == "trusted"]
+        uncertain = [i for i, rec in enumerate(evidence) if rec["trust"] == "uncertain"]
+        chosen: Dict[int, int] = {}
+        ambiguous: List[dict] = []
+        remaining = list(range(len(pool)))
+        for active, gate in ((trusted, True), (uncertain, False)):
+            subset = [pool[i] for i in remaining]
+            groups = group_by_edge(bbox, pins, subset, evidence, active,
+                                   axis_gate=gate, normal_gate=True)
+            def phase_score(cand, pi):
+                if not _candidate_faces_edge(cand, bbox, pin_edge(bbox, pins, pi, evidence)):
+                    return 0.0
+                if gate and _candidate_axis_gap(
+                        cand, pin_edge(bbox, pins, pi, evidence),
+                        pin_anchor(pins, pi, evidence)) > _candidate_axis_tolerance(cand):
+                    return 0.0
+                return score_of(cand, pi)
+            plan, amb = _rebind_groups(groups, subset, value_of, phase_score,
+                                       gap_pen, cover, demote, majority, ladder and not gate)
+            chosen.update({pi: remaining[ci] for pi, ci in plan.items()})
+            for item in amb:
+                mapped = dict(item, cand=remaining[item["cand"]],
+                              alt=remaining[item["alt"]])
+                ambiguous.append(mapped)
+            used = set(plan.values())
+            remaining = [ci for index, ci in enumerate(remaining) if index not in used]
+        return chosen, ambiguous
+    active = ([i for i, rec in enumerate(evidence) if rec["trust"] != "rejected"]
+              if evidence else None)
+    groups = group_by_edge(bbox, pins, pool, evidence, active)
+    return _rebind_groups(groups, pool, value_of, score_of,
+                          gap_pen, cover, demote, majority, ladder)
+
+
+def _rebind_groups(groups, pool, value_of, score_of, gap_pen, cover,
+                   demote, majority, ladder):
+    """Shared monotone/ladder solver; all point and candidate indices stay original."""
     out: Dict[int, int] = {}
     ambiguous: List[dict] = []
 
