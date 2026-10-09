@@ -11,7 +11,8 @@ class BoxPinDuplicateTests(unittest.TestCase):
         return {"number": {"text": number, "conf": nc},
                 "name": {"text": name, "conf": nn}}
 
-    def build(self, reads, enabled=True, string_keys=False, partial=True):
+    def build(self, reads, enabled=True, string_keys=False, partial=True,
+              need_name=True, evidence=None):
         points = [[212, 120], [212, 180]]
         stage1 = {
             "image": {"w": 300, "h": 300},
@@ -25,12 +26,14 @@ class BoxPinDuplicateTests(unittest.TestCase):
         assigned = {"comps": {"ic": {"designator": {"text": "U1"},
                          "pins": {str(k) if string_keys else k: r
                                   for k, r in enumerate(reads)}}}}
+        if evidence is not None:
+            stage1["pin_evidence"] = {"ic": evidence}
         with patch.object(assemble, "BOX_PIN_DUPLICATE_BEST", enabled), \
                 patch.object(assemble, "BOX_PIN_PARTIAL", partial), \
                 patch.object(assemble, "BOX_PIN_DROP_UNREAD", True), \
                 patch.object(assemble, "BOX_PIN_DROP_MIXED_ONLY", True), \
                 patch.object(assemble, "BOX_PIN_DROP_CAP", False), \
-                patch.object(assemble, "BOX_PIN_NEED_NAME", True):
+                patch.object(assemble, "BOX_PIN_NEED_NAME", need_name):
             return assemble.build_doc(stage1, assigned, "synthetic")
 
     def test_stronger_complete_duplicate_keeps_own_point_and_only_own_net(self):
@@ -69,10 +72,132 @@ class BoxPinDuplicateTests(unittest.TestCase):
                     self.assertEqual(net["hyperGraph"], "(U1.8)")
                     self.assertEqual(next(iter(net["edges"].values()))[0]["y"], 120.)
 
-    def test_historically_unnamed_incumbent_keeps_original_policy(self):
-        doc = self.build([self.read("8", "", .4, .4), self.read("8", "GND")])
-        self.assertEqual(doc["pins"]["U1"], {})
-        self.assertEqual(doc["__pin_index"], {})
+    def test_color_complete_read_replaces_any_unnamed_incumbent(self):
+        for source in ("red_green_transition", "red_stub_endpoint", "red_green_transition_uncertain"):
+            with self.subTest(source=source):
+                evidence = [self.evidence("uncertain", [212, 120]),
+                            self.evidence("trusted", [212, 180], source=source)]
+                doc = self.build([self.read("8", "", .4, .4), self.read("8", "GND")], evidence=evidence)
+                self.assertEqual(doc["__pin_index"]["ic"], {"1": "pin_8"})
+        self.assertEqual(doc["pins"]["U1"], {
+            "pin_8": {"pinname": "GND", "point": {"x": 212., "y": 120.}}})
+        self.assertEqual(doc["__pin_index"]["ic"], {"1": "pin_8"})
+        self.assertEqual(len(doc["nets"]), 1)
+        net = next(iter(doc["nets"].values()))
+        self.assertEqual(net["hyperGraph"], "(U1.8)")
+        self.assertEqual(next(iter(net["edges"].values()))[0]["y"], 120.)
+
+    @staticmethod
+    def evidence(trust, point, confirmed=True, source=None):
+        return {"trust": trust, "point_img": point, "frame_confirmed": confirmed, "source": source}
+
+    def test_unnamed_non_color_incumbent_keeps_previous_policy(self):
+        for evidence in (None, [self.evidence("uncertain", [212, 120]),
+                               self.evidence("trusted", [212, 180])]):
+            with self.subTest(evidence=evidence):
+                doc = self.build([self.read("8", "", .4, .4), self.read("8", "GND")], evidence=evidence)
+                self.assertEqual(doc["pins"]["U1"], {})
+                self.assertEqual(doc["__pin_index"], {})
+
+    def test_invalid_or_unconfirmed_color_claim_cannot_replace_unnamed_incumbent(self):
+        claims = (self.evidence("trusted", [212, 180], source="other"),
+                  self.evidence("trusted", [212, 180], source=["red_green_transition"]),
+                  self.evidence("trusted", [212, 180], False, source="red_green_transition"),
+                  self.evidence("trusted", [212, 120], source="red_green_transition"),
+                  self.evidence("uncertain", [212, 180], source="red_green_transition"))
+        for claim in claims:
+            with self.subTest(claim=claim):
+                doc = self.build([self.read("8", ""), self.read("8", "GND")],
+                                 evidence=[self.evidence("uncertain", [212, 120]), claim])
+                self.assertEqual(doc["pins"]["U1"], {})
+
+    def test_non_color_contact_ranks_keep_old_confidence_order(self):
+        evidence = [self.evidence("trusted", [212, 120]),
+                    self.evidence("rejected", [212, 180])]
+        doc = self.build([self.read("8", "FIRST", .65, .65),
+                          self.read("8", "SECOND", .99, .99)], evidence=evidence)
+        self.assertEqual(doc["__pin_index"]["ic"], {"1": "pin_8"})
+
+    def test_trusted_contact_beats_more_confident_text_contact_and_keeps_own_net(self):
+        evidence = [self.evidence("rejected", [212, 120]),
+                    self.evidence("trusted", [212, 180], source="red_green_transition")]
+        doc = self.build([self.read("8", "FALSE", .999, .999),
+                          self.read("8", "VDDREG", .65, .65)], evidence=evidence)
+        self.assertEqual(doc["pins"]["U1"], {
+            "pin_8": {"pinname": "VDDREG", "point": {"x": 212., "y": 120.}}})
+        self.assertEqual(doc["__pin_index"]["ic"], {"1": "pin_8"})
+        self.assertEqual(len(doc["nets"]), 1)
+        net = next(iter(doc["nets"].values()))
+        self.assertEqual(net["hyperGraph"], "(U1.8)")
+        self.assertEqual(next(iter(net["edges"].values()))[0]["y"], 120.)
+
+    def test_later_text_candidate_cannot_replace_trusted_contact_by_confidence(self):
+        evidence = [self.evidence("trusted", [212, 120], source="red_stub_endpoint"),
+                    self.evidence("uncertain", [212, 180])]
+        doc = self.build([self.read("8", "VDDREG", .65, .65),
+                          self.read("8", "FALSE", .999, .999)], evidence=evidence)
+        self.assertEqual(doc["__pin_index"]["ic"], {"0": "pin_8"})
+
+    def test_unconfirmed_missing_and_stale_contact_evidence_keep_quality_order(self):
+        invalid_evidence = (
+            [self.evidence("rejected", [212, 120]),
+             self.evidence("trusted", [212, 180], False, source="red_green_transition")],
+            [self.evidence("rejected", [212, 120]), None],
+            [self.evidence("rejected", [212, 120]),
+             self.evidence("trusted", [212, 120], source="red_green_transition")],
+        )
+        for evidence in invalid_evidence:
+            with self.subTest(evidence=evidence):
+                doc = self.build([self.read("8", "FIRST", .99, .99),
+                                  self.read("8", "SECOND", .65, .65)], evidence=evidence)
+                self.assertEqual(doc["__pin_index"]["ic"], {"0": "pin_8"})
+
+    def test_contact_evidence_does_not_change_disabled_switches(self):
+        evidence = [self.evidence("rejected", [212, 120]),
+                    self.evidence("trusted", [212, 180], source="red_green_transition")]
+        reads = [self.read("8", "FIRST", .99, .99), self.read("8", "SECOND", .65, .65)]
+        for switches in ({"enabled": False}, {"need_name": False}, {"partial": False}):
+            with self.subTest(switches=switches):
+                self.assertEqual(self.build(reads, evidence=evidence, **switches),
+                                 self.build(reads, **switches))
+
+    def test_frozen_case8_vddreg_uses_own_contact_index_and_network(self):
+        # Contact 14's old grayscale guess competes with the actual color-rule
+        # VDDREG/5 contact measured at (1191,513). Keep the color contact's own
+        # point and network; its OCR read comes from the frozen _assigned pool.
+        points = [[982.9, 680.4], [1191.0, 513.0]]
+        stage1 = {
+            "image": {"w": 2229, "h": 1192},
+            "components": [{"id": "c0000", "type": "box",
+                            "bbox_img": [994.93, 453.68, 1172.31, 770.37],
+                            "bbox_json": [994.93, 421.63, 1172.31, 738.32]}],
+            "pins": {"c0000": points},
+            "pin_evidence": {"c0000": [self.evidence("uncertain", points[0]),
+                                        self.evidence("trusted", points[1], source="red_green_transition")]},
+            # The actual unnamed contact has no network. The real right-side
+            # contact is in net_7. A short marker here identifies that same net.
+            "wire_detail": {"segments": [[[1191.0, 513.0], [1231.0, 513.0]]]},
+            "nets": [{"id": "net_7", "pins": [["c0000", 1]], "seg_index": [0]}],
+        }
+        assigned = {"comps": {"c0000": {"designator": {"text": "U1"}, "pins": {
+            "0": {"number": {"text": "5", "conf": .6476764834590687}, "name": None},
+            "1": {"number": {"text": "5", "conf": .9662621787068312},
+                  "name": {"text": "VDDREG", "conf": .6651882566996943}},
+        }}}}
+        with patch.object(assemble, "BOX_PIN_DUPLICATE_BEST", True), \
+                patch.object(assemble, "BOX_PIN_PARTIAL", True), \
+                patch.object(assemble, "BOX_PIN_DROP_UNREAD", True), \
+                patch.object(assemble, "BOX_PIN_DROP_MIXED_ONLY", True), \
+                patch.object(assemble, "BOX_PIN_DROP_CAP", False), \
+                patch.object(assemble, "BOX_PIN_NEED_NAME", True):
+            doc = assemble.build_doc(stage1, assigned, "8")
+        self.assertEqual(doc["pins"]["U1"], {
+            "pin_5": {"pinname": "VDDREG", "point": {"x": 1191., "y": 679.}}})
+        self.assertEqual(doc["__pin_index"], {"c0000": {"1": "pin_5"}})
+        self.assertEqual(len(doc["nets"]), 1)
+        net = next(iter(doc["nets"].values()))
+        self.assertEqual(net["hyperGraph"], "(U1.5)")
+        self.assertEqual(next(iter(net["edges"].values()))[0], {"x": 1191., "y": 679.})
 
     def test_unknown_complete_read_cannot_promote_unnamed_incumbent(self):
         for invalid in (None, "bad", float("nan"), float("inf"), -1, 2):

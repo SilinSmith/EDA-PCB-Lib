@@ -133,9 +133,11 @@ from envflag import env_on                       # noqa: E402  (唯一权威假�
 # ★ 原来手写了 5 个词（缺 `no`/`disable`/`disabled`）—— 「差不多全」正是 drift 的
 #   温床。词表只有一处权威：`eda-pcb\envflag.py:FALSE_WORDS`。
 PIN_ALONG = env_on("STAGE2_PIN_ALONG", "1")
-# Stage1 may supply actual frame-contact evidence for NAME binding. Number
-# assignment retains the historical whole-row path; this switch supports A/B.
+# Stage1 may supply actual frame-contact evidence for name and number binding.
 PIN_TRUST_BIND = env_on("STAGE2_PIN_TRUST_BIND", "1")
+# Numbers use trust/side only and retain observed wire-row coordinates, rather
+# than the calibrated frame anchor used by names. Missing trust keeps legacy.
+PIN_NUMBER_TRUST_BIND = env_on("STAGE2_PIN_NUMBER_TRUST_BIND", "1")
 MAX_ALTS = 6         # 每个元件最多保留几个位号候选（交给阶段三仲裁）
 # 结构化重绑定时「每配上一对」的固定加分（`stage2\\structmatch.py` 的 `cover`）：
 # 它让「一条自洽、把整排引脚都配上、每对都稍远」的方案压过「只配最近的那几对」。
@@ -545,6 +547,10 @@ def _best_read(reads: Dict[str, Tuple[str, float]], role: str,
                fit) -> Optional[Tuple[str, float, float]]:
     """在 5 种读法里取该角色适配度最高的一次。也允许串角色借读
     （例如 `pin_name` 框在 `designator` 角色下读出来更像），因为角色条件只是弱条件。"""
+    # A dedicated external digit crop is intentionally role-limited. It must
+    # not turn a recognized pin number into a numeric name, value or label.
+    if set(reads) == {"pin_number"} and role != "pin_number":
+        return None
     best = None
     for r, (txt, conf) in reads.items():
         if not txt:
@@ -894,6 +900,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         _pcr = (pincol or {}).get(cid) or []
         _pe = (structmatch.normalize_name_evidence(
             c["bbox"], plist, (pin_evidence or {}).get(cid)) if PIN_TRUST_BIND else [])
+        _npe = (structmatch.normalize_number_evidence(plist, _pe)
+                if PIN_NUMBER_TRUST_BIND and c["type"] == "box" else [])
         pinfo = {i: {"number": None, "name": None} for i in range(len(plist))}
         rec["pins"] = pinfo
         take = lambda t: (t.get("bbox") is not None
@@ -904,10 +912,10 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         for role, want_inside, fit_fn, slot in (
                 ("pin_name", True, fit_pinname, "name"),
                 ("pin_number", False, fit_pinnum, "number")):
-            # Geometry evidence changes name ownership only. Reusing calibrated
-            # anchors for the numeric ladder changed otherwise correct numbers
-            # in the official 7/8 audit and created duplicate output numbers.
-            _slot_pe = _pe if slot == "name" else []
+            # Names may use frame anchors; numeric row matching explicitly
+            # retains original points while sharing fresh trust and side.
+            _slot_pe = _pe if slot == "name" else _npe
+            _number_guard = slot == "number" and bool(_npe)
             pool = []
             # 引脚名可以更长（`VDDA`/`GNDA`），引脚号可以离框更远（大 IC 印在框外 29~44px）。
             _wlim = PINNAME_MAXW if slot == "name" else MAX_BOX_W
@@ -920,20 +928,30 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     continue
                 if want_inside and not t["inside"]:
                     continue
-                if (not want_inside) and (t["inside"] or t["d"] > _dlim):
+                if (not want_inside) and t["d"] > _dlim:
                     continue
                 got = (_best_number_read(t["reads"]) if role == "pin_number"
                        else _best_read(t["reads"], role, fit_fn))
                 if not got:
                     continue
                 s, txt, conf, f = got
-                s = _score(s, conf, t["d"], t["inside"], dist_w=_dw)
+                if (not want_inside) and t["inside"]:
+                    crossing = {"text": txt, "bbox": t["bbox"], "center": t["center"]}
+                    if not (_number_guard and structmatch.crossing_number_candidate(
+                            crossing, c["bbox"], plist, _pe)):
+                        continue
+                # A merged number/marker box does not earn the inside-name
+                # score bonus merely because its centre crossed the frame.
+                s = _score(s, conf, t["d"], t["inside"] and not _number_guard,
+                           dist_w=_dw)
                 if s <= 0:
                     continue
                 pool.append({"center": t["center"], "text": txt, "score": s,
                              "conf": conf, "rec": t})
             if not pool:
                 continue
+            if _number_guard:
+                pool = structmatch.deduplicate_number_candidates(pool)
             # ★ 候选池去重：同一块文字被重复检出两次时，两个副本会被对齐到两根
             # 不同的脚上（其中一根必然是错的）。见 `PINNUM_DUP` 的注释。
             if PINNUM_DUP > 0 and len(pool) > 1:
@@ -993,8 +1011,12 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
 
             def score_of(c, pi, _pl=plist, _bb=_cbb,
                          _ev=_slot_pe,
+                         _numeric=_number_guard,
                          _dec=PINNUM_DECAY if slot == "number" else 20.0):
-                if PIN_ALONG:
+                if _numeric:
+                    e = structmatch.pin_edge(_bb, _pl, pi, _ev)
+                    d = structmatch.number_row_distance(c, e, _pl[pi])
+                elif PIN_ALONG:
                     # ★ 用**沿边**距离而不是 2D 距离。
                     # 同一排的文字框在垂直方向（沿边）上各自贴着它的引脚，而在
                     # 朝外方向上的 x 偏移**随文字长度变化**（`VDD` 29px / `VDDIO` 44px
@@ -1015,10 +1037,16 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
 
             cov = PIN_COVER if slot == "number" else PIN_COVER * 0.5
             frame_rejected_names = []
-            bound, amb = structmatch.rebind(
-                c["bbox"], plist, pool, lambda cc: cc["text"], score_of, cover=cov,
-                pin_evidence=_slot_pe, prioritize_trusted=slot == "name",
-                frame_rejected_name_pins=frame_rejected_names if slot == "name" else None)
+            if _number_guard:
+                bound, amb = structmatch.rebind_numbers(
+                    c["bbox"], plist, pool, lambda cc: cc["text"], score_of,
+                    cover=cov, pin_evidence=_pe,
+                    named_pins=[i for i, rec in pinfo.items() if rec["name"]])
+            else:
+                bound, amb = structmatch.rebind(
+                    c["bbox"], plist, pool, lambda cc: cc["text"], score_of, cover=cov,
+                    pin_evidence=_slot_pe, prioritize_trusted=slot == "name",
+                    frame_rejected_name_pins=frame_rejected_names if slot == "name" else None)
             for pi in frame_rejected_names:
                 pinfo[pi]["name_rejected_by_frame"] = True
             if os.environ.get("STAGE2_DBG_CID") == cid:

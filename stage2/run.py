@@ -25,6 +25,7 @@ from .assign import assign, dist_to_rect
 from .assemble import build_doc
 from .expect import merge_runs, score_expect, should_grow
 from .growbox import grow_reading
+from envflag import env_on
 
 # 「不可分就默认是长的」时，长出来的新读法要过这道门才允许进候选池（用户 m06734：
 # 「截止条件定的高一点」）。0.9 = 必须落在它自己前缀所期望的长度区间里。
@@ -39,6 +40,7 @@ PINCOL_WIN_TEXTS = os.environ.get("STAGE2_PINCOL_WIN", "1").strip().lower() not 
 PINCOL_WIN_KEYS = tuple(k.strip() for k in
                         os.environ.get("STAGE2_PINCOL_WIN_KEYS", "out_win").split(",")
                         if k.strip())
+COLOR_NUMBER_CROP = env_on("STAGE2_COLOR_NUMBER_CROP", "1")
 # 这些是「参数」类元件，它们旁边没有长器件名，不参与生长
 _VALUE_TYPES = {"r", "c", "l", "fuse", "crystal", "crystal_2pin",
                 "crystal_3pin", "crystal_4pin"}
@@ -218,6 +220,9 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         reads = engine.read(bgr, boxes) if roles is None else engine.read(bgr, boxes, roles)
     else:
         reads = [{"bbox": b, "reads": {}} for b in boxes]
+    if do_ocr and COLOR_NUMBER_CROP and (roles is None or "pin_number" in roles):
+        from .color_crops import read_color_numbers
+        reads = list(reads) + read_color_numbers(doc,reads,engine,bgr)
     t2 = time.time()
 
     for r in reads:

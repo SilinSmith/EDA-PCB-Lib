@@ -513,15 +513,40 @@ def _pin_read_quality(rec: dict) -> Optional[float]:
     return values[0] * values[1]
 
 
+COLOR_PIN_SOURCES = frozenset(("red_green_transition", "red_stub_endpoint",
+                               "red_green_transition_uncertain"))
+
+
+def _pin_contact_rank(evidence: dict, point: Sequence[float]) -> Optional[int]:
+    """Use confirmed, index-aligned frame evidence; absent/stale records are neutral."""
+    if not isinstance(evidence, dict) or evidence.get("frame_confirmed") is not True:
+        return None
+    observed = evidence.get("point_img")
+    if not isinstance(observed, (list, tuple)) or len(observed) != 2:
+        return None
+    try:
+        delta = math.hypot(float(observed[0]) - float(point[0]),
+                           float(observed[1]) - float(point[1]))
+    except (IndexError, TypeError, ValueError, OverflowError):
+        return None
+    # pin_evidence serializes point_img to one decimal place. A record from a
+    # different contact must not acquire that contact's number or network.
+    if not math.isfinite(delta) or delta > .11:
+        return None
+    trust = evidence.get("trust")
+    return ({"rejected": 0, "uncertain": 1, "trusted": 2}.get(trust)
+            if isinstance(trust, str) else None)
+
+
 def _box_number_winners(raw: Sequence[dict]) -> Dict[int, int]:
     """Choose one existing contact per read number without joining their nets.
 
-    A complete later read may replace a complete earlier read when both have
-    usable confidence and the later number/name pair ranks higher. A complete
-    read can also replace an unnamed first read if the frame guard just rejected
-    that first contact's false name and output requires names. Other historically
-    unnamed contacts keep the original policy; equal or unknown complete-read
-    quality keeps the original first-wins behavior.
+    When names are required, a complete measured-color read can replace an
+    unnamed first read; a frame-rejected incumbent also keeps the prior escape
+    hatch. For two complete reads with usable confidence and confirmed contact
+    evidence, geometry precedes OCR confidence only when a measured-color
+    contact participates. Legacy and monochrome reads keep the original policy.
+    Numbers, names, points and nets stay on the selected contact.
     """
     winners: Dict[int, int] = {}
     for i, r in enumerate(raw):
@@ -535,9 +560,23 @@ def _box_number_winners(raw: Sequence[dict]) -> Dict[int, int]:
             continue
         old = raw[prev]
         quality, old_quality = r.get("quality"), old.get("quality")
-        if (BOX_PIN_DUPLICATE_BEST and r["nm"] and quality is not None
-                and ((not old["nm"] and BOX_PIN_NEED_NAME and old.get("name_rejected_by_frame") is True)
-                     or (old["nm"] and old_quality is not None and quality > old_quality))):
+        if not BOX_PIN_DUPLICATE_BEST or not r["nm"] or quality is None:
+            continue
+        if not old["nm"]:
+            if BOX_PIN_NEED_NAME and (r.get("color_contact") is True
+                                     or old.get("name_rejected_by_frame") is True):
+                winners[v] = i
+            continue
+        if old_quality is None:
+            continue
+        contact_rank, old_rank = r.get("contact_rank"), old.get("contact_rank")
+        if (BOX_PIN_NEED_NAME and (r.get("color_contact") is True
+                                  or old.get("color_contact") is True)
+                and contact_rank is not None and old_rank is not None
+                and contact_rank != old_rank):
+            if contact_rank > old_rank:
+                winners[v] = i
+        elif quality > old_quality:
             winners[v] = i
     return winners
 
@@ -548,6 +587,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     comps = stage1.get("components") or []
     a = assigned.get("comps") or {}
     st1_pins = stage1.get("pins") or {}
+    st1_evidence = stage1.get("pin_evidence") or {}
 
     components: Dict[str, dict] = {}
     pins: Dict[str, dict] = {}
@@ -618,11 +658,19 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # 但阶段三是**从 JSON 读回来的**，JSON 一定把字典键变成字符串 —— 只写
         # `pinfo.get(k)` 就会全部落空，于是所有 OCR 出来的引脚号/引脚名被丢掉。
         raw: List[dict] = []
+        contact_evidence = st1_evidence.get(cid) or []
         for k in range(len(pts)):
             rec = pinfo.get(k) or pinfo.get(str(k)) or {}
             num = ((rec.get("number") or {}).get("text") or "").strip()
             nm = ((rec.get("name") or {}).get("text") or "").strip()
+            evidence = (contact_evidence[k] if isinstance(contact_evidence, (list, tuple))
+                        and k < len(contact_evidence) else None)
+            contact_rank = _pin_contact_rank(evidence, pts[k])
             raw.append({"num": num, "nm": nm, "quality": _pin_read_quality(rec),
+                        "contact_rank": contact_rank,
+                        "color_contact": (contact_rank == 2 and isinstance(evidence, dict)
+                                          and isinstance(evidence.get("source"), str)
+                                          and evidence.get("source") in COLOR_PIN_SOURCES),
                         "name_rejected_by_frame": rec.get("name_rejected_by_frame") is True})
         # **结构期望**（2025-10 按官方 Q&A 重定）。
         #

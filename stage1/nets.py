@@ -162,7 +162,8 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
                join_dist: float = PIN_JOIN_DIST, min_pins: int = MIN_NET_PINS,
                join_far: float = PIN_JOIN_FAR, report=None,
                pin_synth=None, join_synth: float = PIN_JOIN_SYNTH,
-               components=None, guard_attachments: bool = False):
+               components=None, guard_attachments: bool = False,
+               pin_connected=None):
     """返回 (nets, seg_groups)。
 
     `comp_pins`: `{comp_id: [(x, y), ...]}`（图像坐标）
@@ -192,6 +193,11 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
     choices in different wire groups are kept in `report["ambiguous"]`, rather
     than resolved by segment order. Same-group ties are harmless. Neither check
     expands a search radius or changes wire grouping; the default remains off.
+
+    `pin_connected` is optional measured color evidence, aligned by component
+    and pin index. Only explicit False prevents network attachment (a measured
+    floating red stub or an NC mark). Missing/None evidence keeps the legacy
+    behavior; nearby skeleton noise must not connect a known floating pin.
     """
     segs = segments if isinstance(segments, np.ndarray) else labels_mod._as_segs(segments)
     tol = labels_mod.WIRE_TOL if tol is None else tol
@@ -224,13 +230,15 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
         ink_frac=getattr(labels_mod, "WIRE_INK_FRAC", 0.5))
 
     # 收集所有引脚点，并记住它属于哪个元件、第几个脚
-    pts, owner, jd, strict_synth = [], [], [], []
+    pts, owner, jd, strict_synth, disconnected = [], [], [], [], []
     synth_radius = float(join_synth)
     for cid, plist in comp_pins.items():
         sf = (pin_synth or {}).get(cid) or []
+        cf = (pin_connected or {}).get(cid) or []
         for k, p in enumerate(plist):
             pts.append((float(p[0]), float(p[1])))
             owner.append((cid, k))
+            disconnected.append(k < len(cf) and cf[k] is False)
             # 「补出来的脚」用紧半径挑导线，其余用 `join_dist`。见 `PIN_JOIN_SYNTH`。
             # Negative or nonrestrictive values disable the synthetic-pin guard,
             # as documented by PIN_JOIN_SYNTH. A strict guard also applies to
@@ -284,6 +292,8 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
 
     def _pick(m: int) -> int:
         """给第 m 个引脚挑一个分量号（返回 -1 = 悬空）。"""
+        if disconnected[m]:
+            return -1
         # 每脚自己的接线半径：补出来的脚只有 `join_synth`（见 `PIN_JOIN_SYNTH`）。
         # `pin_synth` 没给时 `JD[m]` 恒等于参数 `join_dist`，行为与历史一致。
         jdm = float(JD[m])
@@ -323,11 +333,13 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
             rec = {"comp": owner[m][0], "pin": owner[m][1],
                    "x": round(float(P[m][0]), 1), "y": round(float(P[m][1]), 1),
                    "d": (round(d, 1) if np.isfinite(d) else None)}
+            if disconnected[m]:
+                rec["reason"] = "color_stub_without_connected_wire"
             # ★ 「不丢弃，只降权」：`join_far` 给了就说明调用方要的是**软判据** ——
             #   这一段距离里的引脚照样挂上（挂最近的那个分量），只是记进
             #   `report["weak"]` 让下游能降权/复核。`join_far=0`（默认）时
             #   weak 区间为空，行为与历史完全一致。
-            if (not strict_synth[m] and m not in ambiguous
+            if (not disconnected[m] and not strict_synth[m] and m not in ambiguous
                     and _far > 0 and np.isfinite(d) and d <= _far):
                 g = int(seg_groups[int(sidx[m])])
                 if report is not None:

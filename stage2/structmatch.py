@@ -261,6 +261,181 @@ def candidate_inside_confirmed_frame(cand: dict, sides: Dict[str, float]) -> boo
             and ("bottom" not in sides or y1 <= sides["bottom"] + halo))
 
 
+_NUMBER_COLOR_SOURCES = frozenset(("red_green_transition", "red_stub_endpoint",
+                                  "red_green_transition_uncertain"))
+
+
+def normalize_number_evidence(pins: Sequence[Sequence[float]],
+                              evidence: Optional[Sequence[dict]],
+                              require_color: bool = True) -> List[dict]:
+    """Keep contact trust/side, but never move numbers to a name's frame anchor.
+
+    Number labels usually sit above their wire row. Calibrated name anchors
+    changed some otherwise correct number bindings; use the observed contact
+    coordinate for numeric row matching. Missing/stale evidence stays neutral.
+    """
+    checked = normalize_pin_evidence(pins, evidence)
+    if require_color:
+        for rec in checked:
+            if rec.get("trust") == "trusted" and rec.get("source") not in _NUMBER_COLOR_SOURCES:
+                rec["trust"] = "uncertain"
+    if not any(rec.get("trust") == "trusted" for rec in checked):
+        return []
+    for rec in checked:
+        rec.pop("anchor_img", None)
+    return checked
+
+
+def _number_axis_tolerance(cand: dict, edge: str) -> float:
+    rect = _candidate_rectangle(cand)
+    if rect is None:
+        return _candidate_axis_tolerance(cand)
+    axis = 1 if edge in ("left", "right") else 0
+    # Number baselines can sit several pixels above the wire. Unlike names,
+    # a narrow single-digit width is not a useful row-tolerance scale.
+    return max(4.0, 0.75 * (rect[axis + 2] - rect[axis]))
+
+
+def number_row_distance(cand: dict, edge: str, point: Sequence[float]) -> float:
+    """Horizontal pin numbers are printed above the wire, ending near its row."""
+    rect = _candidate_rectangle(cand)
+    if rect is not None and edge in ("left", "right"):
+        return abs(float(point[1]) - rect[3])
+    return _candidate_axis_gap(cand, edge, point)
+
+
+def _number_faces_edge(cand: dict, bbox: Sequence[float], edge: str,
+                       sides: Dict[str, float]) -> bool:
+    """Require actual ink extent outside its own side, including merged boxes."""
+    rect = _candidate_rectangle(cand)
+    if rect is None:
+        return False
+    x0, y0, x1, y1 = rect
+    halo = max(1.0, min(3.0, 0.15 * min(x1 - x0, y1 - y0)))
+    boundary = sides.get(edge, {"left": bbox[0], "top": bbox[1],
+                                "right": bbox[2], "bottom": bbox[3]}[edge])
+    return ({"left": boundary - x0, "right": x1 - boundary,
+             "top": boundary - y0, "bottom": y1 - boundary}[edge] > halo)
+
+
+def crossing_number_candidate(cand: dict, bbox: Sequence[float], pins,
+                              evidence: Sequence[dict]) -> bool:
+    """A numeric OCR box crossing a measured body side may still be a number.
+
+    An internal numeric pin name remains internal. Only a positive read number
+    with exterior ink and row alignment to a trusted contact can relax the
+    legacy centre-outside qualification. No GT number or sequence is inferred.
+    """
+    value = num_of(cand.get("text", ""))
+    if value is None or not 1 <= value <= 999:
+        return False
+    checked = normalize_pin_evidence(pins, evidence)
+    trusted_rows = normalize_number_evidence(pins, evidence)
+    if not trusted_rows:
+        return False
+    sides = confirmed_frame_sides(bbox, checked)
+    for index, rec in enumerate(checked):
+        edge = rec.get("edge")
+        if trusted_rows[index].get("trust") != "trusted" or edge not in sides:
+            continue
+        if (_number_faces_edge(cand, bbox, edge, sides)
+                and _candidate_axis_gap(cand, edge, pins[index])
+                <= _number_axis_tolerance(cand, edge)):
+            return True
+    return False
+
+
+def deduplicate_number_candidates(pool: Sequence[dict]) -> List[dict]:
+    """Collapse same-number, strongly overlapping OCR boxes, not nearby rows."""
+    keep = []
+    for cand in sorted(pool, key=lambda item: -float(item.get("score", 0.0))):
+        rect = _candidate_rectangle(cand)
+        duplicate = False
+        if rect is not None:
+            x0, y0, x1, y1 = rect
+            area = (x1 - x0) * (y1 - y0)
+            for prior in keep:
+                other = _candidate_rectangle(prior)
+                if other is None or prior.get("text") != cand.get("text"):
+                    continue
+                a0, b0, a1, b1 = other
+                intersection = max(0.0, min(x1, a1) - max(x0, a0)) * max(
+                    0.0, min(y1, b1) - max(y0, b0))
+                union = area + (a1 - a0) * (b1 - b0) - intersection
+                # Both overlap and a small centre displacement are needed.
+                # Distinct repeated numerals on different rows must survive.
+                centre_delta = max(abs((x0+x1-a0-a1)*0.5),
+                                   abs((y0+y1-b0-b1)*0.5))
+                if union > 0 and intersection / union >= 0.5 and centre_delta <= 3.0:
+                    duplicate = True
+                    break
+        if not duplicate:
+            keep.append(cand)
+    return keep
+
+
+def rebind_numbers(bbox: Sequence[float], pins: Sequence[Sequence[float]],
+                   pool: Sequence[dict], value_of, score_of,
+                   cover: float = 0.0,
+                   pin_evidence: Optional[Sequence[dict]] = None,
+                   named_pins: Optional[Sequence[int]] = None):
+    """Bind observed numbers to trusted wire rows before leftover contacts.
+
+    Geometric row/side gates prevent extra glyph contacts from moving a whole
+    sequence. Numeric values need not increase in schematic drawing order.
+    The old numeric ladder remains the exact fallback without fresh trust or
+    OCR rectangles; names and network/contact coordinates are not changed.
+    """
+    evidence = normalize_number_evidence(pins, pin_evidence)
+    if not evidence or any(_candidate_rectangle(cand) is None for cand in pool):
+        return rebind(bbox, pins, pool, value_of, score_of, cover=cover)
+    frames = confirmed_frame_sides(bbox, normalize_pin_evidence(pins, pin_evidence))
+    selected, remaining = {}, list(range(len(pool)))
+    named = set(named_pins or ())
+    phases = (("trusted", True), ("uncertain", True),
+              ("trusted", False), ("uncertain", False))
+    for trust, has_name in phases:
+        active = [i for i, rec in enumerate(evidence)
+                  if rec.get("trust") == trust and ((i in named) == has_name)]
+        if not active or not remaining:
+            continue
+        edges = {i: pin_edge(bbox, pins, i, evidence) for i in active}
+        allowed = {}
+        owners = {}
+        for ci in remaining:
+            cand = pool[ci]
+            value = num_of(value_of(cand))
+            if value is None or not 1 <= value <= 999:
+                continue
+            for pi in active:
+                edge = edges[pi]
+                gap = _candidate_axis_gap(cand, edge, pins[pi])
+                if (gap <= _number_axis_tolerance(cand, edge)
+                        and _number_faces_edge(cand, bbox, edge, frames)):
+                    allowed[(ci, pi)] = True
+            eligible = [pi for pi in active if (ci, pi) in allowed]
+            if eligible:
+                nearest = min(eligible, key=lambda pi: (
+                    _candidate_axis_gap(cand, edges[pi], pins[pi]),
+                    abs(along(bbox, edges[pi], *pins[pi])
+                        - along(bbox, edges[pi], *cand["center"]))))
+                owners[ci] = edges[nearest]
+        for edge in EDGES:
+            pl = sorted((pi for pi in active if edges[pi] == edge),
+                        key=lambda pi: along(bbox, edge, *pins[pi]))
+            cl = sorted((ci for ci, owner in owners.items() if owner == edge),
+                        key=lambda ci: along(bbox, edge, *pool[ci]["center"]))
+            if not pl or not cl:
+                continue
+            weights = [[max(0.0, float(score_of(pool[ci], pi)))
+                        if (ci, pi) in allowed else 0.0 for pi in pl] for ci in cl]
+            for i, j in align_monotone(weights, cover=cover):
+                selected[pl[j]] = cl[i]
+        used = set(selected.values())
+        remaining = [ci for ci in remaining if ci not in used]
+    return selected, []
+
+
 def _name_corridor_distance(cand: dict, bbox: Sequence[float], pins,
                             index: int, evidence: Sequence[dict]) -> Optional[float]:
     """Inward distance from a contact to aligned name text, using its near edge."""

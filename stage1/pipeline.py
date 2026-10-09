@@ -45,6 +45,7 @@ from stage1 import pintrace as ray_mod         # noqa: E402
 from stage1 import nets as nets_mod            # noqa: E402
 from stage1 import pincol as pincol_mod        # noqa: E402
 from stage1 import pin_evidence as evidence_mod  # noqa: E402
+from stage1 import pincolor as color_mod       # noqa: E402
 from stage1.detect import Detector             # noqa: E402
 from stage1 import detect as det_mod           # noqa: E402
 
@@ -64,11 +65,85 @@ BIGIC_ON = env_on("STAGE1_BIGIC", "1")
 #     枚举前 5px 命中   3/64   （stage1 只给 8 个点）
 #     枚举后 5px 命中  63/64   （L 32 个 pitch 9.99、R 31 个 pitch 9.96）
 PINC_ON = env_on("STAGE1_PINC", "1")
+PIN_COLOR_ON = env_on("STAGE1_PIN_COLOR", "1")
 
 # Direction and body-crossing checks are opt-in until a held-out end-to-end
 # comparison confirms they help for the detector's boxes and this drawing style.
 PIN_DIRECTION_GUARD = env_on("STAGE1_PIN_DIRECTION_GUARD", "0")
 PIN_ATTACHMENT_GUARD = env_on("STAGE1_PIN_ATTACHMENT_GUARD", "0")
+
+
+def apply_color_pins(components, pins, pin_synth, color_records):
+    """Apply measured color terminals after grid merging, before net indexing.
+
+    A confirmed red frame with pins on it supplies stronger evidence than
+    gray text/grid guesses. Replace legacy guesses on color-confirmed sides.
+    On a fully confirmed red frame all sides are scanned, including sides with
+    no red pin strokes. Unconfirmed sides and monochrome components keep the
+    legacy candidates. The dropped guesses remain in the diagnostic ledger.
+    """
+    result = {cid: list(points) for cid, points in pins.items()}
+    synth = {cid: list(flags) for cid, flags in (pin_synth or {}).items()}
+    overlays, connected, ledger = {}, {}, {}
+    for comp in components:
+        cid = comp["id"]
+        if comp.get("type") != "box":
+            continue
+        recs = color_records.get(cid) or []
+        if not recs:
+            continue
+        # Do not treat arbitrary caller metadata as a confirmed color stroke.
+        recs = [dict(r) for r in recs if r.get("frame_confirmed") is True
+                and r.get("edge") in ("top", "right", "bottom", "left")
+                and len(r.get("point_img") or []) == 2
+                and all(math.isfinite(float(v)) for v in r["point_img"])]
+        if not recs:
+            continue
+        confirmed = {e for r in recs for e in r.get("confirmed_edges", [])}
+        covered = {r["edge"] for r in recs}
+        if confirmed == {"top", "right", "bottom", "left"}:
+            covered = confirmed
+        old = result.get(cid) or []
+        old_flags = synth.get(cid) or []
+        kept, kept_flags, dropped = [], [], []
+        for index, p in enumerate(old):
+            edge = evidence_mod._EDGES[evidence_mod._candidate_edge(p, comp["bbox_img"])]
+            if edge in covered:
+                dropped.append({"index": index, "point_img": list(p), "edge": edge,
+                                "reason": "replaced_by_frame_attached_color_strokes"})
+            else:
+                kept.append(tuple(p))
+                kept_flags.append(old_flags[index] if index < len(old_flags) else 0)
+        measured = []
+        flags, connections = [], []
+        for r in recs:
+            r["point_img"] = [round(float(v), 1) for v in r["point_img"]]
+            if r.get("anchor_img"):
+                r["anchor_img"] = [round(float(v), 1) for v in r["anchor_img"]]
+            r["trust"] = "trusted"
+            measured.append(tuple(r["point_img"]))
+            connections.append(r.get("connected"))
+            flags.append(int(r.get("connected") is False))
+        result[cid] = measured + kept
+        synth[cid] = flags + kept_flags
+        overlays[cid] = recs + [None] * len(kept)
+        connected[cid] = connections + [None] * len(kept)
+        ledger[cid] = {"measured": recs, "replaced_guesses": dropped,
+                       "confirmed_edges": sorted(confirmed),
+                       "retained_unconfirmed_side": len(kept)}
+    return result, synth, overlays, connected, ledger
+
+
+def overlay_color_evidence(evidence, overlays):
+    """Keep evidence exactly aligned with the post-color pin sequence."""
+    result = dict(evidence)
+    for cid, recs in overlays.items():
+        old = result.get(cid) or [{} for _ in recs]
+        if len(old) != len(recs):
+            old = [{} for _ in recs]
+        result[cid] = [dict(r) if r is not None else dict(prior)
+                       for prior, r in zip(old, recs)]
+    return result
 
 
 def _pt_seg_dist(p, a, b) -> float:
@@ -135,6 +210,13 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
     #   端到端只会表现为「这张图这些项是 0」，与「这张图本来就没有引脚」不可区分）。
     errs: list[str] = []
     bgr = cv2.imread(str(case.png_path), cv2.IMREAD_COLOR)
+    if bgr is None:
+        # Some Windows OpenCV builds cannot open Unicode dataset paths.
+        try:
+            encoded = np.fromfile(str(Path(case.png_path)), dtype=np.uint8)
+            bgr = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+        except (OSError, ValueError, cv2.error):
+            bgr = None
     if bgr is None:
         raise RuntimeError(f"读不出图: {case.png_path}")
     H, W = bgr.shape[:2]
@@ -266,6 +348,7 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
     comp_pins, nets, seg_groups, pin_s = {}, [], [], 0.0
     pincol_cols, pincol_stat, pin_synth = {}, {}, {}
     pin_evidence = {}
+    color_overlays, pin_connected, pin_color = {}, {}, {}
     # ★★ 「不丢弃」的**留痕**通道（owner 哲学：证据不能被悄悄抹掉）。
     #   `build_nets` 会把「够不着任何导线而被硬截断的引脚」写进 `orphans`、
     #   把「软判据区间内勉强挂上的引脚」写进 `weak`。历史行为是 `if g < 0: continue`
@@ -295,6 +378,14 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                 except Exception as e:
                     traceback.print_exc()
                     errs.append(f"pincol: {type(e).__name__}: {e}")
+            if PIN_COLOR_ON:
+                try:
+                    color_records = color_mod.extract_color_pins(bgr, comps)
+                    comp_pins, pin_synth, color_overlays, pin_connected, pin_color = apply_color_pins(
+                        comps, comp_pins, pin_synth, color_records)
+                except Exception as e:
+                    traceback.print_exc()
+                    errs.append(f"pin_color: {type(e).__name__}: {e}")
             # ★ 把**墨迹掩膜**传给网络装配：`_weld_unions` 用它判断两个端点之间的
             # 直线上是否真的有墨。结点圆点造成的断口是**画出来的**（圆点本身就是墨），
             # 而「把不相干的两条线凑近」的假配对连线必然穿过空白。
@@ -308,7 +399,8 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                 # 而 `PIN_JOIN_DIST=12` 比它还大 ⇒ 补脚会认领**隔壁脚的导线**，
                 # 把两条网络并成一条。`pin_synth` 为空时行为与历史完全一致。
                 pin_synth=pin_synth, components=comps,
-                guard_attachments=PIN_ATTACHMENT_GUARD)
+                guard_attachments=PIN_ATTACHMENT_GUARD,
+                pin_connected=pin_connected)
         except Exception as e:
             traceback.print_exc()
             # ★ 审计项②：这一条是**最贵**的吞异常 —— 它把 pin(0.25)+net(0.35)
@@ -318,7 +410,7 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         pin_s = round(time.time() - t_p, 2)
 
         # Evidence ranks the FINAL merged sequence. Failure must not erase
-        # otherwise valid pins or nets, and no coordinates are changed here.
+        # otherwise valid pins or nets; coordinates were finalized above.
         try:
             pin_evidence = evidence_mod.build_pin_evidence(
                 comps, comp_pins, _ink, texts)
@@ -326,6 +418,7 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
             traceback.print_exc()
             errs.append(f"pin_evidence: {type(e).__name__}: {e}")
             pin_evidence = {}
+        pin_evidence = overlay_color_evidence(pin_evidence, color_overlays)
 
     tm = dict(tm)
     tm["wires_s"] = round(t_w, 2)
@@ -341,6 +434,7 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         "pins": {cid: [[round(float(p[0]), 1), round(float(p[1]), 1)] for p in pl]
                  for cid, pl in comp_pins.items()},
         "pin_evidence": pin_evidence,
+        "pin_color": pin_color,
         "nets": nets,
         # ★ 引脚接线的「留痕」：`orphans` = 够不着导线而被截断的引脚（历史上直接消失）、
         #   `weak` = 软判据区间内勉强挂上的引脚（带 `d`，下游可降权）。**不参与评分**，
