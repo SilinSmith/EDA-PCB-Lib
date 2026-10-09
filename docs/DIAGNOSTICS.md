@@ -809,6 +809,37 @@ gnd 496 个、v 211 个是**按设计**用 ∅NNN 伪键（靠坐标匹配），
   2. **读 case 名单要用 `utf-8-sig`**：PowerShell `Set-Content -Encoding utf8` 会写 BOM，
      第一个 token 被 `^[0-9A-Za-z_]+$` 过滤掉 ⇒ **静默少一张 case**（本轮 `cases=19` 就是这么来的）。
 
+### 裁片口径 = 「紧框」还是「外扩」：交付权重偏向**外扩**，紧框语料微调只是**在管线不用的那种裁片上更好**（2026-10-11，`tools/dev/_padchk.py`）
+- 探针 `work\tools\dev\_padchk.py`：取紧框语料 `work\official_text\manifest.jsonl` 的行（`bbox` = 紧框、
+  `text` = GT），对同一行做两份裁片 —— 紧框、以及 `pad_box(2.0/0.0/3.0/0.20)`（= `stage2/text.py:402-403`
+  对**非** `TIGHT_ROLES` 角色的口径）—— 再用两个权重各读一遍，比 exact / CER。
+- 留出集必须按**被评权重**的训练切分来选（否则测的是记忆）：
+
+  | 权重 | 紧框 exact | 外扩 exact | 差（外扩−紧框） |
+  |---|---|---|---|
+  | `work\ocr_mix\runs\best.pt`（现行交付 e57） | 63.49% | **78.84%** | **+15.35** |
+  | `work\ocr_official_v1\best.pt`（紧框语料微调） | **83.90%** | 78.69% | **−5.21** |
+
+  样本 671 行 = 官方 `1,5` + 「每 10 个四位 case 取一个」（正是 `ocr_official_v1` 的训练留出集，
+  两个权重都没在这批行上训过；若换成官方 `1..10` 全集，`ocr_official_v1` 的 87% 行是它自己的训练集，
+  数字会虚高到 87.8%）。复现：`python -X utf8 work\tools\dev\_padchk.py --val-cases "1,5" --val-every 10`。
+- 三条结论：
+  1. **交付权重是「外扩口径」的模型**：在管线真正喂的裁片上比紧框高 15 个点 ⇒ 管线默认外扩对它是
+     **对齐**的（这也解释了 `mix+pad 62.7992 > mix+nopad 58.7400`）。按角色最夸张的是 value：
+     紧框 33.12% → 外扩 76.25%（designator 72.86 → 78.00、pin_name 70.92 → 82.27）。
+  2. **紧框语料微调那次「离线大胜」是口径假象**：`_offtext_eval.py` 报 66.05% → 87.44%，但在它自己的
+     留出集上换成**管线口径**后是 **78.69% vs 78.84% = 平**（`pin_number` 还从 90.0% 掉到 75.0%）。
+     所以 b926 那个 −4.45 不是「微调没用」，而是「微调只学好了管线不用紧框时的那种裁片」。
+  3. 修法是**让语料对齐管线口径**，不是改管线外扩：`tools/dev/mk_official_textset.py` 现在默认按
+     `pad_box` 写 `bbox`（`--no-pad` 退回紧框），每行同时保留 `bbox_tight`（原框，`verify_rows`
+     的复读校验仍用它，保证「框↔读数」判据不变）；并对 `pin_name` / `pin_number` 复刻
+     `stage2/text.py:133 tight_ink_box`（`--no-pipe-crops` 可关）—— 这两个角色在管线里是
+     「先切掉彩色描边、再外扩」的（`stage2/text.py:404-415`，`pin_number` 的 `pad_frac_y` 取
+     `PINNUM_PAD_FRAC_Y=0.0`）。产出目录 `work\official_text_pad`（只外扩）与
+     `work\official_text_pipe`（外扩 + 引脚切描边，**与管线逐位同口径**）。
+- 纪律：**评一个权重之前先问「它是在哪种裁片上训的」** —— 跨口径比准确率会得到两个方向相反、看着都
+  「显著」的结论。语料里同时留 `bbox`（管线口径）与 `bbox_tight`（原框）两列，就是为了让这件事可查。
+
 ### 交付 CRNN 权重陈旧：`weights/textrec_best.pt` == `work/ocr_real`(e51)，而 `work/ocr_mix`(e57) 在**两把尺子**上都更好（2026-10-11）
 - 事实链：
   1. `assets.py:29 CRNN_ENV="STAGE2_CKPT"`，按 `stage2/text.py:38` 的兜底与 `assets.py:39 REPO/weights/textrec_best.pt`

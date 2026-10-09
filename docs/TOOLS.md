@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **592** 个脚本。
+共 **595** 个脚本。
 
 
 <a id="data"></a>
@@ -54,7 +54,7 @@
 
 <a id="dev"></a>
 
-## `tools/dev/`（23 个脚本）
+## `tools/dev/`（26 个脚本）
 
 开发辅助（本目录的生成器）。
 
@@ -72,6 +72,9 @@
 | `_fontfit` | 174 | 官方渲染用的是哪一款字体？—— 拿真实裁片（GT 文本已知）去套候选字体的字形。 |
 | `_fontsheet` | 80 | 把真实裁片和候选字体的渲染并排画出来，肉眼看哪个像（`_fontfit.py` 的数字靠这个兜底）。 |
 | `_offtext_eval` | 109 | 在**官方渲染图的域内语料**上评一个 CRNN 权重：只走生产路径（`textrec.infer.Recognizer`）。 |
+| `_padchk` | 179 | 2x2 探针：{交付权重, 域内微调权重} x {紧框裁片, 管线外扩裁片}。 |
+| `_pindiag` | 191 | **引脚失分归因**：官方口径 `pin_f1` 只统计 GT 里 type 为 box 的元件 |
+| `_pinnum` | 190 | **引脚号能不能靠几何推**：官方口径的引脚配对键是 `(元件键, 引脚号)` |
 | `_sheet_from_manifest` | 62 | 从已落盘的文字语料 manifest 里挑一批出来拼对照图（核标签真假 / 看还没修好的）。 |
 | `_textrate` | 175 | 量「CRNN 在官方渲染图上读文字的错读率」——按套（10GT / 10_GTcase / train200）× role 分开。 |
 | `audit_labels` | 277 | Training-label quality audit for a YOLO dataset — "错误的标号" triage. |
@@ -81,7 +84,7 @@
 | `gpu_gate` | 363 | GPU 串行闸门：**同一时刻只允许一个自己起的吃卡任务**，且起之前先确认显存够。 |
 | `mix_crnn_manifest` | 180 | 把「真实语料」和「合成语料里挑出来的那几类」混成一份 CRNN 训练清单。 |
 | `mk_fonttext` | 280 | **官方字体合成语料**：用与官方渲染器同款/同类的字体直接合成文字裁片，补上合成语料的字体域缺口。 |
-| `mk_official_textset` | 438 | 从**官方公开数据**（10GT + 200_train_cases）造一份「域内」文字识别训练集。 |
+| `mk_official_textset` | 523 | 从**官方公开数据**（10GT + 200_train_cases）造一份「域内」文字识别训练集。 |
 | `mk_textrec_manifest` | 152 | 把「官方渲染图上的域内文字语料」（`mk_official_textset.py` 的产物）转成 `textrec` 能直接 |
 
 <a id="diag"></a>

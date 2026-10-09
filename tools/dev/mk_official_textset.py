@@ -183,11 +183,61 @@ def ocr_by(e: dict) -> bool:
     return "vlm" not in str((e or {}).get("_by") or "").lower()
 
 
+def pad_box(box, pad_min=2.0, pad_frac=0.0, pad_min_y=3.0, pad_frac_y=0.20,
+            pad_max=200.0):
+    """与 `stage2/text.py:164 pad_box` 同一算法（默认值也对齐 `stage2/text.py:69-80`）。
+
+    语料必须按**管线真正喂给识别器的裁片**来做：stage2 运行时先外扩再裁，
+    上一次微调用的是紧框裁片，于是同一个框在管线里读出 `C15S2`（见
+    `eda-pcb/docs/DIAGNOSTICS.md` 的「域内微调权重不能直接换进 stage2」）。
+    """
+    h = max(1.0, float(box[3]) - float(box[1]))
+    px = min(pad_max, max(pad_min, pad_frac * h))
+    py = min(pad_max, max(pad_min_y, pad_frac_y * h))
+    return (float(box[0]) - max(0.0, px), float(box[1]) - max(0.0, py),
+            float(box[2]) + max(0.0, px), float(box[3]) + max(0.0, py))
+
+
+def tight_ink_box(img_rgb, box, sat=60.0, dark=160.0):
+    """`stage2/text.py:133 tight_ink_box` 的等价实现（PIL RGB -> numpy）。
+
+    管线对 `pin_name` / `pin_number` 用的是「先切掉低饱和暗墨之外的彩色描边、再外扩」
+    的裁片（`stage2/text.py:404-415`，默认 `TIGHT_ROLES=pin_number,pin_name`）。
+    语料要跟管线完全同口径，就得照做一遍。返回 `None` = 框里没有这类像素（管线此时
+    退回原框）。
+    """
+    import numpy as np
+    a = np.asarray(img_rgb, dtype=np.int16)
+    H, W = a.shape[:2]
+    x1, y1, x2, y2 = [int(round(float(v))) for v in box]
+    x1 = max(0, x1)
+    y1 = max(0, y1)
+    x2 = min(W, x2)
+    y2 = min(H, y2)
+    if x2 - x1 < 2 or y2 - y1 < 2:
+        return None
+    sub = a[y1:y2, x1:x2]
+    mx = sub.max(2)
+    mn = sub.min(2)
+    g = sub.mean(2)
+    m = ((mx - mn) < sat) & (g < dark)
+    on = np.nonzero(m.sum(0) > 0)[0]
+    if len(on) == 0:
+        return None
+    oy = np.nonzero(m[:, int(on[0]):int(on[-1]) + 1].sum(1) > 0)[0]
+    if len(oy) == 0:
+        return None
+    return (float(x1 + on[0] - 1), float(y1 + oy[0] - 1),
+            float(x1 + on[-1] + 2), float(y1 + oy[-1] + 2))
+
+
 def verify_rows(rows, ckpt, device="cpu"):
     """重读一遍：要求「这次读出来的」与当初 `_assigned` 里的读数差 ≤ 1 个编辑距离。
 
     这是唯一能排除「box 与 text 根本不是一回事」的检查（另一个来源是上面 `ocr_by`）。
     按图分组批读，CPU 上 2 万条几分钟。
+    注意：校验一律用 `bbox_tight`（当初读那个框时的口径），训练用的 `bbox`
+    可能是外扩过的。
     """
     try:
         from PIL import Image
@@ -206,7 +256,8 @@ def verify_rows(rows, ckpt, device="cpu"):
         except Exception:
             drop += len(idxs)
             continue
-        items = [(rows[i]["bbox"], rows[i]["role"]) for i in idxs]
+        items = [(rows[i].get("bbox_tight") or rows[i]["bbox"], rows[i]["role"])
+                 for i in idxs]
         try:
             got = rec.read_many(gray, items)
         except Exception:
@@ -251,6 +302,18 @@ def main() -> int:
                     help="只在「我们原来的读数」与 GT 足够像（编辑距离 ≤ 此值）时才收这一条"
                          "——框来自检测、标签来自 GT，文本门槛是用来挡错配的")
     ap.add_argument("--sheet", action="store_true", help="抽样拼一张对照图并打印标签")
+    ap.add_argument("--no-pad", action="store_true",
+                    help="不按 stage2 运行时口径外扩裁片（默认外扩，见 pad_box）")
+    ap.add_argument("--no-pipe-crops", action="store_true",
+                    help="对 pin_name/pin_number 不做 tight_ink_box（默认做，与管线同口径）")
+    ap.add_argument("--tight-roles", default="pin_number,pin_name",
+                    help="与 stage2/text.py:128 TIGHT_ROLES 对齐")
+    ap.add_argument("--pad-min", type=float, default=2.0)
+    ap.add_argument("--pad-frac", type=float, default=0.0)
+    ap.add_argument("--pad-min-y", type=float, default=3.0)
+    ap.add_argument("--pad-frac-y", type=float, default=0.20)
+    ap.add_argument("--pinnum-frac-y", type=float, default=0.0,
+                    help="引脚号角色的垂直比例外扩（stage2 `PINNUM_PAD_FRAC_Y`=0）")
     ap.add_argument("--sheet-only-diff", action="store_true",
                     help="sheet 只放「我们读错的那些」（GT != 原读数）——用来核标签真假")
     ap.add_argument("--sheet-n", type=int, default=40)
@@ -266,6 +329,34 @@ def main() -> int:
         names = names[:a.limit]
 
     idx, digits = build_index()
+    img_cache = {}
+
+    def _rgb(path):
+        if path not in img_cache:
+            from PIL import Image as _I
+            img_cache[path] = _I.open(path).convert("RGB")
+        return img_cache[path]
+
+    tight_roles = tuple(r.strip() for r in a.tight_roles.split(",") if r.strip())
+
+    def row_of(case_name, role, text, box, was, by, img):
+        bx = [float(v) for v in box]
+        base = bx
+        fy = a.pinnum_frac_y if role == "pin_number" else a.pad_frac_y
+        # 管线对 `pin_name`/`pin_number` 先切彩色描边再外扩（stage2/text.py:404-415）
+        if (not a.no_pipe_crops) and role in tight_roles and img:
+            try:
+                tb = tight_ink_box(_rgb(img), bx)
+            except Exception:
+                tb = None
+            if tb is not None:
+                base = list(tb)
+        pb = list(base) if a.no_pad else list(
+            pad_box(base, a.pad_min, a.pad_frac, a.pad_min_y, fy))
+        return {"image": img, "case": case_name, "role": role, "text": str(text),
+                "bbox": pb, "bbox_tight": bx, "src": "official",
+                "was": was, "_by": by}
+
     rows, stats, skip = [], Counter(), Counter()
     for name in names:
         s1p = s1dir / ("%s.stage1.json" % name)
@@ -322,10 +413,8 @@ def main() -> int:
                 if edit_dist(e.get("text"), gt_text) > thr:
                     skip["原读数与 GT 差太远"] += 1
                     continue
-                rows.append({"image": img, "case": name, "role": role,
-                             "text": str(gt_text), "bbox": [float(v) for v in e["box"]],
-                             "src": "official", "was": e.get("text"),
-                             "_by": e.get("_by")})
+                rows.append(row_of(name, role, gt_text, e["box"],
+                                   e.get("text"), e.get("_by"), img))
                 stats[role if slot != "partname" else "partname"] += 1
             # --- 引脚
             if a.no_pins:
@@ -342,20 +431,16 @@ def main() -> int:
                 if nm and en.get("box") and ocr_by(en) and not junk_key(nm) \
                         and not junk_key(str(nm)) and len(str(nm)) >= 3 \
                         and edit_dist(en.get("text"), nm) <= tol_edit(str(nm)):
-                    rows.append({"image": img, "case": name, "role": "pin_name",
-                                 "text": str(nm), "bbox": [float(v) for v in en["box"]],
-                                 "src": "official", "was": en.get("text"),
-                                 "_by": en.get("_by")})
+                    rows.append(row_of(name, "pin_name", nm, en["box"],
+                                       en.get("text"), en.get("_by"), img))
                     stats["pin_name"] += 1
                 en = ae.get("number") or {}
                 # 引脚号很短（`1`/`2`），编辑距离没有鉴别力：只收**完全相同**的读数，
                 # 而且这个数必须在本 case 的引脚号里只出现一次（否则无从判重）。
                 if num and en.get("box") and ocr_by(en) and str(en.get("text")) == str(num) \
                         and len(str(num)) >= 2:
-                    rows.append({"image": img, "case": name, "role": "pin_number",
-                                 "text": str(num), "bbox": [float(v) for v in en["box"]],
-                                 "src": "official", "was": en.get("text"),
-                                 "_by": en.get("_by")})
+                    rows.append(row_of(name, "pin_number", num, en["box"],
+                                       en.get("text"), en.get("_by"), img))
                     stats["pin_number"] += 1
 
     if not a.no_verify and rows:
