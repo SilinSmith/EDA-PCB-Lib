@@ -620,6 +620,29 @@ python -X utf8 eda-pcb\tools\diag\adjmeas.py --assigned work\_s2_220mix\_assigne
     --cases-file work\_cases_w28.txt --poolscan
 ```
 
+### 2.10 导线彩色边缘通道的端到端判决（2026-10-09）
+
+动机：User ref m40034 第二项质疑「导线是不是依赖灰度」。实装 Di Zenzo 彩色边缘通道
+（`pipeline/pskel.py` 的 `colour_edge` / `colour_edge_mask` / `chroma_floor`，
+`WireExtractor(colour_edge=...)`，开关 `STAGE1_WIRE_EDGE` 默认 `0`、`_REL 0.55`、
+`_MIN 10.0`、`_NEAR 2`——`_NEAR` 把彩色边缘像素限制在灰度墨迹 2px 内，否则会在遮挡框上接缝）。
+
+**导线级（只量导线）**：官方 9 张 F1 0.4366 → **0.4727**（+0.036）；28 张 0.3583 → **0.3713**（+0.013）。
+⇒ 灰度**不是**导线召回的天花板，彩色信息确实带增量。
+
+**端到端**（`work\_wireab.ps1` → `work\_fast_base\wire_*.json`，28 张、`--no-vlm`、逐张同 case）：
+
+| 臂 | ALL28 | 官方 9 | 派生 18 | comp | pin | netH | netL |
+|---|---|---|---|---|---|---|---|
+| `wire_base`（默认，灰度） | **39.76** | **64.28** | **27.16** | 0.6131 | 0.2384 | **0.4131** | **0.0953** |
+| `wire_edge`（`EDGE=1`） | 37.95 | 59.78 | 26.47 | 0.6131 | 0.2247 | 0.3791 | 0.0669 |
+| `wire_erel`（`EDGE=1 COLOUR=rel`） | 37.56 | 59.51 | 26.11 | 0.6131 | 0.2252 | 0.3686 | 0.0635 |
+
+逐张 vs base：`edge` 更好 10 / 更差 17；`erel` 更好 7 / 更差 21。
+
+⇒ **判决：默认保持关**。彩色边缘在导线级赚，但并进前景后多出的笔画压低了 netH/netL，
+端到端净负 ≈ −1.8 分。**通道级 F1 改善 ≠ 端到端改善**：任何新增像素/笔画的改动都必须过端到端。
+
 ## 3. 四项分解（官方 9 张）
 
 | 臂 | 总分 | component (30) | pin (25) | netH (35) | netL (10) |

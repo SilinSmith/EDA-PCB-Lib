@@ -6,18 +6,18 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **301** 个开关。
+共 **309** 个开关。
 
 ## 目录
 
 - [stage1](#stage1)（85）
-- [stage2](#stage2)（66）
+- [stage2](#stage2)（70）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（113）
 - [vlm](#vlm)（12）
 - [textrec](#textrec)（13）
 - [cvparts](#cvparts)（6）
-- [pipeline](#pipeline)（3）
+- [pipeline](#pipeline)（7）
 - [submission](#submission)（1）
 
 <a id="stage1"></a>
@@ -45,41 +45,41 @@
 | `LLM_TEMPERATURE` | `"0.0"` | `stage1/llm.py:55` |
 | `LLM_TIMEOUT` | `"180"` | `stage1/llm.py:45` |
 | `LLM_WORKERS` | `"4"` | `stage1/llm.py:51` |
-| `STAGE1_BIGIC` | `"1"` | `stage1/pipeline.py:55` |
+| `STAGE1_BIGIC` | `"1"` | `stage1/pipeline.py:71` |
 | `STAGE1_GROUP_TOL` | `"1.5"` | `stage1/labels.py:47` |
 | `STAGE1_MERGE_TP` | `"0"` | `stage1/detect.py:120` |
 | `STAGE1_NMS_IOU` | `"0.5"` | `stage1/detect.py:81` |
 | `STAGE1_OWN_DEMOTE` | `"0.85"` | `stage1/detect.py:75` |
-| `STAGE1_PINC` | `"1"` | `stage1/pipeline.py:65` |
-| `STAGE1_PINC_BAND` | `"22"` | `stage1/pincol.py:78` |
-| `STAGE1_PINC_CENTRE_FRAC` | `"0.30"` | `stage1/pincol.py:767` |
-| `STAGE1_PINC_CONNECT` | `"3"` | `stage1/pincol.py:84` |
-| `STAGE1_PINC_COVER` | `"0.5"` | `stage1/pincol.py:95` |
-| `STAGE1_PINC_FALLBACK` | `"0"` | `stage1/pincol.py:97` |
-| `STAGE1_PINC_FILL` | `"1"` | `stage1/pincol.py:130` |
-| `STAGE1_PINC_KEEP_REACH` | `"2.5"` | `stage1/pincol.py:89` |
-| `STAGE1_PINC_MAX_GAP` | `"3"` | `stage1/pincol.py:93` |
-| `STAGE1_PINC_MAX_SIDE` | `"200"` | `stage1/pincol.py:124` |
-| `STAGE1_PINC_MERGE` | `"1"` | `stage1/pincol.py:134` |
-| `STAGE1_PINC_MIN_EL` | `"4"` | `stage1/pincol.py:100` |
-| `STAGE1_PINC_MIN_NUM` | `"2"` | `stage1/pincol.py:128` |
-| `STAGE1_PINC_MIN_RUN` | `"1"` | `stage1/pincol.py:82` |
-| `STAGE1_PINC_MIN_SIDE` | `"60"` | `stage1/pincol.py:126` |
-| `STAGE1_PINC_MIN_STUB` | `"2"` | `stage1/pincol.py:80` |
-| `STAGE1_PINC_NAME_REACH` | `"90"` | `stage1/pincol.py:105` |
-| `STAGE1_PINC_NUM_MAXH` | `"26"` | `stage1/pincol.py:108` |
-| `STAGE1_PINC_NUM_MAXW` | `"42"` | `stage1/pincol.py:107` |
-| `STAGE1_PINC_NUM_REACH` | `"26"` | `stage1/pincol.py:104` |
-| `STAGE1_PINC_OUT` | `"12.0"` | `stage1/pincol.py:102` |
-| `STAGE1_PINC_PITCH_MAX` | `"48.0"` | `stage1/pincol.py:87` |
-| `STAGE1_PINC_PITCH_MIN` | `"5.0"` | `stage1/pincol.py:86` |
-| `STAGE1_PINC_SNAP` | `"5.0"` | `stage1/pincol.py:133` |
-| `STAGE1_PINC_SUP_TOL` | `"0.5"` | `stage1/pincol.py:91` |
-| `STAGE1_PINC_TIGHT_MINH` | `"3"` | `stage1/pincol.py:759` |
-| `STAGE1_PINC_TIGHT_X` | `"2.0"` | `stage1/pincol.py:757` |
-| `STAGE1_PINC_TIGHT_Y` | `"3.0"` | `stage1/pincol.py:758` |
-| `STAGE1_PINC_TIP_PAD` | `"0"` | `stage1/pincol.py:121` |
-| `STAGE1_PINC_TIP_TOL` | `"6.0"` | `stage1/pincol.py:122` |
+| `STAGE1_PINC` | `"1"` | `stage1/pipeline.py:81` |
+| `STAGE1_PINC_BAND` | `"22"` | `stage1/pincol.py:95` |
+| `STAGE1_PINC_CENTRE_FRAC` | `"0.30"` | `stage1/pincol.py:817` |
+| `STAGE1_PINC_CONNECT` | `"3"` | `stage1/pincol.py:101` |
+| `STAGE1_PINC_COVER` | `"0.5"` | `stage1/pincol.py:112` |
+| `STAGE1_PINC_FALLBACK` | `"0"` | `stage1/pincol.py:114` |
+| `STAGE1_PINC_FILL` | `"1"` | `stage1/pincol.py:147` |
+| `STAGE1_PINC_KEEP_REACH` | `"2.5"` | `stage1/pincol.py:106` |
+| `STAGE1_PINC_MAX_GAP` | `"3"` | `stage1/pincol.py:110` |
+| `STAGE1_PINC_MAX_SIDE` | `"200"` | `stage1/pincol.py:141` |
+| `STAGE1_PINC_MERGE` | `"1"` | `stage1/pincol.py:151` |
+| `STAGE1_PINC_MIN_EL` | `"4"` | `stage1/pincol.py:117` |
+| `STAGE1_PINC_MIN_NUM` | `"2"` | `stage1/pincol.py:145` |
+| `STAGE1_PINC_MIN_RUN` | `"1"` | `stage1/pincol.py:99` |
+| `STAGE1_PINC_MIN_SIDE` | `"60"` | `stage1/pincol.py:143` |
+| `STAGE1_PINC_MIN_STUB` | `"2"` | `stage1/pincol.py:97` |
+| `STAGE1_PINC_NAME_REACH` | `"90"` | `stage1/pincol.py:122` |
+| `STAGE1_PINC_NUM_MAXH` | `"26"` | `stage1/pincol.py:125` |
+| `STAGE1_PINC_NUM_MAXW` | `"42"` | `stage1/pincol.py:124` |
+| `STAGE1_PINC_NUM_REACH` | `"26"` | `stage1/pincol.py:121` |
+| `STAGE1_PINC_OUT` | `"12.0"` | `stage1/pincol.py:119` |
+| `STAGE1_PINC_PITCH_MAX` | `"48.0"` | `stage1/pincol.py:104` |
+| `STAGE1_PINC_PITCH_MIN` | `"5.0"` | `stage1/pincol.py:103` |
+| `STAGE1_PINC_SNAP` | `"5.0"` | `stage1/pincol.py:150` |
+| `STAGE1_PINC_SUP_TOL` | `"0.5"` | `stage1/pincol.py:108` |
+| `STAGE1_PINC_TIGHT_MINH` | `"3"` | `stage1/pincol.py:809` |
+| `STAGE1_PINC_TIGHT_X` | `"2.0"` | `stage1/pincol.py:807` |
+| `STAGE1_PINC_TIGHT_Y` | `"3.0"` | `stage1/pincol.py:808` |
+| `STAGE1_PINC_TIP_PAD` | `"0"` | `stage1/pincol.py:138` |
+| `STAGE1_PINC_TIP_TOL` | `"6.0"` | `stage1/pincol.py:139` |
 | `STAGE1_PIN_ATTR` | `"nearest"` | `stage1/nets.py:67` |
 | `STAGE1_PIN_ATTR_SLACK` | `"6"` | `stage1/nets.py:68` |
 | `STAGE1_PIN_CLUSTER_IC` | `"12.0"` | `stage1/pins.py:74` |
@@ -119,13 +119,14 @@
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
 | `STAGE1_MERGE_TP` | `"0"` | `stage2/assemble.py:103` |
-| `STAGE2_BOTH_TOL` | `"0.65"` | `stage2/text.py:82` |
+| `STAGE2_BOTH_TOL` | `"0.65"` | `stage2/text.py:87` |
 | `STAGE2_BOX_PIN_DROP_UNREAD` | `"mixed"` | `stage2/assemble.py:162` |
 | `STAGE2_BOX_PIN_NEED_NAME` | `"1"` | `stage2/assemble.py:182` |
 | `STAGE2_BOX_PIN_PARTIAL` | `"1"` | `stage2/assemble.py:136` |
-| `STAGE2_CKPT` | `r"Y:\workspace\EDA\work\ocr_mix\runs\best.pt"` | `stage2/text.py:38` |
-| `STAGE2_DBG_CID` | — *(6 处)* | `stage2/assign.py:840` |
+| `STAGE2_CKPT` | `r"Y:\workspace\EDA\work\ocr_mix\runs\best.pt"` | `stage2/text.py:42` |
+| `STAGE2_DBG_CID` | — *(6 处)* | `stage2/assign.py:855` |
 | `STAGE2_DBG_PINS` | — *(3 处)* | `stage2/assemble.py:861` |
+| `STAGE2_DEMOTE_HARD` | `"0.05"` | `stage2/structmatch.py:35` |
 | `STAGE2_DESIG_MAXW` | `"6.0"` | `stage2/assign.py:164` |
 | `STAGE2_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:54` |
 | `STAGE2_EDGE_ANG` | `"6.0"` | `stage2/assemble.py:301` |
@@ -133,29 +134,30 @@
 | `STAGE2_EDGE_MERGE` | `"0"` | `stage2/assemble.py:299` |
 | `STAGE2_EDGE_SNAP` | `"20.0"` | `stage2/assemble.py:318` |
 | `STAGE2_EDGE_SNAP_ANG` | `"45.0"` | `stage2/assemble.py:319` |
-| `STAGE2_FREE_STEAL` | `"1"` | `stage2/assign.py:213` |
-| `STAGE2_GLOBAL_MATCH` | `"0"` | `stage2/assign.py:738` |
+| `STAGE2_FREE_STEAL` | `"1"` | `stage2/assign.py:222` |
+| `STAGE2_GLOBAL_MATCH` | `"0"` | `stage2/assign.py:747` |
 | `STAGE2_GROW_MIN` | `"0.9"` | `stage2/run.py:31` |
 | `STAGE2_GROW_PER_COMP` | `"4"` | `stage2/run.py:33` |
 | `STAGE2_LIB_PINS` | `"1"` *(2 处)* | `stage2/assemble.py:196` |
 | `STAGE2_LIB_PINS_DBG` | `"0"` | `stage2/assemble.py:198` |
 | `STAGE2_LIB_PINS_FUZZY` | `"0.85"` | `stage2/libpins.py:148` |
 | `STAGE2_MIN_EDGE_LEN` | `"20"` | `stage2/assemble.py:273` |
-| `STAGE2_MULTI_H` | `"0.43"` | `stage2/text.py:90` |
-| `STAGE2_MULTI_W` | `"0.15"` | `stage2/text.py:89` |
-| `STAGE2_NETLABEL_MIN_H` | `"9"` | `stage2/assign.py:295` |
-| `STAGE2_NETLABEL_MIN_W` | `"12"` | `stage2/assign.py:294` |
+| `STAGE2_MULTI_H` | `"0.43"` | `stage2/text.py:95` |
+| `STAGE2_MULTI_W` | `"0.15"` | `stage2/text.py:94` |
+| `STAGE2_NETLABEL_MIN_H` | `"9"` | `stage2/assign.py:304` |
+| `STAGE2_NETLABEL_MIN_W` | `"12"` | `stage2/assign.py:303` |
 | `STAGE2_NET_DROP_PWRONLY` | `"1"` | `stage2/assemble.py:236` |
 | `STAGE2_NET_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:225` |
+| `STAGE2_NODELETE` | `"1"` | `stage2/structmatch.py:33` |
 | `STAGE2_OWN_ASSIGN` | `"0"` | `stage2/assign.py:87` |
 | `STAGE2_OWN_BBOX` | `"1"` | `stage2/assign.py:68` |
-| `STAGE2_PAD_FRAC` | `"0.0"` | `stage2/text.py:65` |
-| `STAGE2_PAD_FRAC_Y` | `"0.20"` | `stage2/text.py:74` |
-| `STAGE2_PAD_MAX` | `"99.0"` | `stage2/text.py:66` |
-| `STAGE2_PAD_MIN` | `"2.0"` | `stage2/text.py:64` |
-| `STAGE2_PAD_MIN_Y` | `"3.0"` | `stage2/text.py:75` |
-| `STAGE2_PINCOL` | `"0"` | `stage2/assign.py:200` |
-| `STAGE2_PINCOL_COVER` | `"0.5"` | `stage2/assign.py:201` |
+| `STAGE2_PAD_FRAC` | `"0.0"` | `stage2/text.py:70` |
+| `STAGE2_PAD_FRAC_Y` | `"0.20"` | `stage2/text.py:79` |
+| `STAGE2_PAD_MAX` | `"99.0"` | `stage2/text.py:71` |
+| `STAGE2_PAD_MIN` | `"2.0"` | `stage2/text.py:69` |
+| `STAGE2_PAD_MIN_Y` | `"3.0"` | `stage2/text.py:80` |
+| `STAGE2_PINCOL` | `"0"` | `stage2/assign.py:209` |
+| `STAGE2_PINCOL_COVER` | `"0.5"` | `stage2/assign.py:210` |
 | `STAGE2_PINCOL_WIN` | `"1"` | `stage2/run.py:37` |
 | `STAGE2_PINCOL_WIN_KEYS` | `"out_win"` | `stage2/run.py:40` |
 | `STAGE2_PINNAME_MAXW` | `"6.0"` | `stage2/assign.py:130` |
@@ -164,30 +166,28 @@
 | `STAGE2_PINNUM_DISTW` | `"0.005"` | `stage2/assign.py:101` |
 | `STAGE2_PINNUM_DUP` | `"0"` | `stage2/assign.py:126` |
 | `STAGE2_PINNUM_NEAR` | `"60"` | `stage2/assign.py:97` |
-| `STAGE2_PINNUM_PAD_FRAC_Y` | `"0.0"` | `stage2/text.py:120` |
-| `STAGE2_PINNUM_TIGHT` | `"1"` | `stage2/text.py:117` |
-| `STAGE2_PINNUM_TIGHT_DARK` | `"160"` | `stage2/text.py:119` |
-| `STAGE2_PINNUM_TIGHT_SAT` | `"60"` | `stage2/text.py:118` |
+| `STAGE2_PINNUM_PAD_FRAC_Y` | `"0.0"` | `stage2/text.py:125` |
+| `STAGE2_PINNUM_TIGHT` | `"1"` | `stage2/text.py:122` |
+| `STAGE2_PINNUM_TIGHT_DARK` | `"160"` | `stage2/text.py:124` |
+| `STAGE2_PINNUM_TIGHT_SAT` | `"60"` | `stage2/text.py:123` |
 | `STAGE2_PIN_ALONG` | `"1"` | `stage2/assign.py:174` |
 | `STAGE2_PIN_COVER` | `"0.15"` | `stage2/assign.py:178` |
-| `STAGE2_PIN_RESIDUAL` | `"0"` | `stage2/assign.py:182`（残差回填：把「读对但没绑上」的号按沿边距离回填给空槽；28 张 A/B **净负**，见 `reports\引脚号通道三层归因与残差回填.md` §3） |
-| `STAGE2_PIN_RESIDUAL_MIN` | `"0"` | `stage2/assign.py:183`（残差回填的候选最低分闸门） |
-| `STAGE2_NODELETE` | `"1"` | `stage2/structmatch.py`（**不删除只削弱**：被判「硬剔出」的候选不丢，改写为一条**严格为正**的降权记录 + 保留池 + `{kind:"drop",before,after,reason}` 事件，落盘在 `_assigned/<case>.json` 的 `no_delete` 里；见 `reports\工程哲学.md` §94 的机制 (d)。设为 `"0"` 则只做判定不记账 —— 二者**分数逐位相同**） |
-| `STAGE2_DEMOTE_HARD` | `"0.05"` | `stage2/structmatch.py`（硬剔出时记入账本的降权倍率；只影响记录的数字，不影响判据） |
+| `STAGE2_PIN_RESIDUAL` | `"0"` | `stage2/assign.py:186` |
+| `STAGE2_PIN_RESIDUAL_MIN` | `"0"` | `stage2/assign.py:187` |
 | `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:454` |
 | `STAGE2_PREFIX` | `"strict"` | `stage2/assign.py:38` |
 | `STAGE2_PREFIX_SKEL` | `"0"` | `stage2/assign.py:48` |
 | `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1098` |
-| `STAGE2_STEAL` | `"80"` | `stage2/assign.py:211` |
+| `STAGE2_STEAL` | `"80"` | `stage2/assign.py:220` |
 | `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:259` |
-| `STAGE2_TIGHT_ROLES` | `"pin_number,pin_name"` | `stage2/text.py:124` |
+| `STAGE2_TIGHT_ROLES` | `"pin_number,pin_name"` | `stage2/text.py:129` |
 | `STAGE2_TP_LEDGER` | `"0"` | `stage2/assemble.py:120` |
 | `STAGE2_TP_TRUST_EVIDENCE` | `"1"` | `stage2/assemble.py:117` |
-| `STAGE2_VALUE_DISTW` | `"0.035"` | `stage2/assign.py:276` |
-| `STAGE2_VALUE_NETNAME` | `"0"` | `stage2/assign.py:265` |
-| `STAGE2_VALUE_STEAL` | `"40"` | `stage2/assign.py:222` |
-| `STAGE2_VALUE_TRIM` | `"0"` | `stage2/assign.py:252` |
-| `STAGE2_VALUE_UNIT` | `"1"` | `stage2/assign.py:240` |
+| `STAGE2_VALUE_DISTW` | `"0.035"` | `stage2/assign.py:285` |
+| `STAGE2_VALUE_NETNAME` | `"0"` | `stage2/assign.py:274` |
+| `STAGE2_VALUE_STEAL` | `"40"` | `stage2/assign.py:231` |
+| `STAGE2_VALUE_TRIM` | `"0"` | `stage2/assign.py:261` |
+| `STAGE2_VALUE_UNIT` | `"1"` | `stage2/assign.py:249` |
 
 <a id="stage3"></a>
 
@@ -376,8 +376,12 @@
 
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
-| `STAGE1_WIRE_COLOUR` | `"hint"` | `pipeline/pskel.py:155` |
-| `STAGE1_WIRE_DEBUG` | — | `pipeline/pskel.py:215` |
+| `STAGE1_WIRE_COLOUR` | `"hint"` | `pipeline/pskel.py:214` |
+| `STAGE1_WIRE_DEBUG` | — | `pipeline/pskel.py:280` |
+| `STAGE1_WIRE_EDGE` | `"0"` | `pipeline/pskel.py:444` |
+| `STAGE1_WIRE_EDGE_MIN` | `"10.0"` | `pipeline/pskel.py:485` |
+| `STAGE1_WIRE_EDGE_NEAR` | `"2"` | `pipeline/pskel.py:498` |
+| `STAGE1_WIRE_EDGE_REL` | `"0.55"` | `pipeline/pskel.py:481` |
 | `WINDIR` | `r'C:\Windows'` | `pipeline/pglyph.py:30` |
 
 <a id="submission"></a>
