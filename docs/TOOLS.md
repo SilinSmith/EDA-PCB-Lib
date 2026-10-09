@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **621** 个脚本。
+共 **625** 个脚本。
 
 
 <a id="data"></a>
@@ -93,7 +93,7 @@
 
 <a id="diag"></a>
 
-## `tools/diag/`（479 个脚本）
+## `tools/diag/`（483 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -135,6 +135,7 @@
 | `_charfit` | 150 | 从 38.8 万条真实「框 + 文本」标注里**拟合逐字符的宽度**，替换 axis.py 里那个 |
 | `_cmp.cmp` | 16 |  |
 | `_cmp9` | 78 | 逐张对比两个 stage2_eval --json 产物（用法：python work\_cmp9.py <A.json> <B.json>）。 |
+| `_cmpab` | 80 | 多臂基线对比：`work\_fast_base\<arm>.json`（`fast.py --save <arm>` 的产物）。 |
 | `_cmpcfg` | 13 |  |
 | `_comp_diag` | 51 | 连通分量到底有多大？在「墨迹掩膜」上量，还是「骨架」上量？ |
 | `_compextra` | 185 | 把 `component.extra`（我们多出来的元件 = 纯 fp）按**类别 / 尺寸 / 与已匹配框的关系**分桶。 |
@@ -299,6 +300,7 @@
 | `_namerule` | 120 | 引脚名救援：在 _namerescue.py 的明细上离线比较「发不发、发哪个」的规则。 |
 | `_netconv` | 179 | 量「净 hyperGraph」的两种口径，看差多少分。 |
 | `_netcover` | 200 | 网络分（`net_hypergraph_f1`，权重 **0.35** —— 四项里最重）到底卡在哪。 |
+| `_netdiff` | 125 | **网络失分账本**：把 `net_hypergraph_f1`（权重 0.35，micro 口径）的 fn/fp 逐条拆到 |
 | `_netdump` | 32 |  |
 | `_netfrag` | 69 | 把某个 case 的「GT 网 <-> 我们网」的碎裂结构打印出来。 |
 | `_netlab` | 62 | 看我们的产物里网络标签到底有没有被用上。 |
@@ -358,6 +360,7 @@
 | `_pin_stamp` | 190 | 引脚「图章点位」可行性核算。 |
 | `_pin_why` | 174 | 引脚失配归因：把 `pin_f1` 的损失拆成「键丢 / 号丢 / 名错 / 点错」。 |
 | `_pinab` | 110 | 引脚窗口 A/B：`pin_pitch_frac=0`（旧，垂直半宽 = cross）vs `0.45`（新，按引脚间距收窄）。 |
+| `_pinaxis` | 120 | **引脚轴向账本**：非 IC（c/r/l/d/…) 元件的两个引脚应该长在**符号主轴**两端 |
 | `_pinband` | 82 | 量「某颗 IC 框外的引脚号文字框」到底有没有被检出、又有没有被读成号。 |
 | `_pinbox` | 65 | 核对 boxscan 的第 ③ 条：引脚取景框到底是不是 None。 |
 | `_pinboxdiff` | 134 | 逐 case 的 IC 引脚对账：GT vs 我方 `final_results/<case>_Pred.json`。 |
@@ -474,6 +477,7 @@
 | `_stale` | 12 |  |
 | `_stampshape` | 152 | 图章形状勘察：官方 GT 的每类 bbox 到底是「正方形」还是「长方形」。 |
 | `_stubfill` | 139 | Could geometric *pin stubs* fill the pins that have no wire attached? |
+| `_stubreach` | 155 | 引脚桩「远场判据」(`STAGE1_PINC_STUB_REACH`) 的离线取证。 |
 | `_subst` | 48 | 按「字面子串」替换文件内容（避开 PowerShell 引号地狱）。 |
 | `_suite_diag` | 60 | 按套看某一臂的 per-case 诊断分布（pin/component 的 missing/extra/mismatch 计数）。 |
 | `_swapceil` | 243 | 位号**归属**可修性测量（GT 锚定版）：`_adjmeas --poolscan` 的 78 个 |

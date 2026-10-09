@@ -63,15 +63,28 @@ CLUSTER_R = 12.0
 # 被并成一个簇。实例：`0113` 的 `U4`（MAX7219，24 脚）我们只输出 **7** 个点
 # （`work\_submit_out220r21\runs\stage2\0113.json`），而点的位置其实准到 1px
 # （我们 x=185.1/305.5 vs GT x=186.0/306.0）——**亏的是覆盖率，不是精度**。
-# ⚠️ 默认值仍是 12.0（= `CLUSTER_R`，即行为不变）。虽然理论上「12 > 引脚间距 10」
-# 会并掉邻脚，但**实测三个臂都是净亏**（10GT 9 张，`--no-vlm`，`work\_fast_base\`）：
-#     12.0（默认）42.67 ｜ 6.0 41.68 ｜ 5.0 41.47 ｜ 4.0 41.47
+# ⚠️ 历史：这个旋钮**被判负过一次**（10GT 9 张，`--no-vlm`，`work\_fast_base\`）：
+#     12.0 42.67 ｜ 6.0 41.68 ｜ 5.0 41.47 ｜ 4.0 41.47
 # 19 张快测：12.0 25.99 ｜ 4.0 25.57（pin 0.0737 → 0.0649）。
-# 原因：`pin_f1` 的 tp 要「号 + 名 + 点」全对，**多出来的引脚绝大多数只能变成
-# `pin.extra`（fp）**，把 `fn` 换成 `fp+fn` 是亏的。拆分只在「名和号本来就读对了」
-# 的引脚上才有收益，而那部分覆盖率极低（`_pinname.py`：`equal` 只有 5.5%）。
-# 旋钮留着，等引脚名/号通道修好之后再回来扫。
-CLUSTER_IC = float(os.environ.get("STAGE1_PIN_CLUSTER_IC", "12.0"))
+# 当时的原因：`pin_f1` 的 tp 要「号 + 名 + 点」全对，多出来的引脚绝大多数只是
+# `pin.extra`（fp），把 fn 换成 fp+fn 是亏的；拆分只在「名和号本来就读对」的引脚
+# 上才有收益，而那部分覆盖率极低。
+# ★★ 该结论**在 VLM 引脚通道打开后被推翻**（`-vlm-pin` 默认 on，实测 2026-10-09，
+# 交付口径 × 官方 10 张，`work\_pinab*.ps1` / `_cmpab.py`，`work\_fast_base\*.json`）：
+#     12.0（旧默认）68.55 ｜ 8.0 69.09(+0.54，**1涨/9平/0跌**) ｜ 4.0/5.0/6.0 69.89(+1.34)
+# 其中 4.0 / 5.0 逐位相同（平台），逐案 Δ：2 +3.27 ｜ 3 +2.83 ｜ 5 +0.15 ｜ 6 +6.58
+# ｜ 9 +5.44 ｜ **4 −0.44 ｜ 7 −4.46**。机制：IC 密集引脚列（case 6 的 4 颗 SOT-23、
+# case 9）在 12px 下被并掉；而 case 7 反过来 —— 半径过小会把同一根真脚的两个触点
+# （相距 8px）拆成两根，两根抢同一个文字槽 ⇒ 名字读成垃圾（AGND→'O'/'D'），
+# tp 3→2、fn 5→6。VLM 现在能供号供名，拆分才第一次变成净赚。
+# ★ 默认值取 **5.0**（平台中点：4.0/5.0 同分，取靠近旧值的一侧；`6.0` 也同分但更接近
+# 退化区）。若想零回归，可用 `STAGE1_PIN_CLUSTER_IC=8.0`（只赚 case 9 的 +5.44）。
+# ★ 派生集泛化已抽查（12 张，`--no-vlm` + `FUSION_LLM=0`）：`5` vs `12` = **Δ总分 0.00**
+# （涨 3 / 平 4 / 跌 5）⇒ 官方集 +1.34、派生集不动。
+# ⚠️ 亏的 case 7 是「小半径 ⇒ 簇变多 ⇒ `STUB_SPARSE_RATIO=0.6` 不再触发 ⇒ 丢掉几何桩补出的脚」，
+# 试过 `STAGE1_PIN_STUB=union` 把桩全并回来：case 7 救回（69.71）但整体 **−0.90**
+# （0 涨 / 7 平 / 3 跌，case 2 76.24→68.52）⇒ 不加桩才是对的。详见 `docs\RESULTS.md` §2.16。
+CLUSTER_IC = float(os.environ.get("STAGE1_PIN_CLUSTER_IC", "5.0"))
 # 采样步长（像素）
 SAMPLE_STEP = 3.0
 # 每个元件最多输出多少个引脚（防毛刺炸开）
@@ -130,6 +143,53 @@ TWO_PIN = frozenset({"r", "c", "l", "d", "led", "fuse", "crystal_2pin", "battery
 #   两个父类都按一脚处理，合并类必须同款，否则开关打开前后不是同一套语义。
 ONE_PIN = frozenset({"gnd", "v", "vcc", "vbus_in", "net_input", "net_output", "pin",
                      "testpoint", "tp", "net_bidirection", "block", "other"})
+
+# ★★ 「两脚元件的脚必在长轴两端」（`STAGE1_PIN_AXIS`，默认 0 = 关）。
+#   动机：`pins_from_touch` 是「哪条导线段贴着框的哪条边，就在那一边生一个脚」——
+#   两脚元件周围除了真正的主力引线（长轴两端），还常有**符号自身笔画/极板/短线头**
+#   残留在框外（框是检测器给的，常常比符号紧），于是同一个电容会拿到 4 个候选脚
+#   （上下真脚 + 左右两个笔画残段）。`build_nets` 会把每个候选脚挂到最近的段上 ⇒
+#   **一个两脚元件凭空多出两条单脚网络**，而官方口径 `net_pin_collapse_nonbox=True`
+#   把非 IC 的脚号折成 `*`：GT 里一个电容在一条网里只算一个成员，我们却多出两条
+#   只含它自己的网 ⇒ `netH` 的 fp 涨、召回不动。
+#   证据（官方 10 张，`tools/diag/_pinaxis.py`）：GT 非 IC 元件的脚**100% 沿框主轴**
+#   （V/V 100 + H/H 25 = 125/125）；而 stage1 的候选脚里 **232/495（46.9%）在短轴上**。
+#   修法：类型不在 `ONE_PIN`、不是 IC、且框主轴比 >= `PIN_AXIS_RATIO` 时，只留主轴
+#   两端最近的各一个候选脚，其余进 `pins_latent`（只移出活动集，**不删除**，账本留痕）。
+PIN_AXIS = os.environ.get("STAGE1_PIN_AXIS",
+                          "0").strip().lower() not in ("", "0", "false", "off", "no", "none")
+PIN_AXIS_RATIO = float(os.environ.get("STAGE1_PIN_AXIS_RATIO", "1.2"))
+
+
+def _axis_split(bbox, pins):
+    """按框主轴把候选脚分成「主轴两端」与「短轴两侧」。返回 (keep, drop)。"""
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    w, h = abs(x2 - x1), abs(y2 - y1)
+    long_axis = "V" if h >= w else "H"
+    along, aside = [], []
+    for p in pins:
+        d_long = abs(p[1] - cy) if long_axis == "V" else abs(p[0] - cx)
+        d_short = abs(p[0] - cx) if long_axis == "V" else abs(p[1] - cy)
+        (along if d_long >= d_short else aside).append(p)
+    if len(along) < 2:
+        return list(pins), []
+    key = (lambda p: p[1]) if long_axis == "V" else (lambda p: p[0])
+    along = sorted(along, key=key)
+    keep = [along[0], along[-1]]
+    drop = [p for p in pins if p not in keep]
+    return keep, drop
+
+
+# `find_pins` 每次调用都会重置：被 `PIN_AXIS` 移出活动集的候选脚（不删除，只降权）。
+LATENT: Dict[str, List[Tuple[float, float]]] = {}
+
+
+def latent_stats() -> dict:
+    """被移出活动集的候选脚小结（给 dbg/账本用）。"""
+    return {"n_comps": len(LATENT),
+            "n_pins": sum(len(v) for v in LATENT.values()),
+            "sample": sorted((k, [list(p) for p in v]) for k, v in LATENT.items())[:6]}
 
 
 def sample_segments(segments: Sequence[Sequence[Sequence[float]]],
@@ -328,6 +388,7 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
     """
     pts = sample_segments(segments, sample_step)
     out: Dict[str, List[Tuple[float, float]]] = {}
+    LATENT.clear()                     # 每次调用重置（ProcessPool worker 会复用进程）
     for c in components:
         bb = c.get("bbox_img")
         if not bb or len(bb) != 4:
@@ -355,7 +416,24 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
         for p in pins:
             if not any(math.hypot(p[0] - q[0], p[1] - q[1]) <= 3.0 for q in dedup):
                 dedup.append(p)
+        # ★ 两脚元件的脚必在长轴两端（见 `PIN_AXIS` 的长注释）：短轴上的候选脚是把
+        #   符号笔画/极板当成了引线，会让一个元件凭空多出单脚网络。**只移出活动集**，
+        #   原候选进模块级 `LATENT` 并记 `LEDGER.demote`（工程哲学：不删除、只降权）。
+        _latent: List[Tuple[float, float]] = []
+        if PIN_AXIS and not _is_ic:
+            _t = str(c.get("type") or "").split(":")[0].lower()
+            _b = [float(v) for v in bb]
+            _w, _h = abs(_b[2] - _b[0]), abs(_b[3] - _b[1])
+            _ratio = (max(_w, _h) / max(1e-6, min(_w, _h)))
+            if _t not in ONE_PIN and _ratio >= PIN_AXIS_RATIO and len(dedup) >= 2:
+                _keep, _drop = _axis_split(bb, dedup)
+                if _drop and len(_keep) >= 2:
+                    dedup = _keep
+                    _latent = _drop
+                    _ev["axis_drop"] = len(_drop)          # 供账本/dbg 计数
         out[c["id"]] = dedup[:MAX_PINS]
+        if _latent:
+            LATENT[c["id"]] = list(_latent)
         # ★ 2026-10-10（用户 m42009）：「引脚在等导线交叉验证」必须留下证据链。
         #   每个元件的引脚来源进账本：`touch` = 上游导线真的触到框边（交叉验证通过）；
         #   `prior` = 没有任何导线证据、纯类型先验造出来的（**未确认**，按「只削弱不删除」
@@ -381,6 +459,21 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
                 LEDGER.demote(where="pin:%s" % c["id"], value=c.get("id"),
                               score_before=1.0, score_after=DEMOTE_SOFT,
                               reason="仅类型先验（无导线交叉验证）",
+                              by="stage1/pins.py:find_pins")
+            if _latent:
+                # 「不删除只削弱」：短轴候选脚移出活动集，但每个都留在账本里，
+                # 下游要复核时可以按 where=pins_latent 把它们捞回来。
+                LEDGER.demote(where="pins_latent", value=c.get("id"),
+                              score_before=1.0, score_after=DEMOTE_SOFT,
+                              reason="短轴候选脚 %d 个（符号笔画/极板，非长轴引线；GT 非 IC 引脚 100%% 沿主轴）"
+                                     % len(_latent),
+                              by="stage1/pins.py:find_pins")
+                LEDGER.record("evidence", where="pin:%s" % c["id"],
+                              before={"n": len(out[c["id"]]) + len(_latent)},
+                              after={"n": len(out[c["id"]]), "axis_drop": len(_latent),
+                                     "latent": [[round(float(q[0]), 1), round(float(q[1]), 1)]
+                                                for q in _latent[:8]]},
+                              reason="长轴裁剪：短轴候选脚移出活动集（STAGE1_PIN_AXIS=1）",
                               by="stage1/pins.py:find_pins")
         except Exception:
             pass
@@ -456,6 +549,18 @@ def _selftest() -> int:
     chk("bigic 不兜底", pins_from_prior((100.0, 100.0, 200.0, 300.0), "bigic"), [])
     _b = [{"id": "b1", "type": "box", "bbox_img": [100, 100, 200, 300]}]
     chk("box 无线无墨 -> 0 脚", find_pins(_b, [], use_prior=True)["b1"], [])
+
+    print("12) 长轴裁剪 `_axis_split`：竖长框只留上下两端，左右两个短轴候选被移出")
+    keep, drop = _axis_split((68.0, 147.8, 84.0, 167.8),
+                             [(76.5, 137.8), (94.0, 158.5), (76.5, 177.8), (58.0, 158.5)])
+    chk("竖长框 keep", keep, [(76.5, 137.8), (76.5, 177.8)])
+    chk("竖长框 drop", drop, [(94.0, 158.5), (58.0, 158.5)])
+    keep, drop = _axis_split((100.0, 100.0, 200.0, 108.0),
+                             [(96.0, 104.0), (204.0, 104.0), (150.0, 96.0)])
+    chk("横长框 keep", keep, [(96.0, 104.0), (204.0, 104.0)])
+    chk("横长框 drop", drop, [(150.0, 96.0)])
+    chk("主轴只有一个候选 -> 不裁", _axis_split((100.0, 100.0, 200.0, 300.0),
+                                                [(90.0, 200.0), (150.0, 90.0)])[1], [])
 
     print("")
     if fails:

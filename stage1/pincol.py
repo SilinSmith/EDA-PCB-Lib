@@ -99,6 +99,16 @@ MIN_STUB = int(os.environ.get("STAGE1_PINC_MIN_STUB", "2"))
 MIN_RUN = int(os.environ.get("STAGE1_PINC_MIN_RUN", "1"))
 # 桩必须从框边往外**连续**这么多像素（把 ✕ 标记、孤立斑点排除掉）
 CONNECT = int(os.environ.get("STAGE1_PINC_CONNECT", "3"))
+# 引脚桩的「远场」判据：该行墨必须延伸到离框边 >= 这么多像素远（0 = 关闭旧行为）。
+# 用来把贴在边上的**引脚号数字**（只占靠内侧 ~9px）从桩证据里剔掉，见 `_stub_positions`。
+# ★ 实测（2026-10-09）：桩级精度大涨、召回不变 —— 官方 10 张 L/R 侧 `--tol 6px`
+#   桩证据 P 0.6398（fp 67）→ 0.9444（fp 7）@12、0.9520（fp 6）@18，R 恒 **0.9754**；
+#   12 落在「真桩外伸 ≥20px / 号字 ~8px」两者中间且平台很宽。
+# ⚠️ 但**端到端单独是负的**：交付口径官方 10 张 `68.55 → 68.09`（Δsum −4.60，0 涨 / 9 平 / 1 跌，
+#   case 8 的 `pin` tp 3→1，因为它把 `pincol` 的格点补齐逼到了错误的 pitch 上）。
+#   `REACH=12 + STAGE1_PINC_FILL=0` 才回正（69.28，零回归），但不如 `CLUSTER_IC=5`。
+#   ⇒ 旋钮保留、**默认仍 0**；要动它必须读 `docs\RESULTS.md` §2.16。
+STUB_REACH = float(os.environ.get("STAGE1_PINC_STUB_REACH", "0"))
 # pitch 搜索范围
 PITCH_MIN = float(os.environ.get("STAGE1_PINC_PITCH_MIN", "5.0"))
 PITCH_MAX = float(os.environ.get("STAGE1_PINC_PITCH_MAX", "48.0"))
@@ -144,6 +154,10 @@ MIN_SIDE = float(os.environ.get("STAGE1_PINC_MIN_SIDE", "60"))
 # ★ 至少要检到几个**真号码候选**才认这次枚举（否则纯属几何外推）。
 MIN_NUM = int(os.environ.get("STAGE1_PINC_MIN_NUM", "2"))
 # 是否把「没有桩、只在格点上」的位置也发出来（owner m25661「等距对齐」）
+# ⚠️ 关掉它（`STAGE1_PINC_FILL=0`）的实测（2026-10-09，交付口径 × 官方 10 张，
+#    `docs\RESULTS.md` §2.16）：`CLUSTER_IC=5` 之上再赚 `69.89 → 70.08`（只动 case 8：
+#    `pincol` 那 19 个列里 9 tp / **10 fp**，fp 11→7、总分 67.25→69.14）；
+#    派生 12 张 `--no-vlm` 反而 `−0.47`（涨 3 / 平 6 / 跌 3）⇒ **收益太小，默认仍 1**。
 FILL_MISSING = os.environ.get("STAGE1_PINC_FILL", "1").strip().lower() not in (
     "", "0", "false", "off", "none")
 # 并入 `comp_pins` 时，已有的「导线触点」离格点多近就用触点（它是真实走线接点）
@@ -236,10 +250,59 @@ def _stub_positions(mask: np.ndarray, box: Sequence[float], side: str,
     else:
         inner = seg[:, :min(seg.shape[1], connect + 2)]
     cnt = inner.sum(axis=1)
+    # ★ 远场判据（STAGE1_PINC_STUB_REACH > 0 才启用）：真引脚桩是**从框边往外
+    #   画满十几~二十像素的横线**，而贴在边上的**引脚号数字**只占靠内侧的
+    #   ~9px。旧判据只看「靠边那 connect+2=5 列有墨」，于是数字也被当成桩 ⇒
+    #   证据里混进一串「真桩 ±10px」的假位置 ⇒ `_fit_pitch` 把 pitch 拟成真
+    #   值的一半、`_lattice` 于是多出一倍幻影脚。实测 case 8 的 U1 左列：真桩
+    #   11 根（图上 x=985 逐像素扫描 = 473/493/552/572/591.5/612/670.5/690.5/
+    #   710.5/730/749.5），free-ink 的 `_stub_positions` 却给 17 个（多的 9 个
+    #   正是数字行，x 只到 987..995，RGB≈(16,15,11) 的灰黑），`_fit_pitch` 于是
+    #   给 11.0（甚至 8.0），`enumerate_component` 枚举出 **19** 根（GT 只有 11）。
+    #   本判据要求该行的墨**必须延伸到离框边 >= STUB_REACH 像素远处**。
+    far = None
+    n = seg.shape[1]
+    if STUB_REACH > 0.0 and n >= connect + 2:
+        if outdir < 0:
+            # 列 j 到框边的距离 = band - j（j=0 是最外一列）
+            j_hi = int(band - STUB_REACH)
+            j_lo = 0
+            j_hi = min(n - 1, j_hi)
+            if j_hi >= j_lo:
+                far = seg[:, j_lo:j_hi + 1]
+        else:
+            j_lo = max(0, int(STUB_REACH - 2))      # 距离 = j + 2
+            j_hi = min(n - 1, int(band - 2))
+            if j_hi >= j_lo:
+                far = seg[:, j_lo:j_hi + 1]
+    cnt_far = far.sum(axis=1) if far is not None else None
+    n_raw = 0
+    rej: List[float] = []
     out = []
     for s, e in _runs(cnt >= min_stub, min_run):
+        n_raw += 1
+        if cnt_far is not None and int(cnt_far[s:e].max() if e > s else 0) < 1:
+            rej.append(float((s + e - 1) / 2.0) + b0)
+            continue
         # 段的像素中心：覆盖 s..e-1，所以是 (s + e - 1) / 2（1 行时正好是 s）
         out.append(float((s + e - 1) / 2.0) + b0)
+    if rej:
+        # 「不删除只削弱」：被远场判据剔掉的贴边墨行留一条降权记录（不是删除）。
+        try:
+            from cvparts.hypo import LEDGER, DEMOTE_SOFT
+            LEDGER.demote("pincol:stub", side, 1.0, DEMOTE_SOFT,
+                          "远场判据（STAGE1_PINC_STUB_REACH=%g）剔掉 %d 个只贴在框边"
+                          "（外伸 < %g px）的墨行 —— 它们是引脚号数字被旧判据当成桩，"
+                          "会让 pitch 减半、枚举出成倍幻影脚；位置仍在下方 rejected 里可查"
+                          % (STUB_REACH, len(rej), STUB_REACH),
+                          by="stage1/pincol.py:_stub_positions")
+            LEDGER.record("evidence", "pincol:stub:%s" % side,
+                          before=[{"n": n_raw}],
+                          after={"n": len(out), "rejected": [round(v, 1) for v in rej[:12]]},
+                          reason="远场判据剔掉的候选桩位置（贴边文字行）",
+                          by="stage1/pincol.py:_stub_positions")
+        except Exception:
+            pass
     return out
 
 
@@ -929,7 +992,11 @@ def _selftest() -> int:
         y = 30 + i * 10
         ink[y - 5:y + 5, 93:98] = 1
     boxes = [[93, 30 + i * 10 - 5, 98, 30 + i * 10 + 5] for i in range(12)]
-    chk("脏墨迹：并成 1 根桩", len(_stub_positions(ink, box, "L")), 1)
+    # ★ 行为变更：`STAGE1_PINC_STUB_REACH > 0` 时远场判据会直接剔掉这类
+    #   「只贴在框边 ~7px」的墨行（它们在真实图上就是引脚号数字），所以这里
+    #   的期望值随开关变化（0 = 旧行为，1 = 旧判据把它们并成一根桩）。
+    chk("脏墨迹：并成 %d 根桩" % (0 if STUB_REACH > 0 else 1),
+        len(_stub_positions(ink, box, "L")), 0 if STUB_REACH > 0 else 1)
     chk("去字后：0 根桩", len(_stub_positions(text_free_ink(ink, boxes), box, "L")), 0)
 
     print("6) 文字分派 + 格点补齐：桩只在偶数序号的脚上，格点应补出奇数序号的脚")

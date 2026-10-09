@@ -6,11 +6,11 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **351** 个开关。
+共 **354** 个开关。
 
 ## 目录
 
-- [stage1](#stage1)（101）
+- [stage1](#stage1)（104）
 - [stage2](#stage2)（92）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（113）
@@ -59,43 +59,46 @@
 | `STAGE1_OWN_DEMOTE` | `"0.85"` | `stage1/detect.py:75` |
 | `STAGE1_PINC` | `"1"` | `stage1/pipeline.py:81` |
 | `STAGE1_PINC_BAND` | `"22"` | `stage1/pincol.py:95` |
-| `STAGE1_PINC_CENTRE_FRAC` | `"0.30"` | `stage1/pincol.py:817` |
+| `STAGE1_PINC_CENTRE_FRAC` | `"0.30"` | `stage1/pincol.py:880` |
 | `STAGE1_PINC_CONNECT` | `"3"` | `stage1/pincol.py:101` |
-| `STAGE1_PINC_COVER` | `"0.5"` | `stage1/pincol.py:112` |
-| `STAGE1_PINC_FALLBACK` | `"0"` | `stage1/pincol.py:114` |
-| `STAGE1_PINC_FILL` | `"1"` | `stage1/pincol.py:147` |
-| `STAGE1_PINC_KEEP_REACH` | `"2.5"` | `stage1/pincol.py:106` |
-| `STAGE1_PINC_MAX_GAP` | `"3"` | `stage1/pincol.py:110` |
-| `STAGE1_PINC_MAX_SIDE` | `"200"` | `stage1/pincol.py:141` |
-| `STAGE1_PINC_MERGE` | `"1"` | `stage1/pincol.py:151` |
-| `STAGE1_PINC_MIN_EL` | `"4"` | `stage1/pincol.py:117` |
-| `STAGE1_PINC_MIN_NUM` | `"2"` | `stage1/pincol.py:145` |
+| `STAGE1_PINC_COVER` | `"0.5"` | `stage1/pincol.py:122` |
+| `STAGE1_PINC_FALLBACK` | `"0"` | `stage1/pincol.py:124` |
+| `STAGE1_PINC_FILL` | `"1"` | `stage1/pincol.py:161` |
+| `STAGE1_PINC_KEEP_REACH` | `"2.5"` | `stage1/pincol.py:116` |
+| `STAGE1_PINC_MAX_GAP` | `"3"` | `stage1/pincol.py:120` |
+| `STAGE1_PINC_MAX_SIDE` | `"200"` | `stage1/pincol.py:151` |
+| `STAGE1_PINC_MERGE` | `"1"` | `stage1/pincol.py:165` |
+| `STAGE1_PINC_MIN_EL` | `"4"` | `stage1/pincol.py:127` |
+| `STAGE1_PINC_MIN_NUM` | `"2"` | `stage1/pincol.py:155` |
 | `STAGE1_PINC_MIN_RUN` | `"1"` | `stage1/pincol.py:99` |
-| `STAGE1_PINC_MIN_SIDE` | `"60"` | `stage1/pincol.py:143` |
+| `STAGE1_PINC_MIN_SIDE` | `"60"` | `stage1/pincol.py:153` |
 | `STAGE1_PINC_MIN_STUB` | `"2"` | `stage1/pincol.py:97` |
-| `STAGE1_PINC_NAME_REACH` | `"90"` | `stage1/pincol.py:122` |
-| `STAGE1_PINC_NUM_MAXH` | `"26"` | `stage1/pincol.py:125` |
-| `STAGE1_PINC_NUM_MAXW` | `"42"` | `stage1/pincol.py:124` |
-| `STAGE1_PINC_NUM_REACH` | `"26"` | `stage1/pincol.py:121` |
-| `STAGE1_PINC_OUT` | `"12.0"` | `stage1/pincol.py:119` |
-| `STAGE1_PINC_PITCH_MAX` | `"48.0"` | `stage1/pincol.py:104` |
-| `STAGE1_PINC_PITCH_MIN` | `"5.0"` | `stage1/pincol.py:103` |
-| `STAGE1_PINC_SNAP` | `"5.0"` | `stage1/pincol.py:150` |
-| `STAGE1_PINC_SUP_TOL` | `"0.5"` | `stage1/pincol.py:108` |
-| `STAGE1_PINC_TIGHT_MINH` | `"3"` | `stage1/pincol.py:809` |
-| `STAGE1_PINC_TIGHT_X` | `"2.0"` | `stage1/pincol.py:807` |
-| `STAGE1_PINC_TIGHT_Y` | `"3.0"` | `stage1/pincol.py:808` |
-| `STAGE1_PINC_TIP_PAD` | `"0"` | `stage1/pincol.py:138` |
-| `STAGE1_PINC_TIP_TOL` | `"6.0"` | `stage1/pincol.py:139` |
+| `STAGE1_PINC_NAME_REACH` | `"90"` | `stage1/pincol.py:132` |
+| `STAGE1_PINC_NUM_MAXH` | `"26"` | `stage1/pincol.py:135` |
+| `STAGE1_PINC_NUM_MAXW` | `"42"` | `stage1/pincol.py:134` |
+| `STAGE1_PINC_NUM_REACH` | `"26"` | `stage1/pincol.py:131` |
+| `STAGE1_PINC_OUT` | `"12.0"` | `stage1/pincol.py:129` |
+| `STAGE1_PINC_PITCH_MAX` | `"48.0"` | `stage1/pincol.py:114` |
+| `STAGE1_PINC_PITCH_MIN` | `"5.0"` | `stage1/pincol.py:113` |
+| `STAGE1_PINC_SNAP` | `"5.0"` | `stage1/pincol.py:164` |
+| `STAGE1_PINC_STUB_REACH` | `"0"` | `stage1/pincol.py:111` |
+| `STAGE1_PINC_SUP_TOL` | `"0.5"` | `stage1/pincol.py:118` |
+| `STAGE1_PINC_TIGHT_MINH` | `"3"` | `stage1/pincol.py:872` |
+| `STAGE1_PINC_TIGHT_X` | `"2.0"` | `stage1/pincol.py:870` |
+| `STAGE1_PINC_TIGHT_Y` | `"3.0"` | `stage1/pincol.py:871` |
+| `STAGE1_PINC_TIP_PAD` | `"0"` | `stage1/pincol.py:148` |
+| `STAGE1_PINC_TIP_TOL` | `"6.0"` | `stage1/pincol.py:149` |
 | `STAGE1_PIN_ATTR` | `"nearest"` | `stage1/nets.py:67` |
 | `STAGE1_PIN_ATTR_SLACK` | `"6"` | `stage1/nets.py:68` |
-| `STAGE1_PIN_CLUSTER_IC` | `"12.0"` | `stage1/pins.py:74` |
+| `STAGE1_PIN_AXIS` | `"0"` | `stage1/pins.py:159` |
+| `STAGE1_PIN_AXIS_RATIO` | `"1.2"` | `stage1/pins.py:161` |
+| `STAGE1_PIN_CLUSTER_IC` | `"5.0"` | `stage1/pins.py:87` |
 | `STAGE1_PIN_JOIN_DIST` | `"12"` | `stage1/nets.py:37` |
 | `STAGE1_PIN_JOIN_FAR` | `"0"` | `stage1/nets.py:49` |
 | `STAGE1_PIN_JOIN_SYNTH` | `"3"` | `stage1/nets.py:59` |
 | `STAGE1_PIN_OUT_BOX` | `"12.0"` | `stage1/pins.py:55` |
-| `STAGE1_PIN_STUB` | `"sparse"` | `stage1/pins.py:116` |
-| `STAGE1_PIN_STUB_RATIO` | `"0.6"` | `stage1/pins.py:120` |
+| `STAGE1_PIN_STUB` | `"sparse"` | `stage1/pins.py:129` |
+| `STAGE1_PIN_STUB_RATIO` | `"0.6"` | `stage1/pins.py:133` |
 | `STAGE1_SPLIT_JUNCTIONS` | `"1"` | `stage1/wires.py:869` |
 | `STAGE1_SPLIT_TOL` | `"1.5"` | `stage1/wires.py:871` |
 | `STAGE1_WIRE_BRIDGE` | `"0"` | `stage1/wires.py:845` |
