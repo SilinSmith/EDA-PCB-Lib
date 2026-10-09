@@ -17,8 +17,12 @@ import sys
 
 # ---------------------------------------------------------------- paths
 
-REPO = r'Y:\workspace\EDA\eda-pcb'
-EDA_ROOT = r'Y:\workspace\EDA'
+# 路径按 __file__ 推导（本文件在 <repo>/pipeline/config.py）；以前硬编码
+# r'Y:\workspace\EDA\eda-pcb'，容器里那个路径不存在。仍可用 EDA_PCB_REPO /
+# EDA_ROOT 覆盖（诊断脚本换数据集时会用）。
+REPO = os.environ.get('EDA_PCB_REPO') or os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))
+EDA_ROOT = os.environ.get('EDA_ROOT') or os.path.dirname(REPO)
 DATA_ROOT = os.path.join(REPO, 'yolo_part', 'Dataset(waitforpreprocess)')
 REF_ROOT = os.path.join(REPO, 'yolo_part', 'Dataset300我不知道干嘛用的先放置')
 SYNTH_ROOT = os.path.join(EDA_ROOT, '合成原理图demo')

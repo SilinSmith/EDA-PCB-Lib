@@ -53,6 +53,12 @@ DEFAULT_PACK = Path(
 
 PACK_FILES = ("Dockerfile", "run.sh", "install_deps.py", "verify_imports.py")
 
+# ★ 四个打包文件的**权威副本**现在也放进了仓库：`<src>/packaging/`。
+#   理由：那两个 py 里有真的需要修的东西（install_deps.py 曾在 build 机看不到 GPU 时
+#   `sys.exit(1)` 直接把一次可用提交判成红 build；verify_imports.py 把交付路径不用的
+#   httpx 当成硬依赖报警）。放在仓库里才有版本历史，也才随代码一起走。
+PACK_DIR_NAME = "packaging"
+
 # 任意层级都排除的**目录名**（整棵子树）
 EXCLUDE_DIR_NAMES = {
     "__pycache__",
@@ -63,6 +69,9 @@ EXCLUDE_DIR_NAMES = {
     ".pytest_cache",
     ".mypy_cache",
     ".ipynb_checkpoints",
+    # 仓库内那份打包文件副本：它已经在 <out>/ 根上放了一份，
+    # 不需要再复制一份到 <out>/eda-pcb-main/packaging/ 里。
+    "packaging",
 }
 
 # 任意层级都排除的**文件**（glob，按 basename 匹配）
@@ -208,13 +217,23 @@ def main(argv: list[str] | None = None) -> int:
     out = Path(a.out).resolve()
     extra = list(a.exclude)
 
+    # ★ 优先用仓库内的权威副本 <src>/packaging/（若四个文件齐全），否则回落到 --pack。
+    #   这样打包不再依赖「上一次平台返回的 prediction_result 目录还在不在」。
+    pack_src = pack
+    repo_pack = src / PACK_DIR_NAME
+    if repo_pack.is_dir() and not check_pack_files(repo_pack):
+        pack_src = repo_pack
+        print("[pack] 打包文件取自仓库内权威副本: %s" % pack_src)
+    else:
+        print("[pack] 打包文件取自 --pack: %s" % pack_src)
+
     # ---------- 0) 体检：不通过就别浪费一次提交机会 ----------
     bad = False
     if not src.is_dir():
         print("[pack] 错误：--src 不是目录: %s" % src, file=sys.stderr)
         bad = True
-    if not pack.is_dir():
-        print("[pack] 错误：--pack 不是目录: %s" % pack, file=sys.stderr)
+    if not pack_src.is_dir():
+        print("[pack] 错误：打包文件来源不是目录: %s" % pack_src, file=sys.stderr)
         bad = True
     if bad:
         return 2
@@ -228,11 +247,12 @@ def main(argv: list[str] | None = None) -> int:
               "缺一个就是整批 case 全灭。", file=sys.stderr)
         return 3
 
-    missing_pack = check_pack_files(pack)
+    missing_pack = check_pack_files(pack_src)
     if missing_pack:
         print("[pack] 错误：--pack 缺少打包文件：%s" % ", ".join(missing_pack),
               file=sys.stderr)
-        print("[pack] --pack 应指向上一次平台返回的 prediction_result 目录。", file=sys.stderr)
+        print("[pack] 应放 <src>/%s/ 或 --pack 指向上一次返回的 prediction_result 目录。"
+              % PACK_DIR_NAME, file=sys.stderr)
         return 4
 
     # ---------- 1) 走一遍树，决定拷贝集合 ----------
@@ -288,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
         copied_bytes += dst.stat().st_size
 
     for name in PACK_FILES:
-        shutil.copy2(pack / name, out / name)
+        shutil.copy2(pack_src / name, out / name)
         if not a.quiet:
             print("[pack] + %s  (%s)" % (name, human((out / name).stat().st_size)))
 

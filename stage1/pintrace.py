@@ -32,7 +32,12 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-sys.path.insert(0, r"Y:\workspace\EDA\eda-pcb")
+# 仓库根（本文件在 <repo>/stage1/pintrace.py）—— 以前这里硬编码
+# r"Y:\workspace\EDA\eda-pcb"，容器里那个路径不存在（模块级执行，每次启动都会
+# 往 sys.path[0] 塞一个不存在的 Windows 路径）。改成按 __file__ 推导。
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 INK = 170
 BAND = 16.0          # 在框外多远之内找引脚桩
