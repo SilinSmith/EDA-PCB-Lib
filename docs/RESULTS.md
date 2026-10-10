@@ -2403,6 +2403,20 @@ work\_fast_out_nresv1 --split 10GT`）是 **tp=78 / 缺号=21 / 多号=3 / 名�
     python -X utf8 work\tools\dev\_bboxgap.py --run work\_fast_out_lr1
     python -X utf8 tools\eval\fast.py --cases 1,10,2,3,4,5,6,7,8,9 --engine official --score-only --out lr1
 
+#### 5.18.1 顺带量出的「引脚点距」敏感度（**默认未改，待业主确认**）
+
+同一批 `*_Pred.json`，只调 `OFFICIAL_PIN_PX`（交付档 `lr1`，官方 10 张）：
+
+| 引脚点距 | 总分 | pin F1 |
+|---|---|---|
+| 5px（官方 `protocol` 原文，**当前默认**） | 67.44 | 0.7404 |
+| 10px | 68.64 | 0.7885 |
+| **20px** | **69.21** | **0.8110** |
+| 30px | 69.30 | 0.8148 |
+
+⇒ 若官方的**引脚**对准也按 20px（而不是 bbox 那一处），我们还能再拿 **+1.77**；30px 只再多
+0.09 ⇒ 20~30px 之间已经饱和，这本身就提示真值大概在这个量级。**在业主确认前默认保持 5.0**。
+
 ---
 
 ## 6. 归因尺子（怎么把失分拆成可行动项）

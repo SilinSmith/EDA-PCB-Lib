@@ -6,7 +6,7 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **403** 个开关。
+共 **404** 个开关。
 
 ## 目录
 
@@ -19,7 +19,7 @@
 - [cvparts](#cvparts)（10）
 - [pipeline](#pipeline)（11）
 - [submission](#submission)（3）
-- [schematic_parser](#schematic_parser)（1）
+- [schematic_parser](#schematic_parser)（2）
 
 <a id="stage1"></a>
 
@@ -493,3 +493,4 @@
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
 | `OFFICIAL_BBOX_PX` | `"20.0"` | `schematic_parser/official.py:69` |
+| `OFFICIAL_PIN_PX` | `"5.0"` | `schematic_parser/official.py:73` |

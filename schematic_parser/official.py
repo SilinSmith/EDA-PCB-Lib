@@ -67,6 +67,10 @@ THRESHOLD_PX = 5.0
 # 也就是**多出 4 个元件**（文本三项全对、只有四坐标最大误差落在 5~15px 之间）。
 # 只改 bbox：引脚点距（`:pin`）与导线（`wire`）仍按 5px —— 业主这句话只针对 bbox。
 BBOX_PX = float(os.environ.get("OFFICIAL_BBOX_PX", "20.0"))
+# 引脚**点距**（`tip_position`）的容差，默认 5.0 = 官方 `spatial_match_threshold_px`。
+# ★ 这个开关只为「量一下改成 20px 会翻回多少」而存在，**默认不动**：业主 2026-10 的指正
+# 只提到 bbox。要试：`$env:OFFICIAL_PIN_PX='20'` 再跑 `fast.py --score-only`。
+PIN_PX = float(os.environ.get("OFFICIAL_PIN_PX", "5.0"))
 WEIGHTS = {'component': 0.30, 'pin': 0.25, 'connectivity': 0.35, 'wire': 0.10}
 
 # `hyperGraph` 里的成员引用：`U1.101` / `C151.2` / `∅208.206`
@@ -236,7 +240,7 @@ def pin_f1(gt: dict, pred: dict) -> F1:
                 failed.append('pin_name')
             a, b = _point(grec.get('point')), _point(prec.get('point'))
             dist = math.hypot(a[0] - b[0], a[1] - b[1]) if (a and b) else None
-            if dist is None or dist > THRESHOLD_PX:
+            if dist is None or dist > PIN_PX:
                 failed.append('tip_position')
             if failed:
                 bad.append({'pin_id': [key, pid], 'component_id': key,
