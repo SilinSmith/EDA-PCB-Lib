@@ -19,6 +19,7 @@ except ImportError:                     # 直接跑脚本（python eda-pcb\stage
     _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
     from envflag import env_on
 import os
+import math
 import re
 import sys
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -138,6 +139,8 @@ PIN_TRUST_BIND = env_on("STAGE2_PIN_TRUST_BIND", "1")
 # Numbers use trust/side only and retain observed wire-row coordinates, rather
 # than the calibrated frame anchor used by names. Missing trust keeps legacy.
 PIN_NUMBER_TRUST_BIND = env_on("STAGE2_PIN_NUMBER_TRUST_BIND", "1")
+PIN_TEXT_ROLE_GUARD = env_on("STAGE2_PIN_TEXT_ROLE_GUARD", "1")
+PIN_DIGIT_ENTITY = env_on("STAGE2_PIN_DIGIT_ENTITY", "1")
 MAX_ALTS = 6         # 每个元件最多保留几个位号候选（交给阶段三仲裁）
 # 结构化重绑定时「每配上一对」的固定加分（`stage2\\structmatch.py` 的 `cover`）：
 # 它让「一条自洽、把整排引脚都配上、每对都稍远」的方案压过「只配最近的那几对」。
@@ -551,6 +554,8 @@ def _best_read(reads: Dict[str, Tuple[str, float]], role: str,
     # not turn a recognized pin number into a numeric name, value or label.
     if set(reads) == {"pin_number"} and role != "pin_number":
         return None
+    if set(reads) == {"pin_name"} and role != "pin_name":
+        return None
     best = None
     for r, (txt, conf) in reads.items():
         if not txt:
@@ -565,10 +570,10 @@ def _best_read(reads: Dict[str, Tuple[str, float]], role: str,
     return best
 
 
-def _best_number_read(reads: Dict[str, Tuple[str, float]]):
+def _best_number_read(reads: Dict[str, Tuple[str, float]], fresh_color: bool = False):
     """Use stronger same-box agreement only for an uncertain numeric glyph."""
     original = _best_read(reads, "pin_number", fit_pinnum)
-    if not PINNUM_CONSENSUS or original is None or original[2] >= 0.6:
+    if not PINNUM_CONSENSUS or original is None:
         return original
     groups = {}
     for txt, conf in reads.values():
@@ -579,11 +584,168 @@ def _best_number_read(reads: Dict[str, Tuple[str, float]]):
     if not supported:
         return original
     conf, txt = max(supported)
+    if original[2] >= 0.6:
+        # Role probabilities are not correctness guarantees. Revisit a strong
+        # short read only when three strong reads of this same glyph agree on
+        # its unshortened digits. Never infer a number from drawing order.
+        cs = groups[txt]
+        if not (fresh_color and len(txt) > len(original[1])
+                and len([v for v in cs if v >= 0.85]) >= 3
+                and 1 <= int(txt) <= 999):
+            return original
+        fit = fit_pinnum(txt)
+        return fit * (0.3 + 0.7 * conf), txt, conf, fit
     if txt == original[1] or conf <= original[2] or len(txt) != len(original[1]):
         return original
     fit = fit_pinnum(txt)
     score = fit * (0.3 + 0.7 * max(0.0, min(1.0, conf)))
     return score, txt, conf, fit
+
+
+_COLOR_TEXT_SOURCES = frozenset(("red_green_transition", "red_stub_endpoint",
+                               "red_green_transition_uncertain"))
+
+
+def _same_image_point(value, expected):
+    try:
+        values = tuple(float(v) for v in value)
+        other = tuple(float(v) for v in expected)
+        return (len(values) == len(other) == 2
+                and all(math.isfinite(v) for v in values + other)
+                and math.dist(values, other) <= 0.001)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _target_index(text, cid, pins, evidence):
+    """Validate a directional crop target against its observed color contact."""
+    target = text.get("pin_target")
+    if target is None:
+        return None
+    if not isinstance(target, dict) or target.get("component_id") != cid:
+        return -1
+    index = target.get("pin_index")
+    if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(pins):
+        return -1
+    # Only freshness/point alignment is needed here; actual body/corridor
+    # checks are repeated by the binding code with the component rectangle.
+    checked = structmatch.normalize_pin_evidence(pins, evidence)
+    if not checked:
+        return -1
+    ev = checked[index]
+    if (ev.get("trust") != "trusted" or ev.get("source") not in _COLOR_TEXT_SOURCES
+            or ev.get("frame_confirmed") is not True
+            or target.get("edge") != ev.get("edge")):
+        return -1
+    if (target.get("point_img") is not None
+            and not _same_image_point(target["point_img"], pins[index])):
+        return -1
+    if (target.get("anchor_img") is not None
+            and not _same_image_point(target["anchor_img"], ev.get("anchor_img"))):
+        return -1
+    return index
+
+
+def _name_reservation(candidate, box, pins, evidence):
+    """Protect aligned alphabetic name evidence from an earlier partname role."""
+    if not PIN_TEXT_ROLE_GUARD or not evidence or not pins:
+        return False
+    got = _best_read(candidate.get("reads", {}), "pin_name", fit_pinname)
+    if not got or not any(ch.isalpha() for ch in got[1]):
+        return False
+    cand = {"bbox": candidate["bbox"], "center": candidate["center"]}
+    sides = structmatch.confirmed_frame_sides(box, evidence)
+    if not sides or not structmatch.candidate_inside_confirmed_frame(cand, sides):
+        return False
+    for index, ev in enumerate(evidence):
+        if (ev.get("trust") == "trusted" and ev.get("source") in _COLOR_TEXT_SOURCES
+                and ev.get("frame_confirmed") is True
+                and structmatch._name_corridor_distance(cand, box, pins, index, evidence) is not None):
+            return True
+    return False
+
+
+def _digit_entities(cands, cid, box, pins, evidence):
+    """Link original OCR samples to clean observations of the same black glyph."""
+    if not PIN_DIGIT_ENTITY or not evidence:
+        return {}
+    entities = {}
+    checked = structmatch.normalize_pin_evidence(pins, evidence)
+    for rec in cands:
+        meta = rec.get("color_crop")
+        if not isinstance(meta, dict) or meta.get("component_id") != cid:
+            continue
+        index = meta.get("pin_index")
+        if (isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(checked)
+                or checked[index].get("source") not in _COLOR_TEXT_SOURCES
+                or checked[index].get("trust") != "trusted"
+                or checked[index].get("frame_confirmed") is not True
+                or meta.get("edge") != checked[index].get("edge")
+                or not _same_image_point(meta.get("anchor_img"), checked[index].get("anchor_img"))):
+            continue
+        geometry = structmatch._candidate_rectangle({"bbox": rec.get("geometry_bbox")})
+        if geometry is None:
+            continue
+        edge = checked[index].get("edge")
+        ink = {"geometry_bbox": geometry}
+        sides = structmatch.confirmed_frame_sides(box, checked)
+        if (not structmatch._number_faces_edge(ink, box, edge, sides)
+                or structmatch._number_axis_gap(ink, edge, pins[index])
+                > structmatch._number_axis_tolerance(ink, edge)):
+            continue
+        got = _best_number_read(rec.get("reads", {}), fresh_color=True)
+        if got is None or got[2] < 0.4:
+            continue
+        sources = meta.get("source_boxes", [])
+        if not isinstance(sources, (list, tuple)):
+            continue
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            source_box = structmatch._candidate_rectangle(source)
+            if source_box is None:
+                continue
+            if (min(geometry[2], source_box[2]) <= max(geometry[0], source_box[0])
+                    or min(geometry[3], source_box[3]) <= max(geometry[1], source_box[1])):
+                continue
+            try:
+                contamination = float(source.get("color_contamination_ratio", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(contamination) or not 0 <= contamination <= 1:
+                continue
+            link = {"geometry_bbox": list(geometry), "entity_id": meta.get("entity_id"),
+                    "clean_text": got[1], "clean_conf": got[2],
+                    "contamination": contamination,
+                    "boundary_touched": meta.get("glyph_touches_search_boundary") is True}
+            key = tuple(source_box)
+            if key not in entities or got[2] > entities[key]["clean_conf"]:
+                entities[key] = link
+    return entities
+
+
+def _fresh_number_candidate(candidate, box, pins, evidence, target=None):
+    """A strong conflicting read needs this glyph's own fresh trusted row."""
+    checked = structmatch.normalize_pin_evidence(pins, evidence)
+    sides = structmatch.confirmed_frame_sides(box, checked)
+    eligible = []
+    for index, ev in enumerate(checked):
+        if target is not None and target != index:
+            continue
+        edge = ev.get("edge")
+        if (edge not in sides
+                or not structmatch._number_faces_edge(candidate, box, edge, sides)
+                or structmatch._number_axis_gap(candidate, edge, pins[index])
+                > structmatch._number_axis_tolerance(candidate, edge)):
+            continue
+        gap = structmatch.number_row_distance(candidate, edge, pins[index])
+        eligible.append((gap, index))
+    if not eligible:
+        return False
+    index = min(eligible)[1]
+    return (checked[index].get("trust") == "trusted"
+            and checked[index].get("source") in _COLOR_TEXT_SOURCES
+            and checked[index].get("frame_confirmed") is True)
 
 
 def _global_match(cands: Sequence[Tuple[str, str, float, dict]],
@@ -675,6 +837,16 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             continue
         ds = [dist_to_rect(cx, cy, c["bbox"]) for c in comps]
         j = min(range(len(ds)), key=lambda i: ds[i])
+        target = t.get("pin_target")
+        if target is not None:
+            choices = [i for i, c in enumerate(comps)
+                       if isinstance(target, dict) and c["id"] == target.get("component_id")]
+            if not choices:
+                continue
+            j = choices[0]
+            if _target_index(t, comps[j]["id"], pins.get(comps[j]["id"], []),
+                             (pin_evidence or {}).get(comps[j]["id"])) == -1:
+                continue
         d = ds[j]
         ins = inside(cx, cy, comps[j]["bbox"])
         # ★ 归属（owned / free）改用**与文字长度无关**的框到框间距，见 `OWN_BBOX`。
@@ -825,6 +997,14 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         cid, ctype = c["id"], c["type"]
         cands = owned.get(cid, [])
         rec = out[cid]
+        plist = pins.get(cid, [])
+        _pe = (structmatch.normalize_name_evidence(
+            c["bbox"], plist, (pin_evidence or {}).get(cid)) if PIN_TRUST_BIND else [])
+        _npe = (structmatch.normalize_number_evidence(plist, _pe)
+                if PIN_NUMBER_TRUST_BIND and ctype == "box" else [])
+        name_reservations = {id(t) for t in cands
+                             if ctype == "box" and _name_reservation(t, c["bbox"], plist, _pe)}
+        digit_entities = _digit_entities(cands, cid, c["bbox"], plist, _pe)
 
         # 参数（r/c/l/...）或器件名（box 等）
         want = "value" if ctype in ("r", "c", "l", "fuse", "crystal_2pin",
@@ -834,6 +1014,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         # （实测 `MSP432E401YTPDT` 这种），按宽高比筛会把器件名整条筛掉。
         best = None
         for t in cands:
+            if id(t) in name_reservations:
+                continue
             if rec["designator"] and list(t["bbox"]) == rec["designator"]["box"]:
                 continue
             got = _best_read(t["reads"], want, fit)
@@ -898,10 +1080,6 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         # ★★ 引脚列记录（`stage1/pincol.py`）：`plist[i]` 与 `_pcr[i]` 一一对应
         # （`pincol.merge_into` 就是按记录顺序写进去的，未被认领的老触点补在末尾）。
         _pcr = (pincol or {}).get(cid) or []
-        _pe = (structmatch.normalize_name_evidence(
-            c["bbox"], plist, (pin_evidence or {}).get(cid)) if PIN_TRUST_BIND else [])
-        _npe = (structmatch.normalize_number_evidence(plist, _pe)
-                if PIN_NUMBER_TRUST_BIND and c["type"] == "box" else [])
         pinfo = {i: {"number": None, "name": None} for i in range(len(plist))}
         rec["pins"] = pinfo
         take = lambda t: (t.get("bbox") is not None
@@ -930,13 +1108,29 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     continue
                 if (not want_inside) and t["d"] > _dlim:
                     continue
-                got = (_best_number_read(t["reads"]) if role == "pin_number"
+                target_index = _target_index(t, cid, plist, _pe)
+                if target_index == -1:
+                    continue
+                entity = digit_entities.get(tuple(t["bbox"])) if _number_guard else None
+                geometry = (t.get("geometry_bbox") or (entity or {}).get("geometry_bbox")) if _number_guard else None
+                fresh_number = (_number_guard and PIN_DIGIT_ENTITY
+                                and _fresh_number_candidate(
+                                    {"bbox": t["bbox"], "geometry_bbox": geometry},
+                                    c["bbox"], plist, _pe, target_index))
+                got = (_best_number_read(t["reads"], fresh_color=fresh_number) if role == "pin_number"
                        else _best_read(t["reads"], role, fit_fn))
                 if not got:
                     continue
                 s, txt, conf, f = got
+                if (entity and txt != entity["clean_text"]
+                        and entity["contamination"] >= 0.15
+                        and not entity["boundary_touched"]):
+                    # An observed clean numeral replaces a symbol-contaminated
+                    # sample of that same glyph. No digit is synthesized.
+                    continue
                 if (not want_inside) and t["inside"]:
-                    crossing = {"text": txt, "bbox": t["bbox"], "center": t["center"]}
+                    crossing = {"text": txt, "bbox": t["bbox"], "center": t["center"],
+                                "geometry_bbox": geometry}
                     if not (_number_guard and structmatch.crossing_number_candidate(
                             crossing, c["bbox"], plist, _pe)):
                         continue
@@ -946,8 +1140,13 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                            dist_w=_dw)
                 if s <= 0:
                     continue
-                pool.append({"center": t["center"], "text": txt, "score": s,
-                             "conf": conf, "rec": t})
+                item = {"center": t["center"], "text": txt, "score": s,
+                        "conf": conf, "rec": t}
+                if geometry is not None:
+                    item["geometry_bbox"] = geometry
+                if target_index is not None:
+                    item["target_pin"] = target_index
+                pool.append(item)
             if not pool:
                 continue
             if _number_guard:

@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -242,6 +243,50 @@ def _candidate_rectangle(cand: dict) -> Optional[Tuple[float, float, float, floa
     return x0, y0, x1, y1
 
 
+def name_edge_midpoint(cand: dict, edge: str) -> Optional[Tuple[float, float]]:
+    """The text-box edge facing this pin's confirmed IC frame side.
+
+    Both the name and its point stay unchanged. The near edge removes text
+    length from the normal distance, unlike measuring to the word centre.
+    """
+    rect = _candidate_rectangle(cand)
+    if rect is None or edge not in EDGES:
+        return None
+    x0, y0, x1, y1 = rect
+    return {"left": (x0, (y0 + y1) * 0.5),
+            "right": (x1, (y0 + y1) * 0.5),
+            "top": ((x0 + x1) * 0.5, y0),
+            "bottom": ((x0 + x1) * 0.5, y1)}[edge]
+
+
+def _name_edge_midpoint_enabled(rec: dict, bbox: Sequence[float]) -> bool:
+    """Only fresh trusted colour/frame evidence enables this optional score."""
+    return (os.environ.get("STAGE2_PIN_NAME_EDGE_MIDPOINT", "0") == "1"
+            and rec.get("trust") == "trusted"
+            and rec.get("source") in _NUMBER_COLOR_SOURCES
+            and _frame_anchor_usable(rec, bbox))
+
+
+def name_edge_midpoint_distance(cand: dict, bbox: Sequence[float], pins,
+                               index: int, evidence: Sequence[dict]) -> Optional[float]:
+    """Euclidean text-edge distance to a measured pin/body intersection.
+
+    Missing, stale or unconfirmed anchors are not replaced by a detector-box
+    projection. Eligibility is enforced separately by the inward corridor.
+    """
+    if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(pins):
+        return None
+    checked = normalize_pin_evidence(pins, evidence)
+    if not checked:
+        return None
+    rec = checked[index]
+    if (rec.get("trust") != "trusted" or rec.get("source") not in _NUMBER_COLOR_SOURCES
+            or not _frame_anchor_usable(rec, bbox)):
+        return None
+    middle = name_edge_midpoint(cand, pin_edge(bbox, pins, index, checked))
+    return math.dist(middle, pin_anchor(pins, index, checked)) if middle else None
+
+
 def candidate_inside_confirmed_frame(cand: dict, sides: Dict[str, float]) -> bool:
     """Reject name rectangles spanning a confirmed body edge, not just centres.
 
@@ -287,7 +332,7 @@ def normalize_number_evidence(pins: Sequence[Sequence[float]],
 
 
 def _number_axis_tolerance(cand: dict, edge: str) -> float:
-    rect = _candidate_rectangle(cand)
+    rect = _number_rectangle(cand)
     if rect is None:
         return _candidate_axis_tolerance(cand)
     axis = 1 if edge in ("left", "right") else 0
@@ -298,16 +343,35 @@ def _number_axis_tolerance(cand: dict, edge: str) -> float:
 
 def number_row_distance(cand: dict, edge: str, point: Sequence[float]) -> float:
     """Horizontal pin numbers are printed above the wire, ending near its row."""
-    rect = _candidate_rectangle(cand)
+    rect = _number_rectangle(cand)
     if rect is not None and edge in ("left", "right"):
         return abs(float(point[1]) - rect[3])
-    return _candidate_axis_gap(cand, edge, point)
+    return _number_axis_gap(cand, edge, point)
+
+
+def _number_rectangle(cand: dict) -> Optional[Tuple[float, float, float, float]]:
+    """Use digit ink geometry separately from padded OCR sampling rectangles."""
+    geometry = cand.get("geometry_bbox") or (cand.get("rec") or {}).get("geometry_bbox")
+    if geometry is not None:
+        checked = _candidate_rectangle({"bbox": geometry})
+        if checked is not None:
+            return checked
+    return _candidate_rectangle(cand)
+
+
+def _number_axis_gap(cand: dict, edge: str, anchor: Sequence[float]) -> float:
+    rect = _number_rectangle(cand)
+    if rect is None:
+        return _candidate_axis_gap(cand, edge, anchor)
+    axis = 1 if edge in ("left", "right") else 0
+    return max(rect[axis] - float(anchor[axis]),
+               float(anchor[axis]) - rect[axis + 2], 0.0)
 
 
 def _number_faces_edge(cand: dict, bbox: Sequence[float], edge: str,
                        sides: Dict[str, float]) -> bool:
     """Require actual ink extent outside its own side, including merged boxes."""
-    rect = _candidate_rectangle(cand)
+    rect = _number_rectangle(cand)
     if rect is None:
         return False
     x0, y0, x1, y1 = rect
@@ -339,7 +403,7 @@ def crossing_number_candidate(cand: dict, bbox: Sequence[float], pins,
         if trusted_rows[index].get("trust") != "trusted" or edge not in sides:
             continue
         if (_number_faces_edge(cand, bbox, edge, sides)
-                and _candidate_axis_gap(cand, edge, pins[index])
+                and _number_axis_gap(cand, edge, pins[index])
                 <= _number_axis_tolerance(cand, edge)):
             return True
     return False
@@ -387,7 +451,7 @@ def rebind_numbers(bbox: Sequence[float], pins: Sequence[Sequence[float]],
     OCR rectangles; names and network/contact coordinates are not changed.
     """
     evidence = normalize_number_evidence(pins, pin_evidence)
-    if not evidence or any(_candidate_rectangle(cand) is None for cand in pool):
+    if not evidence or any(_number_rectangle(cand) is None for cand in pool):
         return rebind(bbox, pins, pool, value_of, score_of, cover=cover)
     frames = confirmed_frame_sides(bbox, normalize_pin_evidence(pins, pin_evidence))
     selected, remaining = {}, list(range(len(pool)))
@@ -408,15 +472,17 @@ def rebind_numbers(bbox: Sequence[float], pins: Sequence[Sequence[float]],
             if value is None or not 1 <= value <= 999:
                 continue
             for pi in active:
+                if cand.get("target_pin") is not None and cand["target_pin"] != pi:
+                    continue
                 edge = edges[pi]
-                gap = _candidate_axis_gap(cand, edge, pins[pi])
+                gap = _number_axis_gap(cand, edge, pins[pi])
                 if (gap <= _number_axis_tolerance(cand, edge)
                         and _number_faces_edge(cand, bbox, edge, frames)):
                     allowed[(ci, pi)] = True
             eligible = [pi for pi in active if (ci, pi) in allowed]
             if eligible:
                 nearest = min(eligible, key=lambda pi: (
-                    _candidate_axis_gap(cand, edges[pi], pins[pi]),
+                    _number_axis_gap(cand, edges[pi], pins[pi]),
                     abs(along(bbox, edges[pi], *pins[pi])
                         - along(bbox, edges[pi], *cand["center"]))))
                 owners[ci] = edges[nearest]
@@ -440,6 +506,8 @@ def _name_corridor_distance(cand: dict, bbox: Sequence[float], pins,
                             index: int, evidence: Sequence[dict]) -> Optional[float]:
     """Inward distance from a contact to aligned name text, using its near edge."""
     rect = _candidate_rectangle(cand)
+    if cand.get("target_pin") is not None and cand["target_pin"] != index:
+        return None
     if rect is None:
         return None
     edge = pin_edge(bbox, pins, index, evidence)
@@ -464,6 +532,8 @@ def _name_corridor_distance(cand: dict, bbox: Sequence[float], pins,
     limit = min(0.5 * depth, 4.0 * glyph) + tolerance
     if far < -tolerance or near > limit:
         return None
+    if _name_edge_midpoint_enabled(evidence[index], bbox):
+        return name_edge_midpoint_distance(cand, bbox, pins, index, evidence)
     return max(0.0, near)
 
 
@@ -503,6 +573,12 @@ def _directional_name_groups(bbox, pins, pool, evidence, active, score_of):
             return 0.0
         rect = _candidate_rectangle(cand)
         glyph = max(4.0, min(rect[2] - rect[0], rect[3] - rect[1]))
+        if _name_edge_midpoint_enabled(evidence[pi], bbox):
+            # The new criterion uses one Euclidean distance. Applying the
+            # caller's old centre/along distance as well would double-count
+            # row displacement and no longer test the requested criterion.
+            return float(cand.get("score", score_of(cand, pi))) / (
+                1.0 + distances[(ci, pi)] / glyph)
         return score_of(cand, pi) / (1.0 + distances[(ci, pi)] / glyph)
     return groups, directional_score
 
@@ -719,6 +795,8 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
             groups = group_by_edge(bbox, pins, subset, evidence, active,
                                    axis_gate=gate, normal_gate=True) if not directional else None
             def phase_score(cand, pi):
+                if cand.get("target_pin") is not None and cand["target_pin"] != pi:
+                    return 0.0
                 if not _candidate_faces_edge(cand, bbox, pin_edge(bbox, pins, pi, evidence)):
                     return 0.0
                 if gate and _candidate_axis_gap(

@@ -41,6 +41,7 @@ PINCOL_WIN_KEYS = tuple(k.strip() for k in
                         os.environ.get("STAGE2_PINCOL_WIN_KEYS", "out_win").split(",")
                         if k.strip())
 COLOR_NUMBER_CROP = env_on("STAGE2_COLOR_NUMBER_CROP", "1")
+PIN_TEXT_CROP = env_on("STAGE2_PIN_TEXT_CROP", "1")
 # 这些是「参数」类元件，它们旁边没有长器件名，不参与生长
 _VALUE_TYPES = {"r", "c", "l", "fuse", "crystal", "crystal_2pin",
                 "crystal_3pin", "crystal_4pin"}
@@ -223,6 +224,13 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
     if do_ocr and COLOR_NUMBER_CROP and (roles is None or "pin_number" in roles):
         from .color_crops import read_color_numbers
         reads = list(reads) + read_color_numbers(doc,reads,engine,bgr)
+    if do_ocr and PIN_TEXT_CROP and (roles is None or any(r in roles for r in ("pin_name", "pin_number"))):
+        from .pin_text_crops import read_pin_texts
+        extra = read_pin_texts(doc, reads, engine, bgr)
+        if roles is not None:
+            extra = [dict(r, reads={k:v for k,v in r["reads"].items() if k in roles})
+                     for r in extra if any(k in roles for k in r["reads"])]
+        reads = list(reads) + extra
     t2 = time.time()
 
     for r in reads:
