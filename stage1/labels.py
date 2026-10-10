@@ -95,6 +95,20 @@ WIRE_TOL = float(os.environ.get("STAGE1_WIRE_TOL", "1.5"))
 WIRE_EXT = float(os.environ.get("STAGE1_WIRE_EXT", "8.0"))
 WIRE_EXT_PERP = float(os.environ.get("STAGE1_WIRE_EXT_PERP", "2.0"))
 WIRE_EXT_NEAREST = env_on("STAGE1_WIRE_EXT_NEAREST", "0")
+# ---- 定向「抹字断口」桥接（`STAGE1_TEXT_BRIDGE`，默认 0 = 关）----
+# 动机（case 3 实证）：`extract_wires(erase=texts, erase_pad=1.0)` 会把**盖在导线上的
+# 文本框像素一起抹掉**，留下 9~12px 的断口 —— C1 上脚的竖线 `seg0=[[156.5,508.9],
+# [156.5,433.2]]` 顶到 y=433.2，长横线 `seg46=[[812.1,422.5],[152.0,424.0]]` 在 y=424，
+# 缺口 9.2px，缺口里正是被抹掉的 `t0018 [154,426,163,430]`；常规规则接不上
+# （`WIRE_TOL=1.5` 太短、`WIRE_EXT=8` 又差一点点）。同型碎片在 case 3 有 7 对
+# （8.4~11.7px），全部没并上 ⇒ 网络成员少、netH/netL 吃亏。
+# **为什么不能靠抬容差**（都已实测）：`WIRE_TOL=10` 是零和交换（官方 9 张 +0.82 /
+# 派生 −0.75，且 case 10 把电容两块极板并成 11 脚巨块）；`WIRE_EXT` 20/30 →
+# 53.55/50.48；`WIRE_WELD` 24/32 → 54.33/51.86（都更差）。根因是那些断口躺在
+# **元件框**里 —— 一抬就把极板并上。所以这里只认**被擦除的文本框**，且要求两个线端
+# 各自贴住**同一个**框（见 `_text_bridge_unions`）。**绝不用元件框做桥接。**
+TEXT_BRIDGE = float(os.environ.get("STAGE1_TEXT_BRIDGE", "0"))   # 0 = 关；>0 = 允许的最大跨框缺口(px)
+TEXT_BRIDGE_PAD = float(os.environ.get("STAGE1_TEXT_BRIDGE_PAD", "3.0"))   # 框外扩，容端点贴着框边
 # ★ `weld` / `perp` 的正确配比：**`perp` 必须跟着 `weld` 放大，否则等于没开 weld。**
 #
 # `_weld_unions` 里 `perp = |out_A × v̂| * dist` 是「位移偏离 A 的外法线延长线多少像素」，
@@ -631,9 +645,60 @@ def _cross_forbid(segs, ends, own, ee_pairs, ink,
     return forbid, n_cross, axis_of
 
 
+def _closest_on_seg(s, x, y):
+    """线段 `s = [x1,y1,x2,y2]` 上离 `(x, y)` 最近的点（投影后夹到段内）。"""
+    x1, y1, x2, y2 = float(s[0]), float(s[1]), float(s[2]), float(s[3])
+    dx, dy = x2 - x1, y2 - y1
+    L2 = dx * dx + dy * dy
+    if L2 < 1e-12:
+        return x1, y1
+    t = ((x - x1) * dx + (y - y1) * dy) / L2
+    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+    return x1 + t * dx, y1 + t * dy
+
+
+def _text_bridge_unions(segs, ends, own, D, max_d, pad, bridges):
+    """端点被「抹字」截断的桥接（规则 6）：两个线端各贴住**同一个**被擦除文本框。
+
+    三重判据，缺一不可：
+      (a) 端点-线段距离 > 常规容差（否则规则 2 已经并了）、但在 `max_d` 内；
+      (b) **该端点**落在某个被擦除文本框（外扩 `pad`）里、或紧贴它；
+      (c) 目标段上离该端点**最近的点**也落在**同一个**框（外扩 `pad`）里。
+    (c) 是排他判据：只有「缺口横穿同一个文本框」才成立 —— 电容的两块平行极板、并排
+    走线（文本框在旁边而不是在缺口上）都不成立。这正是抬全局容差做不到的区分。
+    返回 `[(段下标 i, 段下标 j)]`；调用方一律经 `_u` 合并（仍受 forbid/轴冲突约束）。
+    """
+    box = np.asarray(bridges, np.float64).reshape(-1, 4)
+    if not len(box):
+        return []
+    x1 = np.minimum(box[:, 0], box[:, 2]) - pad
+    y1 = np.minimum(box[:, 1], box[:, 3]) - pad
+    x2 = np.maximum(box[:, 0], box[:, 2]) + pad
+    y2 = np.maximum(box[:, 1], box[:, 3]) + pad
+    out = []
+    for m in range(len(ends)):
+        i = int(own[m])
+        ex, ey = float(ends[m, 0]), float(ends[m, 1])
+        hit = np.nonzero((ex >= x1) & (ex <= x2) & (ey >= y1) & (ey <= y2))[0]
+        if not len(hit):
+            continue
+        row = D[m]
+        for j in np.nonzero((row > 0.0) & (row <= float(max_d)))[0]:
+            k = int(j)
+            if k == i:
+                continue
+            cx, cy = _closest_on_seg(segs[k], ex, ey)
+            for h in hit:
+                if x1[h] <= cx <= x2[h] and y1[h] <= cy <= y2[h]:
+                    out.append((i, k))
+                    break
+    return out
+
+
 def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
                 ext=0.0, ext_perp=2.0, ext_cos=1.0, ext_nearest=True,
-                over=0.0, over_cross=None, over_cos=None, ink=None, ink_frac=0.5):
+                over=0.0, over_cross=None, over_cos=None, ink=None, ink_frac=0.5,
+                bridges=None, bridge=None, bridge_pad=None):
     """把段并成连通分量，返回每条段的组号（组号 = 该组最小的段下标）。
 
     三种合并：
@@ -642,7 +707,9 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
       (3) `weld > 0` 时的**方向性桥接**（见 `_weld_unions`，修断口用）；
       (4) `ext > 0` 时的端点外法线延伸；
       (5) `over > 0` 时的**穿越式微越过**（见 `_overshoot_unions` —— 只吃「端点跨过
-          目标段所在的直线、且只多画了几像素」，不吃电容极板那种平行近距）。
+          目标段所在的直线、且只多画了几像素」，不吃电容极板那种平行近距）；
+      (6) `bridge > 0` 时的**抹字断口定向桥接**（见 `_text_bridge_unions` —— 只吃
+          「两个线端各贴住同一个被擦除文本框的两侧」，`bridges` 是该框列表）。
     `ink` 非空时给规则 (3) 加一道墨迹判据（见 `_ink_along`）。
     """
     segs = segments if isinstance(segments, np.ndarray) else _as_segs(segments)
@@ -747,6 +814,12 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
             over_cos = WIRE_OVER_COS
         for a, b in _overshoot_unions(segs, ends, own, over,
                                       cross_only=bool(over_cross), cos_par=over_cos):
+            _u(a, b)
+    # (6) 抹字断口定向桥接（只认被擦除的文本框，绝不用元件框）
+    _br = TEXT_BRIDGE if bridge is None else float(bridge)
+    if _br > 0.0 and bridges is not None:
+        _bp = TEXT_BRIDGE_PAD if bridge_pad is None else float(bridge_pad)
+        for a, b in _text_bridge_unions(segs, ends, own, D, _br, _bp, bridges):
             _u(a, b)
     LAST_X["n_blocked"] = n_blocked[0]
     roots = {}

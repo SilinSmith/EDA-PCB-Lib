@@ -341,7 +341,14 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                 # 紧半径（`PIN_JOIN_SYNTH=3`）挑导线。引脚列间距只有 10px，
                 # 而 `PIN_JOIN_DIST=12` 比它还大 ⇒ 补脚会认领**隔壁脚的导线**，
                 # 把两条网络并成一条。`pin_synth` 为空时行为与历史完全一致。
-                pin_synth=pin_synth)
+                pin_synth=pin_synth,
+                # ★★ 「抹字断口」定向桥接：`texts` 就是上面 `extract_wires(...,
+                # erase=texts)` 抹掉的那批文本框（`STAGE1_TEXT_BRIDGE>0` 才生效）。
+                # 只认「两个线端各贴住同一个被擦除文本框」的缺口，绝不认元件框 ——
+                # 抬全局容差会把电容两块极板并成一坨（见 `stage1\labels.py` 注释）。
+                bridges=([(t.get("bbox_img") if isinstance(t, dict) else t)
+                          for t in (texts or [])
+                          if (t.get("bbox_img") if isinstance(t, dict) else t)] or None))
         except Exception as e:
             traceback.print_exc()
             # ★ 审计项②：这一条是**最贵**的吞异常 —— 它把 pin(0.25)+net(0.35)

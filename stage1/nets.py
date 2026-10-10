@@ -104,7 +104,8 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
                weld=None, perp_tol=None, cos_tol=None, ink=None, over=None,
                join_dist: float = PIN_JOIN_DIST, min_pins: int = MIN_NET_PINS,
                join_far: float = PIN_JOIN_FAR, report=None,
-               pin_synth=None, join_synth: float = PIN_JOIN_SYNTH):
+               pin_synth=None, join_synth: float = PIN_JOIN_SYNTH,
+               bridges=None, bridge=None, bridge_pad=None):
     """返回 (nets, seg_groups)。
 
     `comp_pins`: `{comp_id: [(x, y), ...]}`（图像坐标）
@@ -149,7 +150,8 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
         segs, tol=tol, ext=ext, ext_nearest=ext_nearest,
         weld=weld, perp_tol=perp_tol, cos_tol=cos_tol, over=over,
         ink=(ink if getattr(labels_mod, "WIRE_INK", True) else None),
-        ink_frac=getattr(labels_mod, "WIRE_INK_FRAC", 0.5))
+        ink_frac=getattr(labels_mod, "WIRE_INK_FRAC", 0.5),
+        bridges=bridges, bridge=bridge, bridge_pad=bridge_pad)
 
     # 收集所有引脚点，并记住它属于哪个元件、第几个脚
     pts, owner, jd = [], [], []
