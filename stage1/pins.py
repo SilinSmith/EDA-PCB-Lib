@@ -287,6 +287,13 @@ PIN_LEAD_FREE = os.environ.get("STAGE1_PIN_LEAD_FREE", "1").strip().lower() not 
 PIN_LEAD_INK = os.environ.get("STAGE1_PIN_LEAD_INK", "0").strip().lower() not in (
     "", "0", "false", "off", "no", "none")
 PIN_LEAD_INK_FRAC = float(os.environ.get("STAGE1_PIN_LEAD_INK_FRAC", "0.6"))
+# ★ 判负（2026-10-10，官方 10 张 VLM-free）：本以为是「已挂上网的脚搬走会拆桥 ⇒ 只吸孤儿」，
+# 实测 `LEAD_ORPHAN=1` **57.78** vs 关 **58.15**（case 5 +2.05→0、case 10 +1.25→0 全丢，
+# 而 case 3/6 的下跌**没有**因此修复）⇒ 真相是：脚常被挂到「路过但不对」的那条线上，
+# 吸附正是在把它搬到**引线远侧**那条线上纠正它。默认 **0**（关），只留作实验旋钮。
+PIN_LEAD_ORPHAN = os.environ.get("STAGE1_PIN_LEAD_ORPHAN", "0").strip().lower() not in (
+    "", "0", "false", "off", "no", "none")
+PIN_LEAD_ORPHAN_D = float(os.environ.get("STAGE1_PIN_LEAD_ORPHAN_D", "12.0"))
 # 只对 stage2 走 `stamp_pins` 的类型开（`stage2/assemble.py:485 PIN_STAMP_TYPES`）：
 # 其余类型的 stage1 引脚点**就是**输出引脚，挪了会直接改 pin_f1。
 PIN_LEAD_TYPES = frozenset({"r", "c", "l", "fuse", "crystal_2pin", "d", "led"})
@@ -319,7 +326,8 @@ def _seg_ink(ink, a, b, n: int = 8, frac: float = None) -> bool:
     return (hit / float(tot)) >= _f
 
 
-def _snap_lead(pins, pts, center, lead=None, perp=None, mask=None, ink=None):
+def _snap_lead(pins, pts, center, lead=None, perp=None, mask=None, ink=None,
+               cloud=None):
     """引脚点沿朝外方向吸附到最近的导线采样点（跨过符号自身引线）。
 
     返回 `(新 pins, 吸附个数)`。`pts` = `sample_segments` 的点云 (M,2)，图像坐标；
@@ -327,6 +335,8 @@ def _snap_lead(pins, pts, center, lead=None, perp=None, mask=None, ink=None):
     `ink` 给了就要求「引脚点 → 目标点」的连线上有引线墨迹（见 `PIN_LEAD_INK`）。
     判据：`t = (p-q)·u ∈ (0, lead]` 且横向偏移 `|(p-q) - t·u| ≤ perp`，取 `t` 最小者
     （= 引线外侧最近的导线点）。`t ≤ PIN_JOIN_DIST` 时本来就挂得上，吸附不改所属网。
+    `cloud` 给全量点云时只吸**孤儿脚**（到最近导线的距离 > `PIN_LEAD_ORPHAN_D`）：
+    已经挂上网的脚再搬走会**拆掉它当时充当的桥**，反而让网数变多（见 `PIN_LEAD_ORPHAN`）。
     """
     _lead = PIN_LEAD if lead is None else float(lead)
     _perp = PIN_LEAD_PERP if perp is None else float(perp)
@@ -335,6 +345,11 @@ def _snap_lead(pins, pts, center, lead=None, perp=None, mask=None, ink=None):
     cx, cy = float(center[0]), float(center[1])
     for p in pins:
         qx, qy = float(p[0]), float(p[1])
+        if PIN_LEAD_ORPHAN and cloud is not None and len(cloud):
+            d0 = np.sqrt(((cloud[:, 0] - qx) ** 2 + (cloud[:, 1] - qy) ** 2).min())
+            if float(d0) <= PIN_LEAD_ORPHAN_D:
+                out.append((qx, qy))
+                continue
         ux, uy = qx - cx, qy - cy
         nrm = math.hypot(ux, uy)
         if nrm < 1e-6 or pts is None or len(pts) == 0:
@@ -712,7 +727,7 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
                 _cc = ((float(bb[0]) + float(bb[2])) / 2.0,
                        (float(bb[1]) + float(bb[3])) / 2.0)
                 _snapped, _nsnap = _snap_lead(dedup, _lead_tgt, _cc,
-                                              mask=_lead_mask, ink=ink)
+                                              mask=_lead_mask, ink=ink, cloud=pts)
                 if _nsnap:
                     dedup = _snapped
                     _ev["lead"] = _nsnap
@@ -875,6 +890,14 @@ def _selftest() -> int:
     chk("朝内（点已在引脚内侧）-> 不吸",
         _snap_lead([(150.0, 270.0)], np.asarray([(150.0, 285.0)]),
                    _ctr, lead=26.0, perp=3.0)[0], [(150.0, 270.0)])
+    # 孤儿判据：已经挂上网的脚（全量点云里有 ≤12px 的点）不许搬走，否则拆桥
+    _cloud_near = np.asarray([(150.0, 250.0), (150.0, 265.0)], dtype=float)
+    chk("已挂网（5px）-> 不吸",
+        _snap_lead([(150.0, 270.0)], _pts, _ctr, lead=26.0, perp=3.0,
+                   cloud=_cloud_near)[0], [(150.0, 270.0)])
+    chk("孤儿（30px）-> 吸",
+        _snap_lead([(150.0, 270.0)], _pts, _ctr, lead=26.0, perp=3.0,
+                   cloud=np.asarray([(150.0, 240.0)]))[0], [(150.0, 250.0)])
 
     print("")
     if fails:

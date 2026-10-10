@@ -6,11 +6,11 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **370** 个开关。
+共 **372** 个开关。
 
 ## 目录
 
-- [stage1](#stage1)（117）
+- [stage1](#stage1)（119）
 - [stage2](#stage2)（93）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（113）
@@ -102,6 +102,8 @@
 | `STAGE1_PIN_LEAD_FREE` | `"1"` | `stage1/pins.py:283` |
 | `STAGE1_PIN_LEAD_INK` | `"0"` | `stage1/pins.py:287` |
 | `STAGE1_PIN_LEAD_INK_FRAC` | `"0.6"` | `stage1/pins.py:289` |
+| `STAGE1_PIN_LEAD_ORPHAN` | `"0"` | `stage1/pins.py:294` |
+| `STAGE1_PIN_LEAD_ORPHAN_D` | `"12.0"` | `stage1/pins.py:296` |
 | `STAGE1_PIN_LEAD_PERP` | `"3.0"` | `stage1/pins.py:277` |
 | `STAGE1_PIN_LEAD_SRC` | `"end"` | `stage1/pins.py:280` |
 | `STAGE1_PIN_MAJOR` | `"1"` | `stage1/pins.py:256` |
