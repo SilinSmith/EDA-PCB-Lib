@@ -1854,6 +1854,15 @@ attachments/nets 与 stage2/3/final 的网成员）、`_crossdbg.py`（重建 in
 `STAGE1_CROSS_DOT_NEED`(3)；诊断计数 `labels.LAST_X = {"n_cross","n_blocked"}`
 （case 2：`n_cross 2 / n_blocked 28`）。
 
+### 5.8 共线碎边焊接 `STAGE2_EDGE_MERGE` 在新基线上仍然判负（−1.31）
+
+官方 `wire_match` 是在 Hungarian 配对后的网上做**一对一两点边匹配**，把共线碎边焊成
+一条等于**减少可匹配边的条数** —— 这正是 tp 的分子。官方 10 张、no-vlm、在 §5.7 的
+新基线上只改这一个变量（`STAGE2_EDGE_MERGE` 0 → 1）：总分 59.65 → **58.34（−1.31）**，
+导线 tp 218 → 104、`net_line` F1 0.3014 → 0.1702，`component`/`pin`/`net_hypergraph`
+三通道逐位不变，**10 张全部下降**（−0.25 ~ −2.21）。⇒ 维持默认 `0`（与旧基线 §4 的
+结论一致，可归档，别再试）。
+
 ---
 
 ## 6. 归因尺子（怎么把失分拆成可行动项）
