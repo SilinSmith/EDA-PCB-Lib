@@ -29,9 +29,16 @@ IC 体在原理图里一律画成**轴对齐的实线矩形**（KiCad / Altium /
 from __future__ import annotations
 
 import os
+import sys
 
 import cv2
 import numpy as np
+
+try:                                    # 作为包导入（python -m stage1 / submission\run.py）
+    from envflag import env_on      # 「假值词表」唯一实现，见 eda-pcb/envflag.py
+except ImportError:                     # 直接跑脚本（python eda-pcb\stage1\bigic.py 自检）：
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from envflag import env_on
 
 # ---- 可调参数（全部可用环境变量覆盖，方便 A/B） ----
 MIN_SIDE = int(os.environ.get("BIGIC_MIN_SIDE", "60"))       # 矩形最短边
@@ -42,6 +49,30 @@ STUB_MIN = int(os.environ.get("BIGIC_STUB_MIN", "3"))        # 边缘引脚桩�
 STUB_OFF = int(os.environ.get("BIGIC_STUB_OFF", "10"))       # 取列的位置：边线外多少像素
 INK = int(os.environ.get("BIGIC_INK", "140"))                # 暗像素阈值
 STUB_BAND = float(os.environ.get("BIGIC_STUB_BAND", "0.6"))  # 只数中间这一段（避开四角）
+# ★★ 导线环拒绝（`BIGIC_REJECT_WIRE`）：一圈**绿色导线**围成的矩形（包住某个 GND 符号
+#    或一片子图）会被当成 IC —— 它的四条边是导线、边上的「引脚桩」其实是穿过边界的
+#    电源线（`_edge_stubs` 数的是暗→亮跳变，数得出来）。
+#
+# 病（10GT case 5 的 AMS1117）：bigic 给出 `b0000`（框 382..795 / 585..755，
+# `work/_b5crop.png` 肉眼可见是绿色导线围出的矩形），它把 `U3` 的位号框和 `1`/`2`/`4`
+# 三块号框整个包在里面（文字归属是「到框的硬 argmin」，`d=0`）⇒ 真元件 `c0002`
+# （YOLO，score 0.9657）反而**既拿不到位号也拿不到脚号**，GT 的 `pin_1/2/4` 全丢。
+# 全局关掉 bigic（`STAGE1_BIGIC=0`）实测 case 5 **+2.4799**（pin tp 21→22），但
+# case 1 **−11.3825**（那颗 14 脚 `U1` 只能靠 bigic 找到）⇒ 必须**只提精度**。
+#
+# 判据：矩形边框上的**暗**像素里，属「绿系」（导线色）的占比 ≥ `BIGIC_WIRE_FRAC`
+#     ⇒ 判为导线环，丢掉。IC 体是深红/黑描边（红系），导线是绿系，两者色相分离得很干净。
+#
+# ★ 已转正（默认 1，2026-10）：`work/tools/dev/_bigicwire.py` 扫描官方 10 张 + 派生 val 19 张
+#   的**全部**候选矩形，只有 case 5 的伪矩形 ≥ 0.5（0.841），其余一律 0.000；再扫
+#   `work/_submit_in220`（220 张 / 312 个候选矩形）只有两个中段值（case 0003 的 0.306/0.396，
+#   都低于阈值、都留着）⇒ 打开它在本机所有语料上只改变 case 5。
+#   A/B：官方 10 张 no-vlm 59.7423 → **59.9903**（case 5 49.4581 → 51.9380）；
+#   VLM 交付口径 case 5 60.5107 → **61.8342**；case 5 的 `U3` 从 `[3]` 变成 `[1,2,3,4]`。
+#   关掉时与历史逐位相同（`bw0` = `au10` = `gen2` = 59.7423）。详见 `docs/RESULTS.md` §5.12。
+WIRE_REJECT = env_on("BIGIC_REJECT_WIRE", "1")
+WIRE_FRAC = float(os.environ.get("BIGIC_WIRE_FRAC", "0.5"))
+WIRE_BAND = int(os.environ.get("BIGIC_WIRE_BAND", "2"))
 
 
 def _runs(col: np.ndarray) -> int:
@@ -83,6 +114,40 @@ def _edge_stubs_h(dark: np.ndarray, y: int, x1: int, x2: int) -> int:
     return _runs((sub.max(axis=0) > 0).astype(np.uint8))
 
 
+def _border_wire_frac(bgr: np.ndarray, x1, y1, x2, y2, band=None) -> float:
+    """矩形**边框**上的暗像素里，属「绿系」（导线色）的占比。
+
+    只看暗像素（`gray < INK`）：这些图里导线是绿系、IC 体与地符号是深红系描边，
+    色相分离得很干净。返回 0.0 表示「没有足够的暗像素可判」（保守，不拒绝）。
+    """
+    band = WIRE_BAND if band is None else band
+    H, W = bgr.shape[:2]
+    xa = max(0, int(x1) - band)
+    xb = min(W, int(x2) + band + 1)
+    ya = max(0, int(y1) - band)
+    yb = min(H, int(y2) + band + 1)
+    if xb - xa < 4 or yb - ya < 4:
+        return 0.0
+    sub = bgr[ya:yb, xa:xb]
+    b = sub[:, :, 0].astype(np.int16)
+    g = sub[:, :, 1].astype(np.int16)
+    r = sub[:, :, 2].astype(np.int16)
+    gray = 0.114 * b + 0.587 * g + 0.299 * r
+    darkm = gray < INK
+    greenm = (g > r + 20) & (g > b + 20) & (g > 60)
+    n = int(2 * band + 1)
+    h, w = darkm.shape
+    ring = np.zeros_like(darkm)
+    ring[:n, :] = True
+    ring[max(0, h - n):, :] = True
+    ring[:, :n] = True
+    ring[:, max(0, w - n):] = True
+    sel = ring & darkm
+    if int(sel.sum()) < 20:
+        return 0.0
+    return float(greenm[sel].mean())
+
+
 def detect_rects(bgr: np.ndarray, min_side=None, min_area=None, max_frac=None,
                  fill_min=None, stub_min=None):
     """返回候选 IC 体：`[{x1,y1,x2,y2,fill,stub,w,h}]`（图像坐标，y 向下）。"""
@@ -122,9 +187,13 @@ def detect_rects(bgr: np.ndarray, min_side=None, min_area=None, max_frac=None,
                  _edge_stubs_h(dark, y + h + STUB_OFF, x, x + w))
         if ns < stub_min:
             continue
+        wf = _border_wire_frac(bgr, x, y, x + w, y + h) if WIRE_REJECT else 0.0
+        if WIRE_REJECT and wf >= WIRE_FRAC:
+            continue                                     # 一圈导线围成的矩形，不是 IC
         out.append({"x1": float(x), "y1": float(y), "x2": float(x + w),
                     "y2": float(y + h), "w": float(w), "h": float(h),
-                    "fill": round(float(fill), 4), "stub": int(ns)})
+                    "fill": round(float(fill), 4), "stub": int(ns),
+                    "wire": round(float(wf), 4)})
     out.sort(key=lambda r: -r["w"] * r["h"])
     return out
 

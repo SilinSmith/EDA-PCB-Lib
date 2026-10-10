@@ -97,6 +97,12 @@ OWN_ASSIGN = env_on("STAGE2_OWN_ASSIGN", "0")
 # 权值就是贪心路径用的同一个 `_score`（见 `_own_match_pick` 的 docstring）。
 OWN_MATCH = env_on("STAGE2_OWN_MATCH", "0")
 OWN_MATCH_ABSTAIN = 0.5   # 弃权权值 = 该元件候选里的最高分 × 这个常数
+def _dbg_want(cid: str) -> bool:
+    """`STAGE2_DBG_CID` 支持逗号分隔多个 cid（调试用；不影响任何行为）。"""
+    v = os.environ.get("STAGE2_DBG_CID") or ""
+    return bool(v) and cid in [x.strip() for x in v.split(",") if x.strip()]
+
+
 MAX_BOX_W = 3.0      # 位号框宽度 / 字高 之比上限（挡掉「一排字」被当成一个框）
 # **IC 引脚号必须离得更远也能收**（2025-11 实测，`case 1` 的 `U1`）。
 # 大 IC 的引脚号印在**符号框外**、而且离框边 29~44 px（`U1` 框左沿 x=961，
@@ -136,6 +142,21 @@ PINNUM_DECAY = float(os.environ.get("STAGE2_PINNUM_DECAY", "10"))
 #   （`tp`）、另一根是错的（`fp`），而 `pin_f1` 里丢 `tp` 比多 `fp` 更贵。
 # 所以这里保留旋钮但**默认关**，并把「去重」这个直觉记下来当作反例。
 PINNUM_DUP = float(os.environ.get("STAGE2_PINNUM_DUP", "0"))
+# ★★ 引脚号的「抢读」半径（`STAGE2_PINNUM_STEAL`，**默认 0 = 关**）。
+#
+# 病（10GT case 5 的 `U3`，2026-10 实测）：`stage1` 在 AMS1117 处同时给出
+# `c0002`（YOLO，score 0.9657）与 `b0000`（`bigic` 从**一圈绿色导线**围出的伪矩形，
+# score 0.9，见 `work/_b5crop.png`）。文字归属是「到元件框的硬 argmin」，
+# 而 `b0000` 的框把 `1`/`2`/`4` 三块号框整个包在里面（`d=0`）⇒ 它们归 `b0000`；
+# `b0000` 永远拿不到位号（`DROP_UNKEYED` 直接丢）⇒ **这三块文字被静默地浪费掉**，
+# `c0002` 的 `pin_number` 候选池只剩 `3`（`[dbg] pool=2` 那是同一块文字的两次检出），
+# GT 的 `pin_1/2/4` 全部 `fn`。同类损失见 `work/tools/dev/_pinwhy.py`。
+#
+# 规则：引脚号这一轮，除了自己名下的框，还允许读**别人名下 / 无主、但离自己
+# <= `PINNUM_STEAL` 的框** —— 只抢「主人**没有位号**（= 注定被丢）或**无主**」的框，
+# 已挂键的邻居的框一根都不碰（那才是抢别人东西）。位号（`STEAL_R`）与值
+# （`VALUE_STEAL_R`）早就有这条通道，引脚号是最后一个没有的。
+PINNUM_STEAL = float(os.environ.get("STAGE2_PINNUM_STEAL", "0"))
 # 引脚**名**框的宽高比上限。`MAX_BOX_W=3.0` 会把 `VDDA`(64x18=3.56)、
 # `GNDA`(67x18=3.72) 这类长名判成 `wide` 直接踢出候选池 —— 而它们恰恰
 # 是 `U1` 的合法引脚名。IC 引脚名本来就比位号长，这里单独放宽。
@@ -1073,7 +1094,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         # 故对这些 type 直接不给位号候选（`desig_slots` 也一并清空，阶段三没有可仲裁的东西）。
         dcands = [] if ctype in NO_DESIGNATOR else (
             cands if STEAL_R <= 0 else list(cands) + steal.get(cid, []))
-        if os.environ.get("STAGE2_DBG_CID") == cid:
+        if _dbg_want(cid):
             print("[dbg-D] cid=%s type=%s bbox=%s owned=%d steal=%d"
                   % (cid, ctype, c.get("bbox"), len(cands), len(steal.get(cid, []))))
             for t in dcands:
@@ -1129,7 +1150,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                               "fit": fid, "box_i": t.get("_i", -1),
                               "type_fix": tfix}))
         alts.sort(key=lambda x: -x[0])
-        if os.environ.get("STAGE2_DBG_CID") == cid:
+        if _dbg_want(cid):
             print("[dbg-alts] cid=%s -> %s" % (cid, [
                 (round(s, 3), i["canon"], round(i["conf"], 3), round(i["d"], 1))
                 for s, i in alts[:4]]))
@@ -1195,7 +1216,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             _old = ctype_of.get(cid)
             ctype_of[cid] = _tf
             out[cid]["ctype_fix"] = _tf
-            if os.environ.get("STAGE2_DBG_CID") == cid:
+            if _dbg_want(cid):
                 print("[dbg-typefix] cid=%s %s -> %s (canon=%s)"
                       % (cid, _old, _tf, info.get("canon")))
 
@@ -1308,7 +1329,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 _txt = canon_value(_txt) or _txt
             rec[want] = {"text": _txt, "conf": best[2],
                          "box": list(best[3]["bbox"]), "d": best[3]["d"]}
-        if os.environ.get("STAGE2_DBG_CID") == cid:
+        if _dbg_want(cid):
             print("[dbg] cid=%s type=%s want=%s bbox=%s" % (cid, ctype, want, c.get("bbox")))
             print("      owned cands=%d" % len(cands))
             for t in cands:
@@ -1339,7 +1360,20 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             _wlim = PINNAME_MAXW if slot == "name" else MAX_BOX_W
             _dlim = PINNUM_NEAR if slot == "number" else NEAR
             _dw = PINNUM_DISTW if slot == "number" else 0.035
-            for t in cands:
+            # ★ 引脚号抢读（`STAGE2_PINNUM_STEAL`）：见常量的长注释。只抢
+            #   「主人没位号（注定被 `DROP_UNKEYED` 丢）」或「无主」的框。
+            _src = list(cands)
+            if slot == "number" and PINNUM_STEAL > 0:
+                for _t in steal.get(cid, []):
+                    _own_id = _t.get("stolen_from")
+                    if _own_id and ((out.get(_own_id) or {}).get("designator")):
+                        continue
+                    if float(_t.get("d", 1e9)) > PINNUM_STEAL:
+                        continue
+                    _t = dict(_t)
+                    _t["_steal"] = True
+                    _src.append(_t)
+            for t in _src:
                 if not take(t) or id(t) in taken_box:
                     continue
                 if t.get("wide") and (t.get("wratio") or 0.0) > _wlim:
@@ -1356,7 +1390,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 if s <= 0:
                     continue
                 pool.append({"center": t["center"], "text": txt, "score": s,
-                             "conf": conf, "rec": t})
+                             "conf": conf, "rec": t, "steal": bool(t.get("_steal"))})
             if not pool:
                 continue
             # ★ 候选池去重：同一块文字被重复检出两次时，两个副本会被对齐到两根
@@ -1405,7 +1439,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                         pinfo[_i][slot] = {"text": bb[1], "conf": bb[2],
                                            "box": list(bb[3]["bbox"]), "d": 0.0}
                         taken_box.add(id(bb[3]))
-                    if os.environ.get("STAGE2_DBG_CID") == cid:
+                    if _dbg_want(cid):
                         print("[dbg] cid=%s pin_col %s: 窗口直接归位 %d/%d"
                               % (cid, slot, len(picks), _n_win))
                     continue
@@ -1441,7 +1475,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 c["bbox"], plist, pool, lambda cc: cc["text"], score_of, cover=cov,
                 resid=PIN_RESIDUAL if slot == "number" else 0.0,
                 resid_min=PIN_RESIDUAL_MIN)
-            if os.environ.get("STAGE2_DBG_CID") == cid:
+            if _dbg_want(cid):
                 print("      [pin:%s] nplist=%d pool=%d cov=%.2f bound=%d amb=%d"
                       % (role, len(plist), len(pool), cov, len(bound), len(amb)))
                 for rs in structmatch.LAST_RESIDUAL:
@@ -1531,7 +1565,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     _used_pin.add(pi)
                     _used_rec.add(rid)
                     _n_late += 1
-                if _n_late and os.environ.get("STAGE2_DBG_CID") == cid:
+                if _n_late and _dbg_want(cid):
                     print("[dbg] cid=%s pin_name late: 框外补名 %d 个（池 %d，空槽 %d）"
                           % (cid, _n_late, len(_pool),
                              sum(1 for i in range(len(plist)) if pinfo[i]["name"] is None)))
