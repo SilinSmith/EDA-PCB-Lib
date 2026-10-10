@@ -61,6 +61,7 @@ from fusion import priors as PR                        # noqa: E402
 from fusion import rescan as RS                        # noqa: E402
 from fusion import solve as SV                         # noqa: E402
 from stage2.assemble import build_doc                  # noqa: E402
+from stage2 import librefine as LR                      # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]      # `fusion/run.py` -> `eda-pcb/` -> 仓库根
 RUN_DIR = Path(os.environ.get("FUSION_RUN_DIR",
@@ -335,6 +336,14 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
     rep["iterate"] = {k: v for k, v in rep_it.items() if k != "rows"}
     pred = _assemble(doc, assigned, case, vlm_doc, sol, assigned0,
                      pin_index=pin_index)
+    # ---- ⑩ 库名回填：用官方库按 `(型号, 号) → 库名` 校准已 emit 的引脚名 --------
+    # 必须在这之后：`_assemble` 才把 VLM 的引脚读数落进 `pred`，而 VLM 会覆盖
+    # `build_doc` 里库规则 B 已经写好的名字（见 `stage2/librefine.py` 顶部）。
+    # 默认开（2026-10 转正）：官方 10 张 66.4498 → 66.7807、val 19 张 19.2974 → 19.3987。
+    try:
+        rep["librefine"] = LR.refine(pred, log=log)
+    except Exception as exc:                               # noqa: BLE001
+        rep["librefine"] = {"err": str(exc)}
     try:
         rep["redetect"] = IT.redetect_hints(pred, doc)
     except Exception:                                      # noqa: BLE001
