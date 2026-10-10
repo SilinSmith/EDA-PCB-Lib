@@ -127,6 +127,10 @@
 | `STAGE1_WIRE_CLOSE_THIN` | `"0"` | `stage1/wires.py:620` |
 | `STAGE1_WIRE_COLOUR` | `"hint"` | `stage1/wires.py:513` |
 | `STAGE1_WIRE_COS` | `"-0.75"` | `stage1/labels.py:130` |
+| `STAGE1_CROSS_COS` | `"-0.85"` | `stage1/labels.py:153` |
+| `STAGE1_CROSS_DOT_NEED` | `"3"` | `stage1/labels.py:155` |
+| `STAGE1_CROSS_DOT_R` | `"3.0"` | `stage1/labels.py:154` |
+| `STAGE1_CROSS_SPLIT` | `"1"` | `stage1/labels.py:152` |
 | `STAGE1_WIRE_DILATE` | `"0"` | `stage1/wires.py:633` |
 | `STAGE1_WIRE_EXT` | `"8.0"` | `stage1/labels.py:95` |
 | `STAGE1_WIRE_EXT_NEAREST` | `"0"` | `stage1/labels.py:97` |

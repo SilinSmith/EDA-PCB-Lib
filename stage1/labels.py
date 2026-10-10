@@ -132,6 +132,29 @@ WIRE_COS = float(os.environ.get("STAGE1_WIRE_COS", "-0.75"))
 # `STAGE1_WIRE_INK=0` 关掉（回到纯几何）。`STAGE1_WIRE_INK_FRAC` 调阈值。
 WIRE_INK = env_on("STAGE1_WIRE_INK", "1")
 WIRE_INK_FRAC = float(os.environ.get("STAGE1_WIRE_INK_FRAC", "0.5"))
+# ★★ 规则 (1) 的**十字交叉拆分**（`STAGE1_CROSS_SPLIT`，默认开）。
+#
+# 规则 (1)「四段端点在 tol 内 ⇒ 并」会把**交叉**当成连接：一条竖直走线穿过
+# 一条水平走线时，骨架在交叉处把两条线各切成两段，四个端点相距 1~2px，于是
+# 四条段并进同一组 ⇒ **本来独立的两个网络被合成一条**。官方 GT 是分开标的：
+# case 2 的 `net_5 = (R2.2, U1.3)`（竖直走线）与 `net_22 = (R1.2, U1.4)`
+# （水平走线）在 (576,375) 处十字交叉，图上**没有圆点**，我们却并成了一坨
+# `(R1.2, R2.2, U1.3, U1.4)` ⇒ 一个满分配对被稀释、另一个 GT 网直接变 fn。
+#
+# 判据（两条同时成立才拆）：
+#   ① 结点处**有 >= 2 条不同的轴都「穿过去」** —— 同轴在本结点有 >= 2 个端点，
+#      或者有线段从结点**中间穿过**（骨架偶尔对同一根导线给出两条重叠副本：一条
+#      长段 + 若干被切开的短段，长副本的端点不在结点上，只按端点聚类看不见它 ——
+#      case 2 的 `seg 49 [624.3,376]-[444,375]` 正是这样把竖直/水平两半并起来的）；
+#   ② 该处**没有实心结点圆点**（`_has_dot`：半径 `STAGE1_CROSS_DOT_R` 的对角方向
+#      都有墨 ⇒ 圆点 ⇒ 保持合并）。真结点（T 型、L 角、圆点四叉、单端支）不受影响。
+# 满足时只有**同轴**的段能并；两轴都穿过时它们之间的合并一律被 `_u` 拦下。
+CROSS_SPLIT = env_on("STAGE1_CROSS_SPLIT", "1")
+CROSS_COS = float(os.environ.get("STAGE1_CROSS_COS", "-0.85"))
+CROSS_DOT_R = float(os.environ.get("STAGE1_CROSS_DOT_R", "3.0"))
+CROSS_DOT_NEED = int(os.environ.get("STAGE1_CROSS_DOT_NEED", "3"))
+# 诊断计数（`wire_detail` 之外用不到；探针读它看「这次拆了几处交叉」）
+LAST_X = {"n_cross": 0, "n_blocked": 0}
 # ★★ 规则 (5)「端点微越过目标段」的容差（`STAGE1_WIRE_OVER`，0 = 关）。
 #
 # **为什么需要它、以及它为什么比抬 `WIRE_TOL` 干净。** `WIRE_TOL=10` 在官方 9 张上
@@ -422,6 +445,149 @@ def _extend_unions(segs, ends, own, out, ext_len, ext_perp, ext_cos=1.0,
     return pairs
 
 
+def _has_dot(ink, p, r=None, need=None) -> bool:
+    """结点圆点判据：真结点画了实心圆点，**对角**方向（45°/135°/225°/315°）也有墨。
+
+    只看对角是关键 —— 十字交叉的四个**轴向**（与两条线同向）永远有墨，只有对角
+    是空白；实心圆点（直径 9~10px）在对角一样是墨。case 2 实测（`STAGE1_CROSS_DOT_R=3`）：
+    交叉点 (576,375) 对角 0/4、圆点 (575,355)/(493,375) 对角 4/4、普通走线 0/4。
+    `ink` 为 None 时一律当圆点（保守：保持历史行为）。
+    """
+    if ink is None:
+        return True
+    r = CROSS_DOT_R if r is None else float(r)
+    need = CROSS_DOT_NEED if need is None else int(need)
+    h, w = ink.shape[:2]
+    hit = 0
+    for k in range(4):
+        a = np.pi * (0.25 + 0.5 * k)
+        x = int(round(float(p[0]) + r * float(np.cos(a))))
+        y = int(round(float(p[1]) + r * float(np.sin(a))))
+        if 0 <= x < w and 0 <= y < h and ink[y, x]:
+            hit += 1
+    return hit >= need
+
+
+def _cross_forbid(segs, ends, own, ee_pairs, ink,
+                  cos_par=None, r=None, need=None, pass_tol=None):
+    """返回「十字交叉（无圆点）」处**不许并**的段对集合，以及交叉点个数。
+
+    结点处只要有**两条不同的轴都「穿过去」**（同轴端点 >= 2 支，或有线段从结点
+    中间穿过），且该处**没有实心结点圆点**（`_has_dot`），就判为交叉：
+    只有**同轴**的段能并；两轴**都穿过**时，它们之间的任何合并都被禁止
+    （规则 1~5 全适用，由 `wire_groups` 里的 `_u` 拦截）。
+    真结点（T 型、L 角、圆点四叉、单端支）一律不动 —— 历史行为。
+
+    ★ 为什么需要「穿过」这一支：骨架对同一根导线偶尔会给出**两条重叠副本**
+    （一条长段 + 若干被切开的短段），长副本从结点中间穿过、端点并不落在结点上，
+    只按端点聚类看不见它，跨轴合并就经由它发生 —— case 2 的 SDA/SCL 实测：
+    `seg 49 [624.3,376]-[444,375]` 从 (576,375) 中间穿过，把竖直的
+    `seg 4/seg 10`（R2 顶脚）与水平的 `seg 46/seg 9` 并成了同一个 group 19。
+    """
+    cos_par = CROSS_COS if cos_par is None else float(cos_par)
+    pass_tol = (max(2.0, 1.5 * float(WIRE_TOL)) if pass_tol is None else float(pass_tol))
+    axis_cos = abs(cos_par)
+    par = {}
+
+    def find(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+
+    def union(x, y):
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            par[rx] = ry
+
+    for m, j in ee_pairs:
+        par.setdefault(m, m)
+        par.setdefault(j, j)
+        union(m, j)
+    cl = {}
+    for m in list(par):
+        cl.setdefault(find(m), []).append(m)
+    forbid, n_cross = set(), 0
+    n_seg = len(segs)
+    for mems in cl.values():
+        group = sorted({int(own[m]) for m in mems})
+        if len(group) < 2:
+            continue
+        node = ends[mems].mean(axis=0)
+        # 「穿过」结点、端点却不在结点上的段（重叠副本）：点到线段距离 + 投影在内部
+        for i in range(n_seg):
+            if i in group:
+                continue
+            a = np.asarray(segs[i, :2], dtype=np.float64)
+            b = np.asarray(segs[i, 2:4], dtype=np.float64)
+            d = b - a
+            L2 = float(d @ d)
+            if L2 <= 1e-9:
+                continue
+            t = float((node - a) @ d) / L2
+            if t <= 0.03 or t >= 0.97:
+                continue
+            if float(np.hypot(*(node - (a + t * d)))) <= pass_tol:
+                group.append(int(i))
+        group = sorted(set(group))
+        if len(group) < 2:
+            continue
+        # 每支的**轴**（无向）+ 这一支是否「穿过」结点
+        axes, is_pass, good = {}, {}, True
+        for i in group:
+            a = np.asarray(segs[i, :2], dtype=np.float64)
+            b = np.asarray(segs[i, 2:4], dtype=np.float64)
+            d = b - a
+            L2 = float(d @ d)
+            if L2 <= 1e-9:
+                good = False
+                break
+            t = float((node - a) @ d) / L2
+            if 0.03 < t < 0.97 and float(np.hypot(*(node - (a + t * d)))) <= pass_tol:
+                v = d / float(np.sqrt(L2))
+                is_pass[i] = True
+            else:
+                o = b if np.hypot(*(b - node)) >= np.hypot(*(a - node)) else a
+                w = o - node
+                Lw = float(np.hypot(w[0], w[1]))
+                if Lw <= 1e-6:
+                    good = False
+                    break
+                v = w / Lw
+                is_pass[i] = False
+            if v[0] < 0.0 or (v[0] == 0.0 and v[1] < 0.0):
+                v = -v
+            axes[i] = v
+        if not good:
+            continue
+        # 按轴聚类（无向：|cos| 够大即同轴）
+        sets, used = [], set()
+        for i in group:
+            if i in used:
+                continue
+            g = [j for j in group if abs(float(axes[i] @ axes[j])) >= axis_cos]
+            used.update(g)
+            sets.append(g)
+        if len(sets) < 2:
+            continue
+        # 「穿过去」的轴：有穿过支，或同轴在本结点有 >= 2 个端点
+        cont = [bool(any(is_pass[j] for j in g)) or sum(1 for j in g if not is_pass[j]) >= 2
+                for g in sets]
+        if sum(cont) < 2:
+            continue
+        if _has_dot(ink, node, r=r, need=need):
+            continue
+        n_cross += 1
+        for x in range(len(sets)):
+            for y in range(x + 1, len(sets)):
+                if not (cont[x] and cont[y]):
+                    continue
+                for a in sets[x]:
+                    for b in sets[y]:
+                        forbid.add((a, b) if a < b else (b, a))
+    return forbid, n_cross
+
+
 def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
                 ext=0.0, ext_perp=2.0, ext_cos=1.0, ext_nearest=True,
                 over=0.0, over_cross=None, over_cos=None, ink=None, ink_frac=0.5):
@@ -445,7 +611,8 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
     # 否则每一段会和自己的**序号后继**并起来，整张图塌成一个分量（踩过）。
     ends = np.stack([segs[:, :2], segs[:, 2:]], axis=1).reshape(-1, 2)
     own = np.repeat(np.arange(n), 2)
-    # (1) 端点-端点
+    # (1) 端点-端点（`STAGE1_CROSS_SPLIT` 时把「无圆点的十字交叉」拆成两组）
+    ee = []
     if n <= 4000:
         D_ee = np.hypot(ends[:, 0][:, None] - ends[:, 0][None, :],
                         ends[:, 1][:, None] - ends[:, 1][None, :])
@@ -453,15 +620,35 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
             row = D_ee[m]
             for j in np.nonzero(row <= tol)[0]:
                 if own[m] != own[j]:
-                    uf.union(int(own[m]), int(own[j]))
+                    ee.append((int(m), int(j)))
     else:
         try:
             from scipy.spatial import cKDTree
             for a, b in cKDTree(ends).query_pairs(float(tol), output_type='ndarray'):
                 if own[a] != own[b]:
-                    uf.union(int(own[a]), int(own[b]))
+                    ee.append((int(a), int(b)))
         except Exception:
             pass
+    # ★ 十字交叉（无圆点）的**跨对禁止表**：命中的段对在规则 (1)~(5) 里一律不许并。
+    forbid, n_cross = set(), 0
+    if CROSS_SPLIT and ink is not None and ee:
+        forbid, n_cross = _cross_forbid(segs, ends, own, ee, ink)
+    n_blocked = [0]
+    LAST_X["n_cross"], LAST_X["n_blocked"] = n_cross, 0
+
+    def _u(a, b):
+        a, b = int(a), int(b)
+        if a == b:
+            return
+        if a > b:
+            a, b = b, a
+        if forbid and (a, b) in forbid:
+            n_blocked[0] += 1
+            return
+        uf.union(a, b)
+
+    for m, j in ee:
+        _u(own[m], own[j])
     # (2) 端点-线段（T 型结点）
     D = _dist_pt_segs(ends, segs)
     for m in range(len(ends)):
@@ -470,12 +657,12 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
         row[i] = np.inf
         j = int(np.argmin(row))
         if float(row[j]) <= tol:
-            uf.union(i, j)
+            _u(i, j)
     # (3) 方向性桥接
     if weld > 0.0:
         for a, b in _weld_unions(segs, ends, own, weld, perp_tol, cos_tol,
                                  ink=ink, ink_frac=ink_frac):
-            uf.union(a, b)
+            _u(a, b)
     # (4) 端点沿外法线朝前延伸
     if ext > 0.0:
         out = np.zeros((len(ends), 2), np.float64)
@@ -487,7 +674,7 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
         out[1::2] = u
         for a, b in _extend_unions(segs, ends, own, out, ext, ext_perp,
                                    ext_cos=ext_cos, nearest_only=ext_nearest):
-            uf.union(a, b)
+            _u(a, b)
     # (5) 穿越式微越过（端点跨过目标段的支撑直线、只多画了几像素）
     if over > 0.0:
         if over_cross is None:
@@ -496,7 +683,8 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
             over_cos = WIRE_OVER_COS
         for a, b in _overshoot_unions(segs, ends, own, over,
                                       cross_only=bool(over_cross), cos_par=over_cos):
-            uf.union(a, b)
+            _u(a, b)
+    LAST_X["n_blocked"] = n_blocked[0]
     roots = {}
     out = []
     for i in range(n):
