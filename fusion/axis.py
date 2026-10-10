@@ -146,6 +146,13 @@ AXIS_MIN = 3
 # 轴上相邻两个框的间距 / 中位间距，允许的倍数范围（宽松到 0.25..4.0）。
 AXIS_PITCH_LO = 0.25
 AXIS_PITCH_HI = 4.0
+# ★ 竖直轴（`FUSION_AXIS_VERT`，默认 0）：同前缀的一**列**位号也能成轴。
+# 为什么默认关（而不是「没量过」）：`docs/RESULTS.md` §2.9 已经把这条路的天花板量死了 ——
+# 原理图里**几何相邻 != 号相邻**（位号是设计者随手分配的标识），同前缀邻座能覆盖的
+# run 只有 16/639 = **2.5%**，其中靠邻座推对的只有 **0.3%**；真正有信号的是「**偷邻居
+# 的号**」（`near_not_chosen` 78 = 12.2%），那是**归属（一对一）**问题、不是排列问题。
+# 所以这里把竖排实装出来是为了「钉死这个方向有没有用」，默认必须关、且 A/B 说了算。
+AXIS_VERT = env_on("FUSION_AXIS_VERT", "0")
 
 _DESIG_RE = re.compile(r"^([A-Za-z]{1,3})(\d{1,4})$")
 
@@ -291,44 +298,53 @@ def build_axes(items: Sequence[Item], min_members: int = AXIS_MIN) -> List[Axis]
         by_pre.setdefault(pre, []).append(it)
 
     out: List[Axis] = []
+    dirs = (True, False) if AXIS_VERT else (True,)
     for pre, group in by_pre.items():
-        # 先按垂直坐标分带（带容差跟着成员自己的字高走）
-        group = sorted(group, key=lambda t: t.cy)
-        bands: List[List[Item]] = []
-        for it in group:
-            placed = False
+        for horizontal in dirs:
+            # 先按「垂直于轴」的坐标分带（带容差跟着成员自己的尺寸走）。
+            # 横排按 cy 分带、竖排按 cx 分带（竖排的带容差用**框宽**，因为同一列的框
+            # 应该左对齐/同宽，而这正是 `place()` 之后要拿到的顺序）。
+            key = (lambda t: t.cy) if horizontal else (lambda t: t.cx)
+            span = (lambda t: t.h) if horizontal else (lambda t: t.w)
+            group = sorted(group, key=key)
+            bands: List[List[Item]] = []
+            for it in group:
+                placed = False
+                for b in bands:
+                    ref = b[-1]
+                    tol = max(AXIS_BAND_FRAC * max(span(it), span(ref)), AXIS_BAND_PX)
+                    if abs(key(it) - key(ref)) <= tol:
+                        b.append(it)
+                        placed = True
+                        break
+                if not placed:
+                    bands.append([it])
             for b in bands:
-                ref = b[-1]
-                tol = max(AXIS_BAND_FRAC * max(it.h, ref.h), AXIS_BAND_PX)
-                if abs(it.cy - ref.cy) <= tol:
-                    b.append(it)
-                    placed = True
-                    break
-            if not placed:
-                bands.append([it])
-        for b in bands:
-            if len(b) < min_members:
-                continue
-            # 水平排：沿 x 排序；若 x 已经不单调，也照样保留（宽松），只记 note
-            ax = Axis(prefix=pre, items=list(b), horizontal=True)
-            ax.sort()
-            # ★ 行内规范框宽：**同一排的框本该一样宽**。某个框明显窄于本排中位宽
-            #   ⇒ 那是「框没延展到位」，不是「这格里字少」（owner m23945 ③：
-            #   「文本框没有正常的延展或者合并」）。于是长度律要用**行给它的宽度**
-            #   判，而不是它自己那个被截断的框 —— 这就是「合适的时候用合适的方法」：
-            #   稀疏的排（0175 那种 `C33/C23/C34/…`）宽度本就参差，中位数不构成
-            #   规范，`_row_regular` 直接返回 False，一条读数都不会被改。
-            ws = sorted(it.w for it in b)
-            w_med = ws[len(ws) // 2] if ws else 0.0
-            if _row_regular(b, w_med):
-                for it in b:
-                    if it.w < W_TRUNC * w_med:
-                        it.w_ref = w_med
-                ax.note["w_med"] = round(w_med, 2)
-                ax.note["trunc"] = [it.key for it in b if it.w_ref]
-            if ax.pitch > 0:
-                ax.note["pitch_ok"] = True
-            out.append(ax)
+                if len(b) < min_members:
+                    continue
+                ax = Axis(prefix=pre, items=list(b), horizontal=horizontal)
+                ax.sort()
+                # ★ 行内规范框宽：**同一排的框本该一样宽**。某个框明显窄于本排中位宽
+                #   ⇒ 那是「框没延展到位」，不是「这格里字少」（owner m23945 ③：
+                #   「文本框没有正常的延展或者合并」）。于是长度律要用**行给它的宽度**
+                #   判，而不是它自己那个被截断的框 —— 这就是「合适的时候用合适的方法」：
+                #   稀疏的排（0175 那种 `C33/C23/C34/…`）宽度本就参差，中位数不构成
+                #   规范，`_row_regular` 直接返回 False，一条读数都不会被改。
+                #   竖排不做这条（竖排要的是「同列同高」，与长度律无关）。
+                if horizontal:
+                    ws = sorted(it.w for it in b)
+                    w_med = ws[len(ws) // 2] if ws else 0.0
+                    if _row_regular(b, w_med):
+                        for it in b:
+                            if it.w < W_TRUNC * w_med:
+                                it.w_ref = w_med
+                        ax.note["w_med"] = round(w_med, 2)
+                        ax.note["trunc"] = [it.key for it in b if it.w_ref]
+                else:
+                    ax.note["vert"] = True
+                if ax.pitch > 0:
+                    ax.note["pitch_ok"] = True
+                out.append(ax)
     out.sort(key=lambda a: (-len(a), a.prefix))
     return out
 
@@ -856,7 +872,16 @@ def _selftest() -> int:
         Item(key="b3", box=[753.0, 646.0, 809.0, 667.0], text="C181", score=0.733,
              reads=[("C181", 0.733)]),
     ]
-    axes = build_axes(items, min_members=2)
+    axes_all = build_axes(items, min_members=2)
+    # 横轴断言只看横轴（`FUSION_AXIS_VERT=1` 时会额外多出竖轴，语义不变）。
+    axes = [a for a in axes_all if a.horizontal]
+    if AXIS_VERT:
+        vax = [a for a in axes_all if not a.horizontal]
+        chk(bool(vax), "开了 FUSION_AXIS_VERT 就该出现竖轴（一条都没有）")
+        chk(all(a.prefix == "C" for a in vax), "竖轴前缀也都是 C")
+        for a in vax:
+            ys = [it.cy for it in a.items]
+            chk(ys == sorted(ys), "竖轴成员应按 y 递增，拿到 %s" % ys)
     chk(len(axes) == 3, "应该聚成三条轴（拿到 %d 条）" % len(axes))
     sizes = sorted(len(a) for a in axes)
     chk(sizes == [2, 3, 6], "三条轴的长度应是 6/2/3，拿到 %s" % sizes)

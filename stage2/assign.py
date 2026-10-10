@@ -85,6 +85,18 @@ OWN_BBOX = env_on("STAGE2_OWN_BBOX", "1")
 #   ⇒ 现状 **2 对 0 错**、这一臂 **0 对 2 错**：整体求解会把被误读的那块框
 #     配给错的元件。**判负，保持 0**；机制留在代码里以便复现与后续复用。
 OWN_ASSIGN = env_on("STAGE2_OWN_ASSIGN", "0")
+# ★★ 位号通道的**全局一对一 + 显式弃权**（`STAGE2_OWN_MATCH`，默认 **0 = 关**）。
+#
+# 与上面 `OWN_ASSIGN`（以及 `STAGE2_GLOBAL_MATCH` 的 `_global_match`）的**唯一区别**：
+# 那两条都是一张 `n × m` 的方阵，`linear_sum_assignment` 被迫配出 `min(n, m)` 对，
+# 再拿 `thr` 事后过滤 —— **没有弃权位**，被挤掉的真实主人再也拿不回自己的位号。
+# 这里给每颗元件加一列**专属弃权列**，权值 = 该元件自己当前最优分 × `OWN_MATCH_ABSTAIN`：
+# 于是「配一块真实文字框」只有**严格优于弃权**才会被选中（最优解里不含负增益的对）。
+# 列的唯一性直接给出两条不变式：**一块文字框最多配一颗元件、一颗元件最多拿一个位号**。
+# 候选池原样复用 `desig_all`（= 每颗元件的 `owned + steal` 候选，不新造候选），
+# 权值就是贪心路径用的同一个 `_score`（见 `_own_match_pick` 的 docstring）。
+OWN_MATCH = env_on("STAGE2_OWN_MATCH", "0")
+OWN_MATCH_ABSTAIN = 0.5   # 弃权权值 = 该元件候选里的最高分 × 这个常数
 MAX_BOX_W = 3.0      # 位号框宽度 / 字高 之比上限（挡掉「一排字」被当成一个框）
 # **IC 引脚号必须离得更远也能收**（2025-11 实测，`case 1` 的 `U1`）。
 # 大 IC 的引脚号印在**符号框外**、而且离框边 29~44 px（`U1` 框左沿 x=961，
@@ -611,6 +623,24 @@ def _best_read(reads: Dict[str, Tuple[str, float]], role: str,
     return best
 
 
+def _box_key(info: dict):
+    """文字框的**物理身份**：有 `box_i`（跨元件唯一的文字框序号）就用它，
+    没有（`-1`）才退回 `canon` 字符串。读不出 canon 也没有 box_i ⇒ 返回 `None`。
+
+    ★ 去重必须认**身份**而不是只认**读法**：同一块文字框被两颗元件读到两个不同
+    的 canon 时，按 canon 去重会把这块**同一个物理标签**同时发给两颗元件
+    （官方 case 2 的 `c0009`/`c0013` 就是这种「一块框、两种读法」的邻居）。
+    """
+    try:
+        bi = int(info.get("box_i", -1))
+    except Exception:
+        bi = -1
+    if bi >= 0:
+        return ("box", bi)
+    can = info.get("canon")
+    return ("canon", can) if can else None
+
+
 def _global_match(cands: Sequence[Tuple[str, str, float, dict]],
                   comp_ids: Sequence[str], thr: float = 0.02) -> List[Tuple[str, dict]]:
     """（元件 × 文字框）一对一最大权匹配，返回 `[(cid, 证据)]`。
@@ -729,6 +759,86 @@ def _own_assign_pick(desig_all: Dict[str, List[dict]]) -> List[Tuple[str, dict]]
         seen_canon.add(can)
         picked.append((cid, al))
     return picked
+
+
+def _own_match_pick(desig_all: Dict[str, List[dict]]) -> List[Tuple[str, dict]]:
+    """★ `STAGE2_OWN_MATCH`：带**显式弃权**的（元件 × 位号文字框）最大权一对一匹配。
+
+    候选池 = `desig_all`（每颗元件的 `desig_all` 条目，就是 `owned + steal` 那批
+    已经算好的候选，**不新造任何候选生成**）。权值 = 条目上的 `score`，而它正是
+    贪心路径用的同一个 `_score(fit, conf, d, inside, dist_clamp=max(FAR, STEAL_R))`
+    （`read_score` 的 `fit * (1-confit + confit*conf)` 项 × 距离衰减 × inside 加成），
+    所以这一臂与现状**只差「谁来选」**，不差打分。
+
+    矩阵：`n` 行（元件）× `m + n` 列（`m` 块文字框 + **每颗元件一列专属弃权列**）。
+      · `mat[i, j] = score(元件 i, 文字框 j)`（没候选 ⇒ `-1e9`）
+      · `mat[i, m+i] = OWN_MATCH_ABSTAIN * max_j score(i, j)`（弃权分）
+      · 别人那列弃权 = `-1e9` ⇒ 每颗元件只能弃自己的权
+    `linear_sum_assignment` 求全局最大权；列唯一 ⇒ 文字框最多用一次、元件最多拿一个
+    位号；弃权列的权值 ⇒ 只有**严格优于弃权**的候选才会被吃掉。
+    （等价写法：方形矩阵再补 `m` 行「未配对的框」，权值 0。）
+    """
+    cids = list(desig_all)
+    if not cids:
+        return []
+    bidx: Dict[object, int] = {}
+    boxes: List[object] = []
+    for cid in cids:
+        for al in desig_all.get(cid) or []:
+            k = _box_key(al)
+            if k is not None and k not in bidx:
+                bidx[k] = len(boxes)
+                boxes.append(k)
+    n, m = len(cids), len(boxes)
+    if m == 0:
+        return []
+    NEG = -1e9
+    mat = np.full((n, m + n), NEG)
+    info_of: Dict[Tuple[int, int], dict] = {}
+    abstain: List[float] = []
+    for i, cid in enumerate(cids):
+        alts = desig_all.get(cid) or []
+        best = 0.0
+        for al in alts:
+            k = _box_key(al)
+            if k is None:
+                continue
+            j = bidx[k]
+            w = float(al.get("score") or 0.0)
+            if (i, j) not in info_of or w > mat[i, j]:
+                mat[i, j] = w
+                info_of[(i, j)] = al
+            if w > best:
+                best = w
+        abstain.append(OWN_MATCH_ABSTAIN * max(0.0, best))
+        mat[i, m + i] = abstain[-1]
+
+    pairs: List[Tuple[int, int]] = []
+    try:
+        from scipy.optimize import linear_sum_assignment
+        r, c = linear_sum_assignment(-mat)
+        pairs = [(int(a), int(b)) for a, b in zip(r.tolist(), c.tolist())]
+    except Exception:                                   # 没有 scipy 就贪心兜底
+        taken: set = set()
+        order = sorted(info_of, key=lambda ij: -mat[ij[0], ij[1]])
+        for i, j in order:
+            if i in taken or j in taken:
+                continue
+            if mat[i, j] <= abstain[i]:                  # 不比弃权高就不吃
+                continue
+            taken.add(i)
+            taken.add(j)
+            pairs.append((i, j))
+
+    got: List[Tuple[float, str, dict]] = []
+    for i, j in pairs:
+        if j >= m or mat[i, j] <= NEG / 2.0:
+            continue                                         # 弃权列
+        if (i, j) not in info_of:
+            continue
+        got.append((float(mat[i, j]), cids[i], info_of[(i, j)]))
+    got.sort(key=lambda x: -x[0])
+    return [(cid, al) for _sc, cid, al in got]
 
 
 def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[dict],
@@ -892,14 +1002,27 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         picked = _global_match(desig_cands, [c["id"] for c in comps])
     elif OWN_ASSIGN:
         picked = _own_assign_pick(desig_all)
+    elif OWN_MATCH:
+        picked = _own_match_pick(desig_all)
     else:
         # 位号去重：同一张图里位号唯一，全局按分数贪心，撞号的低分者让位。
+        # ★ 撞号判据加一条**文字框身份**（`_box_key`：`box_i` 优先、缺了退回 canon）。
+        #   两块不同的框读成同一个位号 ⇒ 仍按 canon 去重（原行为，位号确实唯一）；
+        #   同一块框被两颗元件读到两个不同 canon（罕见）⇒ 原来两票全收、同一块文字
+        #   成了两颗元件的位号，现在低分者让位。
+        #   撞框那一票作废时**照样占住 canon**（否则这块框的误读会被顶给第三个元件，
+        #   凭空造出一条今天不存在的归属）⇒ `picked` 恒为今天那份列表的**子集**。
         picked = []
         seen_txt: set = set()
+        seen_box: set = set()
         for cid, can, sc, info in sorted(desig_cands, key=lambda x: -x[2]):
-            if can in seen_txt:
+            bi = _box_key(info)
+            if can in seen_txt or (bi is not None and bi in seen_box):
+                seen_txt.add(can)
                 continue
             seen_txt.add(can)
+            if bi is not None:
+                seen_box.add(bi)
             picked.append((cid, info))
 
     # `desig_slots` 给的是**每个元件的全部候选**（阶段三 LLM 仲裁的原料），

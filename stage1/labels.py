@@ -148,11 +148,22 @@ WIRE_INK_FRAC = float(os.environ.get("STAGE1_WIRE_INK_FRAC", "0.5"))
 #      case 2 的 `seg 49 [624.3,376]-[444,375]` 正是这样把竖直/水平两半并起来的）；
 #   ② 该处**没有实心结点圆点**（`_has_dot`：半径 `STAGE1_CROSS_DOT_R` 的对角方向
 #      都有墨 ⇒ 圆点 ⇒ 保持合并）。真结点（T 型、L 角、圆点四叉、单端支）不受影响。
-# 满足时只有**同轴**的段能并；两轴都穿过时它们之间的合并一律被 `_u` 拦下。
+#
+# ★ 泛化（`STAGE1_CROSS_TAGS` 默认开 = 根级标签；`STAGE1_CROSS_WIDE` 默认**关**）：
+# 判据从「这两段不许并」升级为「**同一个根不许同时持有同一结点的两条不同轴**」
+# （`axis_of` 标签 + `_u` 里的根级冲突检查）—— 后者能拦住**经由第三段传递**的
+# 跨轴合并（A 轴 ∪ 无关段 ∪ B 轴），那是逐对黑名单拦不住的。多岔（>=3 条轴）本来就是
+# 两两判定，自动覆盖。实测（官方 10 张、no-vlm）：只用标签 **case 1 62.01→62.79
+# (+0.78)**，其余 9 张逐位不变（case 5 也不动）；把聚簇半径也从 `tol` 放宽到
+# `pass_tol` 反而 **case 5 −1.24**（把两个本来无关的近距结点并成一个簇 ⇒ 误判交叉），
+# 所以 `WIDE` 默认关。
 CROSS_SPLIT = env_on("STAGE1_CROSS_SPLIT", "1")
 CROSS_COS = float(os.environ.get("STAGE1_CROSS_COS", "-0.85"))
 CROSS_DOT_R = float(os.environ.get("STAGE1_CROSS_DOT_R", "3.0"))
 CROSS_DOT_NEED = int(os.environ.get("STAGE1_CROSS_DOT_NEED", "3"))
+CROSS_WIDE = env_on("STAGE1_CROSS_WIDE", "0")
+CROSS_TAGS = env_on("STAGE1_CROSS_TAGS", "1")
+CROSS_WIDE_MAX = int(os.environ.get("STAGE1_CROSS_WIDE_MAX", "96"))
 # 诊断计数（`wire_detail` 之外用不到；探针读它看「这次拆了几处交叉」）
 LAST_X = {"n_cross": 0, "n_blocked": 0}
 # ★★ 规则 (5)「端点微越过目标段」的容差（`STAGE1_WIRE_OVER`，0 = 关）。
@@ -504,10 +515,37 @@ def _cross_forbid(segs, ends, own, ee_pairs, ink,
         par.setdefault(m, m)
         par.setdefault(j, j)
         union(m, j)
+    # ★ 泛化（`STAGE1_CROSS_WIDE`）：聚簇半径从规则 (1) 的 `tol`(1.5) 放宽到 `pass_tol`(2.25)。
+    # 骨架在交叉处给出的端点常常差 1.5~2.2px —— 它们**进不了 `ee`**，只按 `ee` 聚类就
+    # 永远看不见这个结点（多岔、粗笔画、rdp 抖动都会这样）。放宽只影响「是否成簇」，
+    # 是否拆分仍要求**≥2 条轴都穿过去**，所以 T 型（1 条轴穿过）不会被动到。
+    # 只对已有簇的邻域做两轮闭包，并把簇规模封顶，避免密集区炸开。
+    if CROSS_WIDE and pass_tol > float(WIRE_TOL) and par:
+        near = set(int(m) for m in par)
+        for _ in range(2):
+            add = set()
+            for m in sorted(near):
+                p = ends[m]
+                d = np.hypot(ends[:, 0] - p[0], ends[:, 1] - p[1])
+                for k in np.nonzero(d <= pass_tol)[0]:
+                    add.add(int(k))
+            if add <= near:
+                break
+            near |= add
+        if len(near) <= CROSS_WIDE_MAX:
+            near_s = sorted(near)
+            for x in range(len(near_s)):
+                px = ends[near_s[x]]
+                for y in range(x + 1, len(near_s)):
+                    py = ends[near_s[y]]
+                    if float(np.hypot(px[0] - py[0], px[1] - py[1])) <= pass_tol:
+                        par.setdefault(near_s[x], near_s[x])
+                        par.setdefault(near_s[y], near_s[y])
+                        union(near_s[x], near_s[y])
     cl = {}
     for m in list(par):
         cl.setdefault(find(m), []).append(m)
-    forbid, n_cross = set(), 0
+    forbid, axis_of, n_cross = set(), {}, 0
     n_seg = len(segs)
     for mems in cl.values():
         group = sorted({int(own[m]) for m in mems})
@@ -578,6 +616,11 @@ def _cross_forbid(segs, ends, own, ee_pairs, ink,
         if _has_dot(ink, node, r=r, need=need):
             continue
         n_cross += 1
+        cid = n_cross
+        for x in range(len(sets)):
+            if cont[x]:
+                for i in sets[x]:
+                    axis_of.setdefault(int(i), []).append((cid, x))
         for x in range(len(sets)):
             for y in range(x + 1, len(sets)):
                 if not (cont[x] and cont[y]):
@@ -585,7 +628,7 @@ def _cross_forbid(segs, ends, own, ee_pairs, ink,
                 for a in sets[x]:
                     for b in sets[y]:
                         forbid.add((a, b) if a < b else (b, a))
-    return forbid, n_cross
+    return forbid, n_cross, axis_of
 
 
 def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
@@ -629,23 +672,44 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
                     ee.append((int(a), int(b)))
         except Exception:
             pass
-    # ★ 十字交叉（无圆点）的**跨对禁止表**：命中的段对在规则 (1)~(5) 里一律不许并。
-    forbid, n_cross = set(), 0
+    # ★ 十字交叉（无圆点）的**跨轴禁止**：命中的段对在规则 (1)~(5) 里一律不许并；
+    # `axis_of` 给出「段 -> [(结点, 轴号)]」，`_u` 用它做**根级**冲突检查（拦传递合并）。
+    forbid, n_cross, axis_of = set(), 0, {}
     if CROSS_SPLIT and ink is not None and ee:
-        forbid, n_cross = _cross_forbid(segs, ends, own, ee, ink)
+        forbid, n_cross, axis_of = _cross_forbid(segs, ends, own, ee, ink)
     n_blocked = [0]
     LAST_X["n_cross"], LAST_X["n_blocked"] = n_cross, 0
+    root_tags = {int(i): dict(t) for i, t in axis_of.items()} if (axis_of and CROSS_TAGS) else {}
 
     def _u(a, b):
         a, b = int(a), int(b)
         if a == b:
             return
+        ra, rb = uf.find(a), uf.find(b)
+        if ra == rb:
+            return
+        ta, tb = root_tags.get(ra), root_tags.get(rb)
+        if ta and tb:
+            for cid, ax in ta.items():
+                if cid in tb and tb[cid] != ax:
+                    n_blocked[0] += 1
+                    return
         if a > b:
             a, b = b, a
         if forbid and (a, b) in forbid:
             n_blocked[0] += 1
             return
-        uf.union(a, b)
+        uf.union(ra, rb)
+        if ta or tb:
+            r = uf.find(ra)
+            m = dict(ta or {})
+            for cid, ax in (tb or {}).items():
+                m.setdefault(cid, ax)
+            root_tags[r] = m
+            if r != ra:
+                root_tags.pop(ra, None)
+            if r != rb:
+                root_tags.pop(rb, None)
 
     for m, j in ee:
         _u(own[m], own[j])
