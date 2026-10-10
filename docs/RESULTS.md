@@ -1336,6 +1336,52 @@ netH 0.6590 → 0.6860，tp 网络 110 → 111；逐案 1 0｜2 +0.75｜**3 −0
 **GT 边被覆盖 89.1%** ⇒ 几何本来就对，差的是口径）、`work\_splittol.ps1`（`STAGE1_SPLIT_TOL` 1.5/3/4/6/8 ⇒ 56.70/56.70/56.71/56.71/56.76，**不是杠杆**）、
 `work\_leadreg.py`（按 GT 网归因 S/P 变化）。基线：`work\_fast_base\{w10_base, lead26, leadE26, leadP3, leadL18/22/30/34, inkP6, inkP3, dropunk, leadV, valbase, vallead, vallead2}.json`。
 
+### 2.23 两脚二极管/LED 的官方脚名是 `K`/`A`（`PIN_NAME_ALIAS`）：官方 10 张 58.15 → **58.51**（交付 64.30 → **64.65**）
+
+**依据**：官方 protocol（`20261009引入/theSixthSubmission_44.29/intermediate_files (5)/report/submission/20261009T140206Z/1.json`
+的 `protocol` 段）写明 `pin_match = "component key and pin_<number> exact; owner exists in both components; **pinname exact**; point Euclidean threshold"`。
+`d`/`led` 的官方脚名**不是号码**：400 张训练 GT 全量统计
+（`200_train_cases/*/*target_named.json`）里 d = `(1→K 192, 2→A 192)`、led = `(1→K 177, 2→A 177)`，
+各占该类 **100%**（另有 12 条 `P_nn` 是训练集的错标）；`r/c/l` 则一律 `(1→"1", 2→"2")`。10GT 全量一致。
+我们 `stage2/assemble.py` 的贴章路径原来把**号码**直接当脚名写（`"pinname": num`）⇒
+每个 d/led 的两脚各吃一次 `pin_name` 失分（10GT 共 8 个：case 4 LED1、case 7 D1/LED1、case 10 D1…）。
+
+**改动**：`stage2/assemble.py` 新增模块常量 `PIN_NAME_ALIAS = {("d","1"):"K", ("d","2"):"A", ("led","1"):"K", ("led","2"):"A"}`
+（在 `PIN_STAMP_ON` 之后），贴章路径写成 `"pinname": PIN_NAME_ALIAS.get((ctype, num), num)`，
+非贴章路径在 `nm = r["nm"] or num` 之后同表兜底。**没有加环境旋钮**（口径是硬事实，不需要 A/B 开关）。
+
+**读数（官方 10 张，官方尺）**
+
+| 臂 | 总分 | component (30) | pin (25) | netH (35) | wire (10) | tp 元件/引脚/网络/导线 |
+|---|---|---|---|---|---|---|
+| `kAnv`（VLM-free） | **58.51**（+0.36） | 0.5159 | **0.7014** | 0.6572 | 0.2496 | 103 / **292** / 104 / 187 |
+| `leadVfy`（VLM-free 基线，= `leadP3`） | 58.15 | 0.5159 | 0.6870 | 0.6572 | 0.2496 | 103 / 286 / 104 / 187 |
+| `kA`（交付，VLM 开） | **64.65**（+0.35） | 0.6643 | **0.7231** | 0.6860 | 0.2636 | 132 / **306** / 111 / 196 |
+| `leadV`（交付基线） | 64.30 | 0.6643 | 0.7090 | 0.6860 | 0.2636 | 132 / 300 / 111 / 196 |
+
+⇒ 两个口径都是 **+6 个引脚 tp**（0.25×100×2/(…) 之后 ≈ +0.35 分），只动 pin 通道（其余三通道逐位不变），无回归。
+基线存 `work\_fast_base\{kAnv,kA}.json`，产物 `work\_fast_out_kAnv` / `work\_fast_out_kA`。
+
+**本轮同时否证的两条路（别再试）**
+* **按符号学「引脚外伸」表**（`eda-pcb\tools\dev\_symgeom.py` 从 200 张训练 GT 建 `work\_symgeom_table.json`，3260 个 `Name|type` 条目）：
+  评测 254 个带脚元件里 117 个能匹配到 (号,名) 集合完全一致的签名，但这 233 个脚里**我们本来就对了 223 个 ⇒ 只能再捞 10 个脚（≈ +0.2 分）**；
+  真正丢脚的元件（case 1 U1 `MSP432E401YTPDT`）**没有**匹配签名；且训练表 `Name` 字段有噪声（4 条 `MSP432E401YTPDT` 的脚名是 `314/GND/U29C`），
+  按 Name 聚合中位偏移反而把 79 个对的尖端改坏成 12 个。
+* **IC 右列脚位不可从图推**：case 1 U1 GT 左列外伸 15px / **右列 20px**，我们统一 `PIN_OUT_BOX=12`
+  ⇒ 右列 8px 级 `tip_position` 失分（官方报告 case 1 的 `U1 pin_17/55/58/80` = 8.0~8.06px）。灰度图（case 1 `maxRGBdiff 9`）
+  逐行剖面显示：左列各脚 x930..961 整段近黑（导线把桩盖住）、右列自框边 1313 起即为导线灰（26/50/130 三档），
+  **桩端没有任何可测特征**；彩色 case 里红桩/绿导线也证不出统一修正量（`_pincolour.py`：`flat12` 命中 82.9% vs `red_end` 36.8%）。
+
+**GT 边口径（供 wire 通道后续用）**：10GT 的 639 条边**全是 2 点直线**（avg 2.00 点/边），
+长度 p50 79 / p90 158 / max 688px，**<20px 只占 1.4%**（⇒ `STAGE2_MIN_EDGE_LEN=20` 不会误杀真边）；
+只有 **11.3%** 的 GT 边内部含本网引脚点（⇒ GT 基本在引脚/结点处切边）。
+* **`STAGE2_EDGE_MERGE`（共线碎边焊接）官方尺重测 = 否证**：`STAGE2_EDGE_MERGE=1` 的 `kAnvEM` **57.57** vs 关 **58.51**
+  （wire f1 0.2496 → **0.1554**，导线 tp 187 → **101**）⇒ 保持默认 0（旧结论在官方尺上成立，此条不再是待办）。
+  基线 `work\_fast_base\kAnvEM.json`、产物 `work\_fast_out_kAnvEM`。
+我们交付臂 **842 条边同样全是 2 点**，长度分布几乎重合（p50 80.7 / p90 180.3），
+**5px 内同端点的重复边只有 21 条（2.5%）** ⇒ 「边数 842 vs 639」不是重复，而是我们多切/多生成的 203 条；
+但 `_wirepost.py` 的 `cut`（在自己端点处切）已实测 −0.058 ⇒ 切点拿不到 GT 的切点就没用。
+
 ## 3. 四项分解（官方 9 张）
 
 | 臂 | 总分 | component (30) | pin (25) | netH (35) | netL (10) |

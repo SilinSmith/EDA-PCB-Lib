@@ -492,6 +492,14 @@ PIN_STAMP_SPAN = {"fuse": 21.0}
 PIN_STAMP_DEFAULT_SPAN = 20.0
 # 关掉就退回「用 stage1 的附着点当引脚点位」（旧行为）
 PIN_STAMP_ON = env_on("STAGE2_PIN_STAMP", "1")
+# ★ 两脚二极管/LED 的官方脚名**不是号码**：`pin_1 = "K"`（阴极）、`pin_2 = "A"`（阳极），
+# 只有 r/c/l 才是 `(1→"1", 2→"2")`。依据：400 张训练 GT 的 d/led 元件全量统计
+# （d 192+192、led 177+177，各占该类 100%）与 10GT 全量一致。
+# 官方 protocol 的 `pin_match` 明确要求 `pinname exact`（见
+# `20261009引入/.../report/submission/*/1.json` 的 protocol 段），贴章路径原来把号码
+# 直接当脚名写 ⇒ 每个 d/led 的两脚各吃一次 `pin_name` 失分（10GT 共 8 个）。
+PIN_NAME_ALIAS = {("d", "1"): "K", ("d", "2"): "A",
+                  ("led", "1"): "K", ("led", "2"): "A"}
 # ★★ 每一侧只保留「沿轴投影绝对值最大」的候选（最贴轴的那个），旁侧幻影脚不发号。
 # 2026-10 实测（`work/tools/dev/_stampchk.py`，官方 10 张）：旧逻辑按候选顺序贪心
 # 发号，`pts` 的 `side=[F,F,T,F]` 会变成 `[2,1,2,1]` —— **两个真脚都拿到 `2`**、
@@ -876,7 +884,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                     continue          # 旁侧幻影候选：不发号、不注册槽位（保持 k 对齐）
                 num, xy = _item
                 _g["pin_%s" % num] = {
-                    "pinname": num,
+                    "pinname": PIN_NAME_ALIAS.get((ctype, num), num),
                     "point": {"x": round(float(xy[0]), 2),
                               "y": round(float(xy[1]), 2)}}
                 num_of[(cid, k)] = num
@@ -1020,6 +1028,9 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                     and not BOX_PIN_NEED_NAME_LATE and not r.get("nm")):
                 continue
             nm = r["nm"] or num
+            # 非贴章路径上的 d/led 同样必须给官方脚名（K/A），否则 `pin_name` 必失分
+            if ctype in ("d", "led"):
+                nm = PIN_NAME_ALIAS.get((ctype, str(num)), nm)
             # ★ **规则 B（改名）**：这个桩的**号读到了**（`num` 是 1..999 的整数，或者
             # 规则 A 刚从库里补出来的号），但名字要么空、要么不在库里该型号的名字
             # 集合里 —— 那就用库的 `(型号, 号) → 名`，**只有该号唯一对应一个名字**时

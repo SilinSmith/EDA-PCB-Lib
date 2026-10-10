@@ -145,10 +145,17 @@ def main(argv=None) -> int:
         for key, (gname, gpt) in gp.items():
             ck, pid = key
             if ck not in pc:                      # 元件键没配上 ⇒ 结构上拿不到
-                bump(P, "gt_unkeyable" if ck.startswith(UNKEYED) else "owner_missing")
+                if ck.startswith(UNKEYED):
+                    bump(P, "gt_unkeyable")
+                else:
+                    bump(P, "owner_missing")
+                    examples.setdefault("owner", []).append(
+                        (case, ck, pid, str(gname)))
                 continue
             if (ck, pid) not in pp:
                 bump(P, "pin_not_emitted")
+                examples.setdefault("notemit", []).append(
+                    (case, ck, pid, str(gname), (round(gpt[0], 1), round(gpt[1], 1))))
                 continue
             pname, ppt = pp[(ck, pid)]
             d = ((gpt[0] - ppt[0]) ** 2 + (gpt[1] - ppt[1]) ** 2) ** 0.5
@@ -191,6 +198,8 @@ def main(argv=None) -> int:
     for name, title in (("miskeyed", "探测到了但位号读错"),
                         ("nearby", "位置近但框不对"),
                         ("notdet", "根本没有检测框"),
+                        ("owner", "元件键没配上（owner_missing）"),
+                        ("notemit", "GT 有、我方完全没发这个脚"),
                         ("tip", "尖端位置 >5px"),
                         ("pname", "脚名不符")):
         rows = examples.get(name) or []
