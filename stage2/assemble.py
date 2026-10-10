@@ -380,6 +380,54 @@ EDGE_SNAP = float(os.environ.get("STAGE2_EDGE_SNAP", "10.0"))
 EDGE_JOIN = float(os.environ.get("STAGE2_EDGE_JOIN", "40.0"))     # 端点相接容差（px）
 EDGE_ANG = float(os.environ.get("STAGE2_EDGE_ANG", "6.0"))        # 共线夹角容差（度）
 
+# ★ 跨网焊接（`STAGE2_NET_WELD`，默认 **16 = 开**；`=0` 关）。
+#   （2026-10-14 转正：官方 10 张 **+1.49/张**、val 19 张 −0.003/张。）
+#
+# 为什么：`netH` 的失分分层（`eda-pcb/tools/diag/_netloss.py`）里 ③「键号都在、却没并进
+# 正确的网」占 **34/487 = 7.0%**，主体是**我们的网太碎**（pred_count 182 > gt_count 160）。
+# 其中一批碎片的**边端点相距只有 6~16px** —— 机制是骨架在「净图擦掉文字框」的位置断开，
+# 或者两个分叉点各自比真结点短 8~10px（`snap_edge_ends` 的长注释记过同一现象）。
+# ⇒ 若两条网各有边的**端点**落在 6~16px 内、连线又**穿过一个文字框**、且**不穿任何元件框**，
+#    它们多半本来就是同一条导线 ⇒ 并成一条（只并网，不动引脚取值）。
+#    官方 10 张的净效果全部落在 `net_hypergraph`（0.7162 → **0.7587**），
+#    元件/引脚通道逐位不变。
+#
+# 离线读数（在 `work/_fast_out_nudef` 的最终 pred 上按同一规则改写网络后重打分，
+# 尺子 = protocol2 即官方软 Dice 口径；`work/_netpin.py --rule gap`）：
+#   官方 10 张：base **76.20** → 规则 **77.69（+1.49/张）**，**6 张变好、0 张变差**
+#     （case 10 +3.77 / 3 +3.76 / 7 +2.77 / 6 +2.50 / 4 +1.06 / 2 +1.01；1/5/8/9 不动）
+#   派生 val 19 张（留出集）：30.33 → 30.27 / 30.18（**−0.005~−0.008/张**，2 好 2 坏）⇒ 中性。
+# 端到端（`work/_weld_ab.ps1` → `work/_weld_ab3.out`；默认口径复验 `work/_weld_def.ps1`
+#   → `work/_weld_def.out`）：
+#   `weld0`（=0）**76.20** 与 `nudef2` 逐位相同 ✓；`weld1`（=16）**77.69**（与离线预测
+#   逐位一致）；`wddef`（默认）**78.07**（= 77.69 + case 7 的 VLM 引脚名方差 +3.85/10）；
+#   `wddefno`（`--no-vlm`，默认）**71.00**（对比 `nudefno2` 69.52 ⇒ **+1.48**）。
+#   ⚠️ 参考噪声：case 7 的 `/pins/U1/pin_4/pinname` 在 `AGND`/`GND` 之间**跨跑次翻转**
+#   （VLM 采样方差），单这一处就值 **±0.38** —— 所有 <0.4 的总分差都不可信。
+# ⚠️ 三个条件都**必须**，逐个去掉的读数（同两批数据）：
+#   * 去掉「穿文字框」：官方 10 仍 +1.49，val 19 **−0.19/张**
+#   * 再去掉「不穿元件框」：val 19 **−0.17/张**（相邻两脚的小元件，如 LED，被当成一条线）
+#   * 再去掉 `NET_WELD_COS`（即允许平行同向）：val 19 **−0.38/张** —— 大连接器相邻引脚的
+#     平行线间距正好 10px，是这条规则最大的假阳来源（cos ≈ +1.00）
+#   * 带宽放到 20px：官方 10 反而 **−2.35/张**（开始把不同网并到一起）
+#   * `NET_WELD_MIN` 抬到 10（即只焊 10~16px）：官方 10 +0.86/张、val 19 −0.003/张
+#     ⇒ 更保守但少赚一半，维持 6。
+# 端点吸附（`EDGE_SNAP`）**必须先做**：离线实验就是在吸附后的最终文档上量的。
+#
+# ★★ 实装时踩到的两个坑（都已在代码里修掉，端到端只拿到 +0.39 就是它们造成的）：
+#   ① `build_doc` 在 `out_nets` 那段已经 `pop("_refs")`（:1275），那里之后 `_merge_nets`
+#      只读 `_refs` ⇒ 恒为空 ⇒ 「边并了、成员只剩 root 一份」。修法：`_merge_nets` 改成
+#      「`_refs` ∪ hyperGraph 解析出的引用」。
+#   ② `_merge_nets` **不重建 `hyperGraph`**（沿用 `base = dict(nets[root])` 的那份），
+#      在 `out_nets` 之后调用时评测只读 `hyperGraph` ⇒ 修法：`weld_nets` 收尾时用并集
+#      引用重建一次。两个坑合起来让管线只拿到 **+0.39**（76.20 → 76.59，而离线是
+#      +1.49/张 = 77.69）—— 诊断见 `work/_weldcmp.py` 与 `work/_weldx2.py`
+#      （同一份文档上「探针合并」与「A.weld_nets」逐位对比）。
+NET_WELD = float(os.environ.get("STAGE2_NET_WELD", "16"))         # 0 = 关；>0 时当「最大间距」用
+NET_WELD_MIN = float(os.environ.get("STAGE2_NET_WELD_MIN", "6.0"))
+NET_WELD_COS = float(os.environ.get("STAGE2_NET_WELD_COS", "0.5"))
+NET_WELD_TPAD = float(os.environ.get("STAGE2_NET_WELD_TPAD", "3.0"))
+
 # ★ 端点吸附（T 型结解算）—— `net_line` 唯一真正有效的杠杆，2026-10 新增。
 # `work/tools/diag/_nledge.py` 把某一对配对 net 的 GT 边与我方边**逐条并排**打印，
 # 真相是：**每条边的形状都对，端点却普遍偏 7~13px**，而官方 `metrics._seg_distance`
@@ -698,7 +746,17 @@ def _merge_nets(nets: Dict[str, dict], groups: Dict[str, List[str]]) -> Dict[str
             # (元件, 引脚) 引用全部从 hyperGraph 里消失 —— 而
             # net_hypergraph 的 tp 正是按 `|pred_pins ∩ gt_pins|` 加的，
             # 合并本该让 tp 变多，旧写法反而把它们丢了。
-            for r in nets[m].get("_refs") or []:
+            #
+            # ★★ 2026-10-14 补：`build_doc` 在 `out_nets` 那段**已经 `pop("_refs")`**
+            # （:1255），而 `weld_nets`（跨网焊接）正是在那之后调用 ⇒ 只读 `_refs`
+            # 的写法在那里恒为空，合并出来的网**边并了、成员只剩 root 一份**
+            # （实测 `work/_weldcmp.py` case 4：15 条边但成员只有 `{C7.1}`，
+            # 端到端只拿到 +0.39 而不是离线预测的 +1.49/张）。
+            # 因此这里改成「`_refs` ∪ `hyperGraph` 解析出的引用」：正常流程里两者
+            # 同源（:1244 同一个 `refs` 写两处）⇒ 近似空操作；只有 `_refs` 被摘掉
+            # 或过期时才真正起作用（`merge_shared_pins` 的 `dict(nets[members[0]])`
+            # 也会留下过期的 `_refs`，同一族的坑）。
+            for r in list(nets[m].get("_refs") or []) + _hg_refs(nets[m].get("hyperGraph", "")):
                 t = tuple(r)
                 if t not in seen_ref:
                     seen_ref.add(t)
@@ -797,7 +855,17 @@ def merge_by_label(nets: Dict[str, dict]) -> Dict[str, dict]:
             # (元件, 引脚) 引用全部从 hyperGraph 里消失 —— 而
             # net_hypergraph 的 tp 正是按 `|pred_pins ∩ gt_pins|` 加的，
             # 合并本该让 tp 变多，旧写法反而把它们丢了。
-            for r in nets[m].get("_refs") or []:
+            #
+            # ★★ 2026-10-14 补：`build_doc` 在 `out_nets` 那段**已经 `pop("_refs")`**
+            # （:1255），而 `weld_nets`（跨网焊接）正是在那之后调用 ⇒ 只读 `_refs`
+            # 的写法在那里恒为空，合并出来的网**边并了、成员只剩 root 一份**
+            # （实测 `work/_weldcmp.py` case 4：15 条边但成员只有 `{C7.1}`，
+            # 端到端只拿到 +0.39 而不是离线预测的 +1.49/张）。
+            # 因此这里改成「`_refs` ∪ `hyperGraph` 解析出的引用」：正常流程里两者
+            # 同源（:1244 同一个 `refs` 写两处）⇒ 近似空操作；只有 `_refs` 被摘掉
+            # 或过期时才真正起作用（`merge_shared_pins` 的 `dict(nets[members[0]])`
+            # 也会留下过期的 `_refs`，同一族的坑）。
+            for r in list(nets[m].get("_refs") or []) + _hg_refs(nets[m].get("hyperGraph", "")):
                 t = tuple(r)
                 if t not in seen_ref:
                     seen_ref.add(t)
@@ -1247,6 +1315,9 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # ★ 端点吸附放在**最后**：这时 net 的成员已经定下来，同 net 里能拿来当
         # 结点的邻居最全（离线实验就是在最终文档上做的，顺序必须一致）。
         snap_edge_ends(out_nets, EDGE_SNAP, EDGE_SNAP_ANG)
+    if NET_WELD > 0:
+        # ★ 跨网焊接（默认关）必须在**吸附之后**：离线实验就是在吸附后的最终文档上量的。
+        out_nets = weld_nets(out_nets, components, stage1.get("texts") or (), H)
     if NET_DROP_PWRONLY:
         # ★ 「整条网只有电源/地符号」的孤立网：GT 里不存在这种网（每个电源符号都挂在
         # 一条有真实元件的网络上），所以它只可能是 FP。**必须放在全部合并之后**——
@@ -1275,6 +1346,122 @@ RAIL_NAMES = frozenset((
     "vcc", "vdd", "vddd", "vdda", "vddio", "3v3", "5v", "12v",
     "vbat", "vbus", "vin", "vout"))
 RAIL_ATTACH = env_on("STAGE2_RAIL_ATTACH", "1")
+
+
+def _net_seg_pairs(net: dict) -> List[tuple]:
+    """网络里每条边的 (首点, 尾点)（官方 `net_line_f1` 也只取这两点）。"""
+    out: List[tuple] = []
+    for pts in (net.get("edges") or {}).values():
+        if isinstance(pts, list) and len(pts) >= 2:
+            try:
+                out.append(((float(pts[0]["x"]), float(pts[0]["y"])),
+                            (float(pts[-1]["x"]), float(pts[-1]["y"]))))
+            except (KeyError, TypeError, ValueError):
+                continue
+    return out
+
+
+def _bridge_hits(a, b, boxes, pad: float) -> bool:
+    """端点 a→b 的直线（取 1/6…5/6 五个采样点）是否落在任一框内。"""
+    if not boxes:
+        return False
+    for t in range(1, 6):
+        f = t / 6.0
+        x = a[0] + (b[0] - a[0]) * f
+        y = a[1] + (b[1] - a[1]) * f
+        for (x1, y1, x2, y2) in boxes:
+            if x1 - pad <= x <= x2 + pad and y1 - pad <= y <= y2 + pad:
+                return True
+    return False
+
+
+def weld_nets(nets: Dict[str, dict], components: Dict[str, dict],
+              texts: Sequence = (), H: float = 0.0) -> Dict[str, dict]:
+    """★ 跨网焊接（`STAGE2_NET_WELD`）：把「端点相距 6~16px、连线穿文字框、不穿元件框、
+    且两段不平行同向」的两条网络并成一条。完整依据与逐条件读数见 `NET_WELD` 的长注释。
+
+    只动网络结构（`_refs`/`edges` 取并集），不碰任何引脚取值 ⇒ 引脚/元件通道逐位不变。
+    """
+    if NET_WELD <= 0 or len(nets) < 2:
+        return nets
+    segs = {k: _net_seg_pairs(v) for k, v in nets.items()}
+    keys = [k for k in nets if segs[k]]
+    if len(keys) < 2:
+        return nets
+    tboxes: List[tuple] = []
+    for t in (texts or ()):
+        b = (t or {}).get("bbox_img") if isinstance(t, dict) else None
+        if b and len(b) == 4:
+            # stage1 的 `bbox_img` 是图像帧（y 向下），文档帧是 y 向上。
+            tboxes.append((float(b[0]), H - float(b[3]), float(b[2]), H - float(b[1])))
+    cboxes: List[tuple] = []
+    for c in (components or {}).values():
+        b = (c or {}).get("bbox")
+        if b and len(b) == 4:
+            cboxes.append((float(b[0]), float(b[1]), float(b[2]), float(b[3])))
+    gap, gmin = NET_WELD, NET_WELD_MIN
+    parent: Dict[str, str] = {k: k for k in nets}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    n_join = 0
+    for _i in range(len(keys)):
+        for _j in range(_i + 1, len(keys)):
+            ka, kb = keys[_i], keys[_j]
+            if find(ka) == find(kb):
+                continue
+            best = None
+            bd = gap + 1.0
+            for ea in segs[ka]:
+                for eb in segs[kb]:
+                    for ua in ea:
+                        for ub in eb:
+                            d = math.hypot(ua[0] - ub[0], ua[1] - ub[1])
+                            if d < bd:
+                                bd, best = d, (ea, eb, ua, ub)
+            if not best or bd > gap or bd < gmin:
+                continue
+            ea, eb, ua, ub = best
+            va = ea[0] if ua is ea[1] else ea[1]
+            vb = eb[0] if ub is eb[1] else eb[1]
+            da = (ua[0] - va[0], ua[1] - va[1])
+            db = (ub[0] - vb[0], ub[1] - vb[1])
+            na = math.hypot(da[0], da[1]) or 1.0
+            nb = math.hypot(db[0], db[1]) or 1.0
+            cos = (da[0] * db[0] + da[1] * db[1]) / (na * nb)
+            if cos > NET_WELD_COS:
+                continue
+            if not _bridge_hits(ua, ub, tboxes, NET_WELD_TPAD):
+                continue
+            if _bridge_hits(ua, ub, cboxes, 0.0):
+                continue
+            ra, rb = find(ka), find(kb)
+            if ra != rb:
+                parent[rb] = ra
+                n_join += 1
+    if not n_join:
+        return nets
+    groups: Dict[str, List[str]] = {}
+    for k in nets:
+        groups.setdefault(find(k), []).append(k)
+    out = _merge_nets(nets, groups)
+    # ★★ `_merge_nets` 只把 `_refs`/`edges` 并起来，**不重建 `hyperGraph`**
+    # （`base = dict(nets[root])` 把 root 的 `hyperGraph` 原样留下）。这条在
+    # `build_doc` 的 `out_nets` 阶段之前无所谓 —— 那里反正会在 :1268 用 `_refs`
+    # 重建一次；但 `weld_nets` 是**在那之后**调用的，此时 `_refs` 已不是出口、
+    # 评测只读 `hyperGraph` ⇒ 并出来的网「边并了、成员只剩 root 一份」。
+    # 实测（`work/_weldx2.py` case 10）：探针合并 `+3.77` vs 管线 `+1.68`，
+    # 差异全部来自这里；补上重建后两者成员集合逐位一致。
+    for _v in out.values():
+        _refs = [tuple(_r) for _r in (_v.get("_refs") or [])]
+        if not _refs:
+            _refs = _hg_refs(_v.get("hyperGraph", ""))
+        _v["hyperGraph"] = "(" + ",".join("%s.%s" % t for t in _refs) + ")"
+    return out
 
 
 def attach_orphan_rails(nets: Dict[str, dict], pins: Dict[str, dict]) -> Dict[str, dict]:
@@ -1406,6 +1593,7 @@ def merge_shared_pins(nets: Dict[str, dict]) -> Dict[str, dict]:
             for ev in (nets[n].get("edges") or {}).values():
                 edges["edge_%d" % (len(edges) + 1)] = ev
         rec["edges"] = edges
+        rec["_refs"] = refs          # ★ 与 hyperGraph 保持一致：`dict(nets[members[0]])`
         rec["hyperGraph"] = "(" + ",".join("%s.%s" % t for t in refs) + ")"
         out["net_%d" % (len(out) + 1)] = rec
     return out
