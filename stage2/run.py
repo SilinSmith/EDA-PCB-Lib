@@ -45,6 +45,7 @@ PIN_TEXT_CROP = env_on("STAGE2_PIN_TEXT_CROP", "1")
 PIN_LANE_CROP = env_on("STAGE2_PIN_LANE_CROP", "1")
 PIN_LANE_CLEANUP = os.environ.get("STAGE2_PIN_LANE_CLEANUP", "light")
 PIN_NAME_OCR = os.environ.get("STAGE2_PIN_NAME_OCR", "auto").strip().lower()
+PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "1")
 # 这些是「参数」类元件，它们旁边没有长器件名，不参与生长
 _VALUE_TYPES = {"r", "c", "l", "fuse", "crystal", "crystal_2pin",
                 "crystal_3pin", "crystal_4pin"}
@@ -241,6 +242,10 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                                include_numbers=roles is None or "pin_number" in roles,
                                cleanup=PIN_LANE_CLEANUP, min_conf=min_conf)
         reads = list(reads) + extra
+    if do_ocr and PIN_NUMBER_REPAIR and (roles is None or "pin_number" in roles):
+        from .pin_number_reading import read_pin_numbers
+        reads = list(reads) + read_pin_numbers(doc, reads, engine, bgr,
+                                               min_conf=min_conf)
     if do_ocr and PIN_NAME_OCR != "off" and (roles is None or "pin_name" in roles):
         from .pin_name_reading import read_pin_names
         reads = list(reads) + read_pin_names(doc, reads, bgr, mode=PIN_NAME_OCR,

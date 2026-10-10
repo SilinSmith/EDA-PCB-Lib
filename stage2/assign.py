@@ -707,6 +707,72 @@ def _preferred_name_observation(candidate, cid, box, pins, evidence):
     return index
 
 
+def _preferred_number_observation(candidate, cid, box, pins, evidence):
+    """Only matching, current, complete digit views can override this row.
+
+    PP and CRNN scores are not comparable. The override is local to its
+    verified colour contact; all other observations remain available elsewhere.
+    """
+    meta, reads = candidate.get("pin_number_ocr"), candidate.get("reads") or {}
+    if (candidate.get("source") != "color_pin_number_ppocr"
+            or not candidate.get("number_only") or set(reads) != {"pin_number"}
+            or not isinstance(meta, dict) or meta.get("backend") != "ppocr_v4_direct"
+            or meta.get("accepted") is not True or meta.get("held_reason")
+            or "glyph_integrity_unresolved" in meta.get("flags", [])):
+        return None
+    got = _best_read(reads, "pin_number", fit_pinnum)
+    if (not got or not got[1].isascii() or not got[1].isdigit()
+            or not 1 <= int(got[1]) <= 999 or not math.isfinite(got[2]) or got[2] < .90):
+        return None
+    variants = meta.get("selected_views")
+    if not isinstance(variants, list) or len(variants) != 2:
+        return None
+    for padding, view in zip((2, 4), variants):
+        if not isinstance(view, dict):
+            return None
+        try:
+            confidence = float(view.get("confidence", 0))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if (view.get("padding") != padding or view.get("text") != got[1]
+                or not math.isfinite(confidence) or confidence < .90):
+            return None
+    index = _target_index(candidate, cid, pins, evidence)
+    if index in (None, -1):
+        return None
+    target = candidate["pin_target"]
+    if target.get("point_img") is None or target.get("anchor_img") is None:
+        return None
+    normalized = structmatch.normalize_number_evidence(pins, evidence)
+    sides = structmatch.confirmed_frame_sides(box, evidence)
+    item = {"bbox": candidate["bbox"], "geometry_bbox": candidate.get("geometry_bbox"),
+            "center": candidate["center"], "target_pin": index}
+    edge = target["edge"]
+    if (not sides or not structmatch._number_faces_edge(item, box, edge, sides)
+            or structmatch._number_axis_gap(item, edge, pins[index])
+            > structmatch._number_axis_tolerance(item, edge)):
+        return None
+    rect = structmatch._number_rectangle(item)
+    if rect is None:
+        return None
+    # Legacy crossing boxes may keep their old geometric fallback, but the
+    # new provider receives only an entirely external glyph. Its priority must
+    # enforce that same contract rather than merely a majority-outside test.
+    anchor = target["anchor_img"]
+    outside = {"left": rect[2] <= anchor[0] + .001,
+               "right": rect[0] >= anchor[0] - .001,
+               "top": rect[3] <= anchor[1] + .001,
+               "bottom": rect[1] >= anchor[1] - .001}
+    if not outside[edge]:
+        return None
+    tangent = 1 if edge in ("left", "right") else 0
+    if any(other != index and ev.get("trust") == "trusted" and ev.get("edge") == edge
+           and rect[tangent] < pins[other][tangent] < rect[tangent + 2]
+           for other, ev in enumerate(normalized)):
+        return None
+    return index
+
+
 def _digit_entities(cands, cid, box, pins, evidence):
     """Link original OCR samples to clean observations of the same black glyph."""
     if not PIN_DIGIT_ENTITY or not evidence:
@@ -1159,6 +1225,11 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                                  if c["type"] == "box" else None)
                     if preferred is None:
                         continue
+                if slot == "number" and t.get("source") == "color_pin_number_ppocr":
+                    preferred = (_preferred_number_observation(t, cid, c["bbox"], plist, _pe)
+                                 if c["type"] == "box" else None)
+                    if preferred is None:
+                        continue
                 entity = digit_entities.get(tuple(t["bbox"])) if _number_guard else None
                 geometry = (t.get("geometry_bbox") or (entity or {}).get("geometry_bbox")) if _number_guard else None
                 fresh_number = (_number_guard and PIN_DIGIT_ENTITY
@@ -1195,7 +1266,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 if target_index is not None:
                     item["target_pin"] = target_index
                 if preferred is not None:
-                    item["preferred_name_pin"] = preferred
+                    item["preferred_name_pin" if slot == "name" else "preferred_number_pin"] = preferred
                 pool.append(item)
             if not pool:
                 continue
@@ -1205,6 +1276,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             # own pin. Old reads stay available to every other role/contact.
             if slot == "name":
                 pool.sort(key=lambda cc: "preferred_name_pin" not in cc)
+            elif _number_guard:
+                pool.sort(key=lambda cc: "preferred_number_pin" not in cc)
             # ★ 候选池去重：同一块文字被重复检出两次时，两个副本会被对齐到两根
             # 不同的脚上（其中一根必然是错的）。见 `PINNUM_DUP` 的注释。
             if PINNUM_DUP > 0 and len(pool) > 1:
@@ -1219,6 +1292,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 pool = _keep
             preferred_names = {cc["preferred_name_pin"] for cc in pool
                                if "preferred_name_pin" in cc}
+            preferred_numbers = {cc["preferred_number_pin"] for cc in pool
+                                 if "preferred_number_pin" in cc}
             pool.sort(key=lambda x: -x["score"])
 
             # ★★ **引脚列窗口引导**（`stage1/pincol.py`，默认开）。
@@ -1268,8 +1343,11 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                          _ev=_slot_pe,
                          _numeric=_number_guard,
                          _preferred=preferred_names,
+                         _preferred_numbers=preferred_numbers,
                          _dec=PINNUM_DECAY if slot == "number" else 20.0):
                 if not _numeric and pi in _preferred and c.get("preferred_name_pin") != pi:
+                    return 0.0
+                if _numeric and pi in _preferred_numbers and c.get("preferred_number_pin") != pi:
                     return 0.0
                 if _numeric:
                     e = structmatch.pin_edge(_bb, _pl, pi, _ev)

@@ -412,7 +412,8 @@ def crossing_number_candidate(cand: dict, bbox: Sequence[float], pins,
 def deduplicate_number_candidates(pool: Sequence[dict]) -> List[dict]:
     """Collapse same-number, strongly overlapping OCR boxes, not nearby rows."""
     keep = []
-    for cand in sorted(pool, key=lambda item: -float(item.get("score", 0.0))):
+    for cand in sorted(pool, key=lambda item: (
+            "preferred_number_pin" not in item, -float(item.get("score", 0.0)))):
         rect = _candidate_rectangle(cand)
         duplicate = False
         if rect is not None:
@@ -476,7 +477,7 @@ def rebind_numbers(bbox: Sequence[float], pins: Sequence[Sequence[float]],
                     continue
                 edge = edges[pi]
                 gap = _number_axis_gap(cand, edge, pins[pi])
-                if (gap <= _number_axis_tolerance(cand, edge)
+                if (score_of(cand, pi) > 0 and gap <= _number_axis_tolerance(cand, edge)
                         and _number_faces_edge(cand, bbox, edge, frames)):
                     allowed[(ci, pi)] = True
             eligible = [pi for pi in active if (ci, pi) in allowed]

@@ -1,8 +1,9 @@
-"""Optional, verified PP-OCR recognition of isolated pin *names* only.
+"""Optional, verified PP-OCR recognition of isolated pin text.
 
 The provider receives the exact uint8 gray image already normalized to the
 CRNN's 32px input height. It does not extract glyphs, choose a direction, bind
-pins, read numbers or repair strings. Detection/classification models and
+pins or repair strings. Numbers use a separate explicit original-glyph API.
+Detection/classification models and
 network downloads are never used here.
 """
 from __future__ import annotations
@@ -86,6 +87,24 @@ class PinNameOCR:
             raise ValueError("shared gray input must have shape [32, width]")
         if not 1 <= gray.shape[1] <= SHARED_GRAY_MAX_WIDTH:
             raise ValueError("shared gray input width must be in [1, 384]")
+        return self._read_gray(gray, role="pin_name", version=SAMPLING_VERSION,
+                               input_prefix="shared_gray_input")
+
+    def read_glyph(self, gray):
+        """Read original number pixels, without CRNN's intermediate resampling.
+
+        The caller supplies the complete isolated glyph plus synthetic white
+        margins. PP performs its own one-step 48px normalization. This API
+        deliberately cannot change the established gray32 name path.
+        """
+        if (not isinstance(gray, np.ndarray) or gray.dtype != np.uint8
+                or gray.ndim != 2 or not all(1 <= n <= 384 for n in gray.shape)):
+            raise ValueError("number glyph must be a nonempty uint8 gray array, at most 384px per axis")
+        return self._read_gray(gray, role="pin_number",
+                               version="ppocr-v4-direct-glyph-single-v1",
+                               input_prefix="original_gray_input")
+
+    def _read_gray(self, gray, *, role, version, input_prefix):
         # Replicate grayscale channels without introducing source pixels or
         # sharing writable storage with the caller.
         color = np.repeat(gray[:, :, None], 3, axis=2)
@@ -120,11 +139,11 @@ class PinNameOCR:
             "text": text,
             "confidence": confidence,
             "sampling": {
-                "version": SAMPLING_VERSION,
+                "version": version,
                 "strategy": "single",
-                "role": "pin_name",
-                "shared_gray_input_shape": list(gray.shape),
-                "shared_gray_input_sha256": _sha(gray),
+                "role": role,
+                input_prefix + "_shape": list(gray.shape),
+                input_prefix + "_sha256": _sha(gray),
                 "model_input_shape": list(batch.shape),
                 "model_input_dtype": str(batch.dtype),
                 "model_input_sha256": model_input_hash,
