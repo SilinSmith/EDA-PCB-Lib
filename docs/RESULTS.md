@@ -2314,6 +2314,12 @@ work\_fast_out_nresv1 --split 10GT`）是 **tp=78 / 缺号=21 / 多号=3 / 名�
 
 ### 5.17 ③ 网成员缺口：`fn 165` 里 116 条是**不可达**的无名电源/地符号（`DROP_UNKEYED` 保持 1）（2026-10）
 
+> ⚠️ **本节结论已于 2026-10-14 被 §5.20 推翻**：这里量的那把尺子（`schematic_parser/official.py`）是
+> **2026-10-09 判题机的复刻**，而业主已认定那台判题机写错（bbox 5px 应为 20px），且它与官方书面口径
+> （题面 + 官方问答：`∅NNN` **走坐标匹配**、非 box 引脚**不计分**）另有两条冲突。按书面口径重打，同一改动是
+> **+12.49**（官方 10 张），完全不是下面这些 −8.86 / −10.48 的读数。**正文保留作历史证据**，结论与
+> 「保持 `DROP_UNKEYED=1`」的操作**已作废**；`DROP_UNKEYED` 的默认现在是 **0**。
+
 **先把尺子对齐，否则会得出相反结论。** 用 `work\tools\dev\_netmiss.py --run work/_fast_out_nresv1`
 （官方 10 张、VLM 交付臂）把 `net_hypergraph` 的缺口逐条归类：`gt_pins 487 pred_pins 354 tp 322
 **fn 165**（33.9% 的 GT 成员没接上）` ⇒ `no_comp 116` / `no_pin 20` / `other 28` / `unnet 1`；
@@ -2469,6 +2475,87 @@ case 7 −0.33；val 19：`0029 +3.68 / 0151 +1.09 / 0176 +1.05 / 0011 +0.71 / 0
 
     python -X utf8 tools\eval\fast.py --cases 1,10,2,3,4,5,6,7,8,9 --engine official --out ad1 --save ad1
     python -X utf8 tools\eval\fast.py --cases 1,10,2,3,4,5,6,7,8,9 --engine official --no-vlm --out adno
+
+**★ 尺子复核（2026-10-14，换成 §5.20 的书面口径尺 `protocol`）**：官方 10 张 `work\_fast_out_lr1`
+**69.4341** → `work\_fast_out_ad1` **69.6940（+0.2599**，pin 0.7163→0.7252、tp 84→87**）**；
+val 19 张 `work\_fast_out_lrv1` 20.0799 → `work\_fast_out_ad1val` **20.2692（+0.1893）**
+⇒ **本节的结论在新尺子上依然成立**（换尺只挪绝对值，不翻方向）。
+
+---
+
+### 5.20 ★★ 尺子换血：判题机复刻尺（`official.py`）降级为历史对照，主尺改成**官方书面口径**；`DROP_UNKEYED` 翻成 0（输出无名电源/地符号）= 官方 10 张 **+12.49**（2026-10-14）
+
+#### 起因：我们手里其实有那次判分的**原始报告**
+
+`Y:\workspace\EDA\20261009引入\theSixthSubmission_44.29\`（我们队第 6 次提交，官方判分 **44.291703**）里的
+`scoring_result (5)\`：`scores.txt`（`component_f1 0.487847 / pin_f1 0.45821 / connectivity_f1 0.496836 /
+wire_f1 0.08118`）、`summary.json`（`threshold_px = 5`、权重 `.30/.25/.35/.10`、逐案四通道 F1）、
+`report\submission\20261009T140206Z\<case>.json`（每个 case 的 `protocol` + 逐通道 tp/fp/fn + `error_examples`）。
+把这份报告与题面/QA 对表，发现那台判题机**三处都不照书面口径**：
+
+| 项 | 官方**书面**口径 | 2026-10-09 判题机 |
+|---|---|---|
+| bbox 容差 | 题面 `docs\problem_statement.txt:179` **20px** | **5px**（`protocol.spatial_match_threshold_px = 5.0`）★ 业主已认错（§5.18） |
+| 无名元 `∅NNN` | 官方问答 评测 Q5「Vcc 和 gnd 是 ∅，**直接是坐标匹配**」 | **键精确**：case 1 的 8 个 GT `∅`（5 gnd + 3 v）全记 `component.missing`，我们的 8 个 `pNNN` 全记 `component.extra` |
+| `pin_f1` 分母 | 官方问答 评测 Q2「非 box 类型元器件 pin name, pin number 不参与评分」 | **全引脚都算**（case 1 `pin tp 23 / fp 50 / fn 37`；样例 `["C1513","pin_1"]` 记 `extra`、`["U1","pin_17"]` 记 `tip_position 8.0px`） |
+
+新探针 `work\tools\dev\_ruler_grid.py` 把 `EvalConfig` 的六个维度做成网格、与官方宏平均对表：唯一对得上的是
+`bbox 5 / unkeyed 'off' / pin_box_only False / collapse False / micro / compare_text True`
+（`pin 0.4582` 与官方 `0.45821` **逐位吻合**，agg err 0.2113）；任何 `unkeyed='gt'` 的组合 comp 都 ≥0.7593，
+而官方 comp 是 0.4878 ⇒ **那台判题机 = 单一 5px 阈值 + 键精确 + 全引脚**。
+
+⇒ `schematic_parser/official.py` 复刻的是**那台写错的机器**，不是官方口径；它顶部的第 1 条断言
+（「无名元不参与坐标匹配」）正是从那次 `error_examples` 反推来的。
+
+#### 为什么按书面口径定默认
+
+1. GT 的 `∅` 号来自**源工程对象计数器**（case 1 的 `109/113/117/121/125` 等差 +4、脚号 ≈ 元件号 −2）⇒ 图上不可恢复，
+   任何判题机**只能**按坐标配这批元件，否则它们对所有队伍恒 `fn`；
+2. 官方问答 `docs\QA_2025.txt` 是发给参赛队的**书面文本**，明确写了坐标匹配与非 box 不计分；2026-10 的转述 QA
+   还直接写明了输出侧「电源符号按 10GT 的样子给（单个元件 + 一个 pin + `value` 写 `GND`/`VCC`）」；
+3. 业主转述「之前的判题机写错了」—— 只修 bbox 而不修另两条，等于承认三条里只有一条算 bug。
+
+#### 实装与读数
+
+`stage2/assemble.py`：`DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "0")`（翻转，`=1` 可回退）。
+`tools/eval/fast.py`：主尺默认从 `official`（判题机复刻）翻成 **`protocol`**（= `metrics.py` + `EvalConfig()` 默认 =
+书面口径），`--engine harness`（别名 `official`）保留为对照并打印警告；`_ENGINE_ALIAS` 让旧基线仍可比较。
+
+官方 10 张（VLM 交付臂；**同一批产物**用两把尺各打一遍）：
+
+| 臂 | 书面口径尺（新默认 `protocol`） | 判题机复刻尺（`harness`） |
+|---|---|---|
+| `=1`（旧默认）`addef` | **70.0786**（comp 0.7057 ｜ pin 0.7406 ｜ netH 0.7686 ｜ line 0.3492） | 67.7370 |
+| `=0`（新默认）`du0` | **82.5689（+12.49）**（comp **0.9819** ｜ pin 0.7252 ｜ netH 0.8946 ｜ line 0.3672） | 57.26（**−10.48**） |
+
+其余臂：`--no-vlm` `nrl1` 62.5853 → `du0no` **75.8737（+13.29）**；val 19 张 `addefval` 20.2692 → `du0val`
+**34.2079（+13.94）**。oracle 上界（`work\tools\dev\_pwr_oracle.py --mode s1`，用**我们自己阶段一检出的 bbox**）：
+68.3369 → 81.6221（+13.29）⇒ **真实现拿到了 oracle 的全部收益**（键形 `pNNN` 与 `∅NNN` 在坐标匹配下**逐位等价**：
+`_pwr_p` / `_pwr_u` / `_pwr_gt` / `_pwr_s1` 四臂同分）。逐通道：component `tp 140→250 / fn 114→4`、
+`component.coord_matched = 108`；netH `fn 165→66`；pin 几乎不动（−0.0154，非 box 引脚在书面口径下不计分）；
+line +0.018。case 1 的 8 个电源符号（5 gnd + 3 v）正是 §5.17 里判「不可达」的那批。
+
+#### 回退与风险（诚实记录）
+
+- 唯一能翻掉这个决定的事实是：**新判题机仍是键精确匹配**。那时同一改动是 **−10.48**（官方 10 张）。
+- 回退只需一个环境变量：`STAGE2_DROP_UNKEYED=1`（+ `--engine harness` 复核），无需改代码。
+- 期望值：书面口径证据链（题面 + 官方书面问答 + 业主转述）比「一台已知写错的判题机」强；且业主已确认
+  其中一处是 bug ⇒ 押书面口径。
+
+复现：
+
+    python -X utf8 tools\eval\fast.py --cases 1,10,2,3,4,5,6,7,8,9 --out dudef --save dudef
+    python -X utf8 tools\eval\fast.py --cases 1,10,2,3,4,5,6,7,8,9 --engine harness --out duold --save duold
+    python -X utf8 tools\eval\stage2_eval.py ..\work\_fast_out_dudef\final_results
+    python -X utf8 work\tools\dev\_pwr_oracle.py --pred work\_vlmname --out work\_pwr_p --mode s1 --run work\_fast_out_nresv1 --keys p`
+
+#### 连带欠账（换了尺子就必须重打的读数）
+
+§5.1–§5.19 里用 `--engine official` 量的**绝对值**都只对那台判题机成立；方向性结论**多数**仍成立，但凡是与
+「非 box 元件 / 非 box 引脚 / 无名元」沾边的 A/B 都应在 `protocol` 尺上重打一次。**已复核**：§5.19（+0.26 / +0.19，
+方向不变）。**待复核**：`pin`+`testpoint` 合并（`STAGE1_MERGE_TP`）、`STAGE2_DROP_UNKEYED` 相关的一切
+（`NET_DROP_UNKEYED` / `NET_DROP_PWRONLY`）、`STAGE1_DROP_TYPES` 的 `pin,testpoint`、`_tpceiling.py` 的
+「213 个 GT 元件必然 fn」那类结论。
 
 ---
 

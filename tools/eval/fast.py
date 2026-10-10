@@ -51,15 +51,20 @@ BASE_DIR = ROOT / "work" / "_fast_base"
 METRICS = ["component", "pin", "net_hypergraph", "net_line"]
 SHORT = {"component": "元件", "pin": "引脚", "net_hypergraph": "网络", "net_line": "导线"}
 
-# ★ 打分引擎：`official` = `schematic_parser/official.py`，逐位复刻官方 scorer
-#   （2026-10-13 用官方评测机返回的那批 `*_Pred.json` 标定：comp/pin/connectivity
-#   三个通道的 10 案均值与逐案 F1 **精确命中**官方 report，wire 只在 1 案上有
-#   0.0078 的差 —— 那是匈牙利配对并列最优时的打破方式不同，soft_tp 完全相同）。
-#   `legacy` = 老的 `metrics.py`（`bbox_tol=20`、`unkeyed_match='gt'`、
-#   非 box 引脚号折叠），在**同一批官方 pred** 上给出 comp 0.946 vs 官方 0.488、
-#   总分 58.16 vs 44.29 ⇒ 老尺子松得离谱，**新 A/B 一律用 official**；
-#   只有要和历史 `work/_fast_base/*.json` 对比时才用 `--engine legacy`。
-ENGINE = "official"
+# ★ 打分引擎（2026-10-14 换默认）：
+#   `protocol`（**新默认**）= `schematic_parser/metrics.py` 的 `evaluate_case` +
+#   `EvalConfig()` 默认值 = **官方书面口径**（题面 `problem_statement.txt` + 官方问答
+#   `docs/QA_2025.txt`）：bbox 20px、pin/line 5px、**GT 的 `∅NNN` 走坐标匹配**
+#   （评测 Q5）、**pin_f1 只统计 box 元件**（评测 Q2）、非 box 引脚号在净图里折成通配
+#   （2026-10 转述 QA）。别名 `legacy`。
+#   `harness`（旧默认，别名 `official`）= `schematic_parser/official.py`，**逐位复刻
+#   2026-10-09 那台判题机**：单一 5px 阈值当 bbox 容差、`∅NNN` 走键精确、非 box 引脚
+#   也进 pin_f1。业主明确说过「之前的判题机写错了」（bbox 20px 那处）⇒ 这台只作
+#   历史对照；同一批产物在它上面会给出**相反**的结论（电源/地符号 −10.48 vs +12.49）。
+#   完整证据链与读数见 `docs/RESULTS.md` §5.20。
+ENGINE = "protocol"
+_ENGINE_ALIAS = {"protocol": "protocol", "legacy": "protocol",
+                 "harness": "harness", "official": "harness"}
 
 
 def lookup(cid, exact, digits):
@@ -121,7 +126,7 @@ def score(cases, cfg):
             continue
         gt = load_json(Path(case.json_path))
         pr = load_json(pp)
-        if ENGINE == "official":
+        if ENGINE == "harness":
             from schematic_parser import official as OFF
             sc = OFF.evaluate_case(gt, pr, case_id=case.case_id)
             chans = {"component": sc.component, "pin": sc.pin,
@@ -204,15 +209,21 @@ def main(argv=None):
     ap.add_argument("--save", default="", help="把本次成绩存为基线 <名字>")
     ap.add_argument("--cmp", default="", help="和基线 <名字> 比")
     ap.add_argument("--list", action="store_true", help="只打印默认 case 列表")
-    ap.add_argument("--engine", default="official", choices=("official", "legacy"),
-                    help="official（默认）= 与官方评测机逐位一致的尺子；"
-                         "legacy = 老的 metrics.py（只用于和历史基线比）")
+    ap.add_argument("--engine", default="protocol",
+                    choices=("protocol", "harness", "legacy", "official"),
+                    help="protocol（默认，别名 legacy）= 官方**书面口径**"
+                         "（题面 + QA + EvalConfig 默认：bbox20 / ∅ 坐标匹配 / 只算 box 引脚）；"
+                         "harness（别名 official）= 2026-10-09 判题机复刻（已被业主认定写错，"
+                         "只作历史对照，同一批产物结论常常相反）")
     a = ap.parse_args(argv)
 
     global OUT_DIR, ENGINE
     if a.out:
         OUT_DIR = ROOT / "work" / ("_fast_out_" + a.out.strip().rstrip("/\\"))
-    ENGINE = a.engine
+    ENGINE = _ENGINE_ALIAS[a.engine]
+    if ENGINE == "harness":
+        print("!! 用判题机复刻尺（harness）打分：它把 bbox 容差当 5px、∅ 元件按键精确、"
+              "非 box 引脚也计分 —— 业主已认定这台写错，读数只作历史对照。")
 
     cases = [c.strip() for c in a.cases.split(",") if c.strip()] or DEFAULT_CASES
     if a.list:
@@ -238,7 +249,8 @@ def main(argv=None):
         bp = BASE_DIR / (a.cmp + ".json")
         if bp.exists():
             base = {r["case"]: r for r in json.loads(bp.read_text(encoding="utf-8"))}
-            be = {r.get("engine", "legacy") for r in base.values()}
+            be = {_ENGINE_ALIAS.get(r.get("engine") or "legacy",
+                                    r.get("engine") or "legacy") for r in base.values()}
             if be and ENGINE not in be:
                 print("!! 基线 %s 是用 %s 尺子打的，本次是 %s ⇒ Δ 不可比，重打基线！"
                       % (a.cmp, "/".join(sorted(be)), ENGINE))

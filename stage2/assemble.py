@@ -30,36 +30,50 @@ VALUE_TYPES = ("r", "c", "l", "fuse", "crystal_2pin", "crystal_3pin",
                "crystal_4pin", "crystal")
 LABEL_TOL = 16.0        # 网络标签离走线自由端多远还算「贴在这条线上」
 FREE_TOL = 2.0          # 两个端点离多近算「接上了」
-# 位号没读出来时**要不要**输出这颗元件（默认**丢掉**，兜底键本来是 `pNNN`）。
+# 位号没读出来时**要不要**输出这颗元件（兜底键 `pNNN`）。默认 `0` = **输出**。
 #
-# ★ 2026-10-13 官方评测机返给我们的第 6 次提交报告把它**翻了回来**，这次是硬读数
-#   （`20261009引入\...\scoring_result (5)\report\submission\20261009T140206Z\<case>.json`）：
-#   * 官方 component 是**纯键匹配**：case 1 里 GT 的 8 个 `∅NNN`（5 gnd + 3 v）
-#     全部记 `component.missing`，我们输出的 8 个 `pNNN` 全部记 `component.extra`
-#     （`component f1 tp 6`、`key_f1 tp 7`、`fn 16 = 22 − 6`）；
-#   * 我们的 `pNNN` 与 GT 的 `∅NNN` **坐标几乎重合**（3 个 v 差 ≤1.2px），
-#     所以「靠坐标匹配」在这一版 scorer 上**对 `p` 键没有发生**；
-#   * 机制上是必然的：`pNNN` 永远不可能是 tp ⇒ 只贡献 fp；它的引脚在 net 超图里
-#     也永远配不上 GT 的 `∅NNN.<随机号>`（官方 Q&A：编号是随机生成的）。
-#   把 10 张官方 case 的 `pNNN` 元件 + 引脚 + 超图引用整体删掉、用官方尺重打
-#   （`work\tools\dev\_offscore.py --engine official`）：
-#     **52.3666 → 62.9713（+10.6047）**，逐案全正（最大 case 2 +14.30），
-#     四个通道一起变好。
+# ★★ 2026-10-14 翻转（完整依据见 `docs/RESULTS.md` §5.20）：官方**书面口径**（题面 +
+#   `docs/QA_2025.txt` 官方问答 + 业主 2026-10 转述）与 2026-10-09 那台判题机
+#   **有三处冲突**，而业主已明确说「之前的判题机写错了」（bbox 那处）：
+#     ① bbox 容差：题面 `problem_statement.txt:179` **20px** ｜ 判题机 5px（业主已认错）；
+#     ② 无名元（`∅NNN`）：官方问答 评测 Q5「Vcc 和 gnd 是 ∅，**直接是坐标匹配**」
+#        ｜ 判题机对 `∅NNN` 也走**键精确**（case 1 的 8 个 `∅` 全记 `missing`）；
+#     ③ 引脚分母：官方问答 评测 Q2「非 box 类型元器件 pin name, pin number 不参与评分」
+#        ｜ 判题机把非 box 的脚也计进 `pin_f1`（`{"pin_id": "[\"C1513\",\"pin_1\"]", "error": "extra"}`）。
+#   三处都是「判题机不照书面口径做」，① 既然修了，② ③ 按同一逻辑应当也修 ⇒ 按
+#   **书面口径**定默认。
 #
-# 旧口径（`schematic_parser/metrics.py` 的 `unkeyed_match='gt'`）下默认是「输出」：
-# 那条尺子**自己给无名元件做了坐标匹配**（这一版官方 scorer 没有），220 张实测
-# `=1` 15.5084 vs `=0` 21.1165 ⇒ 结论正好相反，**该实测已作废**（同一批官方 pred
-# 上旧尺 comp 0.946 vs 官方 0.488，总分 58.16 vs 44.29，见 `schematic_parser/official.py`）。
+#   实测（官方 10 张；同一批 `*_Pred.json` 用两种尺子各打一遍）：
+#     · 书面口径尺（`tools/eval/stage2_eval.py`，= `EvalConfig()` 默认：
+#       bbox 20 / `unkeyed_match='gt'` / 只统计 box 引脚）：
+#         **70.0786（`=1` 旧默认）→ 82.5689（`=0`）＝ +12.49**
+#         （comp 0.7057→0.9819 ｜ netH 0.7686→0.8946 ｜ line 0.3492→0.3672
+#          ｜ pin 0.7406→0.7252，见 §5.20 的逐通道表）；
+#         `--no-vlm` 臂 62.5853 → 75.8737（+13.29，与 oracle 上界逐位一致）；
+#         val 19 张 20.2692 → 34.2079（+13.94）。
+#       oracle 上界（`work\tools\dev\_pwr_oracle.py --mode s1`，用**我们自己阶段一
+#       检出的 bbox**）：68.3369 → 81.6221（+13.29）⇒ 真实现拿到了 oracle 的全部收益。
+#     · 判题机复刻尺（`fast.py --engine harness`，= `schematic_parser/official.py`）：
+#       67.7370 → 57.26（**−10.48**）—— 这正是 §5.17 当年判负用的那把尺子。
 #
-# ⚠️ 2026-10 实测（`work\tools\dev\_pwr_oracle.py`，**官方尺**，`fast.py --engine official`）：
-#   「把兜底键改成 `∅NNN` 形态就会被坐标匹配」这条**不成立** —— `pNNN` 与 `∅NNN` 两臂
-#   **逐位相同**（57.59 / 57.59，基线 66.45），说明官方 scorer 的元件匹配是**纯键精确**
-#   （`schematic_parser/official.py:148 component_f1`），连双方都是 `∅` 形态也不配坐标。
-#   只有**直接抄 GT 的 `∅` 号**才涨到 73.48（+7.03），而 GT 的 `∅` 号来自源工程的对象计数器
-#   （case 1 的 109/113/117/121/125 等差 +4、脚号 ≈ 元件号 −2）⇒ 栅格图上不可恢复。
-#   附带：即便键全中，官方 `pin` 尺子还会倒扣 0.082（非 box 元件的脚也进 pin 打分）。
-#   ⇒ 默认仍是**丢掉**。`STAGE2_DROP_UNKEYED=0` 只用于对照（见 `docs/RESULTS.md` §5.17）。
-DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "1")
+#   为什么敢押书面口径：① GT 的 `∅` 号来自源工程的对象计数器（不可恢复）⇒ 判题机
+#   **只能**按坐标配这批元件，否则它们对所有队伍恒 fn；② 官方问答是发给参赛队的
+#   书面文本，明确写了「坐标匹配」与「非 box 不计分」；③ 两条尺子差 ±10 分级别，
+#   书面口径的证据链（题面 + 官方问答 + 业主转述）强于「一台已知写错的判题机」。
+#   **风险与回退**：`STAGE2_DROP_UNKEYED=1` 一个环境变量即可退回旧行为（用
+#   `fast.py --engine harness` 复核）。
+#
+# 历史（2026-10-13，判定「丢掉」的那批读数，保留作证据 —— 它们**只对判题机复刻尺**成立）：
+#   * 官方 component 在那台判题机上是**纯键匹配**：case 1 里 GT 的 8 个 `∅NNN`
+#     （5 gnd + 3 v）全部记 `component.missing`，我们输出的 8 个 `pNNN` 全部记
+#     `component.extra`（`component f1 tp 6`、`key_f1 tp 7`、`fn 16 = 22 − 6`）；
+#   * `pNNN` 与 `∅NNN` 两臂在那把尺子上**逐位相同**（57.59 / 57.59，基线 66.45）；
+#   * 直接抄 GT 的 `∅` 号能到 73.48（+7.03），但号不可恢复；
+#   * 把那 10 张的 `pNNN` 元件 + 引脚 + 超图引用整体删掉，用那把尺重打
+#     （`work\tools\dev\_offscore.py --engine official`）：**52.3666 → 62.9713（+10.6047）**；
+#   * 更早的 220 张实测 `=1` 15.5084 vs `=0` 21.1165（结论相反）当时被当成「旧尺的
+#     幻觉」作废 —— 现在看，那条「旧尺」就是**书面口径**，它的方向才是对的。
+DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "0")
 
 # ---------------------------------------------------------------------------
 # ★★ 内部合并类 `tp` 的**文本闸门**（只跟 `STAGE1_MERGE_TP=1` 配套，默认 off）。
@@ -260,11 +274,14 @@ FKEY_RE = re.compile(r"^p\d{3,4}$")
 #      ⇒ 电源节点在折叠口径下确实值钱。
 #    * 代价（诚实记录）：万一官方仍是字面口径，同一改动是 **−4.44**（57.0646 vs 61.5084）。
 #      缓解见下面的 `NET_DROP_PWRONLY`：只保留「挂在真实成员上」的电源引用。
-# ⚠️ 2026-10-13 起 `STAGE2_DROP_UNKEYED=1`（默认）**已经把这批元件整个丢掉**，
+# ⚠️ 2026-10-13 到 2026-10-14 之间 `STAGE2_DROP_UNKEYED=1` 曾把这批元件整个丢掉，
 #    连 `keymap` 都没有条目 ⇒ `:1104` 的 `keymap.get(cid)` 直接落空，引用本来就不会
-#    写进超图，本开关只在 `DROP_UNKEYED=0`（退回输出 `pNNN`）时才有意义。
-#    同时「component 靠坐标匹配拿 tp」这条前提已被官方报告证伪（见文件顶
-#    `DROP_UNKEYED` 的长注释：官方 case 1 的 8 个 `∅NNN` 全记 `missing`）。
+#    写进超图，本开关只在 `DROP_UNKEYED=0` 时才有意义。
+# ★ 2026-10-14 起 `DROP_UNKEYED` 的默认已是 `0`（按书面口径翻回，见文件顶的长注释与
+#    `docs/RESULTS.md` §5.20）⇒ **本开关重新变得关键**：`=1` 会把 `pNNN` 的引脚引用
+#    从 hyperGraph 里剪掉，那正好废掉坐标匹配带来的那部分 netH 收益。
+#    （2026-10-13 那条「component 靠坐标匹配拿 tp 已被官方报告证伪」的推论，只对
+#     判题机复刻尺成立，见文件顶 `DROP_UNKEYED` 的长注释与 `docs/RESULTS.md` §5.20。）
 NET_DROP_UNKEYED = env_on("STAGE2_NET_DROP_UNKEYED", "0")
 
 # ★ **只由电源/地符号组成的孤立网要不要丢**（`STAGE2_NET_DROP_PWRONLY`，默认 `1`）。
@@ -849,9 +866,12 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                                    "by": _d.get("_by")})
             continue
         if not key or key in components:
-            # 拿不到位号（或位号撞号）—— 兜底键 `pNNN` 在 GT 里不可能存在，
-            # 输出它 = 白送一个 component.extra + 它名下所有引脚在 net 超图里
-            # 也全是 FP。直接不输出这颗元件（见 `DROP_UNKEYED` 的长注释）。
+            # 拿不到位号（或位号撞号）—— 兜底键 `pNNN`（GT 里对应的是无名元 `∅NNN`）。
+            # ★ 2026-10-14 起默认 **输出**（`DROP_UNKEYED=0`）：书面口径下官方对 GT 的
+            #   `∅NNN` 走**坐标匹配**（QA 评测 Q5），我们的 `pNNN` 靠 bbox 就能被配成
+            #   GT 键（`rewrite_keys` 随后把 pins/nets 的引用一起改写），官方 10 张
+            #   +12.49。详见文件顶 `DROP_UNKEYED` 的长注释与 `docs/RESULTS.md` §5.20。
+            #   `=1` 退回旧行为（判题机复刻尺下 +10.48，那把尺子已被业主认定为写错）。
             if DROP_UNKEYED:
                 continue
             key = "p%03d" % i
