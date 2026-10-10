@@ -2048,6 +2048,63 @@ case 5 的 `U3` 从 `[3]` 变成 `[1,2,3,4]`（GT 正是 1/2/3/4）。引脚 tp 
 
 ---
 
+### 5.13 引脚号的两种「正解就在手上却丢掉」的机制（`STAGE2_PIN_STUB_MERGE` / `STAGE2_PIN_ANCHOR`，两个都已转正 = 12px）（2026-10）
+
+**症状**：`tools/diag/_netloss.py` 把「有名元件缺脚号」类失分记为 ②a（交付臂 27 个网成员）。
+`work/tools/dev/_pinwhy.py` 逐案看：GT 的脚号就印在脚边（`d` 5~10 px）、`_readbox.py` 读数 conf 0.9+，
+却一根都没进最终输出（`stage2/assemble.py:1144` 只把有 `num_of` 的脚放进 `hyperGraph`）。
+
+**机制 A · 幻影脚点槽**（case 5 `U1`，`work/tools/dev/_slotdbg.py`）：
+`pintrace` 在同一根真脚上给出**两个相距 ~5px 的触点** —— `pins[c0001]` 的 slot0 `(654.6,266.0)`
+（`pincol` 记录 idx=0）与 slot5 `(654.6,271.0)`。号名两个角色轮**各绑一半**：号 `3` 落 slot0、
+名 `FB` 落 slot5 ⇒ 两槽都凑不齐「号+名」，被 `STAGE2_BOX_PIN_NEED_NAME`（late）**一起丢掉**，
+GT 的 `pin_3 FB` 白丢（slot1/slot6 的 `7`/`P` 同理）。
+两槽在 stage1 里**已经在同一个网**（`net_8 = {U1[0],U1[4],U1[5]}`）⇒ 合并**不改变任何网的成员**，
+只让那根脚能交出去。
+**修法**：两槽**互补半满**（一个只有号、一个只有名）且两点距离 ≤ `STAGE2_PIN_STUB_MERGE` 时，
+把号搬进**有名字**的那一槽（名框在符号内、槽点更贴 GT），号槽清空 —— 只搬已有读数、不新造。
+
+**机制 B · 单调剪枝误杀「重启编号」**（case 5 `U2`、case 4 `U2`、case 8 `U1`，`STAGE2_DBG_CID`）：
+`structmatch.rebind` 先 `group_by_edge` 再 `align_monotone`，随后 `monotone_keep` 把「破坏数值单调」
+的候选**从活动集移出**（`w[i][j] = 0.0`）。但脚号会**绕封装重启**：case 5 `U2` 右列 GT 是
+`pin_2 VOUT`@460 / `pin_3 FB`@500 / `pin_7 PP`@539 / `pin_1 GND`@559 ⇒ 沿边顺序 `2 3 7 1`，
+真值 `1`（号池里的 `1(0.92)c(1644,554)`，离那根脚只有 6px）被判离群清零 ⇒ `U2.1` 永远空着
+（`[dbg] [pin:pin_number] nplist=10 pool=13 bound=5`）。
+**修法**：剪枝时把每一对被清零的 `(候选, 脚)` 连同原收益记进 `dropped`；剪枝结束后（最多 3 轮）
+对**仍然空着**的脚找它**沿边最近的候选**，若该对在 `dropped` 里且沿边距离 ≤ `STAGE2_PIN_ANCHOR`
+⇒ 恢复原收益、记一条 `evidence` 台账（`by="structmatch:anchored"`），再跑一趟单调对齐。
+**只给空槽补号，绝不顶掉已绑上的脚**（DP 仍按总收益决定）。
+
+**读数**（一律 `--engine official`；脚本 `work/_stubmerge_ab.ps1`、`work/_anchor_ab.ps1`、`work/_anb0val.ps1`）：
+
+| 口径 | 基线（都关） | 只开 A（STUB_MERGE=12） | 只开 B（ANCHOR=12） | 两个都开（= 新默认） |
+|---|---|---|---|---|
+| 官方 10 张 no-vlm | 59.9903 | 59.9977（+0.0074/张） | 60.4847（**+0.4944/张**） | **60.5854（+0.5951/张）** |
+| 官方 10 张 VLM（交付口径） | 66.0719（`sm0v`） | **66.2546（+0.0183/张）** | 未单独测 | 见 `anbdef10v` |
+| 派生 val 19 张 no-vlm | 16.8262（`anb0val`，现码关） | — | — | 16.8827（+0.003/张，逐案有正有负） |
+
+逐案（两个都开 vs 基线，官方 10 张 no-vlm）：case 4 **+1.7946**（`U2 pin_3` 从错触点
+`VOUT@(1379,790)` 重坐回 `VIN@(1379,772)`）、case 5 **+1.1180**（`U1` 的 `pin_3 FB`/`pin_7 PP`
+补齐、`U2.1` 补上）、case 8 **+3.0387**（`U1` 补出 `pin_4 VDD`、`pin_8 GNDIO`），其余 7 张**逐位不变**；
+分项：元件不动（tp 103）、引脚 tp 293→**297** 且 **fp 45→45（零代价）**、
+netH tp 110.417→**112.366**、netL tp 233→241（fp 600→**595**）。
+⇒ 两个机制**互补且超可加**（case 5 上 0.0742 + 0.1115 ≪ 1.1180：A 先把号并到有名字的槽，
+B 再把被剪掉的号还回来）。
+
+**默认值已转正**（`STAGE2_PIN_STUB_MERGE=12`、`STAGE2_PIN_ANCHOR=12`）；转正后用默认口径重跑
+官方 10 张 no-vlm（臂 `anbdef10`）= **60.5854**，与两开关显式打开的 `anb1` **逐案 +0.0000**。
+自检：`python -X utf8 -m stage2.structmatch` = **32 项全过**（新增两条把「锚点开启时允许最近的离群
+候选进解」钉住，旧的「离群候选永不被配」断言改为**只在锚点关闭时**成立）、`-m stage2.assign` 18 项全过。
+
+**顺带归档的负结果**：锚点第一版把「每根脚的最近候选表」算在剪枝**之前**、且只对第一趟就没绑上的脚
+生效 ⇒ case 5 **+0.0000**（那些脚在第一趟里被别的候选绑过，随后才被剪掉，于是被排除）⇒ 必须放在
+剪枝**之后**用 `dropped` 驱动。
+
+复现：`python -X utf8 work\tools\dev\_slotdbg.py --dir work/_fast_out_anbdef10 --case 5 --cids c0001,c0000`；
+`python -X utf8 eda-pcb\tools\eval\fast.py --cases 5 --no-vlm --engine official --out x --save x`。
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |

@@ -33,6 +33,24 @@ from typing import Dict, List, Optional, Sequence, Tuple
 NODELETE = os.environ.get("STAGE2_NODELETE", "1").strip().lower() not in (
     "0", "off", "false", "no", "")
 DEMOTE_HARD = float(os.environ.get("STAGE2_DEMOTE_HARD", "0.05"))
+# ★★ 数值离群候选的**位置锚点豁免**（`STAGE2_PIN_ANCHOR`，默认 `0` = 关，单位 px）。
+#
+# 病（10GT case 5 的 `U2`，2026-10 实测，`work/tools/dev/_slotdbg.py` + `STAGE2_DBG_CID`）：
+# 这颗 IC 右列 4 根脚的 GT 是 `pin_2 VOUT`@460 / `pin_3 FB`@500 / `pin_7 PP`@539 /
+# `pin_1 GND`@559 —— 沿边顺序是 `2 3 7 1`，**号码本来就不单调**（脚号绕着封装走）。
+# `monotone_keep` 把 `1` 判成「破坏严格单调的离群」并清零收益（`hard=True`），
+# 于是 `pin_1` 明明在号池里（`1(0.92)c(1644,554)`，离那根脚只有 6px）却**永远绑不上**
+# ⇒ GT `U2.1` 白丢（`[dbg] [pin:pin_number] nplist=10 pool=13 bound=5`）。
+#
+# 规则：把候选移出活动集之前，先看它是不是**某根脚的最近候选**、且沿边距离 <= 该半径；
+# 是则**这一对**保留可配（同一候选对别的脚仍然清零），候选本体与降权记录照旧进台账。
+# 不强制配对（DP 仍按收益决定），所以对既有正确绑定只在「本来就有更好的候选」时才让位。
+#
+# ★ 2026-10 A/B（官方 10 张 `--no-vlm --engine official`）：关 = 59.9903，`=12` = **60.4847
+#   （+0.4944/张）**——case 4 +1.7946（pin tp 25->26）、case 5 +0.1115、case 8 **+3.0387**
+#   （pin tp 23->25），其余 7 张逐位不变，**pin fp 45 -> 45（零代价）**、netL fp 600 -> 596。
+#   与 `STAGE2_PIN_STUB_MERGE=12` 合用（`anb1`）= **60.5854（+0.5951/张）**。默认转正为 `12`。
+ANCHOR = float(os.environ.get("STAGE2_PIN_ANCHOR", "12"))
 
 try:                                    # 允许单独 import（自检 / 离线探针）
     from cvparts.hypo import LEDGER
@@ -260,6 +278,9 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
 
         pairs = align_monotone(w, gap_pen, cover)
 
+        # 被位置锚点救回来的对（`(i, j) -> 原始收益`），见下面的「位置锚点」段。
+        dropped: Dict[Tuple[int, int], float] = {}
+
         # --- 数值离群：破坏严格单调的那个候选 ---
         nums_all = [v for v in vals if v is not None]
         if len(nums_all) >= 3:
@@ -299,6 +320,7 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
                         before = w[i][j]
                         after = before * mult if hard else before * demote
                         w[i][j] = 0.0           # 从活动集移出（行为与历史一致）
+                        dropped[(i, j)] = before
                         rec = {"edge": e, "cand": cl[i], "pin": pl[j],
                                "value": value_of(pool[cl[i]]),
                                "before": round(before, 4), "after": round(after, 4),
@@ -319,6 +341,42 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
                                           by="structmatch:monotone_keep",
                                           at="stage2:structmatch")
                 pairs = align_monotone(w, gap_pen, cover)
+
+                # ★★ 位置锚点（`STAGE2_PIN_ANCHOR > 0`，见文件头常量注释）：上面的剪枝把
+                #   数值离群的候选从活动集移出，但「离群」在**同边脚号重启**的封装上会误伤
+                #   真值（case 5 `U2` 右列沿边 GT 是 `2 3 7 1`，真值 `1` 在 (1644,554)，
+                #   离 `pin_1` (1640.7,560) 只有 6px，却被判离群 ⇒ `pin_1` 永远空着）。
+                #   这里只救「第二趟仍然空着、且该候选就是它沿边最近的候选（<= ANCHOR）」
+                #   的那些对：恢复原收益、留一条 evidence 台账，然后再跑一趟单调对齐。
+                #   ⇒ 只会把空槽补上号，不会顶掉已绑上的脚（DP 仍按总收益决定）。
+                if ANCHOR > 0.0 and dropped:
+                    for _round in range(3):
+                        bound = {pl[j] for _i, j in pairs}
+                        n_add = 0
+                        for j in range(m):
+                            if pl[j] in bound:
+                                continue
+                            aj = along(bbox, e, pins[pl[j]][0], pins[pl[j]][1])
+                            bi, bd = -1, 1e18
+                            for i in range(n):
+                                c = pool[cl[i]]["center"]
+                                d = abs(aj - along(bbox, e, c[0], c[1]))
+                                if d < bd:
+                                    bi, bd = i, d
+                            if bi < 0 or bd > ANCHOR or (bi, j) not in dropped:
+                                continue
+                            w[bi][j] = dropped[(bi, j)]
+                            n_add += 1
+                            if NODELETE:
+                                LEDGER.record("evidence", f"{e}:cand{cl[bi]}",
+                                              before=[value_of(pool[cl[bi]])], after=None,
+                                              reason=("数值离群但位置锚定 pin%d（沿边 %.1fpx <= %.1fpx）："
+                                                      "空槽保留可配" % (pl[j], bd, ANCHOR)),
+                                              by="structmatch:anchored",
+                                              at="stage2:structmatch")
+                        if not n_add:
+                            break
+                        pairs = align_monotone(w, gap_pen, cover)
 
         # ★ 2026-07 审计修复：这里原来还有一行 `pos = {pl[j]: j for j in range(m)}`，
         #   建完之后**再也没被读过**（下一行直接用 `pl[j]`/`cl[i]`）。已删。
@@ -460,6 +518,9 @@ def _selftest() -> int:
         "整排偏移一格时阶梯应重绑成 1-1/2-2/3-3/4-4: %r" % (got,))
 
     # 多一个离群候选（数值最大却排在最上面）——数值单调性应直接禁掉它
+    #   （本组断言钉的是**锚点关闭**时的历史行为：`_anchor_saved` 用完立刻还原）
+    _anchor_saved = ANCHOR
+    globals()["ANCHOR"] = 0.0
     pool2 = [{"center": (-20, 60), "t": "5"},
              {"center": (-20, 140), "t": "1"},
              {"center": (-20, 220), "t": "2"},
@@ -470,6 +531,17 @@ def _selftest() -> int:
     chk(got2.get(1) == 1 and got2.get(2) == 2 and got2.get(3) == 3,
         "离群候选 5 不该被配上: %r" % (got2,))
     chk(got2.get(0) != 0, "位置最上的引脚不该配到数值最大的离群候选: %r" % (got2,))
+    # ★ `STAGE2_PIN_ANCHOR > 0`：离群候选若**就是这根脚最近的候选**且在半径内，允许它进解。
+    #   真实数据（10GT case 5 `U2` 右列 GT `2 3 7 1`，脚号绕封装重启）里真值 `1` 就长这样：
+    #   沿边单调判它离群 ⇒ `pin_1` 永远空着。官方 10 张实测 +0.4944/张、**pin fp 零增长**。
+    #   这里把新行为也钉住（并确认旧断言只在锚点关闭时成立）。
+    globals()["ANCHOR"] = 12.0
+    got3, _ = rebind(bb2, pins2, pool2, lambda c: c["t"], score2, cover=0.25)
+    chk(got3.get(0) == 0,
+        "锚点开启时应允许「最近的离群候选」进解（pin0 <- '5'）: %r" % (got3,))
+    chk(got3.get(1) == 1 and got3.get(2) == 2 and got3.get(3) == 3,
+        "锚点开启只影响「最近的离群候选」，其余绑定不变: %r" % (got3,))
+    globals()["ANCHOR"] = _anchor_saved
     # ★ 「不删除，只削弱」：离群候选被移出**活动集**（所以上面两条断言不变），
     #   但降权分严格为正、候选本体留在 `LAST_RESERVE`、事件进全局账本。
     chk(bool(LAST_RESERVE) and all(r["after"] > 0.0 for r in LAST_RESERVE),

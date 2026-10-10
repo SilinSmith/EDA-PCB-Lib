@@ -157,6 +157,33 @@ PINNUM_DUP = float(os.environ.get("STAGE2_PINNUM_DUP", "0"))
 # 已挂键的邻居的框一根都不碰（那才是抢别人东西）。位号（`STEAL_R`）与值
 # （`VALUE_STEAL_R`）早就有这条通道，引脚号是最后一个没有的。
 PINNUM_STEAL = float(os.environ.get("STAGE2_PINNUM_STEAL", "0"))
+# ★★ 幻影脚点槽合并半径（`STAGE2_PIN_STUB_MERGE`，**默认 0 = 关**，单位 px）。
+#
+# 病（10GT case 5 的 `U1`，2026-10 实测，见 `work/tools/dev/_slotdbg.py`）：
+# `stage1` 的 `pintrace` 在同一根真脚上给出**两个相距 ~5px 的触点** ——
+# `pins[c0001]` 的 slot0 `(654.6,266.0)`（`pincol` 记录 idx=0，号 `3`）与
+# slot5 `(654.6,271.0)`（名 `FB`）；slot1 `(654.6,305.5)`（号 `7`）与
+# slot6 `(654.6,311.0)`（名 `P`）。两个角色轮**各绑一半**：号落在 `pincol`
+# 那个触点上、名落在另一个触点上。于是两槽都凑不齐「号 + 名」，被
+# `assemble.build_doc` 的 `STAGE2_BOX_PIN_NEED_NAME`（late 模式）**一起丢掉**：
+# GT 的 `pin_3 FB`（正解就在我们手上）直接变成 `fn`。
+#
+# 这两个触点其实在 stage1 里**已经属于同一个网**（`net_8 = {U1[0],U1[4],U1[5]}`、
+# `net_18 = {U1[1],U1[6]}`）⇒ 合并**不会改变任何网的成员**，只让那根脚能交出去
+# （`assemble.py:1144` 只把有 `num_of` 的引脚放进 `hyperGraph`）。
+#
+# 规则：两槽**互补半满**（一个只有号、一个只有名）且两点距离 <= 该半径时，
+# 把号搬进**有名字**的那一槽（名字框在符号内、几何更紧，其槽点也更贴 GT 的
+# 引脚点），号槽清空。**只搬已有读数、不新造读数**，且被搬走号的槽本来就被丢，
+# 所以对现有输出的影响面只有「多出几根脚」。
+#
+# ★ 2026-10 A/B（官方 10 张 `--no-vlm --engine official`）：关 = 59.9903（= 历史默认口径），
+#   `=12` = 59.9977（+0.0074/张；只有 case 5 变：51.9380 -> 52.0122，pin tp 22 -> 23）。
+#   与 `STAGE2_PIN_ANCHOR=12` 合用（`anb1`）= **60.5854（+0.5951/张）**，逐案
+#   case 4 +1.7946 / case 5 +1.1180 / case 8 +3.0387，**pin fp 与 netL fp 不增反降**。
+#   ⇒ 与锚点是互补机制（锚点救「号被单调剪枝清掉」，这里救「号与名落在两个幻影触点上」），
+#   默认转正为 `12`。
+STUB_MERGE = float(os.environ.get("STAGE2_PIN_STUB_MERGE", "12"))
 # 引脚**名**框的宽高比上限。`MAX_BOX_W=3.0` 会把 `VDDA`(64x18=3.56)、
 # `GNDA`(67x18=3.72) 这类长名判成 `wide` 直接踢出候选池 —— 而它们恰恰
 # 是 `U1` 的合法引脚名。IC 引脚名本来就比位号长，这里单独放宽。
@@ -1569,6 +1596,43 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     print("[dbg] cid=%s pin_name late: 框外补名 %d 个（池 %d，空槽 %d）"
                           % (cid, _n_late, len(_pool),
                              sum(1 for i in range(len(plist)) if pinfo[i]["name"] is None)))
+
+        # ★★ 幻影脚点槽合并（`STAGE2_PIN_STUB_MERGE`，默认关）：见常量处的长注释。
+        # 两槽「一槽只有号、另一槽只有名」且两点近到像同一根脚时，把号搬进有名字
+        # 的那一槽（被搬空的那一槽本来就会被 `BOX_PIN_NEED_NAME` 丢掉 ⇒ 只增不减）。
+        if STUB_MERGE > 0 and len(plist) > 1:
+            _used: set = set()
+            for _i in range(len(plist)):
+                if _i in _used:
+                    continue
+                for _j in range(_i + 1, len(plist)):
+                    if _j in _used:
+                        continue
+                    _a, _b = pinfo[_i], pinfo[_j]
+                    _a_num, _a_nm = bool(_a["number"]), bool(_a["name"])
+                    _b_num, _b_nm = bool(_b["number"]), bool(_b["name"])
+                    if not (((_a_num and not _a_nm) and (_b_nm and not _b_num))
+                            or ((_b_num and not _b_nm) and (_a_nm and not _a_num))):
+                        continue
+                    _dx = plist[_i][0] - plist[_j][0]
+                    _dy = plist[_i][1] - plist[_j][1]
+                    _dd = (_dx * _dx + _dy * _dy) ** 0.5
+                    if _dd > STUB_MERGE:
+                        continue
+                    if _a_nm:                       # i 有名字、j 有号 ⇒ 号搬进 i
+                        _a["number"] = _b["number"]
+                        _b["number"] = None
+                        _a["merged_from"] = _j
+                        _keep, _drop = _i, _j
+                    else:                           # i 有号、j 有名字 ⇒ 号搬进 j
+                        _b["number"] = _a["number"]
+                        _a["number"] = None
+                        _b["merged_from"] = _i
+                        _keep, _drop = _j, _i
+                    _used.add(_drop)
+                    if _dbg_want(cid):
+                        print("[dbg] cid=%s stub merge: pin[%d] <- 号 %s（来自 pin[%d]，d=%.1f）"
+                              % (cid, _keep, pinfo[_keep]["number"]["text"], _drop, _dd))
 
     # ---- 网络标签：离所有元件都远、且不在元件框里的文字 ----
     net_labels = []
