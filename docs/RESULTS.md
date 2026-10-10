@@ -2359,6 +2359,52 @@ work\_fast_out_nresv1 --split 10GT`）是 **tp=78 / 缺号=21 / 多号=3 / 名�
 
 ---
 
+### 5.18 ★ 尺子修正：官方评测机的 **bbox 容差是 20px**，不是 5px（2026-10 业主指正）
+
+业主原话：「bbox 对准到20px，之前的判题机写错了，所以会掉分」。
+
+复盘：官方 `report/*.json` 的 `protocol` 里只有一个 `spatial_match_threshold_px = 5.0`，
+我们在 `schematic_parser/official.py` 里把它**同时**用在了两处 —— ① 引脚点距（`pin` 通道，
+这处是对的）② 元件 bbox 的四坐标最大误差（**这处错**，真值是 20px）。旁证：老尺
+`schematic_parser/metrics.py:86 bbox_tol: float = 20.0` 一直就是 20px，两条尺子在这一点上
+本来就应该一致。
+
+实测（官方 10 张、交付臂 `work/_fast_out_lr1`，体检脚本 `work\tools\dev\_bboxgap.py`）：
+
+| bbox 容差 | component tp / fp / fn | component F1 |
+|---|---|---|
+| 5px（旧 = 错） | 132 / 10 / 122 | 0.6667 |
+| **20px（新 = 对）** | **136 / 6 / 118** | **0.6869** |
+
+多出来的 4 个元件，是「type/Name/value 三项全对、只有四坐标最大误差落在 5~15px」的那些
+（分布：`<=5px 132 / 5-10px 3 / 10-15px 1 / 15-20px 0 / >20px 0`）⇒ **我们的 bbox 精度早就够
+20px 这一档，是尺子把它们判成了误差**。
+
+关键基线重打（同一批 `*_Pred.json` **只换尺子，管线一动不动**）：
+
+| 臂 | 5px（旧） | 20px（新） | Δ |
+|---|---|---|---|
+| 官方 10 · VLM · `STAGE2_LIB_REFINE=1`（**交付档** `lr1`） | 66.7807 | **67.4420** | +0.6613 |
+| 官方 10 · VLM · `LIB_REFINE=0`（`lr0`） | 66.4498 | 67.1110 | +0.6612 |
+| 官方 10 · `--no-vlm` · `LIB_REFINE=1`（`nrl1`） | 60.9970 | **61.6582** | +0.6612 |
+| 官方 10 · `--no-vlm` · 两开关默认（`anbdef10`） | 60.5854 | 61.2466 | +0.6612 |
+| 派生 val 19 · VLM · `LIB_REFINE=1`（`lrv1`） | 19.3987 | 19.7911 | +0.3924 |
+| 派生 val 19 · VLM · `LIB_REFINE=0`（`lrv0`） | 19.2974 | 19.6898 | +0.3924 |
+
+★ **本文件里 2026-10 之前的所有 `official` 引擎读数都系统性偏低：官方 10 张 −0.66、val 19 张
+−0.39。** 位移几乎是常数（只有少数元件的误差落在 5~20px 档），所以**方向性排序不变**
+（历史 A/B 的「涨/跌」结论依然成立），但**绝对值一律以本节之后的数为准**。
+
+开关：`OFFICIAL_BBOX_PX`（默认 `"20.0"`，`schematic_parser/official.py:69`）。引脚点距
+（`THRESHOLD_PX = 5.0`）与导线容差**未改** —— 业主这句话只针对 bbox。
+
+复现：
+
+    python -X utf8 work\tools\dev\_bboxgap.py --run work\_fast_out_lr1
+    python -X utf8 tools\eval\fast.py --cases 1,10,2,3,4,5,6,7,8,9 --engine official --score-only --out lr1
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |

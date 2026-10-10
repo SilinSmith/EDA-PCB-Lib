@@ -13,7 +13,7 @@
 | pin | `component key and pin_<number> exact; owner exists in both components; pinname exact; point Euclidean threshold` |
 | wire | `one-to-one direction-invariant two-point edge matching within Hungarian-matched nets` |
 | connectivity | `Hungarian one-to-one pin-set soft F1` |
-| 阈值 | `spatial_match_threshold_px = 5.0` |
+| 阈值 | `spatial_match_threshold_px = 5.0`（引脚点距/导线）；**bbox 四坐标容差 = 20px**（见下第 6 条） |
 | 权重 | component .30 / pin .25 / connectivity .35 / wire .10 |
 
 ## 从官方报告里反推出来的判定细节（每条都有 `20261009引入` 的实证）
@@ -31,6 +31,11 @@
 5. `component_stage` / `wire_stage` / `connectivity_stage` **不进总分**（case 1:
    `0.3*0.272727 + 0.25*0.345865 + 0.35*0.295378 + 0.1*0.012945 = 0.272961` = 27.2961 ✓），
    所以本文件不复刻它们。
+6. **bbox 的容差是 20px**（业主 2026-10 指正：「bbox 对准到 20px，之前的判题机写错了」）。
+   复盘：官方 `protocol` 里只有一个 `spatial_match_threshold_px = 5.0`，我们把它**同时**用到了
+   引脚点距和 bbox 四坐标上 —— 这是错的。实测把 bbox 那处改成 20px（官方 10 张、交付臂）：
+   component `tp 132→136 / fp 10→6 / fn 122→118`，F1 `0.6667→0.6869`；4 个元件的文本三项
+   全对、只有四坐标最大误差落在 5~15px。可用 `OFFICIAL_BBOX_PX` 覆盖（默认 20.0）。
 
 ## 用法
 
@@ -41,6 +46,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Set, Tuple
@@ -52,6 +58,15 @@ except Exception:  # pragma: no cover
     _HAVE_SCIPY = False
 
 THRESHOLD_PX = 5.0
+# ★★ **bbox 的容差是 20px，不是 5px**（业主 2026-10 指正：判题机里 bbox 对准到 20px，
+# 我们复刻时把它和引脚点距混成了一个 `spatial_match_threshold_px = 5.0`，于是把本来
+# 该算 tp 的元件判成 `failed_checks: ["bbox"]`）。
+# 实测（官方 10 张、交付臂 `work/_fast_out_lr1`，体检脚本 `work\tools\dev\_bboxgap.py`）：
+#   阈 5px：component tp 132 / fp 10 / fn 122，F1 0.6667
+#   阈 20px：component tp 136 / fp 6  / fn 118，F1 0.6869（+0.0202）
+# 也就是**多出 4 个元件**（文本三项全对、只有四坐标最大误差落在 5~15px 之间）。
+# 只改 bbox：引脚点距（`:pin`）与导线（`wire`）仍按 5px —— 业主这句话只针对 bbox。
+BBOX_PX = float(os.environ.get("OFFICIAL_BBOX_PX", "20.0"))
 WEIGHTS = {'component': 0.30, 'pin': 0.25, 'connectivity': 0.35, 'wire': 0.10}
 
 # `hyperGraph` 里的成员引用：`U1.101` / `C151.2` / `∅208.206`
@@ -171,7 +186,7 @@ def component_f1(gt: dict, pred: dict) -> F1:
             bmax = None
         else:
             bmax = max(abs(gb[i] - pb[i]) for i in range(4))
-            if bmax > THRESHOLD_PX:
+            if bmax > BBOX_PX:
                 failed.append('bbox')
         if failed:
             res.fp += 1

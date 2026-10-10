@@ -6,7 +6,7 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **402** 个开关。
+共 **403** 个开关。
 
 ## 目录
 
@@ -19,6 +19,7 @@
 - [cvparts](#cvparts)（10）
 - [pipeline](#pipeline)（11）
 - [submission](#submission)（3）
+- [schematic_parser](#schematic_parser)（1）
 
 <a id="stage1"></a>
 
@@ -165,12 +166,12 @@
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
 | `CV_UNIFIED` | `"0"` | `stage2/run.py:316` |
-| `STAGE1_MERGE_TP` | `"0"` | `stage2/assemble.py:108` |
+| `STAGE1_MERGE_TP` | `"0"` | `stage2/assemble.py:111` |
 | `STAGE2_BOTH_TOL` | `"0.65"` | `stage2/text.py:87` |
 | `STAGE2_BOXIC_LIB` | `""` | `stage2/libpins.py:91` |
-| `STAGE2_BOX_PIN_DROP_UNREAD` | `"mixed"` | `stage2/assemble.py:167` |
-| `STAGE2_BOX_PIN_NEED_NAME` | `"2"` | `stage2/assemble.py:206` |
-| `STAGE2_BOX_PIN_PARTIAL` | `"1"` | `stage2/assemble.py:141` |
+| `STAGE2_BOX_PIN_DROP_UNREAD` | `"mixed"` | `stage2/assemble.py:170` |
+| `STAGE2_BOX_PIN_NEED_NAME` | `"2"` | `stage2/assemble.py:209` |
+| `STAGE2_BOX_PIN_PARTIAL` | `"1"` | `stage2/assemble.py:144` |
 | `STAGE2_CKPT` | `r"Y:\workspace\EDA\work\ocr_mix\runs\best.pt"` | `stage2/text.py:42` |
 | `STAGE2_CONFORM_AUDIT` | `"1"` | `stage2/assign.py:442` |
 | `STAGE2_CONFORM_AUDIT_MAX` | `"400"` | `stage2/assign.py:443` |
@@ -180,31 +181,31 @@
 | `STAGE2_CONFORM_TYPE_PEN` | `"0.85"` | `stage2/assign.py:433` |
 | `STAGE2_CPNT_LIB` | `""` | `stage2/libpins.py:90` |
 | `STAGE2_DBG_CID` | — | `stage2/assign.py:102` |
-| `STAGE2_DBG_PINS` | — *(4 处)* | `stage2/assemble.py:964` |
+| `STAGE2_DBG_PINS` | — *(4 处)* | `stage2/assemble.py:967` |
 | `STAGE2_DEMOTE_HARD` | `"0.05"` | `stage2/structmatch.py:35` |
 | `STAGE2_DESIG_MAXW` | `"6.0"` | `stage2/assign.py:224` |
-| `STAGE2_DROP_UNKEYED` | `"1"` | `stage2/assemble.py:59` |
-| `STAGE2_EDGE_ANG` | `"6.0"` | `stage2/assemble.py:350` |
-| `STAGE2_EDGE_JOIN` | `"40.0"` | `stage2/assemble.py:349` |
-| `STAGE2_EDGE_MERGE` | `"0"` | `stage2/assemble.py:339` |
-| `STAGE2_EDGE_SNAP` | `"10.0"` *(2 处)* | `stage2/assemble.py:348` |
-| `STAGE2_EDGE_SNAP_ANG` | `"45.0"` | `stage2/assemble.py:371` |
+| `STAGE2_DROP_UNKEYED` | `"1"` | `stage2/assemble.py:62` |
+| `STAGE2_EDGE_ANG` | `"6.0"` | `stage2/assemble.py:353` |
+| `STAGE2_EDGE_JOIN` | `"40.0"` | `stage2/assemble.py:352` |
+| `STAGE2_EDGE_MERGE` | `"0"` | `stage2/assemble.py:342` |
+| `STAGE2_EDGE_SNAP` | `"10.0"` *(2 处)* | `stage2/assemble.py:351` |
+| `STAGE2_EDGE_SNAP_ANG` | `"45.0"` | `stage2/assemble.py:374` |
 | `STAGE2_FREE_STEAL` | `"1"` | `stage2/assign.py:282` |
 | `STAGE2_GLOBAL_MATCH` | `"0"` | `stage2/assign.py:1013` |
 | `STAGE2_GROW_MIN` | `"0.9"` | `stage2/run.py:31` |
 | `STAGE2_GROW_PER_COMP` | `"4"` | `stage2/run.py:33` |
-| `STAGE2_LIB_PINS` | `"1"` *(2 处)* | `stage2/assemble.py:232` |
-| `STAGE2_LIB_PINS_DBG` | `"0"` | `stage2/assemble.py:234` |
+| `STAGE2_LIB_PINS` | `"1"` *(2 处)* | `stage2/assemble.py:235` |
+| `STAGE2_LIB_PINS_DBG` | `"0"` | `stage2/assemble.py:237` |
 | `STAGE2_LIB_PINS_FUZZY` | `"0.85"` | `stage2/libpins.py:199` |
 | `STAGE2_LIB_REFINE` | `"1"` | `stage2/librefine.py:56` |
 | `STAGE2_LIB_REFINE_WHEN` | `"any"` | `stage2/librefine.py:62` |
-| `STAGE2_MIN_EDGE_LEN` | `"20"` | `stage2/assemble.py:313` |
+| `STAGE2_MIN_EDGE_LEN` | `"20"` | `stage2/assemble.py:316` |
 | `STAGE2_MULTI_H` | `"0.43"` | `stage2/text.py:95` |
 | `STAGE2_MULTI_W` | `"0.15"` | `stage2/text.py:94` |
 | `STAGE2_NETLABEL_MIN_H` | `"9"` | `stage2/assign.py:364` |
 | `STAGE2_NETLABEL_MIN_W` | `"12"` | `stage2/assign.py:363` |
-| `STAGE2_NET_DROP_PWRONLY` | `"1"` | `stage2/assemble.py:276` |
-| `STAGE2_NET_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:265` |
+| `STAGE2_NET_DROP_PWRONLY` | `"1"` | `stage2/assemble.py:279` |
+| `STAGE2_NET_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:268` |
 | `STAGE2_NODELETE` | `"1"` | `stage2/structmatch.py:33` |
 | `STAGE2_OWN_ASSIGN` | `"0"` | `stage2/assign.py:87` |
 | `STAGE2_OWN_BBOX` | `"1"` | `stage2/assign.py:68` |
@@ -253,18 +254,18 @@
 | `STAGE2_PIN_COVER` | `"0.15"` | `stage2/assign.py:238` |
 | `STAGE2_PIN_RESIDUAL` | `"0"` | `stage2/assign.py:246` |
 | `STAGE2_PIN_RESIDUAL_MIN` | `"0"` | `stage2/assign.py:247` |
-| `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:506` |
+| `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:509` |
 | `STAGE2_PIN_STUB_MERGE` | `"12"` | `stage2/assign.py:186` |
 | `STAGE2_PREFIX` | `"strict"` | `stage2/assign.py:38` |
 | `STAGE2_PREFIX_SKEL` | `"0"` | `stage2/assign.py:48` |
-| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1243` |
-| `STAGE2_STAMP_ONE_SIDE` | `"1"` | `stage2/assemble.py:522` |
+| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1246` |
+| `STAGE2_STAMP_ONE_SIDE` | `"1"` | `stage2/assemble.py:525` |
 | `STAGE2_STEAL` | `"80"` | `stage2/assign.py:280` |
-| `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:299` |
+| `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:302` |
 | `STAGE2_TIGHT_ROLES` | `"pin_number,pin_name"` | `stage2/text.py:129` |
-| `STAGE2_TP_CV_SUBTYPES` | `"ring3"` | `stage2/assemble.py:110` |
-| `STAGE2_TP_LEDGER` | `"0"` | `stage2/assemble.py:125` |
-| `STAGE2_TP_TRUST_EVIDENCE` | `"1"` | `stage2/assemble.py:122` |
+| `STAGE2_TP_CV_SUBTYPES` | `"ring3"` | `stage2/assemble.py:113` |
+| `STAGE2_TP_LEDGER` | `"0"` | `stage2/assemble.py:128` |
+| `STAGE2_TP_TRUST_EVIDENCE` | `"1"` | `stage2/assemble.py:125` |
 | `STAGE2_VALUE_DISTW` | `"0.035"` | `stage2/assign.py:345` |
 | `STAGE2_VALUE_NETNAME` | `"0"` | `stage2/assign.py:334` |
 | `STAGE2_VALUE_STEAL` | `"40"` | `stage2/assign.py:291` |
@@ -484,3 +485,11 @@
 | `EDA_CASE_WORKERS` | `""` | `submission/run.py:293` |
 | `EDA_WALL_BUDGET_S` | `"0"` | `submission/run.py:442` |
 | `FUSION_LLM` | `"1"` *(3 处)* | `submission/run.py:783` |
+
+<a id="schematic_parser"></a>
+
+## schematic_parser
+
+| 开关 | 默认值 | 定义位置 |
+|---|---|---|
+| `OFFICIAL_BBOX_PX` | `"20.0"` | `schematic_parser/official.py:69` |
