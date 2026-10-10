@@ -94,6 +94,15 @@ class EvalConfig:
     # net comparison: 'micro' counts pins inside matched nets, 'exact' requires
     # the whole pin set of a matched net to be identical.
     net_mode: str = 'micro'
+    # 连通性通道的 tp 口径（2026-10-14 用官方判分机产物实测标定，见 RESULTS §5.21）：
+    #   官方 `connectivity.f1.soft_tp` = Σ_{配对网} 2|P∩G|/(|P|+|G|)（**每对网的
+    #   pin-set 软 F1 之和**，配对 = 以该 Dice 为目标最大化的匈牙利），随后
+    #   precision = soft_tp/pred_net_count、recall = soft_tp/gt_net_count、
+    #   f1 = 2*soft_tp/(pred+gt)。用我们第 6 次提交的真实预测复算，
+    #   case 1/7/2/3 的 soft_tp 与 f1 与官方报告**逐位相同**。
+    #   本文件早先按「tp = Σ|P∩G| 交集」实现（偏乐观：官方 10 张上高估 1.73 分），
+    #   设 net_soft=False 可回到那个旧口径（历史基线都是旧口径）。
+    net_soft: bool = True
     # compare text for IC (Name) and R/C (value)?
     compare_text: bool = True
     # do edges of a matched net pair have to be compared unordered?
@@ -110,12 +119,12 @@ class EvalConfig:
     # pin_f1 是否只统计 box（评测 Q2「非 box 类型元器件 pin name, pin number
     # 不参与评分」）；设 False 回到旧口径（全部元件）
     pin_box_only: bool = True
-    # 净 hyperGraph 的**节点口径**：非 box 元件的引脚号折成通配 `*`。
-    # 最新 QA（2026-10）：「非 box 元件 pinnumber 不计分，所以 rcl 等在 hygraph 中
-    # 相当于**不区分引脚** 1.2；gnd/vcc 同理；输出规范参考 10gt」。
-    # GT 里电源引脚号是随机生产的（`∅113.111`），字面比永远配不上；开着更贴官方。
-    # 设 False 回到「按字面比」的旧口径（历史分数都是那个口径，见 docs/DIAGNOSTICS.md）。
-    net_pin_collapse_nonbox: bool = True
+    # 净 hyperGraph 的**节点口径**：把非 box 元件的引脚号折成通配 `*`。
+    # ★ 2026-10-14 官方产物标定：官方**不折算**（case 1/7/2/3 的 `soft_tp`/`f1`
+    # 只在「字面 refs」下逐位复现；折算后 netH 差 0.033/张）⇒ 默认关。
+    # 折算会把「我们把 c/r 的脚号读错」这一事实掩盖掉，官方 10 张上虚高 7.4 分。
+    # 设 True 回到旧口径（2026-10-14 之前的基线都是它）。
+    net_pin_collapse_nonbox: bool = False
     # type 是否按 type_list 归一化
     canon_types: bool = True
 
@@ -498,11 +507,15 @@ def _net_sets(section: dict, comps: Optional[dict] = None,
     return out
 
 
-def match_nets(gt_nets, pred_nets) -> List[Tuple[int, int]]:
+def match_nets(gt_nets, pred_nets, soft: bool = False) -> List[Tuple[int, int]]:
     """Hungarian matching of predicted nets onto ground-truth nets.
 
-    Similarity is pin-set intersection (with a Jaccard tie-break), so a
-    predicted net is pulled towards the GT net it overlaps most.
+    ``soft=True``（官方口径）以**每对网的 pin-set 软 F1（Dice）**
+    2|P∩G|/(|P|+|G|) 为目标最大化 —— 官方 protocol 的
+    ``connectivity_match = 'Hungarian one-to-one pin-set soft F1'``；
+    ``net_hypergraph_f1`` 会按 ``cfg.net_soft`` 传这个开关。
+    ``soft=False``（本函数默认，保持历史探针语义）是旧口径：
+    交集（外加 Jaccard 千分之一破平）。
     """
     if not gt_nets or not pred_nets:
         return []
@@ -511,11 +524,24 @@ def match_nets(gt_nets, pred_nets) -> List[Tuple[int, int]]:
         row = []
         for _, gset in gt_nets:
             inter = len(pset & gset)
-            union = len(pset | gset)
-            sim = inter + (inter / union if union else 0.0) * 1e-3
+            if soft:
+                union = len(pset) + len(gset)
+                sim = (2.0 * inter / union) if union else 0.0
+            else:
+                union = len(pset | gset)
+                sim = inter + (inter / union if union else 0.0) * 1e-3
             row.append(-sim)
         cost.append(row)
     return _assign(cost)
+
+
+def _net_sim(pset, gset, soft: bool = True) -> float:
+    """一对网的相似度：soft = 软 F1（Dice），否则 = 交集条数。"""
+    inter = len(pset & gset)
+    if soft:
+        union = len(pset) + len(gset)
+        return (2.0 * inter / union) if union else 0.0
+    return float(inter)
 
 
 def net_hypergraph_f1(gt: dict, pred: dict, cfg: EvalConfig,
@@ -525,13 +551,26 @@ def net_hypergraph_f1(gt: dict, pred: dict, cfg: EvalConfig,
                        cfg.net_pin_collapse_nonbox)
     p_nets = _net_sets(pred['nets'], pred.get('components'),
                        cfg.net_pin_collapse_nonbox)
-    pairs = match_nets(g_nets, p_nets)
+    pairs = match_nets(g_nets, p_nets, soft=bool(getattr(cfg, 'net_soft', True)))
     res = F1()
     if cfg.net_mode == 'exact':
         tp = sum(1 for i, j in pairs if p_nets[i][1] == g_nets[j][1])
         res.tp = tp
         res.fp = len(p_nets) - tp
         res.fn = len(g_nets) - tp
+    elif bool(getattr(cfg, 'net_soft', True)):
+        # 官方口径：tp = Σ 软 F1（Dice），fp/fn 由网数扣掉 soft_tp
+        # ⇒ f1 = 2*soft_tp/(pred_count + gt_count)，与官方 report 逐位一致
+        soft = sum(_net_sim(p_nets[i][1], g_nets[j][1], True) for i, j in pairs)
+        res.tp = soft
+        res.fp = len(p_nets) - soft
+        res.fn = len(g_nets) - soft
+        if detail is not None:
+            detail['net.soft_tp'] = soft
+            detail['net.pred_count'] = len(p_nets)
+            detail['net.gt_count'] = len(g_nets)
+            detail['net.pred_pins'] = sum(len(s) for _, s in p_nets)
+            detail['net.gt_pins'] = sum(len(s) for _, s in g_nets)
     else:
         tp = sum(len(p_nets[i][1] & g_nets[j][1]) for i, j in pairs)
         total_pred = sum(len(s) for _, s in p_nets)
