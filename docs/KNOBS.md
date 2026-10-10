@@ -164,7 +164,7 @@
 
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
-| `CV_UNIFIED` | `"0"` | `stage2/run.py:314` |
+| `CV_UNIFIED` | `"0"` | `stage2/run.py:316` |
 | `STAGE1_MERGE_TP` | `"0"` | `stage2/assemble.py:108` |
 | `STAGE2_BOTH_TOL` | `"0.65"` | `stage2/text.py:87` |
 | `STAGE2_BOXIC_LIB` | `""` | `stage2/libpins.py:91` |
@@ -218,13 +218,13 @@
 | `STAGE2_PINCOL_WIN_KEYS` | `"out_win"` | `stage2/run.py:40` |
 | `STAGE2_PINNAME_MAXW` | `"6.0"` | `stage2/assign.py:190` |
 | `STAGE2_PINNAME_OUTSIDE` | `"0"` | `stage2/assign.py:214` |
-| `STAGE2_PINNAME_RESCUE` | `"0"` | `stage2/pinname.py:56` |
-| `STAGE2_PINNAME_RESCUE_AGREE` | `"1"` | `stage2/pinname.py:60` |
-| `STAGE2_PINNAME_RESCUE_CONF` | `"0.70"` | `stage2/pinname.py:58` |
-| `STAGE2_PINNAME_RESCUE_DEPTH` | `"52.0"` | `stage2/pinname.py:63` |
-| `STAGE2_PINNAME_RESCUE_GRAY` | `"170"` | `stage2/pinname.py:65` |
-| `STAGE2_PINNAME_RESCUE_INSET` | `"4.0"` | `stage2/pinname.py:62` |
-| `STAGE2_PINNAME_RESCUE_SAT` | `"70"` | `stage2/pinname.py:66` |
+| `STAGE2_PINNAME_RESCUE` | `"1"` | `stage2/pinname.py:67` |
+| `STAGE2_PINNAME_RESCUE_AGREE` | `"1"` | `stage2/pinname.py:71` |
+| `STAGE2_PINNAME_RESCUE_CONF` | `"0.70"` | `stage2/pinname.py:69` |
+| `STAGE2_PINNAME_RESCUE_DEPTH` | `"52.0"` | `stage2/pinname.py:74` |
+| `STAGE2_PINNAME_RESCUE_GRAY` | `"170"` | `stage2/pinname.py:76` |
+| `STAGE2_PINNAME_RESCUE_INSET` | `"4.0"` | `stage2/pinname.py:73` |
+| `STAGE2_PINNAME_RESCUE_SAT` | `"70"` | `stage2/pinname.py:77` |
 | `STAGE2_PINNUM_DECAY` | `"10"` | `stage2/assign.py:132` |
 | `STAGE2_PINNUM_DISTW` | `"0.005"` | `stage2/assign.py:119` |
 | `STAGE2_PINNUM_DUP` | `"0"` | `stage2/assign.py:144` |

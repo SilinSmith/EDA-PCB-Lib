@@ -1,5 +1,16 @@
 # -*- coding: utf-8 -*-
-"""引脚名救援（`STAGE2_PINNAME_RESCUE`，默认关）：号读出来了、名字没读到 ⇒ 以前整条丢。
+"""引脚名救援（`STAGE2_PINNAME_RESCUE`，2026-10-16 起**默认开**）：号读出来了、名字没读到 ⇒ 以前整条丢。
+
+★ 默认值依据（端到端 A/B，`tools\\eval\\fast.py`，两套装置都不为负）
+  * 官方 10 张 `--no-vlm`：**60.5854 → 61.0000（+0.4146/张，3 涨 0 跌）** ——
+    case 4 58.75 → 60.14（+1.39）、case 5 53.06 → 53.40（+0.35）、case 6 58.09 → 60.46
+    （+2.38），其余 7 张逐位不变；引脚 tp 297 → 301、网络 tp 112 → 115、导线 tp 241 → 249。
+  * 派生 val 19 张（泄漏无关留出集）`--no-vlm`：**17.0047 → 17.0322（+0.0274，4 涨 0 跌）**
+    —— 0176 +0.33、0011 +0.10、0166 +0.08、0050 +0.01。
+  * 实际补名（与关闭臂逐槽位 diff）：case 4 `U1`（c0001）号 5 补 `PROG`；case 5 `U1`
+    号 7 补 `P`、号 1 补 `GND`；case 6 两颗 IC 号 3 补 `FAULT`、号 8 补 `EN` —— 共 6 处。
+  关闭时（`STAGE2_PINNAME_RESCUE=0`）行为与不挂接这条通道**逐位一致**。
+
 
 问题（可复现读数）
 ------------------
@@ -52,8 +63,8 @@ except ImportError:                     # 直接 `python stage2\pinname.py` 自�
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from envflag import env_on
 
-#: 总开关（默认关：先 A/B 再决定默认值）
-ON = env_on("STAGE2_PINNAME_RESCUE", "0")
+#: 总开关（默认开，2026-10-16；依据见模块 docstring：官方 10 +0.4146、派生 val 19 +0.0274，两套装置都 0 跌）
+ON = env_on("STAGE2_PINNAME_RESCUE", "1")
 #: 采信门槛
 CONF_MIN = float(os.environ.get("STAGE2_PINNAME_RESCUE_CONF", "0.70"))
 #: 两参考点（脚点 y / 该脚号码文字框的 y）必须取到**同一行**才发（默认开）

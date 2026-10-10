@@ -241,11 +241,13 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
             reads = list(reads) + list(extra)
             a = assign(doc.get("components") or [], doc.get("pins") or {}, reads,
                        pincol=doc.get("pincol"))
-    # ★ 引脚名救援（`stage2/pinname.py`，`STAGE2_PINNAME_RESCUE` 默认关）：
+    # ★ 引脚名救援（`stage2/pinname.py`，`STAGE2_PINNAME_RESCUE` 默认**开**，2026-10-16）：
     #   「号读对了、名字没读到」的 box 脚以前会被 `assemble.py` 的 NEED_NAME 闸门
     #   整条丢掉（官方 9 张：缺号 51 里有 23 根 = 45%）。这里从脚点往体内切带、
     #   剔掉体描边、按行分组只取离脚最近的一行，读一次；过闸门才写回名字。
     #   必须在 `build_doc` **之前**（名字要进交付文档），且只动 `a` 不删任何东西。
+    #   默认值依据：官方 10 张 --no-vlm 60.5854 → 61.0000（+0.4146/张，3 涨 0 跌）、
+    #   派生 val 19 张 17.0047 → 17.0322（+0.0274，4 涨 0 跌）；置 0 时逐位不变。
     try:
         from . import pinname as _pinname
         _pn = _pinname.rescue(bgr, doc, a, engine)
