@@ -6,14 +6,14 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **404** 个开关。
+共 **405** 个开关。
 
 ## 目录
 
 - [stage1](#stage1)（131）
 - [stage2](#stage2)（106）
 - [stage3](#stage3)（2）
-- [fusion](#fusion)（114）
+- [fusion](#fusion)（115）
 - [vlm](#vlm)（12）
 - [textrec](#textrec)（13）
 - [cvparts](#cvparts)（10）
@@ -300,7 +300,7 @@
 | `FUSION_AXIS` | `"1"` | `fusion/axis.py:87` |
 | `FUSION_AXIS_VERT` | `"0"` | `fusion/axis.py:155` |
 | `FUSION_BASE` | `"ours"` | `fusion/run.py:130` |
-| `FUSION_BOXSCAN` | `"0"` | `fusion/claims.py:129` |
+| `FUSION_BOXSCAN` | `"0"` | `fusion/claims.py:151` |
 | `FUSION_BOX_PIN_PRIOR` | `"0"` | `fusion/priors.py:135` |
 | `FUSION_CASES` | `""` | `fusion/run.py:380` |
 | `FUSION_CONV_EXACT` | `"1"` | `fusion/run.py:92` |
@@ -364,9 +364,9 @@
 | `FUSION_READ_INS` | `"0.30"` | `fusion/priors.py:429` |
 | `FUSION_READ_ROW_OVERLAP` | `"0.5"` | `fusion/priors.py:282` |
 | `FUSION_READ_SUB` | `"0.05"` | `fusion/priors.py:430` |
-| `FUSION_REGION_MIN` | `"120"` | `fusion/claims.py:92` |
-| `FUSION_REGION_PAD` | `"24"` | `fusion/claims.py:90` |
-| `FUSION_REGION_TOPK` | `"1"` | `fusion/claims.py:134` |
+| `FUSION_REGION_MIN` | `"120"` | `fusion/claims.py:114` |
+| `FUSION_REGION_PAD` | `"24"` | `fusion/claims.py:112` |
+| `FUSION_REGION_TOPK` | `"1"` | `fusion/claims.py:156` |
 | `FUSION_REPAIR_PENALTY` | `"0.85"` | `fusion/priors.py:223` |
 | `FUSION_RESCAN_CROP` | `"window"` | `fusion/rescan.py:42` |
 | `FUSION_RESCAN_MAX` | `"12"` | `fusion/rescan.py:40` |
@@ -395,6 +395,7 @@
 | `FUSION_VALUE_MIN_N` | `"4"` | `fusion/plausible.py:55` |
 | `FUSION_VALUE_RATIO` | `"4.0"` | `fusion/plausible.py:53` |
 | `FUSION_VLM_DIR` | `r"Y:\workspace\EDA\work\_fusion_vlm"` *(2 处)* | `fusion/audit.py:556` |
+| `FUSION_VLM_PIN_ADDONLY` | `"1"` | `fusion/claims.py:105` |
 | `FUSION_VLM_PIN_NAME` | `"1"` | `fusion/claims.py:83` |
 | `FUSION_VLM_PIN_NUM` | `"1"` | `fusion/claims.py:82` |
 | `FUSION_VLM_PIN_SCORE` | `"1.15"` | `fusion/claims.py:74` |

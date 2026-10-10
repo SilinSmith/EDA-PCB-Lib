@@ -81,6 +81,28 @@ VLM_PIN = float(os.environ.get("FUSION_VLM_PIN_SCORE", "1.15"))
 #   谁在派生集上倒扣（case 9 上「名」倒扣 4.55）。
 VLM_PIN_NUM = env_on("FUSION_VLM_PIN_NUM", "1")
 VLM_PIN_NAME = env_on("FUSION_VLM_PIN_NAME", "1")
+# ★ `FUSION_VLM_PIN_ADDONLY`（默认 **1** = 只增不删，2026-10 转正）：VLM 的引脚**号**只许补
+# 空槽，不许覆盖「阶段一/CRNN 已经读到的号」。
+#
+# 依据（官方 10 张 + 派生 val 19 张，`--engine official`、bbox 已按 20px 修正）：
+#   | 臂 | 官方 10 | val 19 | 官方 10 的 pin tp |
+#   |---|---|---|---|
+#   | 关（旧行为 = 现行之前） | 67.4420 | 19.7911 | 316 |
+#   | `FUSION_VLM_PIN_NUM=0`（整段关掉号通道） | 67.5397 (+0.10) | 20.1208 (+0.33) | 317 |
+#   | **`ADDONLY=1`（只增不删，本行起为默认）** | **67.6782 (+0.24)** | **20.1030 (+0.31)** | **319** |
+# ⇒ 只增不删在官方 10 上**优于**整段关掉（+0.24 vs +0.10，pin tp 319 vs 317），val 19 上持平
+# （−0.02）。逐案最大项：case 8 +1.74、case 1 +0.95、case 7 −0.33；val 0029 +3.68 / 0151 +1.09 /
+# 0176 +1.05 / 0011 +0.71 / 0190 −0.58。
+#
+# 机理（探针 `work\tools\dev\_nopin.py`，case 1 的 `U1`）：VLM 补对 5 根，却把 3 根本来读对、
+# 槽位仍在的号（`17`/`79`/`122`，GT 里都存在）从产物里**抹掉**，而且补进来的 5 根里有 4 根落在
+# 离 GT 脚点 >5px 处 ⇒「加 5 减 3」。业主 ④「可以削弱内容的置信度，但不能轻易覆盖/删除」在引脚
+# 号上同样成立 ⇒ 覆盖不生效、只记一条 `keep` 台账（`cvparts.hypo.LEDGER`）。
+#
+# ⚠ 第一版写成查 `pool.alts(sid)` 判定「槽位已有号」，实测与基线**逐位相同**（no-op）：`_add_vlm`
+# 是在 OCR 那一轮**之前**被调用的（见 `from_stage2` 尾部），此时池子里还没有 OCR 的号，查池子
+# 恒为空。判据必须查 `pool.assigned`（`_assigned` 那一份原始读数）。
+VLM_PIN_ADDONLY = env_on("FUSION_VLM_PIN_ADDONLY", "1")
 # 装配层给未配上位号的元件发的占位键（`assemble.build_doc` 的 `"p%03d" % i`）：
 # `p008` 这种既不是位号也不是型号，被 VLM 照抄回来时必须丢掉。
 FKEY_RE = re.compile(r"^p\d{3,4}$")
@@ -613,6 +635,29 @@ def _add_vlm(pool: "ClaimPool", vlm: dict, comps: dict,
                 if not txt:
                     continue
                 sid = "pin.%s.%d.%s" % (cid, k, fld)
+                if fld == "number" and VLM_PIN_ADDONLY:
+                    # 只增不删：这个槽位在 `_assigned`（阶段一/CRNN 的读数，VLM 之前的原始
+                    # 那一份）里**已经有号**，就保留它，VLM 的值只记一条台账。
+                    #
+                    # ⚠ 判据必须查 `pool.assigned`，**不能**查 `pool.alts(sid)`：`_add_vlm`
+                    # 是在 OCR 那一轮**之前**调用的（见 `from_stage2` 尾部），此时池子里还
+                    # 没有 OCR 的号，查池子恒为空 ⇒ 第一版就是这么写成 no-op 的（实测
+                    # 官方 10 张与基线逐位相同 67.4420）。
+                    _orec = ((pool.assigned.get("comps") or {}).get(cid) or {}).get("pins") or {}
+                    _o = _orec.get(k) or _orec.get(str(k)) or {}
+                    _ocur = str(((_o.get("number") or {}).get("text")) or "").strip()
+                    if _ocur:
+                        try:
+                            from cvparts.hypo import LEDGER
+                            LEDGER.record(
+                                "keep", "vlm_pin:%s.%d" % (cid, k),
+                                before=_ocur, after=_ocur,
+                                reason=("VLM 引脚号 %r 与阶段一读到的 %r 冲突：按「只增不删」"
+                                        "保留原读数（VLM 值只记台账）" % (txt, _ocur)),
+                                by="claims:_add_vlm")
+                        except Exception:                          # noqa: BLE001
+                            pass
+                        continue
                 _dup = False
                 for alt in pool.alts(sid):
                     if str(alt.value) == txt and float(alt.score) >= VLM_PIN:
