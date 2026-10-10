@@ -6,6 +6,14 @@
 > `stage3` 只做一件事：把 `stage2` 拿不准的位号做成**选择题**交给 LLM（本机没有
 > LLM 环境时用本地 stub，见 §5）。
 
+有可信红绿端点和实际芯片本体边时，第二阶段现默认追加独立的引脚名称/编号裁片。
+新路径隔离邻行、彩色符号和 OCR 留白，并在证据不足时保留原读数。
+`STAGE2_PIN_LANE_CROP=0` 可关闭；`STAGE2_PIN_LANE_CLEANUP=light` 为默认清理，
+`raw` 用于不清理的对照。开关应在启动 Python 前设置。名称、号码和置信度选项继续
+控制新读数；`roles` 只筛选 OCR 角色，既有归属器仍可能把纯数字位号候选用于号码。
+适用范围、固定上游输入的 10GT 实测及剩余限制见
+[第七轮报告](../docs/第七轮独立引脚裁片与OCR输入修正.md)。
+
 ---
 
 ## 1. 端到端命令
@@ -45,6 +53,9 @@ python Y:\workspace\EDA\work\stage2_eval.py Y:\workspace\EDA\work\stage3_all
 | `assign.py` | 角色分配：位号 / 参数 / 器件名 / 引脚名 / 引脚号 / 网络标签。**含 `canon_designator` 前缀矫正、`desig_slots` 与 `struct_slots` 候选输出** |
 | `assemble.py` | 组装成官方 `{components, pins, nets}`；**y 轴只在出口翻一次**（`y_json = H - y_img`） |
 | `run.py` | 第二阶段 CLI，另写 `_assigned/<case>.json` 供第三阶段重装配 |
+| `pin_lane_crops.py` | 根据当前可信颜色引脚和实际框边，独立生成四侧名称/编号区域并检查字形完整性 |
+| `isolated_ocr.py` | 完整字形旋转后加白色护边，逐片识别，避免邻居像素和批次宽度改变读数 |
+| `pin_lane_reading.py` | 仅对缺失、混框、污染等可观察问题补读；分别采信名称/号码并保护未确认的名号配对 |
 | `..\stage3\arbitrate.py` | 槽位构造 / 仲裁 / 回填 / 去重 |
 | `..\stage3\run.py` | 第三阶段 CLI |
 | `..\..\work\stage2_eval.py` | 按**文件名精确配对**的评测器 |

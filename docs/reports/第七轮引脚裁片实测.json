@@ -1,0 +1,3209 @@
+{
+  "baseline_commit": "ddb94e83d1d2a50cb6e97cd23975216917a2ce92",
+  "scope": "specified 10GT; chip box pins; color diagnostics exclude monochrome case 1",
+  "evidence_boundary": "Fixed observed stage1 component/pin/wire geometry and initial OCR; local crops freshly recognized with the same checkpoint. GT is evaluation only. Not fresh upstream detection, an independent hidden test, or official online scoring.",
+  "coordinate_free_definition": "Exact component key, pin_n and pinname; coordinates ignored; micro counts.",
+  "physical_binding_definition": "Evaluation-only fixed GT-to-observed-pin trace, independently checking bound name and number.",
+  "candidate_arm_definition": "new_names/new_numbers filter one shared full lane read batch. They isolate candidate insertion, not independent OCR or direction inference; new numbers may share observed direction votes from new names.",
+  "source_hashes": {
+    "stage2/__init__.py": "47230117438d313d85e862cb0282e4393a8901947f25be03e850e251eb25e507",
+    "stage2/assemble.py": "da025e66976281bed2e441272e8f13c33cb78d2763e4efa04576c05ab26e1fef",
+    "stage2/assign.py": "1d43722293728beae5f8c8a8c977855a4972f2f0cd69119c144b5be38bf885a0",
+    "stage2/color_crops.py": "bc30935e6f42ea660d5aa1aa1b129b3f44871f64cf61198171d5ae0b4a95b5f8",
+    "stage2/expect.py": "90fc618a8f79aea197cceb2576baadd6685e7683392dd1efdbdf7fd3079c3fcf",
+    "stage2/growbox.py": "2bb327df381275ca972b475aa2e94b4516d4c173cf5e23eb216358aa13e8f51a",
+    "stage2/isolated_ocr.py": "01f2814c156f4d73caec878111825261dc57f81f8358cc0b6f9be2ebfcb57ad0",
+    "stage2/pin_lane_crops.py": "8b75927ad4e822ab79fe21936fbb9ea9403a7eeea018639c05b0c8697070dae1",
+    "stage2/pin_lane_reading.py": "1fd5f089748c2e26b23896d4ecd58033256abf39fece745df0ea838687832170",
+    "stage2/pin_text_crops.py": "9ea03241c629f15ebdcaf8ca7a10b148977e8e58ef2f5650a70721c0fbdaebdc",
+    "stage2/run.py": "52d40994f302b2f954e5804a7485efe1df1b0982f5fae2bda8d79f1742153292",
+    "stage2/structmatch.py": "6bd4adc6bcaa50bf3855a8efad3041a8171b5b2c866d1e22c5300eb84f665e47",
+    "stage2/text.py": "f6524d6dfe949e6d0c1011cc71aee70eae625f9000c758e0b8ca59b76b17e132",
+    "textrec/__init__.py": "833ae46aea940aec5ee242916cadcdffe910085c0eca789b4f031bd5c13a0e01",
+    "textrec/charset.py": "63372078b7b388a9782f6b1a24058e3c21bd20f59a138ef3f02c65ea8cbd9190",
+    "textrec/config.py": "646bf5dbc9bf88f418812695bcc9863c507971441fbd13ba8d7580e8e93e0d9b",
+    "textrec/dataset.py": "34cd04e37d0051313b2498ea68accc30c6e603c13d9f2ce0a50ff5710a901fe3",
+    "textrec/eval_real.py": "8ea3e86779adf701829a82352f43eca8d47f3266cdeaae32829a7df5b440a6e7",
+    "textrec/infer.py": "f4359d4f904e966d4ab31f2b092a81070255a4b29337b6bfa184f383dc06e12e",
+    "textrec/manifest.py": "530d0361be577bddf4d9be9c5e4330a9818a5a67fa56d224159c5b057af30edd",
+    "textrec/model.py": "4b35bb38dff54cc19c72e29f64679d42719599d0ac57822fee6449f67274d9f2",
+    "textrec/train.py": "a23ff7c0083327fa771c721aa8bdb840dfff2ccd7c9f13349729163931ab3a24",
+    "schematic_parser/metrics.py": "c4888ad700d94c39adfb17d59671b931f1c791e52ee4fb4b3fad4dfed358f8bd",
+    "schematic_parser/data.py": "554d00991a1b5e75a9b7596dff32c8cb8ccfce805d44fac0a4eb7ff742d70669"
+  },
+  "baseline_snapshot_hashes": {
+    "stage2/assemble.py": "da025e66976281bed2e441272e8f13c33cb78d2763e4efa04576c05ab26e1fef",
+    "stage2/assign.py": "1d43722293728beae5f8c8a8c977855a4972f2f0cd69119c144b5be38bf885a0",
+    "stage2/color_crops.py": "bc30935e6f42ea660d5aa1aa1b129b3f44871f64cf61198171d5ae0b4a95b5f8",
+    "stage2/expect.py": "90fc618a8f79aea197cceb2576baadd6685e7683392dd1efdbdf7fd3079c3fcf",
+    "stage2/growbox.py": "2bb327df381275ca972b475aa2e94b4516d4c173cf5e23eb216358aa13e8f51a",
+    "stage2/pin_text_crops.py": "9ea03241c629f15ebdcaf8ca7a10b148977e8e58ef2f5650a70721c0fbdaebdc",
+    "stage2/run.py": "ff744b7e17adf001cba2b9a468bf58d38e6b32c55f4b03907586e7eb0ef78f65",
+    "stage2/structmatch.py": "6bd4adc6bcaa50bf3855a8efad3041a8171b5b2c866d1e22c5300eb84f665e47",
+    "stage2/text.py": "f6524d6dfe949e6d0c1011cc71aee70eae625f9000c758e0b8ca59b76b17e132",
+    "stage2/__init__.py": "47230117438d313d85e862cb0282e4393a8901947f25be03e850e251eb25e507",
+    "textrec/charset.py": "63372078b7b388a9782f6b1a24058e3c21bd20f59a138ef3f02c65ea8cbd9190",
+    "textrec/config.py": "646bf5dbc9bf88f418812695bcc9863c507971441fbd13ba8d7580e8e93e0d9b",
+    "textrec/dataset.py": "34cd04e37d0051313b2498ea68accc30c6e603c13d9f2ce0a50ff5710a901fe3",
+    "textrec/eval_real.py": "8ea3e86779adf701829a82352f43eca8d47f3266cdeaae32829a7df5b440a6e7",
+    "textrec/infer.py": "f4359d4f904e966d4ab31f2b092a81070255a4b29337b6bfa184f383dc06e12e",
+    "textrec/manifest.py": "530d0361be577bddf4d9be9c5e4330a9818a5a67fa56d224159c5b057af30edd",
+    "textrec/model.py": "4b35bb38dff54cc19c72e29f64679d42719599d0ac57822fee6449f67274d9f2",
+    "textrec/train.py": "a23ff7c0083327fa771c721aa8bdb840dfff2ccd7c9f13349729163931ab3a24",
+    "textrec/__init__.py": "833ae46aea940aec5ee242916cadcdffe910085c0eca789b4f031bd5c13a0e01"
+  },
+  "ocr_checkpoint_sha256": "f089e38b4940e3501b06dd17c5dd6a975eeb145a6030f030b40fa3f994ed2cf5",
+  "configuration": {
+    "FUSION_LLM": "0",
+    "FUSION_ITERATE": "0",
+    "STAGE1_PIN_DIRECTION_GUARD": "0",
+    "STAGE1_PIN_ATTACHMENT_GUARD": "0",
+    "STAGE2_PINNUM_CONSENSUS": "1",
+    "STAGE2_BOX_PIN_DUPLICATE_BEST": "1",
+    "EDA_GPU_CAP": "0",
+    "STAGE2_PIN_TRUST_BIND": "1"
+  },
+  "input_hashes": {
+    "1": {
+      "stage1_sha256": "b078f96e848d74b006f647572b46cbc10d70f6ee3bab8a401d097fcfab615c72",
+      "reads_sha256": "bcdec98b1d3b517796b761f8a502ba8d057a83757ea584f16f72bb8b9bcae390",
+      "image_sha256": "b6fbf993baa18593b09c9297cb462c2f4e5844eeaf27eceb5bfa03bcc32ae3f9",
+      "gt_sha256": "e52d73cb561de8bf5a251cae31638cd914fd320289fbe5e356999807e0cade08"
+    },
+    "2": {
+      "stage1_sha256": "3be21f781274b7c61763e661d46ccb74f94764562b9c70a930b20d2f95d82528",
+      "reads_sha256": "7f0316da4ebad69b1da8a5986989669ba603b51ea446595852ca3d6487cbae2c",
+      "image_sha256": "c6ebc4573158340b64c3f5247e6cb0e2fb9f7325974ad27641dbfb31a770f229",
+      "gt_sha256": "69c4ca59bc5ad1585922754cdd95c172a9702fc1eb491236b7ab5c6e14f5430f"
+    },
+    "3": {
+      "stage1_sha256": "0e1257a52053004903cbf917cdfa4c194c585a294b35b43f1a2732192feaaeef",
+      "reads_sha256": "1748bda33108fbdb7b2b6e846fcea4fe36532bdfd27ea05ed55c8528aad2e1e3",
+      "image_sha256": "30c65062c9032ee83e20b9a16cbe33e0ea40beb2ac532e632fd51d5294bdecb8",
+      "gt_sha256": "ab40961f5920c4948522263aa03ddbd7dccd16c82c5cdc31985e5eb1274285e5"
+    },
+    "4": {
+      "stage1_sha256": "07ea34d58b817c314a6179c82c8fc4375967dbbaa2686f0a82bd56fdd4656675",
+      "reads_sha256": "35e9059aeb6b2106cf09176fa4a460457e5c928c1f8e97db26704b2d2819f5db",
+      "image_sha256": "d3b167ae7f08159272e5a5950c572e2aa5870c822cde57d007eabd61ce9d71c0",
+      "gt_sha256": "2b5c13c4abba511037bfa0f19200f3e3c37a163e7222d8340ea94279dcd1d6e9"
+    },
+    "5": {
+      "stage1_sha256": "3edaed992d078ae27ebea803b3f1c08d1b98e0a19081b39bb8ec8ec897bceb52",
+      "reads_sha256": "da10e2ad9999d4376ee938a60b9e5e32fec4d44368413f211a9c75c595b578ae",
+      "image_sha256": "f39ffdc2677a9b535d25067f55199cd324195614319084717bb54df02f4c83fb",
+      "gt_sha256": "8df3c482636189ba05491744736c2f5cf5702d72bd11882f199fe7c14fd4d871"
+    },
+    "6": {
+      "stage1_sha256": "42aa1ec2f5b6f34915c21dbb2404efaa506f275ef6561f9b20e2d3d59997decf",
+      "reads_sha256": "e3b35a01410530e855d82767fdba18aa0dc2d2946e2d9b75f7b9c0c6f8a638ce",
+      "image_sha256": "1437dcc7a48b969730f4329bfddcdbb2aa0669146afa28e1f30401e3c3e86984",
+      "gt_sha256": "ae89511ea46d393111ac6b904a7d6efd537051cc4034f9e8b25fe7fd2dd6ae45"
+    },
+    "7": {
+      "stage1_sha256": "ee5feac3362c3d63f454d0086acd00d15ab4e65d33a527a7d6285061732cbe15",
+      "reads_sha256": "43457e40c69dbd389fd66a29b7087ff53aca389cf985092ec0fce8595cc7daa6",
+      "image_sha256": "7a403f9bf4af26fdef6bae4499ec30aee9e0ed85ec31935afe02e17bbcec7deb",
+      "gt_sha256": "1f7cdd82e6ba1f2f393c15387452b394ca1cca618c5831392f56594c2619e055"
+    },
+    "8": {
+      "stage1_sha256": "15bcc5a76144950b3ad567fbbc29d5b69c09586aa2c18d3a834da2e25876ea3a",
+      "reads_sha256": "226f24786ca365c3c9ac7ec9116e6962f6105d3d3c153f8c61bbd93edd6e96fe",
+      "image_sha256": "4b450fd6e00caaba1ca1cf34cdd1eeae64d3af7de9c7eda8bd4d2e9cd5d70c13",
+      "gt_sha256": "77bf1a79dfabb18215860e4dae21bf1f39780d9f02bfdc8204f33538b70b1fba"
+    },
+    "9": {
+      "stage1_sha256": "c18aa31d7efd06fb9b724c3768bddba236db1699b1d4bb5fafab3442ffe68b08",
+      "reads_sha256": "4ab5952c2806453f0ff8dbada74d6363b4abcf24eaefd4d08385ed0b3179256c",
+      "image_sha256": "7848e01f5594d01ccc0b65fab1c8d7b3679eb7b94d9c4124424c6afd6abd3886",
+      "gt_sha256": "7f572a6fac8546f600f236dde902ac35e7936ccf6e0a51ef2ff6745769cb685c"
+    },
+    "10": {
+      "stage1_sha256": "9ac674a02f650c389e8d9bd357f05987fbe71e1a04257c684b65e7aae2bbd79d",
+      "reads_sha256": "3115d7087ffa64cc767361a11b5d9d9d45f5df9789180e93c60584e72ac2aef7",
+      "image_sha256": "53a92db828b48cb71a8554214a238c8043b393cb8db206ff4f0d0944980ef223",
+      "gt_sha256": "f807a90420fe5a9818f1df574e62830b37cd1e6cbaa05138570c909a413c4522"
+    }
+  },
+  "baseline_crop_mode": "fresh",
+  "coordinate_free": {
+    "baseline": {
+      "all10": {
+        "gt": 136,
+        "predicted": 119,
+        "correct": 91,
+        "matching_number": 114,
+        "name_mismatch": 23,
+        "missing_number": 22,
+        "extra_number": 5,
+        "precision": 0.7647058823529411,
+        "recall": 0.6691176470588235,
+        "f1": 0.7137254901960784
+      },
+      "color2to10": {
+        "gt": 110,
+        "predicted": 98,
+        "correct": 75,
+        "matching_number": 97,
+        "name_mismatch": 22,
+        "missing_number": 13,
+        "extra_number": 1,
+        "precision": 0.7653061224489796,
+        "recall": 0.6818181818181818,
+        "f1": 0.7211538461538461
+      }
+    },
+    "binding_only": {
+      "all10": {
+        "gt": 136,
+        "predicted": 119,
+        "correct": 91,
+        "matching_number": 114,
+        "name_mismatch": 23,
+        "missing_number": 22,
+        "extra_number": 5,
+        "precision": 0.7647058823529411,
+        "recall": 0.6691176470588235,
+        "f1": 0.7137254901960784
+      },
+      "color2to10": {
+        "gt": 110,
+        "predicted": 98,
+        "correct": 75,
+        "matching_number": 97,
+        "name_mismatch": 22,
+        "missing_number": 13,
+        "extra_number": 1,
+        "precision": 0.7653061224489796,
+        "recall": 0.6818181818181818,
+        "f1": 0.7211538461538461
+      }
+    },
+    "new_names": {
+      "all10": {
+        "gt": 136,
+        "predicted": 119,
+        "correct": 91,
+        "matching_number": 114,
+        "name_mismatch": 23,
+        "missing_number": 22,
+        "extra_number": 5,
+        "precision": 0.7647058823529411,
+        "recall": 0.6691176470588235,
+        "f1": 0.7137254901960784
+      },
+      "color2to10": {
+        "gt": 110,
+        "predicted": 98,
+        "correct": 75,
+        "matching_number": 97,
+        "name_mismatch": 22,
+        "missing_number": 13,
+        "extra_number": 1,
+        "precision": 0.7653061224489796,
+        "recall": 0.6818181818181818,
+        "f1": 0.7211538461538461
+      }
+    },
+    "new_numbers": {
+      "all10": {
+        "gt": 136,
+        "predicted": 119,
+        "correct": 91,
+        "matching_number": 114,
+        "name_mismatch": 23,
+        "missing_number": 22,
+        "extra_number": 5,
+        "precision": 0.7647058823529411,
+        "recall": 0.6691176470588235,
+        "f1": 0.7137254901960784
+      },
+      "color2to10": {
+        "gt": 110,
+        "predicted": 98,
+        "correct": 75,
+        "matching_number": 97,
+        "name_mismatch": 22,
+        "missing_number": 13,
+        "extra_number": 1,
+        "precision": 0.7653061224489796,
+        "recall": 0.6818181818181818,
+        "f1": 0.7211538461538461
+      }
+    },
+    "full": {
+      "all10": {
+        "gt": 136,
+        "predicted": 121,
+        "correct": 93,
+        "matching_number": 116,
+        "name_mismatch": 23,
+        "missing_number": 20,
+        "extra_number": 5,
+        "precision": 0.768595041322314,
+        "recall": 0.6838235294117647,
+        "f1": 0.7237354085603113
+      },
+      "color2to10": {
+        "gt": 110,
+        "predicted": 100,
+        "correct": 77,
+        "matching_number": 99,
+        "name_mismatch": 22,
+        "missing_number": 11,
+        "extra_number": 1,
+        "precision": 0.77,
+        "recall": 0.7,
+        "f1": 0.7333333333333333
+      }
+    },
+    "full_raw": {
+      "all10": {
+        "gt": 136,
+        "predicted": 121,
+        "correct": 93,
+        "matching_number": 116,
+        "name_mismatch": 23,
+        "missing_number": 20,
+        "extra_number": 5,
+        "precision": 0.768595041322314,
+        "recall": 0.6838235294117647,
+        "f1": 0.7237354085603113
+      },
+      "color2to10": {
+        "gt": 110,
+        "predicted": 100,
+        "correct": 77,
+        "matching_number": 99,
+        "name_mismatch": 22,
+        "missing_number": 11,
+        "extra_number": 1,
+        "precision": 0.77,
+        "recall": 0.7,
+        "f1": 0.7333333333333333
+      }
+    }
+  },
+  "color_binding_diagnostics": {
+    "baseline": {
+      "name_correct": 84,
+      "number_correct": 97,
+      "both_correct": 75
+    },
+    "binding_only": {
+      "name_correct": 84,
+      "number_correct": 97,
+      "both_correct": 75
+    },
+    "new_names": {
+      "name_correct": 86,
+      "number_correct": 97,
+      "both_correct": 75
+    },
+    "new_numbers": {
+      "name_correct": 84,
+      "number_correct": 99,
+      "both_correct": 75
+    },
+    "full": {
+      "name_correct": 86,
+      "number_correct": 99,
+      "both_correct": 77
+    },
+    "full_raw": {
+      "name_correct": 86,
+      "number_correct": 99,
+      "both_correct": 77
+    }
+  },
+  "scores": {
+    "baseline": {
+      "cases": 10,
+      "mean_score": 48.8823,
+      "component_f1": 0.791879,
+      "pin_f1": 0.123314,
+      "net_hypergraph_f1": 0.604589,
+      "net_line_f1": 0.088245
+    },
+    "binding_only": {
+      "cases": 10,
+      "mean_score": 48.8823,
+      "component_f1": 0.791879,
+      "pin_f1": 0.123314,
+      "net_hypergraph_f1": 0.604589,
+      "net_line_f1": 0.088245
+    },
+    "new_names": {
+      "cases": 10,
+      "mean_score": 48.8823,
+      "component_f1": 0.791879,
+      "pin_f1": 0.123314,
+      "net_hypergraph_f1": 0.604589,
+      "net_line_f1": 0.088245
+    },
+    "new_numbers": {
+      "cases": 10,
+      "mean_score": 48.8823,
+      "component_f1": 0.791879,
+      "pin_f1": 0.123314,
+      "net_hypergraph_f1": 0.604589,
+      "net_line_f1": 0.088245
+    },
+    "full": {
+      "cases": 10,
+      "mean_score": 49.2863,
+      "component_f1": 0.791879,
+      "pin_f1": 0.13667,
+      "net_hypergraph_f1": 0.606592,
+      "net_line_f1": 0.088245
+    },
+    "full_raw": {
+      "cases": 10,
+      "mean_score": 49.078,
+      "component_f1": 0.791879,
+      "pin_f1": 0.128337,
+      "net_hypergraph_f1": 0.606592,
+      "net_line_f1": 0.088245
+    }
+  },
+  "type_spec": {
+    "path": "D:\\赛题六训练集\\10GT\\10GT\\type_list.md",
+    "sha256": "937192fd6a0e2c979997d9b7f383401a997d257e80aac3e6e9f4de02eaefbaa6"
+  },
+  "inputs_and_sources_unchanged": true,
+  "tests": {
+    "count": 283,
+    "passed": true
+  },
+  "all10_evaluated": true,
+  "regressions_full": [],
+  "coordinate_conflict_count": 67,
+  "timing": {
+    "device": "CPU, torch threads=4, cached initial OCR, fixed stage1",
+    "lane_total_seconds_10": 13.888376299990341,
+    "lane_median_seconds": 1.320077249998576,
+    "lane_min_seconds": 0.7213878000038676,
+    "lane_max_seconds": 2.153532600001199,
+    "baseline_local_crop_total_seconds_10": 5.489127299995744,
+    "process_off_total_seconds_10": 6.742136800035951,
+    "process_on_total_seconds_10": 21.16614090000803,
+    "process_delta_total_seconds_10": 14.42400409997208,
+    "note": "Single sequential run with I/O and cache effects; not a fresh end-to-end latency benchmark."
+  },
+  "network_references_checked": 290,
+  "process_integration": [
+    {
+      "case": "1",
+      "arm": "binding_only",
+      "identical_to_replay": true,
+      "wall_seconds": 0.443272500007879,
+      "initial_read_calls": [
+        {
+          "boxes": 200,
+          "roles": null,
+          "returned_reads": 202
+        }
+      ],
+      "network_references": {
+        "references_checked": 44,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "1",
+      "arm": "full",
+      "identical_to_replay": true,
+      "wall_seconds": 0.9447379000048386,
+      "initial_read_calls": [
+        {
+          "boxes": 200,
+          "roles": null,
+          "returned_reads": 202
+        }
+      ],
+      "network_references": {
+        "references_checked": 44,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "2",
+      "arm": "binding_only",
+      "identical_to_replay": true,
+      "wall_seconds": 0.6492562999919755,
+      "initial_read_calls": [
+        {
+          "boxes": 99,
+          "roles": null,
+          "returned_reads": 118
+        }
+      ],
+      "network_references": {
+        "references_checked": 23,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "2",
+      "arm": "full",
+      "identical_to_replay": true,
+      "wall_seconds": 2.0191602999984752,
+      "initial_read_calls": [
+        {
+          "boxes": 99,
+          "roles": null,
+          "returned_reads": 118
+        }
+      ],
+      "network_references": {
+        "references_checked": 23,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "3",
+      "arm": "binding_only",
+      "identical_to_replay": true,
+      "wall_seconds": 0.6229663999984041,
+      "initial_read_calls": [
+        {
+          "boxes": 83,
+          "roles": null,
+          "returned_reads": 91
+        }
+      ],
+      "network_references": {
+        "references_checked": 25,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "3",
+      "arm": "full",
+      "identical_to_replay": true,
+      "wall_seconds": 1.8964687999978196,
+      "initial_read_calls": [
+        {
+          "boxes": 83,
+          "roles": null,
+          "returned_reads": 91
+        }
+      ],
+      "network_references": {
+        "references_checked": 25,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "4",
+      "arm": "binding_only",
+      "identical_to_replay": true,
+      "wall_seconds": 0.5051869000017177,
+      "initial_read_calls": [
+        {
+          "boxes": 85,
+          "roles": null,
+          "returned_reads": 95
+        }
+      ],
+      "network_references": {
+        "references_checked": 25,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "4",
+      "arm": "full",
+      "identical_to_replay": true,
+      "wall_seconds": 1.8133292999991681,
+      "initial_read_calls": [
+        {
+          "boxes": 85,
+          "roles": null,
+          "returned_reads": 95
+        }
+      ],
+      "network_references": {
+        "references_checked": 26,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "5",
+      "arm": "binding_only",
+      "identical_to_replay": true,
+      "wall_seconds": 0.6323792000039248,
+      "initial_read_calls": [
+        {
+          "boxes": 99,
+          "roles": null,
+          "returned_reads": 122
+        }
+      ],
+      "network_references": {
+        "references_checked": 28,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "5",
+      "arm": "full",
+      "identical_to_replay": true,
+      "wall_seconds": 2.148674600000959,
+      "initial_read_calls": [
+        {
+          "boxes": 99,
+          "roles": null,
+          "returned_reads": 122
+        }
+      ],
+      "network_references": {
+        "references_checked": 28,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "6",
+      "arm": "binding_only",
+      "identical_to_replay": true,
+      "wall_seconds": 0.8887767000123858,
+      "initial_read_calls": [
+        {
+          "boxes": 144,
+          "roles": null,
+          "returned_reads": 164
+        }
+      ],
+      "network_references": {
+        "references_checked": 37,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "6",
+      "arm": "full",
+      "identical_to_replay": true,
+      "wall_seconds": 3.136700599992764,
+      "initial_read_calls": [
+        {
+          "boxes": 144,
+          "roles": null,
+          "returned_reads": 164
+        }
+      ],
+      "network_references": {
+        "references_checked": 37,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "7",
+      "arm": "binding_only",
+      "identical_to_replay": true,
+      "wall_seconds": 0.672018900004332,
+      "initial_read_calls": [
+        {
+          "boxes": 94,
+          "roles": null,
+          "returned_reads": 104
+        }
+      ],
+      "network_references": {
+        "references_checked": 30,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "7",
+      "arm": "full",
+      "identical_to_replay": true,
+      "wall_seconds": 2.0280655000096885,
+      "initial_read_calls": [
+        {
+          "boxes": 94,
+          "roles": null,
+          "returned_reads": 104
+        }
+      ],
+      "network_references": {
+        "references_checked": 30,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "8",
+      "arm": "binding_only",
+      "identical_to_replay": true,
+      "wall_seconds": 0.9022097000124631,
+      "initial_read_calls": [
+        {
+          "boxes": 83,
+          "roles": null,
+          "returned_reads": 105
+        }
+      ],
+      "network_references": {
+        "references_checked": 25,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "8",
+      "arm": "full",
+      "identical_to_replay": true,
+      "wall_seconds": 2.9948198000056436,
+      "initial_read_calls": [
+        {
+          "boxes": 83,
+          "roles": null,
+          "returned_reads": 105
+        }
+      ],
+      "network_references": {
+        "references_checked": 25,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "9",
+      "arm": "binding_only",
+      "identical_to_replay": true,
+      "wall_seconds": 0.6563575000036508,
+      "initial_read_calls": [
+        {
+          "boxes": 66,
+          "roles": null,
+          "returned_reads": 77
+        }
+      ],
+      "network_references": {
+        "references_checked": 18,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "9",
+      "arm": "full",
+      "identical_to_replay": true,
+      "wall_seconds": 1.9455577000044286,
+      "initial_read_calls": [
+        {
+          "boxes": 66,
+          "roles": null,
+          "returned_reads": 77
+        }
+      ],
+      "network_references": {
+        "references_checked": 18,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "10",
+      "arm": "binding_only",
+      "identical_to_replay": true,
+      "wall_seconds": 0.7697126999992179,
+      "initial_read_calls": [
+        {
+          "boxes": 125,
+          "roles": null,
+          "returned_reads": 147
+        }
+      ],
+      "network_references": {
+        "references_checked": 34,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "10",
+      "arm": "full",
+      "identical_to_replay": true,
+      "wall_seconds": 2.2386263999942457,
+      "initial_read_calls": [
+        {
+          "boxes": 125,
+          "roles": null,
+          "returned_reads": 147
+        }
+      ],
+      "network_references": {
+        "references_checked": 34,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "6",
+      "mode": "pin_name_only",
+      "roles": [
+        "pin_name"
+      ],
+      "do_ocr": true,
+      "min_conf": 0.0,
+      "completed": true,
+      "wall_seconds": 2.173009699996328,
+      "initial_read_calls": [
+        {
+          "boxes": 144,
+          "roles": [
+            "pin_name"
+          ],
+          "returned_reads": 164
+        }
+      ],
+      "lane_reads_role_audit": {
+        "records": 8,
+        "allowed_roles_only": true,
+        "minimum_confidence_respected": true
+      },
+      "disabled_role_fallback": {
+        "pin_number": {
+          "baseline_bound_count": 0,
+          "new_bound_count": 0,
+          "identical_to_snapshot": true,
+          "meaning": "OCR role selection; unchanged binder may borrow other allowed roles"
+        }
+      },
+      "network_references": {
+        "references_checked": 0,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "6",
+      "mode": "pin_number_only",
+      "roles": [
+        "pin_number"
+      ],
+      "do_ocr": true,
+      "min_conf": 0.0,
+      "completed": true,
+      "wall_seconds": 2.646534799991059,
+      "initial_read_calls": [
+        {
+          "boxes": 144,
+          "roles": [
+            "pin_number"
+          ],
+          "returned_reads": 164
+        }
+      ],
+      "lane_reads_role_audit": {
+        "records": 12,
+        "allowed_roles_only": true,
+        "minimum_confidence_respected": true
+      },
+      "disabled_role_fallback": {
+        "pin_name": {
+          "baseline_bound_count": 0,
+          "new_bound_count": 0,
+          "identical_to_snapshot": true,
+          "meaning": "OCR role selection; unchanged binder may borrow other allowed roles"
+        }
+      },
+      "network_references": {
+        "references_checked": 0,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "6",
+      "mode": "custom_roles",
+      "roles": [
+        "designator",
+        "pin_name"
+      ],
+      "do_ocr": true,
+      "min_conf": 0.5,
+      "completed": true,
+      "wall_seconds": 2.051621200007503,
+      "initial_read_calls": [
+        {
+          "boxes": 144,
+          "roles": [
+            "designator",
+            "pin_name"
+          ],
+          "returned_reads": 164
+        }
+      ],
+      "lane_reads_role_audit": {
+        "records": 8,
+        "allowed_roles_only": true,
+        "minimum_confidence_respected": true
+      },
+      "disabled_role_fallback": {
+        "pin_number": {
+          "baseline_bound_count": 19,
+          "new_bound_count": 19,
+          "identical_to_snapshot": true,
+          "meaning": "OCR role selection; unchanged binder may borrow other allowed roles"
+        }
+      },
+      "network_references": {
+        "references_checked": 39,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "6",
+      "mode": "high_min_conf",
+      "roles": null,
+      "do_ocr": true,
+      "min_conf": 0.95,
+      "completed": true,
+      "wall_seconds": 3.042830500009586,
+      "initial_read_calls": [
+        {
+          "boxes": 144,
+          "roles": null,
+          "returned_reads": 164
+        }
+      ],
+      "lane_reads_role_audit": {
+        "records": 15,
+        "allowed_roles_only": true,
+        "minimum_confidence_respected": true
+      },
+      "disabled_role_fallback": {},
+      "network_references": {
+        "references_checked": 29,
+        "invalid": [],
+        "all_valid": true
+      }
+    },
+    {
+      "case": "6",
+      "mode": "no_ocr",
+      "roles": null,
+      "do_ocr": false,
+      "min_conf": 0.0,
+      "completed": true,
+      "wall_seconds": 0.1249824999977136,
+      "initial_read_calls": [],
+      "lane_reads_role_audit": {
+        "records": 0,
+        "allowed_roles_only": true,
+        "minimum_confidence_respected": true
+      },
+      "disabled_role_fallback": {
+        "pin_name": {
+          "baseline_bound_count": 0,
+          "new_bound_count": 0,
+          "identical_to_snapshot": true,
+          "meaning": "OCR role selection; unchanged binder may borrow other allowed roles"
+        },
+        "pin_number": {
+          "baseline_bound_count": 0,
+          "new_bound_count": 0,
+          "identical_to_snapshot": true,
+          "meaning": "OCR role selection; unchanged binder may borrow other allowed roles"
+        }
+      },
+      "network_references": {
+        "references_checked": 0,
+        "invalid": [],
+        "all_valid": true
+      }
+    }
+  ],
+  "recovered": [
+    {
+      "case": "4",
+      "component": "U2",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 1375.0,
+          "y": 812.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": null,
+        "bound_number": null,
+        "bound_name_correct": false,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": {
+          "pinname": "GND",
+          "point": {
+            "x": 1371.0,
+            "y": 812.0
+          }
+        },
+        "physical_name_number_row_correct": true,
+        "coordinate_distance": 4.0,
+        "bound_name": "GND",
+        "bound_number": "1",
+        "bound_name_correct": true,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_16",
+      "gt": {
+        "pinname": "NC",
+        "point": {
+          "x": 973.0,
+          "y": 462.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": null,
+        "bound_number": null,
+        "bound_name_correct": false,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": {
+          "pinname": "NC",
+          "point": {
+            "x": 977.0,
+            "y": 462.0
+          }
+        },
+        "physical_name_number_row_correct": true,
+        "coordinate_distance": 4.0,
+        "bound_name": "NC",
+        "bound_number": "16",
+        "bound_name_correct": true,
+        "bound_number_correct": true
+      }
+    }
+  ],
+  "remaining_errors": [
+    {
+      "case": "3",
+      "component": "U1",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "FB",
+        "point": {
+          "x": 946.0,
+          "y": 713.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "F",
+          "point": {
+            "x": 953.5,
+            "y": 712.5
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 7.516648189186454,
+        "bound_name": "F",
+        "bound_number": "3",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "F",
+          "point": {
+            "x": 953.5,
+            "y": 712.5
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 7.516648189186454,
+        "bound_name": "F",
+        "bound_number": "3",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "3",
+      "component": "U1",
+      "pin": "pin_6",
+      "gt": {
+        "pinname": "LX",
+        "point": {
+          "x": 946.0,
+          "y": 772.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "LX",
+        "bound_number": "2",
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "LX",
+        "bound_number": "2",
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      }
+    },
+    {
+      "case": "4",
+      "component": "U3",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "CHRG",
+        "point": {
+          "x": 956.0,
+          "y": 320.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "CHIN6",
+          "point": {
+            "x": 964.5,
+            "y": 320.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 8.5,
+        "bound_name": "CHIN6",
+        "bound_number": "1",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "CHIN6",
+          "point": {
+            "x": 964.5,
+            "y": 320.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 8.5,
+        "bound_name": "CHIN6",
+        "bound_number": "1",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "4",
+      "component": "U3",
+      "pin": "pin_5",
+      "gt": {
+        "pinname": "PROG",
+        "point": {
+          "x": 776.0,
+          "y": 320.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "PROO",
+          "point": {
+            "x": 768.0,
+            "y": 320.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 8.0,
+        "bound_name": "PROO",
+        "bound_number": "5",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "PROO",
+          "point": {
+            "x": 768.0,
+            "y": 320.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 8.0,
+        "bound_name": "PROO",
+        "bound_number": "5",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "5",
+      "component": "U1",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "FB",
+        "point": {
+          "x": 651.0,
+          "y": 826.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "F",
+          "point": {
+            "x": 681.0,
+            "y": 825.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 30.01666203960727,
+        "bound_name": "F",
+        "bound_number": "3",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "F",
+          "point": {
+            "x": 681.0,
+            "y": 825.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 30.01666203960727,
+        "bound_name": "F",
+        "bound_number": "3",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "5",
+      "component": "U1",
+      "pin": "pin_6",
+      "gt": {
+        "pinname": "VIN",
+        "point": {
+          "x": 517.0,
+          "y": 826.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "VIN",
+        "bound_number": "8",
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "VIN",
+        "bound_number": "8",
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      }
+    },
+    {
+      "case": "5",
+      "component": "U1",
+      "pin": "pin_7",
+      "gt": {
+        "pinname": "PP",
+        "point": {
+          "x": 651.0,
+          "y": 786.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "P",
+          "point": {
+            "x": 678.0,
+            "y": 786.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 27.0,
+        "bound_name": "P",
+        "bound_number": "7",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "P",
+          "point": {
+            "x": 678.0,
+            "y": 786.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 27.0,
+        "bound_name": "P",
+        "bound_number": "7",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "5",
+      "component": "U2",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "FB",
+        "point": {
+          "x": 1639.0,
+          "y": 596.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "F",
+          "point": {
+            "x": 1667.0,
+            "y": 596.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 28.0,
+        "bound_name": "F",
+        "bound_number": "3",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "F",
+          "point": {
+            "x": 1667.0,
+            "y": 596.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 28.0,
+        "bound_name": "F",
+        "bound_number": "3",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "5",
+      "component": "U2",
+      "pin": "pin_6",
+      "gt": {
+        "pinname": "VIN",
+        "point": {
+          "x": 1498.0,
+          "y": 596.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "VIN",
+        "bound_number": null,
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "VIN",
+        "bound_number": null,
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      }
+    },
+    {
+      "case": "5",
+      "component": "U2",
+      "pin": "pin_7",
+      "gt": {
+        "pinname": "PP",
+        "point": {
+          "x": 1639.0,
+          "y": 557.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "P",
+          "point": {
+            "x": 1664.5,
+            "y": 556.5
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 25.5049014897137,
+        "bound_name": "P",
+        "bound_number": "7",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "P",
+          "point": {
+            "x": 1664.5,
+            "y": 556.5
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 25.5049014897137,
+        "bound_name": "P",
+        "bound_number": "7",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "5",
+      "component": "U3",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "ADJ(GND)",
+        "point": {
+          "x": 537.0,
+          "y": 360.967033
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "AUIGND",
+          "point": {
+            "x": 532.5,
+            "y": 361.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 4.500120756500763,
+        "bound_name": "AUIGND",
+        "bound_number": "1",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "AUIGND",
+          "point": {
+            "x": 532.5,
+            "y": 361.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 4.500120756500763,
+        "bound_name": "AUIGND",
+        "bound_number": "1",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "5",
+      "component": "U3",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "VOUT(TAB)",
+        "point": {
+          "x": 537.0,
+          "y": 342.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "VOUTAO",
+          "point": {
+            "x": 532.5,
+            "y": 341.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 4.6097722286464435,
+        "bound_name": "VOUTAO",
+        "bound_number": "2",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "VOUTAO",
+          "point": {
+            "x": 532.5,
+            "y": 341.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 4.6097722286464435,
+        "bound_name": "VOUTAO",
+        "bound_number": "2",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "5",
+      "component": "U3",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "TAB",
+        "point": {
+          "x": 739.0,
+          "y": 342.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "TAE",
+          "point": {
+            "x": 748.5,
+            "y": 341.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 9.5524865872714,
+        "bound_name": "TAE",
+        "bound_number": "4",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "TAE",
+          "point": {
+            "x": 748.5,
+            "y": 341.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 9.5524865872714,
+        "bound_name": "TAE",
+        "bound_number": "4",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "6",
+      "component": "U1",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 505.0,
+          "y": 437.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "GND",
+        "bound_number": null,
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "GND",
+        "bound_number": null,
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      }
+    },
+    {
+      "case": "6",
+      "component": "U3",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 1421.0,
+          "y": 452.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "GND",
+        "bound_number": null,
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "GND",
+        "bound_number": null,
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      }
+    },
+    {
+      "case": "7",
+      "component": "U1",
+      "pin": "pin_6",
+      "gt": {
+        "pinname": "EN",
+        "point": {
+          "x": 809.0,
+          "y": 620.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "EN",
+        "bound_number": "8",
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "EN",
+        "bound_number": "8",
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      }
+    },
+    {
+      "case": "7",
+      "component": "U1",
+      "pin": "pin_8",
+      "gt": {
+        "pinname": "FB",
+        "point": {
+          "x": 973.0,
+          "y": 581.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "EN",
+          "point": {
+            "x": 802.0,
+            "y": 620.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 175.3909917869216,
+        "bound_name": "F",
+        "bound_number": "8",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "EN",
+          "point": {
+            "x": 802.0,
+            "y": 620.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 175.3909917869216,
+        "bound_name": "F",
+        "bound_number": "8",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_6",
+      "gt": {
+        "pinname": "NC",
+        "point": {
+          "x": 973.0,
+          "y": 481.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": null,
+        "bound_number": "25",
+        "bound_name_correct": false,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": null,
+        "bound_number": "25",
+        "bound_name_correct": false,
+        "bound_number_correct": false
+      }
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_9",
+      "gt": {
+        "pinname": "MOTION",
+        "point": {
+          "x": 973.0,
+          "y": 699.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "MOTION",
+        "bound_number": "8",
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "MOTION",
+        "bound_number": "8",
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      }
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_11",
+      "gt": {
+        "pinname": "MOSI",
+        "point": {
+          "x": 973.0,
+          "y": 719.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "MOS",
+          "point": {
+            "x": 975.0,
+            "y": 719.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 2.0,
+        "bound_name": "MOS",
+        "bound_number": "11",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "MOS",
+          "point": {
+            "x": 975.0,
+            "y": 719.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 2.0,
+        "bound_name": "MOS",
+        "bound_number": "11",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_12",
+      "gt": {
+        "pinname": "MISO",
+        "point": {
+          "x": 973.0,
+          "y": 619.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "ISO",
+          "point": {
+            "x": 975.0,
+            "y": 620.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 2.23606797749979,
+        "bound_name": "ISO",
+        "bound_number": "12",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "ISO",
+          "point": {
+            "x": 975.0,
+            "y": 620.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 2.23606797749979,
+        "bound_name": "ISO",
+        "bound_number": "12",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_15",
+      "gt": {
+        "pinname": "LED_P",
+        "point": {
+          "x": 973.0,
+          "y": 640.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "LED",
+          "point": {
+            "x": 975.0,
+            "y": 640.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 2.0,
+        "bound_name": "LED",
+        "bound_number": "15",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "LED",
+          "point": {
+            "x": 975.0,
+            "y": 640.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 2.0,
+        "bound_name": "LED",
+        "bound_number": "15",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "9",
+      "component": "U2",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "BS",
+        "point": {
+          "x": 829.0,
+          "y": 619.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "ES",
+          "point": {
+            "x": 799.0,
+            "y": 620.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 30.01666203960727,
+        "bound_name": "ES",
+        "bound_number": "1",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "ES",
+          "point": {
+            "x": 799.0,
+            "y": 620.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 30.01666203960727,
+        "bound_name": "ES",
+        "bound_number": "1",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "9",
+      "component": "U2",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "FB",
+        "point": {
+          "x": 829.0,
+          "y": 581.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "F",
+          "point": {
+            "x": 800.5,
+            "y": 580.5
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 28.50438562747845,
+        "bound_name": "F",
+        "bound_number": "3",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "F",
+          "point": {
+            "x": 800.5,
+            "y": 580.5
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 28.50438562747845,
+        "bound_name": "F",
+        "bound_number": "3",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "9",
+      "component": "U2",
+      "pin": "pin_6",
+      "gt": {
+        "pinname": "SW",
+        "point": {
+          "x": 967.0,
+          "y": 620.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "SW",
+        "bound_number": null,
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "SW",
+        "bound_number": null,
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      }
+    },
+    {
+      "case": "10",
+      "component": "U1",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "VIA",
+        "point": {
+          "x": 482.0,
+          "y": 481.5
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "VA",
+          "point": {
+            "x": 479.0,
+            "y": 482.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 3.0413812651491097,
+        "bound_name": "VA",
+        "bound_number": "4",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "VA",
+          "point": {
+            "x": 479.0,
+            "y": 482.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 3.0413812651491097,
+        "bound_name": "VA",
+        "bound_number": "4",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "10",
+      "component": "U1",
+      "pin": "pin_5",
+      "gt": {
+        "pinname": "FB",
+        "point": {
+          "x": 605.0,
+          "y": 482.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "F",
+          "point": {
+            "x": 613.0,
+            "y": 482.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 8.0,
+        "bound_name": "F",
+        "bound_number": "5",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "F",
+          "point": {
+            "x": 613.0,
+            "y": 482.0
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 8.0,
+        "bound_name": "F",
+        "bound_number": "5",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "10",
+      "component": "U1",
+      "pin": "pin_6",
+      "gt": {
+        "pinname": "VB",
+        "point": {
+          "x": 605.0,
+          "y": 502.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "V",
+        "bound_number": "8",
+        "bound_name_correct": false,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "V",
+        "bound_number": "8",
+        "bound_name_correct": false,
+        "bound_number_correct": false
+      }
+    },
+    {
+      "case": "10",
+      "component": "U1",
+      "pin": "pin_7",
+      "gt": {
+        "pinname": "VS",
+        "point": {
+          "x": 605.0,
+          "y": 522.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "VSS",
+          "point": {
+            "x": 613.0,
+            "y": 521.5
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 8.0156097709407,
+        "bound_name": "VSS",
+        "bound_number": "7",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "VSS",
+          "point": {
+            "x": 613.0,
+            "y": 521.5
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 8.0156097709407,
+        "bound_name": "VSS",
+        "bound_number": "7",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "10",
+      "component": "U1",
+      "pin": "pin_8",
+      "gt": {
+        "pinname": "IS",
+        "point": {
+          "x": 605.0,
+          "y": 542.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "S",
+          "point": {
+            "x": 613.0,
+            "y": 541.5
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 8.0156097709407,
+        "bound_name": "S",
+        "bound_number": "8",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "S",
+          "point": {
+            "x": 613.0,
+            "y": 541.5
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 8.0156097709407,
+        "bound_name": "S",
+        "bound_number": "8",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "10",
+      "component": "U1",
+      "pin": "pin_9",
+      "gt": {
+        "pinname": "VIN",
+        "point": {
+          "x": 605.0,
+          "y": 561.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "VIN",
+        "bound_number": "1",
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": "VIN",
+        "bound_number": "1",
+        "bound_name_correct": true,
+        "bound_number_correct": false
+      }
+    },
+    {
+      "case": "10",
+      "component": "U2",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "Vout",
+        "point": {
+          "x": 1624.0,
+          "y": 642.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "VOU",
+          "point": {
+            "x": 1624.0,
+            "y": 609.5
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 32.5,
+        "bound_name": "VOU",
+        "bound_number": "1",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "VOU",
+          "point": {
+            "x": 1624.0,
+            "y": 609.5
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 32.5,
+        "bound_name": "VOU",
+        "bound_number": "1",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "10",
+      "component": "U2",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "VIn",
+        "point": {
+          "x": 1703.0,
+          "y": 642.0
+        }
+      },
+      "baseline": {
+        "prediction": {
+          "pinname": "VII",
+          "point": {
+            "x": 1703.5,
+            "y": 609.5
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 32.50384592629001,
+        "bound_name": "VII",
+        "bound_number": "3",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      },
+      "current": {
+        "prediction": {
+          "pinname": "VII",
+          "point": {
+            "x": 1703.5,
+            "y": 609.5
+          }
+        },
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": 32.50384592629001,
+        "bound_name": "VII",
+        "bound_number": "3",
+        "bound_name_correct": false,
+        "bound_number_correct": true
+      }
+    }
+  ],
+  "binding_changes": [
+    {
+      "case": "4",
+      "component": "U2",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 1375.0,
+          "y": 812.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": null,
+        "bound_number": null,
+        "bound_name_correct": false,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": {
+          "pinname": "GND",
+          "point": {
+            "x": 1371.0,
+            "y": 812.0
+          }
+        },
+        "physical_name_number_row_correct": true,
+        "coordinate_distance": 4.0,
+        "bound_name": "GND",
+        "bound_number": "1",
+        "bound_name_correct": true,
+        "bound_number_correct": true
+      }
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_16",
+      "gt": {
+        "pinname": "NC",
+        "point": {
+          "x": 973.0,
+          "y": 462.0
+        }
+      },
+      "baseline": {
+        "prediction": null,
+        "physical_name_number_row_correct": false,
+        "coordinate_distance": null,
+        "bound_name": null,
+        "bound_number": null,
+        "bound_name_correct": false,
+        "bound_number_correct": false
+      },
+      "current": {
+        "prediction": {
+          "pinname": "NC",
+          "point": {
+            "x": 977.0,
+            "y": 462.0
+          }
+        },
+        "physical_name_number_row_correct": true,
+        "coordinate_distance": 4.0,
+        "bound_name": "NC",
+        "bound_number": "16",
+        "bound_name_correct": true,
+        "bound_number_correct": true
+      }
+    }
+  ],
+  "held_candidates": [
+    {
+      "case": "8",
+      "bbox": [
+        1003,
+        710,
+        1022,
+        720
+      ],
+      "pin_target": {
+        "component_id": "c0000",
+        "pin_index": 13,
+        "edge": "left",
+        "point_img": [
+          977.0,
+          710.0
+        ],
+        "anchor_img": [
+          994.0,
+          710.0
+        ]
+      },
+      "proposed_read": {
+        "pin_name": [
+          "NC",
+          0.9838442057780344
+        ]
+      },
+      "held_reason": "unresolved_symbol_contaminated_partner_number"
+    }
+  ],
+  "cases": [
+    {
+      "case": "1",
+      "coordinate_free": {
+        "baseline": {
+          "gt": 26,
+          "predicted": 21,
+          "correct": 16,
+          "matching_number": 17,
+          "name_mismatch": 1,
+          "missing_number": 9,
+          "extra_number": 4
+        },
+        "full": {
+          "gt": 26,
+          "predicted": 21,
+          "correct": 16,
+          "matching_number": 17,
+          "name_mismatch": 1,
+          "missing_number": 9,
+          "extra_number": 4
+        }
+      },
+      "scores": {
+        "baseline": {
+          "case_id": "1",
+          "score": 43.489,
+          "component_f1": 0.454545,
+          "pin_f1": 0.510638,
+          "net_hypergraph_f1": 0.480769,
+          "net_line_f1": 0.025974,
+          "diagnostic": {
+            "component.missing": 8,
+            "component.extra": 8,
+            "component.coord_matched": 8,
+            "component.text_mismatch": 3,
+            "component.bbox_mismatch": 1,
+            "pin.position_mismatch": 4,
+            "pin.missing": 9,
+            "pin.extra": 4,
+            "pin.name_mismatch": 1,
+            "net.pred_pins": 44,
+            "net.gt_pins": 60,
+            "net.pred_count": 9,
+            "net.gt_count": 10,
+            "net.pairs": 9,
+            "keymap.size": 14
+          }
+        },
+        "full": {
+          "case_id": "1",
+          "score": 43.489,
+          "component_f1": 0.454545,
+          "pin_f1": 0.510638,
+          "net_hypergraph_f1": 0.480769,
+          "net_line_f1": 0.025974,
+          "diagnostic": {
+            "component.missing": 8,
+            "component.extra": 8,
+            "component.coord_matched": 8,
+            "component.text_mismatch": 3,
+            "component.bbox_mismatch": 1,
+            "pin.position_mismatch": 4,
+            "pin.missing": 9,
+            "pin.extra": 4,
+            "pin.name_mismatch": 1,
+            "net.pred_pins": 44,
+            "net.gt_pins": 60,
+            "net.pred_count": 9,
+            "net.gt_count": 10,
+            "net.pairs": 9,
+            "keymap.size": 14
+          }
+        }
+      },
+      "network_references": {
+        "baseline": {
+          "references_checked": 44,
+          "invalid": [],
+          "all_valid": true
+        },
+        "full": {
+          "references_checked": 44,
+          "invalid": [],
+          "all_valid": true
+        }
+      },
+      "output_regressions": []
+    },
+    {
+      "case": "2",
+      "coordinate_free": {
+        "baseline": {
+          "gt": 16,
+          "predicted": 16,
+          "correct": 16,
+          "matching_number": 16,
+          "name_mismatch": 0,
+          "missing_number": 0,
+          "extra_number": 0
+        },
+        "full": {
+          "gt": 16,
+          "predicted": 16,
+          "correct": 16,
+          "matching_number": 16,
+          "name_mismatch": 0,
+          "missing_number": 0,
+          "extra_number": 0
+        }
+      },
+      "scores": {
+        "baseline": {
+          "case_id": "2",
+          "score": 42.78,
+          "component_f1": 0.785714,
+          "pin_f1": 0.0,
+          "net_hypergraph_f1": 0.535211,
+          "net_line_f1": 0.047619,
+          "diagnostic": {
+            "component.missing": 2,
+            "component.extra": 2,
+            "component.coord_matched": 16,
+            "component.text_mismatch": 4,
+            "pin.position_mismatch": 16,
+            "net.pred_pins": 23,
+            "net.gt_pins": 48,
+            "net.pred_count": 20,
+            "net.gt_count": 24,
+            "net.pairs": 20,
+            "keymap.size": 26
+          }
+        },
+        "full": {
+          "case_id": "2",
+          "score": 42.78,
+          "component_f1": 0.785714,
+          "pin_f1": 0.0,
+          "net_hypergraph_f1": 0.535211,
+          "net_line_f1": 0.047619,
+          "diagnostic": {
+            "component.missing": 2,
+            "component.extra": 2,
+            "component.coord_matched": 16,
+            "component.text_mismatch": 4,
+            "pin.position_mismatch": 16,
+            "net.pred_pins": 23,
+            "net.gt_pins": 48,
+            "net.pred_count": 20,
+            "net.gt_count": 24,
+            "net.pairs": 20,
+            "keymap.size": 26
+          }
+        }
+      },
+      "network_references": {
+        "baseline": {
+          "references_checked": 23,
+          "invalid": [],
+          "all_valid": true
+        },
+        "full": {
+          "references_checked": 23,
+          "invalid": [],
+          "all_valid": true
+        }
+      },
+      "output_regressions": []
+    },
+    {
+      "case": "3",
+      "coordinate_free": {
+        "baseline": {
+          "gt": 6,
+          "predicted": 5,
+          "correct": 4,
+          "matching_number": 5,
+          "name_mismatch": 1,
+          "missing_number": 1,
+          "extra_number": 0
+        },
+        "full": {
+          "gt": 6,
+          "predicted": 5,
+          "correct": 4,
+          "matching_number": 5,
+          "name_mismatch": 1,
+          "missing_number": 1,
+          "extra_number": 0
+        }
+      },
+      "scores": {
+        "baseline": {
+          "case_id": "3",
+          "score": 53.5187,
+          "component_f1": 0.884615,
+          "pin_f1": 0.181818,
+          "net_hypergraph_f1": 0.628571,
+          "net_line_f1": 0.043478,
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 1,
+            "component.coord_matched": 11,
+            "component.text_mismatch": 2,
+            "pin.position_mismatch": 3,
+            "pin.name_mismatch": 1,
+            "pin.missing": 1,
+            "net.pred_pins": 25,
+            "net.gt_pins": 45,
+            "net.pred_count": 17,
+            "net.gt_count": 16,
+            "net.pairs": 16,
+            "keymap.size": 25
+          }
+        },
+        "full": {
+          "case_id": "3",
+          "score": 53.5187,
+          "component_f1": 0.884615,
+          "pin_f1": 0.181818,
+          "net_hypergraph_f1": 0.628571,
+          "net_line_f1": 0.043478,
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 1,
+            "component.coord_matched": 11,
+            "component.text_mismatch": 2,
+            "pin.position_mismatch": 3,
+            "pin.name_mismatch": 1,
+            "pin.missing": 1,
+            "net.pred_pins": 25,
+            "net.gt_pins": 45,
+            "net.pred_count": 17,
+            "net.gt_count": 16,
+            "net.pairs": 16,
+            "keymap.size": 25
+          }
+        }
+      },
+      "network_references": {
+        "baseline": {
+          "references_checked": 25,
+          "invalid": [],
+          "all_valid": true
+        },
+        "full": {
+          "references_checked": 25,
+          "invalid": [],
+          "all_valid": true
+        }
+      },
+      "output_regressions": []
+    },
+    {
+      "case": "4",
+      "coordinate_free": {
+        "baseline": {
+          "gt": 12,
+          "predicted": 11,
+          "correct": 9,
+          "matching_number": 11,
+          "name_mismatch": 2,
+          "missing_number": 1,
+          "extra_number": 0
+        },
+        "full": {
+          "gt": 12,
+          "predicted": 12,
+          "correct": 10,
+          "matching_number": 12,
+          "name_mismatch": 2,
+          "missing_number": 0,
+          "extra_number": 0
+        }
+      },
+      "scores": {
+        "baseline": {
+          "case_id": "4",
+          "score": 51.6193,
+          "component_f1": 0.816327,
+          "pin_f1": 0.173913,
+          "net_hypergraph_f1": 0.617647,
+          "net_line_f1": 0.116402,
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 2,
+            "component.coord_matched": 11,
+            "component.text_mismatch": 3,
+            "pin.name_mismatch": 2,
+            "pin.position_mismatch": 7,
+            "pin.missing": 1,
+            "net.pred_pins": 25,
+            "net.gt_pins": 43,
+            "net.pred_count": 16,
+            "net.gt_count": 14,
+            "net.pairs": 14,
+            "keymap.size": 23
+          }
+        },
+        "full": {
+          "case_id": "4",
+          "score": 54.2227,
+          "component_f1": 0.816327,
+          "pin_f1": 0.25,
+          "net_hypergraph_f1": 0.637681,
+          "net_line_f1": 0.116402,
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 2,
+            "component.coord_matched": 11,
+            "component.text_mismatch": 3,
+            "pin.name_mismatch": 2,
+            "pin.position_mismatch": 7,
+            "net.pred_pins": 26,
+            "net.gt_pins": 43,
+            "net.pred_count": 16,
+            "net.gt_count": 14,
+            "net.pairs": 14,
+            "keymap.size": 23
+          }
+        }
+      },
+      "network_references": {
+        "baseline": {
+          "references_checked": 25,
+          "invalid": [],
+          "all_valid": true
+        },
+        "full": {
+          "references_checked": 26,
+          "invalid": [],
+          "all_valid": true
+        }
+      },
+      "output_regressions": []
+    },
+    {
+      "case": "5",
+      "coordinate_free": {
+        "baseline": {
+          "gt": 18,
+          "predicted": 17,
+          "correct": 9,
+          "matching_number": 16,
+          "name_mismatch": 7,
+          "missing_number": 2,
+          "extra_number": 1
+        },
+        "full": {
+          "gt": 18,
+          "predicted": 17,
+          "correct": 9,
+          "matching_number": 16,
+          "name_mismatch": 7,
+          "missing_number": 2,
+          "extra_number": 1
+        }
+      },
+      "scores": {
+        "baseline": {
+          "case_id": "5",
+          "score": 49.0206,
+          "component_f1": 0.846154,
+          "pin_f1": 0.0,
+          "net_hypergraph_f1": 0.64,
+          "net_line_f1": 0.123596,
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 1,
+            "component.coord_matched": 15,
+            "component.text_mismatch": 3,
+            "pin.name_mismatch": 7,
+            "pin.position_mismatch": 9,
+            "pin.missing": 2,
+            "pin.extra": 1,
+            "net.pred_pins": 28,
+            "net.gt_pins": 47,
+            "net.pred_count": 19,
+            "net.gt_count": 17,
+            "net.pairs": 17,
+            "keymap.size": 25
+          }
+        },
+        "full": {
+          "case_id": "5",
+          "score": 49.0206,
+          "component_f1": 0.846154,
+          "pin_f1": 0.0,
+          "net_hypergraph_f1": 0.64,
+          "net_line_f1": 0.123596,
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 1,
+            "component.coord_matched": 15,
+            "component.text_mismatch": 3,
+            "pin.name_mismatch": 7,
+            "pin.position_mismatch": 9,
+            "pin.missing": 2,
+            "pin.extra": 1,
+            "net.pred_pins": 28,
+            "net.gt_pins": 47,
+            "net.pred_count": 19,
+            "net.gt_count": 17,
+            "net.pairs": 17,
+            "keymap.size": 25
+          }
+        }
+      },
+      "network_references": {
+        "baseline": {
+          "references_checked": 28,
+          "invalid": [],
+          "all_valid": true
+        },
+        "full": {
+          "references_checked": 28,
+          "invalid": [],
+          "all_valid": true
+        }
+      },
+      "output_regressions": []
+    },
+    {
+      "case": "6",
+      "coordinate_free": {
+        "baseline": {
+          "gt": 16,
+          "predicted": 14,
+          "correct": 14,
+          "matching_number": 14,
+          "name_mismatch": 0,
+          "missing_number": 2,
+          "extra_number": 0
+        },
+        "full": {
+          "gt": 16,
+          "predicted": 14,
+          "correct": 14,
+          "matching_number": 14,
+          "name_mismatch": 0,
+          "missing_number": 2,
+          "extra_number": 0
+        }
+      },
+      "scores": {
+        "baseline": {
+          "case_id": "6",
+          "score": 44.4923,
+          "component_f1": 0.710526,
+          "pin_f1": 0.0,
+          "net_hypergraph_f1": 0.628571,
+          "net_line_f1": 0.117647,
+          "diagnostic": {
+            "component.missing": 4,
+            "component.extra": 4,
+            "component.coord_matched": 16,
+            "component.text_mismatch": 7,
+            "pin.position_mismatch": 14,
+            "pin.missing": 2,
+            "net.pred_pins": 37,
+            "net.gt_pins": 68,
+            "net.pred_count": 23,
+            "net.gt_count": 22,
+            "net.pairs": 22,
+            "keymap.size": 34
+          }
+        },
+        "full": {
+          "case_id": "6",
+          "score": 44.4923,
+          "component_f1": 0.710526,
+          "pin_f1": 0.0,
+          "net_hypergraph_f1": 0.628571,
+          "net_line_f1": 0.117647,
+          "diagnostic": {
+            "component.missing": 4,
+            "component.extra": 4,
+            "component.coord_matched": 16,
+            "component.text_mismatch": 7,
+            "pin.position_mismatch": 14,
+            "pin.missing": 2,
+            "net.pred_pins": 37,
+            "net.gt_pins": 68,
+            "net.pred_count": 23,
+            "net.gt_count": 22,
+            "net.pairs": 22,
+            "keymap.size": 34
+          }
+        }
+      },
+      "network_references": {
+        "baseline": {
+          "references_checked": 37,
+          "invalid": [],
+          "all_valid": true
+        },
+        "full": {
+          "references_checked": 37,
+          "invalid": [],
+          "all_valid": true
+        }
+      },
+      "output_regressions": []
+    },
+    {
+      "case": "7",
+      "coordinate_free": {
+        "baseline": {
+          "gt": 8,
+          "predicted": 7,
+          "correct": 6,
+          "matching_number": 7,
+          "name_mismatch": 1,
+          "missing_number": 1,
+          "extra_number": 0
+        },
+        "full": {
+          "gt": 8,
+          "predicted": 7,
+          "correct": 6,
+          "matching_number": 7,
+          "name_mismatch": 1,
+          "missing_number": 1,
+          "extra_number": 0
+        }
+      },
+      "scores": {
+        "baseline": {
+          "case_id": "7",
+          "score": 47.1795,
+          "component_f1": 0.875,
+          "pin_f1": 0.0,
+          "net_hypergraph_f1": 0.589744,
+          "net_line_f1": 0.028846,
+          "diagnostic": {
+            "component.missing": 2,
+            "component.extra": 2,
+            "component.coord_matched": 6,
+            "component.text_mismatch": 1,
+            "pin.name_mismatch": 1,
+            "pin.position_mismatch": 6,
+            "pin.missing": 1,
+            "net.pred_pins": 30,
+            "net.gt_pins": 48,
+            "net.pred_count": 18,
+            "net.gt_count": 13,
+            "net.pairs": 13,
+            "keymap.size": 22
+          }
+        },
+        "full": {
+          "case_id": "7",
+          "score": 47.1795,
+          "component_f1": 0.875,
+          "pin_f1": 0.0,
+          "net_hypergraph_f1": 0.589744,
+          "net_line_f1": 0.028846,
+          "diagnostic": {
+            "component.missing": 2,
+            "component.extra": 2,
+            "component.coord_matched": 6,
+            "component.text_mismatch": 1,
+            "pin.name_mismatch": 1,
+            "pin.position_mismatch": 6,
+            "pin.missing": 1,
+            "net.pred_pins": 30,
+            "net.gt_pins": 48,
+            "net.pred_count": 18,
+            "net.gt_count": 13,
+            "net.pairs": 13,
+            "keymap.size": 22
+          }
+        }
+      },
+      "network_references": {
+        "baseline": {
+          "references_checked": 30,
+          "invalid": [],
+          "all_valid": true
+        },
+        "full": {
+          "references_checked": 30,
+          "invalid": [],
+          "all_valid": true
+        }
+      },
+      "output_regressions": []
+    },
+    {
+      "case": "8",
+      "coordinate_free": {
+        "baseline": {
+          "gt": 16,
+          "predicted": 13,
+          "correct": 10,
+          "matching_number": 13,
+          "name_mismatch": 3,
+          "missing_number": 3,
+          "extra_number": 0
+        },
+        "full": {
+          "gt": 16,
+          "predicted": 14,
+          "correct": 11,
+          "matching_number": 14,
+          "name_mismatch": 3,
+          "missing_number": 2,
+          "extra_number": 0
+        }
+      },
+      "scores": {
+        "baseline": {
+          "case_id": "8",
+          "score": 60.9807,
+          "component_f1": 0.85,
+          "pin_f1": 0.275862,
+          "net_hypergraph_f1": 0.757576,
+          "net_line_f1": 0.206897,
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 1,
+            "component.coord_matched": 9,
+            "component.text_mismatch": 2,
+            "pin.missing": 3,
+            "pin.position_mismatch": 6,
+            "pin.name_mismatch": 3,
+            "net.pred_pins": 25,
+            "net.gt_pins": 41,
+            "net.pred_count": 17,
+            "net.gt_count": 18,
+            "net.pairs": 17,
+            "keymap.size": 19
+          }
+        },
+        "full": {
+          "case_id": "8",
+          "score": 62.4175,
+          "component_f1": 0.85,
+          "pin_f1": 0.333333,
+          "net_hypergraph_f1": 0.757576,
+          "net_line_f1": 0.206897,
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 1,
+            "component.coord_matched": 9,
+            "component.text_mismatch": 2,
+            "pin.missing": 2,
+            "pin.position_mismatch": 6,
+            "pin.name_mismatch": 3,
+            "net.pred_pins": 25,
+            "net.gt_pins": 41,
+            "net.pred_count": 17,
+            "net.gt_count": 18,
+            "net.pairs": 17,
+            "keymap.size": 19
+          }
+        }
+      },
+      "network_references": {
+        "baseline": {
+          "references_checked": 25,
+          "invalid": [],
+          "all_valid": true
+        },
+        "full": {
+          "references_checked": 25,
+          "invalid": [],
+          "all_valid": true
+        }
+      },
+      "output_regressions": []
+    },
+    {
+      "case": "9",
+      "coordinate_free": {
+        "baseline": {
+          "gt": 6,
+          "predicted": 5,
+          "correct": 3,
+          "matching_number": 5,
+          "name_mismatch": 2,
+          "missing_number": 1,
+          "extra_number": 0
+        },
+        "full": {
+          "gt": 6,
+          "predicted": 5,
+          "correct": 3,
+          "matching_number": 5,
+          "name_mismatch": 2,
+          "missing_number": 1,
+          "extra_number": 0
+        }
+      },
+      "scores": {
+        "baseline": {
+          "case_id": "9",
+          "score": 48.391,
+          "component_f1": 0.882353,
+          "pin_f1": 0.0,
+          "net_hypergraph_f1": 0.612245,
+          "net_line_f1": 0.04918,
+          "diagnostic": {
+            "component.missing": 0,
+            "component.extra": 0,
+            "component.coord_matched": 7,
+            "component.text_mismatch": 2,
+            "pin.position_mismatch": 3,
+            "pin.name_mismatch": 2,
+            "pin.missing": 1,
+            "net.pred_pins": 18,
+            "net.gt_pins": 31,
+            "net.pred_count": 11,
+            "net.gt_count": 11,
+            "net.pairs": 11,
+            "keymap.size": 17
+          }
+        },
+        "full": {
+          "case_id": "9",
+          "score": 48.391,
+          "component_f1": 0.882353,
+          "pin_f1": 0.0,
+          "net_hypergraph_f1": 0.612245,
+          "net_line_f1": 0.04918,
+          "diagnostic": {
+            "component.missing": 0,
+            "component.extra": 0,
+            "component.coord_matched": 7,
+            "component.text_mismatch": 2,
+            "pin.position_mismatch": 3,
+            "pin.name_mismatch": 2,
+            "pin.missing": 1,
+            "net.pred_pins": 18,
+            "net.gt_pins": 31,
+            "net.pred_count": 11,
+            "net.gt_count": 11,
+            "net.pairs": 11,
+            "keymap.size": 17
+          }
+        }
+      },
+      "network_references": {
+        "baseline": {
+          "references_checked": 18,
+          "invalid": [],
+          "all_valid": true
+        },
+        "full": {
+          "references_checked": 18,
+          "invalid": [],
+          "all_valid": true
+        }
+      },
+      "output_regressions": []
+    },
+    {
+      "case": "10",
+      "coordinate_free": {
+        "baseline": {
+          "gt": 12,
+          "predicted": 10,
+          "correct": 4,
+          "matching_number": 10,
+          "name_mismatch": 6,
+          "missing_number": 2,
+          "extra_number": 0
+        },
+        "full": {
+          "gt": 12,
+          "predicted": 10,
+          "correct": 4,
+          "matching_number": 10,
+          "name_mismatch": 6,
+          "missing_number": 2,
+          "extra_number": 0
+        }
+      },
+      "scores": {
+        "baseline": {
+          "case_id": "10",
+          "score": 47.352,
+          "component_f1": 0.813559,
+          "pin_f1": 0.090909,
+          "net_hypergraph_f1": 0.555556,
+          "net_line_f1": 0.122807,
+          "diagnostic": {
+            "component.missing": 2,
+            "component.extra": 3,
+            "component.coord_matched": 9,
+            "component.text_mismatch": 3,
+            "pin.missing": 2,
+            "pin.name_mismatch": 6,
+            "pin.position_mismatch": 3,
+            "net.pred_pins": 34,
+            "net.gt_pins": 56,
+            "net.pred_count": 19,
+            "net.gt_count": 15,
+            "net.pairs": 15,
+            "keymap.size": 27
+          }
+        },
+        "full": {
+          "case_id": "10",
+          "score": 47.352,
+          "component_f1": 0.813559,
+          "pin_f1": 0.090909,
+          "net_hypergraph_f1": 0.555556,
+          "net_line_f1": 0.122807,
+          "diagnostic": {
+            "component.missing": 2,
+            "component.extra": 3,
+            "component.coord_matched": 9,
+            "component.text_mismatch": 3,
+            "pin.missing": 2,
+            "pin.name_mismatch": 6,
+            "pin.position_mismatch": 3,
+            "net.pred_pins": 34,
+            "net.gt_pins": 56,
+            "net.pred_count": 19,
+            "net.gt_count": 15,
+            "net.pairs": 15,
+            "keymap.size": 27
+          }
+        }
+      },
+      "network_references": {
+        "baseline": {
+          "references_checked": 34,
+          "invalid": [],
+          "all_valid": true
+        },
+        "full": {
+          "references_checked": 34,
+          "invalid": [],
+          "all_valid": true
+        }
+      },
+      "output_regressions": []
+    }
+  ]
+}
