@@ -305,6 +305,23 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         # ★ 内涵「多余检测」（同一开关）：我方发出去的、内涵上必然判错的元件
         #   （`d`/`led` 的 Name 槽在官方 10GT 里是型号，我方 `name = key`）。
         _nd["conform_extra"] = list(_le)
+        # ★ 大一统交叉校验层（用户 m50175，`CV_UNIFIED` 默认 0=关）：把已有的各种
+        #   候选池/降权痕迹**只读**投影成统一 `Registry`（5 种并行候选表示 → `Claim`），
+        #   跑内置校验（几何判据走 `GridIndex`/`AlongIndex`），产出 `Verdict` 台账。
+        #   **只往旁路 dict `a` 里加 `unified` 键**：`pred` 早在 `:263 build_doc`
+        #   定稿，交付 `<case>.json` 的字节不受影响；自带 try，坏了不牵连 `no_delete`。
+        try:
+            if os.environ.get("CV_UNIFIED", "0").strip().lower() not in (
+                    "", "0", "false", "off", "none"):
+                from cvparts import unified as _uf
+                _reg = _uf.Registry("case%s" % case)
+                _reg.add_many(_uf.project_stage1(doc))
+                _reg.add_many(_uf.project_assigned(a))
+                _reg.register(*_uf.default_checks())
+                _reg.run()
+                _nd["unified"] = _reg.to_json()
+        except Exception as _ue:                  # noqa: BLE001
+            _nd["unified"] = {"error": "%s: %s" % (type(_ue).__name__, _ue)}
         a["no_delete"] = _nd
     except Exception as _e:
         a["no_delete"] = {"error": "%s: %s" % (type(_e).__name__, _e)}

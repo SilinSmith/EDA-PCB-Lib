@@ -6,17 +6,17 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **395** 个开关。
+共 **400** 个开关。
 
 ## 目录
 
 - [stage1](#stage1)（131）
-- [stage2](#stage2)（103）
+- [stage2](#stage2)（104）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（114）
 - [vlm](#vlm)（12）
 - [textrec](#textrec)（13）
-- [cvparts](#cvparts)（6）
+- [cvparts](#cvparts)（10）
 - [pipeline](#pipeline)（11）
 - [submission](#submission)（3）
 
@@ -164,6 +164,7 @@
 
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
+| `CV_UNIFIED` | `"0"` | `stage2/run.py:314` |
 | `STAGE1_MERGE_TP` | `"0"` | `stage2/assemble.py:108` |
 | `STAGE2_BOTH_TOL` | `"0.65"` | `stage2/text.py:87` |
 | `STAGE2_BOXIC_LIB` | `""` | `stage2/libpins.py:91` |
@@ -443,7 +444,11 @@
 
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
+| `CV_AGENDA_MAX` | `"400"` | `cvparts/unified.py:49` |
+| `CV_DESIG_NEAR` | `"60"` | `cvparts/unified.py:51` |
+| `CV_GRID_CELL` | `"32"` | `cvparts/unified.py:48` |
 | `CV_TP_DOT` | `"1"` | `cvparts/testpoint.py:91` |
+| `CV_UNIFIED` | `"0"` | `cvparts/unified.py:47` |
 | `OWN_FLOOR_PX` | `"0.0"` | `cvparts/own.py:79` |
 | `OWN_FRAC` | `"0.30"` | `cvparts/own.py:78` |
 | `OWN_LEGACY_PX` | `"12.0"` | `cvparts/own.py:81` |
