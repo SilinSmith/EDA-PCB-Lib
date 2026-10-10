@@ -2549,13 +2549,29 @@ line +0.018。case 1 的 8 个电源符号（5 gnd + 3 v）正是 §5.17 里判�
     python -X utf8 tools\eval\stage2_eval.py ..\work\_fast_out_dudef\final_results
     python -X utf8 work\tools\dev\_pwr_oracle.py --pred work\_vlmname --out work\_pwr_p --mode s1 --run work\_fast_out_nresv1 --keys p`
 
+#### 业主确认（2026-10-14，转述）
+
+问：「新判题机对 GT 的 `∅NNN` 是否按坐标匹配、非 box 引脚是否不计分？」答：**按书面口径**（∅ 走坐标匹配、
+非 box 引脚不计分）⇒ 本节的默认（`DROP_UNKEYED=0` + 主尺 `protocol`）就是交付口径，不需要回退。
+同轮确认：**引脚点距维持 5px**（题面原文如此，`OFFICIAL_PIN_PX` 保持 `5.0`，不采纳 20px）。
+
 #### 连带欠账（换了尺子就必须重打的读数）
 
 §5.1–§5.19 里用 `--engine official` 量的**绝对值**都只对那台判题机成立；方向性结论**多数**仍成立，但凡是与
-「非 box 元件 / 非 box 引脚 / 无名元」沾边的 A/B 都应在 `protocol` 尺上重打一次。**已复核**：§5.19（+0.26 / +0.19，
-方向不变）。**待复核**：`pin`+`testpoint` 合并（`STAGE1_MERGE_TP`）、`STAGE2_DROP_UNKEYED` 相关的一切
-（`NET_DROP_UNKEYED` / `NET_DROP_PWRONLY`）、`STAGE1_DROP_TYPES` 的 `pin,testpoint`、`_tpceiling.py` 的
-「213 个 GT 元件必然 fn」那类结论。
+「非 box 元件 / 非 box 引脚 / 无名元」沾边的 A/B 都应在 `protocol` 尺上重打一次。
+
+**已复核（2026-10-14，`work\_recheck_ab.ps1` / 作业 `pwsh-281`，官方 10 张 VLM，基线 = 新默认 `dudef` 82.57）**：
+
+| 臂 | 改动 | 总分 | 逐通道（comp / pin / netH / line） | 结论 |
+|---|---|---|---|---|
+| `dudef` | 全部默认 | **82.57** | 0.9819 / 0.7252 / 0.8946 / 0.3672 | 基线 |
+| `rc_dt` | `STAGE1_DROP_TYPES=none`（保留 `pin,testpoint,mosfet_npn`） | 82.14（−0.43） | 0.9807 / 0.7147 / 0.8915 / 0.3654 | **旧结论仍成立**：丢掉这三类更好 |
+| `rc_nt` | `STAGE2_NET_DROP_PWRONLY=0`（保留纯电源孤立网） | 79.88（−2.69） | 0.9819 / 0.7252 / 0.8185 / 0.3650 | 默认 `1` 正确（netH −0.076） |
+| `rc_nu` | `NET_DROP_UNKEYED=1`（把 `pNNN` 引用从超图里剪掉） | 78.15（−4.42） | 0.9819 / 0.7252 / 0.7731 / 0.3502 | ★ 印证：剪掉引用正好废掉坐标匹配的 netH 收益 |
+| `rc_mtp` | `STAGE1_MERGE_TP=1`（`pin`+`testpoint` 并成 `tp`） | 82.62（+0.05） | 0.9819 / 0.7301 / 0.8928 / 0.3658 | **噪声级**：case 6 −3.37 / case 7 +3.85，其余八张逐位不变 ⇒ 维持默认 `0` |
+
+**已复核**：§5.19（+0.26 / +0.19，方向不变）。**仍需复核**：`_tpceiling.py` 的「213 个 GT 元件必然 fn」那类结论
+（它当时假定 pin/testpoint 不输出，现在 `DROP_UNKEYED` 与 `DROP_TYPES` 都变了）。
 
 ---
 
