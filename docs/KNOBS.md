@@ -6,18 +6,18 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **362** 个开关。
+共 **370** 个开关。
 
 ## 目录
 
-- [stage1](#stage1)（111）
+- [stage1](#stage1)（117）
 - [stage2](#stage2)（93）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（113）
 - [vlm](#vlm)（12）
 - [textrec](#textrec)（13）
 - [cvparts](#cvparts)（6）
-- [pipeline](#pipeline)（9）
+- [pipeline](#pipeline)（11）
 - [submission](#submission)（3）
 
 <a id="stage1"></a>
@@ -98,6 +98,12 @@
 | `STAGE1_PIN_JOIN_DIST` | `"12"` | `stage1/nets.py:37` |
 | `STAGE1_PIN_JOIN_FAR` | `"0"` | `stage1/nets.py:49` |
 | `STAGE1_PIN_JOIN_SYNTH` | `"3"` | `stage1/nets.py:59` |
+| `STAGE1_PIN_LEAD` | `"26"` | `stage1/pins.py:276` |
+| `STAGE1_PIN_LEAD_FREE` | `"1"` | `stage1/pins.py:283` |
+| `STAGE1_PIN_LEAD_INK` | `"0"` | `stage1/pins.py:287` |
+| `STAGE1_PIN_LEAD_INK_FRAC` | `"0.6"` | `stage1/pins.py:289` |
+| `STAGE1_PIN_LEAD_PERP` | `"3.0"` | `stage1/pins.py:277` |
+| `STAGE1_PIN_LEAD_SRC` | `"end"` | `stage1/pins.py:280` |
 | `STAGE1_PIN_MAJOR` | `"1"` | `stage1/pins.py:256` |
 | `STAGE1_PIN_OUT_BOX` | `"12.0"` | `stage1/pins.py:55` |
 | `STAGE1_PIN_STUB` | `"gapfill"` | `stage1/pins.py:137` |
@@ -144,38 +150,38 @@
 
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
-| `STAGE1_MERGE_TP` | `"0"` | `stage2/assemble.py:103` |
+| `STAGE1_MERGE_TP` | `"0"` | `stage2/assemble.py:108` |
 | `STAGE2_BOTH_TOL` | `"0.65"` | `stage2/text.py:87` |
 | `STAGE2_BOXIC_LIB` | `""` | `stage2/libpins.py:91` |
-| `STAGE2_BOX_PIN_DROP_UNREAD` | `"mixed"` | `stage2/assemble.py:162` |
-| `STAGE2_BOX_PIN_NEED_NAME` | `"2"` | `stage2/assemble.py:201` |
-| `STAGE2_BOX_PIN_PARTIAL` | `"1"` | `stage2/assemble.py:136` |
+| `STAGE2_BOX_PIN_DROP_UNREAD` | `"mixed"` | `stage2/assemble.py:167` |
+| `STAGE2_BOX_PIN_NEED_NAME` | `"2"` | `stage2/assemble.py:206` |
+| `STAGE2_BOX_PIN_PARTIAL` | `"1"` | `stage2/assemble.py:141` |
 | `STAGE2_CKPT` | `r"Y:\workspace\EDA\work\ocr_mix\runs\best.pt"` | `stage2/text.py:42` |
 | `STAGE2_CPNT_LIB` | `""` | `stage2/libpins.py:90` |
 | `STAGE2_DBG_CID` | — *(6 处)* | `stage2/assign.py:855` |
-| `STAGE2_DBG_PINS` | — *(4 处)* | `stage2/assemble.py:929` |
+| `STAGE2_DBG_PINS` | — *(4 处)* | `stage2/assemble.py:938` |
 | `STAGE2_DEMOTE_HARD` | `"0.05"` | `stage2/structmatch.py:35` |
 | `STAGE2_DESIG_MAXW` | `"6.0"` | `stage2/assign.py:164` |
-| `STAGE2_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:54` |
-| `STAGE2_EDGE_ANG` | `"6.0"` | `stage2/assemble.py:332` |
-| `STAGE2_EDGE_JOIN` | `"40.0"` | `stage2/assemble.py:331` |
-| `STAGE2_EDGE_MERGE` | `"0"` | `stage2/assemble.py:330` |
-| `STAGE2_EDGE_SNAP` | `"20.0"` | `stage2/assemble.py:349` |
-| `STAGE2_EDGE_SNAP_ANG` | `"45.0"` | `stage2/assemble.py:350` |
+| `STAGE2_DROP_UNKEYED` | `"1"` | `stage2/assemble.py:59` |
+| `STAGE2_EDGE_ANG` | `"6.0"` | `stage2/assemble.py:341` |
+| `STAGE2_EDGE_JOIN` | `"40.0"` | `stage2/assemble.py:340` |
+| `STAGE2_EDGE_MERGE` | `"0"` | `stage2/assemble.py:339` |
+| `STAGE2_EDGE_SNAP` | `"20.0"` | `stage2/assemble.py:358` |
+| `STAGE2_EDGE_SNAP_ANG` | `"45.0"` | `stage2/assemble.py:359` |
 | `STAGE2_FREE_STEAL` | `"1"` | `stage2/assign.py:222` |
 | `STAGE2_GLOBAL_MATCH` | `"0"` | `stage2/assign.py:747` |
 | `STAGE2_GROW_MIN` | `"0.9"` | `stage2/run.py:31` |
 | `STAGE2_GROW_PER_COMP` | `"4"` | `stage2/run.py:33` |
-| `STAGE2_LIB_PINS` | `"1"` *(2 处)* | `stage2/assemble.py:227` |
-| `STAGE2_LIB_PINS_DBG` | `"0"` | `stage2/assemble.py:229` |
+| `STAGE2_LIB_PINS` | `"1"` *(2 处)* | `stage2/assemble.py:232` |
+| `STAGE2_LIB_PINS_DBG` | `"0"` | `stage2/assemble.py:234` |
 | `STAGE2_LIB_PINS_FUZZY` | `"0.85"` | `stage2/libpins.py:199` |
-| `STAGE2_MIN_EDGE_LEN` | `"20"` | `stage2/assemble.py:304` |
+| `STAGE2_MIN_EDGE_LEN` | `"20"` | `stage2/assemble.py:313` |
 | `STAGE2_MULTI_H` | `"0.43"` | `stage2/text.py:95` |
 | `STAGE2_MULTI_W` | `"0.15"` | `stage2/text.py:94` |
 | `STAGE2_NETLABEL_MIN_H` | `"9"` | `stage2/assign.py:304` |
 | `STAGE2_NETLABEL_MIN_W` | `"12"` | `stage2/assign.py:303` |
-| `STAGE2_NET_DROP_PWRONLY` | `"1"` | `stage2/assemble.py:267` |
-| `STAGE2_NET_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:256` |
+| `STAGE2_NET_DROP_PWRONLY` | `"1"` | `stage2/assemble.py:276` |
+| `STAGE2_NET_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:265` |
 | `STAGE2_NODELETE` | `"1"` | `stage2/structmatch.py:33` |
 | `STAGE2_OWN_ASSIGN` | `"0"` | `stage2/assign.py:87` |
 | `STAGE2_OWN_BBOX` | `"1"` | `stage2/assign.py:68` |
@@ -221,17 +227,17 @@
 | `STAGE2_PIN_COVER` | `"0.15"` | `stage2/assign.py:178` |
 | `STAGE2_PIN_RESIDUAL` | `"0"` | `stage2/assign.py:186` |
 | `STAGE2_PIN_RESIDUAL_MIN` | `"0"` | `stage2/assign.py:187` |
-| `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:485` |
+| `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:494` |
 | `STAGE2_PREFIX` | `"strict"` | `stage2/assign.py:38` |
 | `STAGE2_PREFIX_SKEL` | `"0"` | `stage2/assign.py:48` |
-| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1181` |
-| `STAGE2_STAMP_ONE_SIDE` | `"1"` | `stage2/assemble.py:493` |
+| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1190` |
+| `STAGE2_STAMP_ONE_SIDE` | `"1"` | `stage2/assemble.py:502` |
 | `STAGE2_STEAL` | `"80"` | `stage2/assign.py:220` |
-| `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:290` |
+| `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:299` |
 | `STAGE2_TIGHT_ROLES` | `"pin_number,pin_name"` | `stage2/text.py:129` |
-| `STAGE2_TP_CV_SUBTYPES` | `"ring3"` | `stage2/assemble.py:105` |
-| `STAGE2_TP_LEDGER` | `"0"` | `stage2/assemble.py:120` |
-| `STAGE2_TP_TRUST_EVIDENCE` | `"1"` | `stage2/assemble.py:117` |
+| `STAGE2_TP_CV_SUBTYPES` | `"ring3"` | `stage2/assemble.py:110` |
+| `STAGE2_TP_LEDGER` | `"0"` | `stage2/assemble.py:125` |
+| `STAGE2_TP_TRUST_EVIDENCE` | `"1"` | `stage2/assemble.py:122` |
 | `STAGE2_VALUE_DISTW` | `"0.035"` | `stage2/assign.py:285` |
 | `STAGE2_VALUE_NETNAME` | `"0"` | `stage2/assign.py:274` |
 | `STAGE2_VALUE_STEAL` | `"40"` | `stage2/assign.py:231` |
@@ -425,14 +431,16 @@
 
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
+| `EDA_PCB_REPO` | — | `pipeline/config.py:23` |
+| `EDA_ROOT` | — | `pipeline/config.py:25` |
 | `STAGE1_WIRE_COLOUR` | `"hint"` | `pipeline/pskel.py:272` |
 | `STAGE1_WIRE_DEBUG` | — | `pipeline/pskel.py:338` |
-| `STAGE1_WIRE_EDGE` | `"0"` | `pipeline/pskel.py:502` |
-| `STAGE1_WIRE_EDGE_MIN` | `"10.0"` | `pipeline/pskel.py:573` |
-| `STAGE1_WIRE_EDGE_NEAR` | `"2"` | `pipeline/pskel.py:586` |
-| `STAGE1_WIRE_EDGE_REL` | `"0.55"` | `pipeline/pskel.py:569` |
-| `STAGE1_WIRE_UNCONF` | `"veto"` | `pipeline/pskel.py:539` |
-| `STAGE1_WIRE_UNCONF_NEAR` | `"3"` | `pipeline/pskel.py:553` |
+| `STAGE1_WIRE_EDGE` | `"0"` | `pipeline/pskel.py:515` |
+| `STAGE1_WIRE_EDGE_MIN` | `"10.0"` | `pipeline/pskel.py:586` |
+| `STAGE1_WIRE_EDGE_NEAR` | `"2"` | `pipeline/pskel.py:599` |
+| `STAGE1_WIRE_EDGE_REL` | `"0.55"` | `pipeline/pskel.py:582` |
+| `STAGE1_WIRE_UNCONF` | `"veto"` | `pipeline/pskel.py:552` |
+| `STAGE1_WIRE_UNCONF_NEAR` | `"3"` | `pipeline/pskel.py:566` |
 | `WINDIR` | `r'C:\Windows'` | `pipeline/pglyph.py:30` |
 
 <a id="submission"></a>

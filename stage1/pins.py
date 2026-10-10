@@ -257,6 +257,109 @@ PIN_MAJOR = os.environ.get("STAGE1_PIN_MAJOR",
                            "1").strip().lower() not in ("", "0", "false", "off", "no", "none")
 PIN_MAJOR_TYPES = frozenset({"r", "c", "l", "fuse", "crystal_2pin", "crystal", "d", "led"})
 
+# ★★ 跨过「符号自身引线」去挂网（`STAGE1_PIN_LEAD`，默认 0 = 关；单位 px）。
+#
+# **问题**：`PIN_MAJOR` 把两脚元件的脚盖章在「框边 ∓ PIN_OUT」= GT 的引脚点（250/250），
+# 但**符号画法**会在框边与导线之间留一段 10~20px 的引线笔画（KiCad 的电阻/电容体比
+# 引脚点短），导线画到引线**外端**就停 ⇒ 引脚点离最近导线 13~20px，超过
+# `nets.PIN_JOIN_DIST=12` ⇒ 这一脚永远挂不上网（`pin_join.orphans`，然后整条网丢失）。
+#
+# **取证**（官方 case 2，R2 = `c0011`）：`orphans` 里 `{"comp":"c0011","pin":0,"d":18.8}`；
+# 逐行判色（图 2063×1116，列 x=573..580）：绿导线止于 y=423、暗红引线 424..443、
+# 电阻体 444..480、红引线 481..500、绿导线 501 起 —— 即「导线端 ↔ 引脚点(441.8)」
+# 之间 18.8px **全是符号引线**。GT `net_5=(R2.2, U1.3)` 因此整条丢失，case 2 一共
+# 8 条 `R.x.2 ↔ U.x` 这样丢掉（conn 权重 0.35，`_conncal`-类读法约 +0.9/案）。
+#
+# **做法**：把「朝外方向上 `PIN_LEAD` 以内、横向偏移 ≤ `PIN_LEAD_PERP`」的引脚点吸附到
+# 最近的导线采样点。只动 **stage1 的附着点** —— 两脚类型在 stage2 走 `stamp_pins`
+# （只用 `pts` 判左右侧，沿轴外推不改投影符号），所以**输出引脚逐位不变**、只有网变。
+PIN_LEAD = float(os.environ.get("STAGE1_PIN_LEAD", "26"))
+PIN_LEAD_PERP = float(os.environ.get("STAGE1_PIN_LEAD_PERP", "3.0"))
+# 吸附目标：`end`（默认）= 只用**线段端点**（物理上「导线画到引线外端就停」）；
+# `any` = 用整条点云（含段中间），会把「从旁边横穿过去的导线」也当成引线终点。
+PIN_LEAD_SRC = os.environ.get("STAGE1_PIN_LEAD_SRC", "end").strip().lower()
+# 只吸附到**自由端**（度 1 的导线端点，2px 内没有别的线段端点）。导线在引脚附近
+# 与别的段交汇时那个端点不是「引线外端」，把引脚挂上去会并错网（case 3/6 的回归）。
+PIN_LEAD_FREE = os.environ.get("STAGE1_PIN_LEAD_FREE", "1").strip().lower() not in (
+    "", "0", "false", "off", "no", "none")
+# 引线证据：引脚点 → 目标端点 的连线上必须有墨（那段「符号自身引线」的笔画）。
+# 没有墨就说明这不是引线，而是别的网的导线端点恰好停在旁边（case 3/6 的回归）。
+PIN_LEAD_INK = os.environ.get("STAGE1_PIN_LEAD_INK", "0").strip().lower() not in (
+    "", "0", "false", "off", "no", "none")
+PIN_LEAD_INK_FRAC = float(os.environ.get("STAGE1_PIN_LEAD_INK_FRAC", "0.6"))
+# 只对 stage2 走 `stamp_pins` 的类型开（`stage2/assemble.py:485 PIN_STAMP_TYPES`）：
+# 其余类型的 stage1 引脚点**就是**输出引脚，挪了会直接改 pin_f1。
+PIN_LEAD_TYPES = frozenset({"r", "c", "l", "fuse", "crystal_2pin", "d", "led"})
+
+
+def _seg_ink(ink, a, b, n: int = 8, frac: float = None) -> bool:
+    """`a` → `b` 的连线上是否有墨（引线笔画的证据）。`ink` 是图像坐标墨迹掩膜。
+
+    沿线取 `n` 个内点，每点看 3×3 邻域；墨点比例 ≥ `frac` 才算过。
+    """
+    if ink is None:
+        return True
+    _f = PIN_LEAD_INK_FRAC if frac is None else float(frac)
+    ax, ay = float(a[0]), float(a[1])
+    bx, by = float(b[0]), float(b[1])
+    h, w = ink.shape[:2]
+    hit = 0
+    tot = 0
+    for i in range(1, n + 1):
+        t = i / float(n + 1)
+        x = int(round(ax + (bx - ax) * t))
+        y = int(round(ay + (by - ay) * t))
+        if x < 0 or y < 0 or x >= w or y >= h:
+            continue
+        tot += 1
+        if ink[max(0, y - 1):y + 2, max(0, x - 1):x + 2].any():
+            hit += 1
+    if tot == 0:
+        return True
+    return (hit / float(tot)) >= _f
+
+
+def _snap_lead(pins, pts, center, lead=None, perp=None, mask=None, ink=None):
+    """引脚点沿朝外方向吸附到最近的导线采样点（跨过符号自身引线）。
+
+    返回 `(新 pins, 吸附个数)`。`pts` = `sample_segments` 的点云 (M,2)，图像坐标；
+    `mask` 非空时只允许吸附到 `mask` 为真的那些点（自由端，见 `PIN_LEAD_FREE`）；
+    `ink` 给了就要求「引脚点 → 目标点」的连线上有引线墨迹（见 `PIN_LEAD_INK`）。
+    判据：`t = (p-q)·u ∈ (0, lead]` 且横向偏移 `|(p-q) - t·u| ≤ perp`，取 `t` 最小者
+    （= 引线外侧最近的导线点）。`t ≤ PIN_JOIN_DIST` 时本来就挂得上，吸附不改所属网。
+    """
+    _lead = PIN_LEAD if lead is None else float(lead)
+    _perp = PIN_LEAD_PERP if perp is None else float(perp)
+    out: List[Tuple[float, float]] = []
+    n = 0
+    cx, cy = float(center[0]), float(center[1])
+    for p in pins:
+        qx, qy = float(p[0]), float(p[1])
+        ux, uy = qx - cx, qy - cy
+        nrm = math.hypot(ux, uy)
+        if nrm < 1e-6 or pts is None or len(pts) == 0:
+            out.append((qx, qy))
+            continue
+        ux, uy = ux / nrm, uy / nrm
+        dx = pts[:, 0] - qx
+        dy = pts[:, 1] - qy
+        t = dx * ux + dy * uy
+        lat = np.abs(dy * ux - dx * uy)
+        ok = (t > 0.0) & (t <= _lead) & (lat <= _perp)
+        if mask is not None:
+            ok &= mask
+        if not bool(ok.any()):
+            out.append((qx, qy))
+            continue
+        idx = int(np.argmin(np.where(ok, t, 1e9)))
+        cand = (float(pts[idx, 0]), float(pts[idx, 1]))
+        if PIN_LEAD_INK and not _seg_ink(ink, (qx, qy), cand):
+            out.append((qx, qy))
+            continue
+        out.append(cand)
+        n += 1
+    return out, n
+
 
 def _axis_split(bbox, pins):
     """按框主轴把候选脚分成「主轴两端」与「短轴两侧」。返回 (keep, drop)。"""
@@ -500,6 +603,19 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
         except Exception:                                 # pragma: no cover
             pass
     pts = sample_segments(segments, sample_step)
+    # ★ 跨引线吸附的目标点集（见 `STAGE1_PIN_LEAD`）：整张图只算一次。
+    _lead_tgt = _lead_mask = None
+    if PIN_LEAD > 0 and len(segments):
+        if PIN_LEAD_SRC == "any":
+            _lead_tgt = pts
+        else:
+            _lead_tgt = np.asarray(
+                [[float(s[0][0]), float(s[0][1])] for s in segments] +
+                [[float(s[-1][0]), float(s[-1][1])] for s in segments], np.float64)
+            if PIN_LEAD_FREE and len(_lead_tgt):
+                _d2 = ((_lead_tgt[:, None, :] - _lead_tgt[None, :, :]) ** 2).sum(-1)
+                # 度 1 = 2px 内没有别的线段端点（自己算 1 个）
+                _lead_mask = (_d2 <= 4.0).sum(1) == 1
     out: Dict[str, List[Tuple[float, float]]] = {}
     LATENT.clear()                     # 每次调用重置（ProcessPool worker 会复用进程）
     for c in components:
@@ -588,6 +704,18 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
                                    "「框边 ∓ PIN_OUT、长轴中线」，官方 250/250）" % len(_gone))
                 dedup = _ideal
                 _ev["major"] = len(_ideal)
+        # ★ 跨过符号自身引线去挂网（`STAGE1_PIN_LEAD`，默认关；见该常量的长注释）。
+        #   只对 stage2 走 `stamp_pins` 的两脚类型做 ⇒ 输出引脚逐位不变，只有网变。
+        if PIN_LEAD > 0 and not _is_ic and dedup and _lead_tgt is not None:
+            _tl = str(c.get("type") or "").split(":")[0].lower()
+            if _tl in PIN_LEAD_TYPES:
+                _cc = ((float(bb[0]) + float(bb[2])) / 2.0,
+                       (float(bb[1]) + float(bb[3])) / 2.0)
+                _snapped, _nsnap = _snap_lead(dedup, _lead_tgt, _cc,
+                                              mask=_lead_mask, ink=ink)
+                if _nsnap:
+                    dedup = _snapped
+                    _ev["lead"] = _nsnap
         out[c["id"]] = dedup[:MAX_PINS]
         if _latent:
             LATENT[c["id"]] = list(_latent)
@@ -724,6 +852,29 @@ def _selftest() -> int:
     chk("横长框 drop", drop, [(150.0, 96.0)])
     chk("主轴只有一个候选 -> 不裁", _axis_split((100.0, 100.0, 200.0, 300.0),
                                                 [(90.0, 200.0), (150.0, 90.0)])[1], [])
+
+    print("")
+    print("13) 跨引线吸附 `_snap_lead`：正对外侧、横向 ≤ perp、距离 ≤ lead 才算")
+    _ctr = (150.0, 300.0)
+    _pts = np.asarray([(150.0, 250.0), (170.0, 260.0), (150.0, 230.0)], dtype=float)
+    _got, _n = _snap_lead([(150.0, 270.0)], _pts, _ctr, lead=26.0, perp=3.0)
+    chk("正对 20px -> 吸到导线端", _got, [(150.0, 250.0)])
+    if _n != 1:
+        fails.append("正对 20px 计数")
+    chk("lead 太短 -> 不吸", _snap_lead([(150.0, 270.0)], _pts, _ctr,
+                                        lead=15.0, perp=3.0)[0], [(150.0, 270.0)])
+    chk("旁偏 20px -> 不吸（perp=3）",
+        _snap_lead([(150.0, 270.0)], np.asarray([(170.0, 260.0)]),
+                   _ctr, lead=26.0, perp=3.0)[0], [(150.0, 270.0)])
+    chk("旁偏 20px -> 吸（perp=24）",
+        _snap_lead([(150.0, 270.0)], np.asarray([(170.0, 260.0)]),
+                   _ctr, lead=26.0, perp=24.0)[0], [(170.0, 260.0)])
+    chk("mask 只放行远点 -> 远点超 lead 不吸",
+        _snap_lead([(150.0, 270.0)], _pts, _ctr, lead=26.0, perp=3.0,
+                   mask=np.asarray([False, False, True]))[0], [(150.0, 270.0)])
+    chk("朝内（点已在引脚内侧）-> 不吸",
+        _snap_lead([(150.0, 270.0)], np.asarray([(150.0, 285.0)]),
+                   _ctr, lead=26.0, perp=3.0)[0], [(150.0, 270.0)])
 
     print("")
     if fails:
