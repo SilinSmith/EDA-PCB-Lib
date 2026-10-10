@@ -503,8 +503,10 @@ def _pin_read_quality(rec: dict) -> Optional[float]:
     """Rank complete OCR reads; this product is not a calibrated probability."""
     values = []
     for role in ("number", "name"):
+        observed = (rec.get("number_selection_name") if "number_selection_name" in rec and role == "name"
+                    else rec.get(role))
         try:
-            conf = float((rec.get(role) or {})["conf"])
+            conf = float((observed or {})["conf"])
         except (KeyError, TypeError, ValueError, OverflowError):
             return None
         if not math.isfinite(conf) or not 0.0 <= conf <= 1.0:
@@ -560,9 +562,11 @@ def _box_number_winners(raw: Sequence[dict]) -> Dict[int, int]:
             continue
         old = raw[prev]
         quality, old_quality = r.get("quality"), old.get("quality")
-        if not BOX_PIN_DUPLICATE_BEST or not r["nm"] or quality is None:
+        selection_name = r.get("selection_name", r["nm"])
+        old_selection_name = old.get("selection_name", old["nm"])
+        if not BOX_PIN_DUPLICATE_BEST or not selection_name or quality is None:
             continue
-        if not old["nm"]:
+        if not old_selection_name:
             if BOX_PIN_NEED_NAME and (r.get("color_contact") is True
                                      or old.get("name_rejected_by_frame") is True):
                 winners[v] = i
@@ -663,10 +667,13 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             rec = pinfo.get(k) or pinfo.get(str(k)) or {}
             num = ((rec.get("number") or {}).get("text") or "").strip()
             nm = ((rec.get("name") or {}).get("text") or "").strip()
+            selection_name = (rec.get("number_selection_name") if "number_selection_name" in rec
+                              else rec.get("name"))
             evidence = (contact_evidence[k] if isinstance(contact_evidence, (list, tuple))
                         and k < len(contact_evidence) else None)
             contact_rank = _pin_contact_rank(evidence, pts[k])
             raw.append({"num": num, "nm": nm, "quality": _pin_read_quality(rec),
+                        "selection_name": ((selection_name or {}).get("text") or "").strip(),
                         "contact_rank": contact_rank,
                         "color_contact": (contact_rank == 2 and isinstance(evidence, dict)
                                           and isinstance(evidence.get("source"), str)

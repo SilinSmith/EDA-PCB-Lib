@@ -539,7 +539,11 @@ def _name_corridor_distance(cand: dict, bbox: Sequence[float], pins,
 
 def _directional_name_groups(bbox, pins, pool, evidence, active, score_of):
     """Build one-to-one side groups after inward/axis/nearest eligibility."""
-    distances = {(ci, pi): _name_corridor_distance(cand, bbox, pins, pi, evidence)
+    # Hard target exclusions must precede nearest eligibility. An excluded
+    # old crop cannot hide the qualified replacement or bypass the exclusion
+    # when the alternative edge-midpoint metric supplies its own soft score.
+    distances = {(ci, pi): (_name_corridor_distance(cand, bbox, pins, pi, evidence)
+                           if score_of(cand, pi) > 0 else None)
                  for ci, cand in enumerate(pool) for pi in active}
     nearest = {pi: min((distance for (ci, index), distance in distances.items()
                        if index == pi and distance is not None), default=float("inf"))

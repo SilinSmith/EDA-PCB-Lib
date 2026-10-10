@@ -665,6 +665,48 @@ def _name_reservation(candidate, box, pins, evidence):
     return False
 
 
+def _preferred_name_observation(candidate, cid, box, pins, evidence):
+    """Qualify an independent name read without comparing model confidence.
+
+    It must still identify a current trusted colour contact and lie inside its
+    actual frame and name corridor. Empty/held or stale observations cannot
+    suppress the existing OCR candidates.
+    """
+    meta = candidate.get("pin_name_ocr")
+    reads = candidate.get("reads") or {}
+    if (candidate.get("source") != "color_pin_name_ppocr"
+            or not candidate.get("name_only") or set(reads) != {"pin_name"}
+            or not isinstance(meta, dict) or meta.get("backend") != "ppocr_v4"
+            or meta.get("accepted") is not True or meta.get("held_reason")
+            or "glyph_integrity_unresolved" in (meta.get("flags") or [])):
+        return None
+    got = _best_read(reads, "pin_name", fit_pinname)
+    if not got or not any(ch.isalpha() for ch in got[1]) or not math.isfinite(got[2]) or got[2] < .90:
+        return None
+    index = _target_index(candidate, cid, pins, evidence)
+    if index is None or index == -1:
+        return None
+    target = candidate["pin_target"]
+    # A new provider observation always carries both points; old targeted
+    # callers may omit them but cannot obtain the new provider's priority.
+    if target.get("point_img") is None or target.get("anchor_img") is None:
+        return None
+    sides = structmatch.confirmed_frame_sides(box, evidence)
+    item = {"bbox": candidate["bbox"], "center": candidate["center"], "target_pin": index}
+    if (not sides or not structmatch.candidate_inside_confirmed_frame(item, sides)
+            or structmatch._name_corridor_distance(item, box, pins, index, evidence) is None):
+        return None
+    tangent = 1 if target["edge"] in ("left", "right") else 0
+    rect = structmatch._candidate_rectangle(item)
+    for other, ev in enumerate(evidence):
+        if (other != index and ev.get("trust") == "trusted"
+                and ev.get("frame_confirmed") is True and ev.get("edge") == target["edge"]
+                and ev.get("source") in _COLOR_TEXT_SOURCES
+                and rect[tangent] < ev["anchor_img"][tangent] < rect[tangent + 2]):
+            return None
+    return index
+
+
 def _digit_entities(cands, cid, box, pins, evidence):
     """Link original OCR samples to clean observations of the same black glyph."""
     if not PIN_DIGIT_ENTITY or not evidence:
@@ -1111,6 +1153,12 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 target_index = _target_index(t, cid, plist, _pe)
                 if target_index == -1:
                     continue
+                preferred = None
+                if slot == "name" and t.get("source") == "color_pin_name_ppocr":
+                    preferred = (_preferred_name_observation(t, cid, c["bbox"], plist, _pe)
+                                 if c["type"] == "box" else None)
+                    if preferred is None:
+                        continue
                 entity = digit_entities.get(tuple(t["bbox"])) if _number_guard else None
                 geometry = (t.get("geometry_bbox") or (entity or {}).get("geometry_bbox")) if _number_guard else None
                 fresh_number = (_number_guard and PIN_DIGIT_ENTITY
@@ -1146,11 +1194,17 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     item["geometry_bbox"] = geometry
                 if target_index is not None:
                     item["target_pin"] = target_index
+                if preferred is not None:
+                    item["preferred_name_pin"] = preferred
                 pool.append(item)
             if not pool:
                 continue
             if _number_guard:
                 pool = structmatch.deduplicate_number_candidates(pool)
+            # Qualified targeted names replace only the observation for their
+            # own pin. Old reads stay available to every other role/contact.
+            if slot == "name":
+                pool.sort(key=lambda cc: "preferred_name_pin" not in cc)
             # ★ 候选池去重：同一块文字被重复检出两次时，两个副本会被对齐到两根
             # 不同的脚上（其中一根必然是错的）。见 `PINNUM_DUP` 的注释。
             if PINNUM_DUP > 0 and len(pool) > 1:
@@ -1163,6 +1217,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                         continue
                     _keep.append(cc)
                 pool = _keep
+            preferred_names = {cc["preferred_name_pin"] for cc in pool
+                               if "preferred_name_pin" in cc}
             pool.sort(key=lambda x: -x["score"])
 
             # ★★ **引脚列窗口引导**（`stage1/pincol.py`，默认开）。
@@ -1211,7 +1267,10 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             def score_of(c, pi, _pl=plist, _bb=_cbb,
                          _ev=_slot_pe,
                          _numeric=_number_guard,
+                         _preferred=preferred_names,
                          _dec=PINNUM_DECAY if slot == "number" else 20.0):
+                if not _numeric and pi in _preferred and c.get("preferred_name_pin") != pi:
+                    return 0.0
                 if _numeric:
                     e = structmatch.pin_edge(_bb, _pl, pi, _ev)
                     d = structmatch.number_row_distance(c, e, _pl[pi])
@@ -1273,6 +1332,10 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     continue
                 pinfo[pi][slot] = {"text": cc["text"], "conf": cc["conf"],
                                    "box": list(cc["rec"]["bbox"])}
+                if "preferred_name_pin" in cc:
+                    meta = cc["rec"]["pin_name_ocr"]
+                    if "previous_name" in meta:
+                        pinfo[pi]["number_selection_name"] = meta["previous_name"]
                 taken_box.add(id(cc["rec"]))
 
     # ---- 网络标签：离所有元件都远、且不在元件框里的文字 ----
