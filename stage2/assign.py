@@ -355,6 +355,61 @@ TYPE_PREFIX: Dict[str, Tuple[str, ...]] = {
 NO_DESIGNATOR = frozenset({"gnd", "v", "net_input", "net_short", "net_output",
                            "other", "net_bidirection", "m3\u87ba\u4e1d"})
 
+# ---------------------------------------------------------------------------
+# ★ 内涵键回收（`STAGE2_CONFORM_KEY`）：位号前缀是元件类型的**内涵**，两者必须互证。
+#
+# 官方 10 张实测（`STAGE2_DBG_CID` 逐条打印 + `work/_fast_out_gen2v`）：
+# **「未挂键 ⇒ 丢弃」这条闸门丢掉的那 4 颗 LED，全部是「读得没错、判型/取证错了」**：
+#   · case 6 `c0016`/`c0017`：YOLO 判成 `d`，而印字五个角色全部读作 `LED2`/`LED1`
+#     （conf 0.98~0.99，干净读法）。但 `TYPE_PREFIX["d"] = ("D",)` 且
+#     `PREFIX_MODE=strict` ⇒ `canon_designator("LED2", "d")` 返回 `""` ⇒ 无候选
+#     ⇒ `[dbg-alts] cid=c0016 -> []` ⇒ 未挂键 ⇒ 被丢。
+#   · case 7 `c0016` / case 10 `c0018`：**只信 `designator` 角色**。标签框的
+#     `designator` 读作 `YXEP1`(0.399)/`Y7EF1`(0.458) 这种垃圾，而**同一块框**的
+#     `pin_name`/`pin_number` 读作 `7LED1`(0.698)/`N7ED1`(0.735) —— 真值就在框里，
+#     只是被角色条件的读法差异挡在门外（`_best_read` 本来就允许串角色借读，
+#     但读串「开头粘了胶连符号」，`7LED1` 过不了 `^([A-Z]{1,3})(\d{1,4})$`）。
+#
+# 两条回收路径都**只对「本来就要丢的元件」生效**（strict 路径失败的元件今天一颗
+# 都不输出）⇒ 天然是零回归的加法；但仍要过 A/B 才能转正。
+#
+# 依据（前缀归属）：`LED` 这个前缀在 `TYPE_PREFIX` 里**只有 `led` 拥有**
+# （`D` 是 `d` 与 `led` 共有 ⇒ 不足以翻类型）—— 这就是「基于维度内涵的校验」：
+# 读出的前缀反过来判定元件类型，而不是靠 YOLO 的类别。
+CONFORM_KEY = env_on("STAGE2_CONFORM_KEY", "0")
+# 内涵回收路径要求的最低置信度（strict 路径不受影响）。官方 case 6 的 `LED2`
+# 是 0.992、case 7 的 `7LED1` 是 0.698 ⇒ 地板上限设在 0.5 一带。
+CONFORM_MIN_CONF = float(os.environ.get("STAGE2_CONFORM_CONF", "0.50"))
+# 削掉开头胶连字符（`7LED1` -> `LED1`）的保真度折扣、翻类型（`d` -> `led`）的折扣。
+CONFORM_GLUE_PEN = float(os.environ.get("STAGE2_CONFORM_GLUE_PEN", "0.85"))
+CONFORM_TYPE_PEN = float(os.environ.get("STAGE2_CONFORM_TYPE_PEN", "0.85"))
+# 允许互相纠正的类型。**必须是显式小表**：只登记「图形符号本身几乎无法区分、
+# 只能靠印字前缀区分」的对子（`d` 与 `led` 的差别只是两条出射箭头）。
+CONFORM_SIBLINGS: Dict[str, Tuple[str, ...]] = {"d": ("led",), "led": ("d",)}
+# ★ **恒开的「遗漏检测」（`STAGE2_CONFORM_AUDIT`，默认 1）**：不管回收开关开不开，
+#   都把「本该挂上、却因为判型/取证不对而没挂上」的元件记进 `LAST_CONFORM`，
+#   由 `stage2/run.py` 写进 `_assigned/<case>.json` 的 `no_delete.conform_audit`。
+#   **只写旁路报告，绝不改输出** —— 这正是用户 m48732 要的「基于维度内涵的识别
+#   与校验，用来检索遗漏/多余的元素」：与「不删除只削弱」的账本同一条通道。
+CONFORM_AUDIT = env_on("STAGE2_CONFORM_AUDIT", "1")
+CONFORM_AUDIT_MAX = int(os.environ.get("STAGE2_CONFORM_AUDIT_MAX", "400"))
+LAST_CONFORM: List[dict] = []
+# ★ 同一通道的**「多余检测」**：我方输出里那些「内涵上不可能判对」的元件 ——
+#   官方 `10GT` 的命名约定是 `c/r/l` 的 `Name` = 位号、`d`/`led`/`box` 的 `Name`
+#   = **型号**；而 `stage2/assemble.py` 只对 `box` 取器件名，其余一律 `name = key`。
+#   于是**每发出一颗 `d`/`led`，它就是一个必然判错的「多余元素」**（官方按
+#   key+type+Name+value+bbox 全对才算 tp）—— 这正是用户 m48732 要的另一半：
+#   检索「多余的元素」。记录里同时带上器件名读数，便于换约定时直接用。
+#   **只写旁路报告**，见 `stage2/run.py` 的 `no_delete.conform_extra`。
+LAST_CONFORM_EXTRA: List[dict] = []
+# 官方约定下 `Name` 应当放**型号**（而非位号）的类型；`box` 已经这么做了。
+EXTRA_MODELNAME_TYPES = ("d", "led")
+
+
+def clear_conform() -> None:
+    LAST_CONFORM.clear()
+    LAST_CONFORM_EXTRA.clear()
+
 
 # ---------------------------------------------------------------------------
 def dist_to_rect(px: float, py: float, r: Sequence[float]) -> float:
@@ -477,6 +532,59 @@ def canon_designator(text: str, ctype: str):
 
 def fit_designator(text: str, ctype: str) -> float:
     return canon_designator(text, ctype)[1]
+
+
+def prefix_owners(prefix: str) -> List[str]:
+    """哪些 type 的 `TYPE_PREFIX` 里有这个前缀（用于「前缀是否唯一确定类型」）。"""
+    p = (prefix or "").upper()
+    if not p:
+        return []
+    return [t for t, ps in TYPE_PREFIX.items()
+            if p in tuple(str(x).upper() for x in ps)]
+
+
+def canon_designator_meaning(text: str, ctype: str,
+                             rescue: Optional[bool] = None):
+    """内涵互校验版的 `canon_designator`：`(位号, 保真度, 类型改写, 依据)`。
+
+    `依据` ∈ `{"strict", "glue", "type", ""}`：
+      · `strict` —— 原路径（`canon_designator` 直接认得），**行为与今天逐位相同**；
+      · `glue`   —— 削掉读串开头粘上的非字母垃圾后认得（`7LED1` -> `LED1`）；
+      · `type`   —— 该串在**另一种类型**的 `TYPE_PREFIX` 下才是干净位号，且所用
+                    前缀**只被那一种类型拥有** ⇒ 采纳该键并**把类型改成它**
+                    （`LED2` 在 `d` 上认不出、在 `led` 上是干净位号 ⇒ 类型 `d` 判错）。
+
+    `CONFORM_KEY=0`（默认）时，非 strict 的两条路径一律不生效 ⇒ 逐位不变。
+    `rescue=True` 是给**审计**用的：不管开关，都把两条救援路径跑一遍（只写报告，
+    用来检索「读得没错、却因为判型/取证不对而没挂上键」的遗漏元件）。
+    """
+    can, fid = canon_designator(text, ctype)
+    if can:
+        return can, fid, None, "strict"
+    if not (CONFORM_KEY if rescue is None else rescue):
+        return "", 0.0, None, ""
+    u = re.sub(r"[^0-9A-Za-z]", "", text or "").upper()
+    if not u:
+        return "", 0.0, None, ""
+    # (a) 开头胶连：`7LED1` -> `LED1`（只削**开头**的非字母；`N7ED1` 开头是字母，
+    #     削不动 ⇒ 老老实实认不出，见下方自检里的反例断言）。
+    u2 = re.sub(r"^[^A-Z]+", "", u)
+    if u2 and u2 != u:
+        can, fid = canon_designator(u2, ctype)
+        if can:
+            return can, fid * CONFORM_GLUE_PEN, None, "glue"
+    # (b) 前缀唯一归属另一种类型 ⇒ 翻类型（`LED` 只属于 `led`）。
+    for ty in CONFORM_SIBLINGS.get(str(ctype).lower(), ()):
+        for s in ((u2,) if u2 else ()) + (u,):
+            can, fid = canon_designator(s, ty)
+            if not can or fid < 0.9:
+                continue
+            m = re.match(r"^([A-Z]{1,3})", can)
+            ow = prefix_owners(m.group(1) if m else "")
+            if len(ow) != 1 or ow[0] != ty:
+                continue
+            return can, fid * CONFORM_TYPE_PEN, ty, "type"
+    return "", 0.0, None, ""
 
 
 def canon_value(text: str) -> str:
@@ -937,6 +1045,9 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
     out: Dict[str, dict] = {}
     desig_cands: List[Tuple[str, str, float, dict]] = []   # (cid, 位号, 分数, 证据)
     desig_all: Dict[str, List[dict]] = {}                 # cid -> 全部候选（阶段三用）
+    # ★ 内涵「遗漏审计」暂存（`STAGE2_CONFORM_AUDIT`，恒开）：cid -> 本该挂上却
+    #   在当前规则下过不了 canon 的读法。只写报告，见下面 `LAST_CONFORM`。
+    audit_of: Dict[str, dict] = {}
 
     for c in comps:
         cid, ctype = c["id"], c["type"]
@@ -973,20 +1084,50 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             if _too_wide(t, DESIG_MAXW):
                 continue
             got = _best_read(t["reads"], "designator",
-                             lambda s, ty=ctype: canon_designator(s, ty)[1])
+                             lambda s, ty=ctype: canon_designator_meaning(s, ty, rescue=True)[1])
             if not got:
                 continue
             _s, txt, conf, _f = got
-            can, fid = canon_designator(txt, ctype)
+            can, fid, tfix, how = canon_designator_meaning(txt, ctype)
             if not can:
+                # ★ 内涵「遗漏检测」（`STAGE2_CONFORM_AUDIT`，恒开、**只写报告**）：
+                #   这条读法在当前开关下过不了 canon，但按内涵规则（前缀 ⇄ 类型互证、
+                #   削开头胶连）能不能反推回一个合法位号？能 ⇒ 记一笔，由
+                #   `stage2/run.py` 落到 `_assigned/<case>.json` 的
+                #   `no_delete.conform_audit`。这就是「检索遗漏的元素」：
+                #   官方 10 张上它恰好点出那 4 颗被丢掉的 LED。
+                #   ⚠ 只写旁路报告，`alts` 一个都不加 ⇒ 输出逐位不变。
+                if CONFORM_AUDIT and conf >= CONFORM_MIN_CONF and cid not in audit_of:
+                    _c2, _f2, _tf2, _h2 = canon_designator_meaning(txt, ctype, rescue=True)
+                    if _c2 and _h2:
+                        audit_of[cid] = {
+                            "read": txt, "canon": _c2, "how": _h2,
+                            "type_fix": _tf2, "type_now": ctype,
+                            "conf": round(float(conf), 4),
+                            "d": round(float(t["d"]), 1),
+                            "role": next((r for r, v in (t["reads"] or {}).items()
+                                          if v and v[0] == txt), ""),
+                            "box": [round(float(x), 1) for x in t["bbox"]],
+                        }
                 continue
+            if how:
+                # 内涵回收路径的两道额外闸门（`how == "strict"` 时一概不查，
+                # 保证默认臂逐位不变）：
+                #  · 置信度地板 —— 回收的前提是「读法本身可信」；
+                #  · `type` 那条要求文字框在 `FAR` 之内 —— 翻类型等于改判元件类型，
+                #    只允许用**贴着这颗元件**的印字当证据（抢读来的远端框不算）。
+                if conf < CONFORM_MIN_CONF:
+                    continue
+                if how == "type" and t["d"] > FAR:
+                    continue
             # ★ 距离项必须放宽到 `STEAL_R`（见 `_score` 的 docstring）：位号候选池里
             # 有一大半是 `d > FAR` 的抢读候选，用 `FAR` 截断会让它们全部同分。
             sc = _score(fid, conf, t["d"], t["inside"],
                         dist_clamp=max(FAR, STEAL_R))
             alts.append((sc, {"text": txt, "canon": can, "conf": conf,
                               "box": list(t["bbox"]), "d": t["d"],
-                              "fit": fid, "box_i": t.get("_i", -1)}))
+                              "fit": fid, "box_i": t.get("_i", -1),
+                              "type_fix": tfix}))
         alts.sort(key=lambda x: -x[0])
         if os.environ.get("STAGE2_DBG_CID") == cid:
             print("[dbg-alts] cid=%s -> %s" % (cid, [
@@ -1015,7 +1156,20 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         picked = []
         seen_txt: set = set()
         seen_box: set = set()
-        for cid, can, sc, info in sorted(desig_cands, key=lambda x: -x[2]):
+
+        def _rank(x):
+            """撞号时的排序键：**救援性候选让位**，同组内再比分数。
+
+            ★ `CONFORM_KEY` 的「翻类型」候选（`type_fix` 非空）是**救援**性质的 ——
+              实测官方 case 4：同一颗 LED 被检出两遍（`d` 与 `led` 两块框指着
+              同一个 `box_i`），翻开 `d` 那块后它的距离更近（18.1 vs 23.7），
+              分数 0.2155 > 0.1677 就把 `LED1` 从本来就同类型的那颗手里抢走，
+              引脚 tp 25→23、该案 −1.29。本该同类型的候选必须先拿号。
+              默认关时 `type_fix` 恒为 `None` ⇒ 与今天的 `-sc` 排序逐位相同。
+            """
+            return ((x[3] or {}).get("type_fix") is not None, -x[2])
+
+        for cid, can, sc, info in sorted(desig_cands, key=_rank):
             bi = _box_key(info)
             if can in seen_txt or (bi is not None and bi in seen_box):
                 seen_txt.add(can)
@@ -1028,8 +1182,61 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
     # `desig_slots` 给的是**每个元件的全部候选**（阶段三 LLM 仲裁的原料），
     # 不是「最优候选」的列表 —— 后者会让第个三阶段没有任何东西可裁。
     desig_slots: Dict[str, List[dict]] = desig_all
+    # ★ 内涵键回收（`CONFORM_KEY`）翻了类型的元件（官方 case 6 的 `d` -> `led`）：
+    #   类型既是输出的一部分（官方按精确串比 `type`），又决定引脚图章与脚名别名
+    #   （`assemble.PIN_STAMP_TYPES` / `PIN_NAME_ALIAS`），所以必须传下去 ——
+    #   ① 记进 per-cid 记录（键 `ctype_fix`），给 `assemble.py` 读；
+    #   ② 本文件后面的参数/器件名/引脚各 pass 直接用改写后的类型。
+    ctype_of: Dict[str, str] = {c["id"]: c["type"] for c in comps}
     for cid, info in picked:
         out[cid]["designator"] = info
+        _tf = (info or {}).get("type_fix")
+        if _tf and _tf != ctype_of.get(cid):
+            _old = ctype_of.get(cid)
+            ctype_of[cid] = _tf
+            out[cid]["ctype_fix"] = _tf
+            if os.environ.get("STAGE2_DBG_CID") == cid:
+                print("[dbg-typefix] cid=%s %s -> %s (canon=%s)"
+                      % (cid, _old, _tf, info.get("canon")))
+
+    # ★ 内涵「遗漏检测」定稿（`STAGE2_CONFORM_AUDIT`，恒开、**只写报告**）：
+    #   在**所有归属通道**（贪心/匈牙利/own.*）都跑完之后看一遍 —— 哪些元件
+    #   最终没有位号，而内涵规则（前缀 ⇄ 类型互证、削开头胶连）本来能给它一个键？
+    #   这些就是「被遗漏的元素」，由 `stage2/run.py` 落到
+    #   `_assigned/<case>.json` 的 `no_delete.conform_audit`。
+    #   与「不删除只削弱」账本同一条通道：只追加记录，`pred` 一个字节都不动。
+    if CONFORM_AUDIT:
+        clear_conform()
+        for _cid in sorted(audit_of):
+            if (out.get(_cid) or {}).get("designator"):
+                continue      # 别的通道把它救回来了 ⇒ 不算遗漏
+            rec = dict(audit_of[_cid])
+            rec["cid"] = _cid
+            LAST_CONFORM.append(rec)
+        del LAST_CONFORM[CONFORM_AUDIT_MAX:]
+        # ★ 同一通道的另一半：**「多余检测」**。内涵（官方命名约定）说
+        #   `d`/`led` 的 `Name` 槽必须是**型号**，而我方 `assemble` 对非 `box`
+        #   一律 `name = key` ⇒ 凡是我们发出去的 `d`/`led`，在官方口径下必然
+        #   判错（既不是 tp、还占一个 fp）。把它们连同器件名读数一起报出来，
+        #   换约定时可直接用；同样**只写报告**。
+        for _cid, _info in picked:
+            _ct = ctype_of.get(_cid)
+            if _ct not in EXTRA_MODELNAME_TYPES:
+                continue
+            _pn, _pnc = "", 0.0
+            # 器件名可能落在 `steal`（80px 内但没被硬划分给它）那一侧，一起看。
+            for _t in list(owned.get(_cid, [])) + list(steal.get(_cid, [])):
+                _r = (_t["reads"] or {}).get("partname")
+                if _r and _r[1] > _pnc:
+                    _pn, _pnc = _r[0], _r[1]
+            LAST_CONFORM_EXTRA.append({
+                "cid": _cid, "canon": _info.get("canon"), "type": _ct,
+                "name_emitted": _info.get("canon"), "partname_read": _pn,
+                "partname_conf": round(float(_pnc), 4),
+                "why": "%s 的 Name 槽在官方 10GT 里是型号（我方 name=key）" % _ct,
+                "box": [round(float(x), 1) for x in _info.get("box") or []],
+            })
+        del LAST_CONFORM_EXTRA[CONFORM_AUDIT_MAX:]
     # 已被选中的位号框：值兜底时必须绕开（`fit_value` 对 `C5` 这种会经 NETNAME 支给 0.6）。
     _desig_boxes = {tuple(info["box"]) for _cid, info in picked}
 
@@ -1039,7 +1246,9 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
 
     # 参数 / 器件名 / 引脚号 / 引脚名
     for c in comps:
-        cid, ctype = c["id"], c["type"]
+        # ★ `ctype_of` 取内涵回收改写后的类型（`d` -> `led`）：`led` 的参数槽是
+        #   「器件名」而不是「值」，引脚通道的期望角色与图章也随类型变。
+        cid, ctype = c["id"], ctype_of.get(c["id"], c["type"])
         cands = owned.get(cid, [])
         rec = out[cid]
 
@@ -1383,8 +1592,10 @@ def _selftest() -> int:
     ]
     res = assign(comps, pins, texts)
     fails = []
+    n_chk = [0]
 
     def chk(cond, msg):
+        n_chk[0] += 1
         if not cond:
             fails.append(msg)
 
@@ -1421,7 +1632,59 @@ def _selftest() -> int:
     got = [v["designator"] for v in dup["comps"].values()]
     chk(sum(1 for g in got if g) == 1, "重复位号应只留一个: %r" % (got,))
 
-    print("自检 %d 项：%s" % (9 + 3 + 3, "全部通过" if not fails else "失败"))
+    # ★ 内涵互校验（`STAGE2_CONFORM_KEY`）：位号前缀是元件类型的**内涵** ——
+    #   读出的前缀能反过来判定类型（`LED` 只属于 `led`），而同一块文字框在
+    #   不同角色下的读法要一起看（`designator` 读垃圾、`pin_name` 读得对）。
+    #   默认关时两条回收路径都必须**完全不生效**（逐位不变）。
+    _m = canon_designator_meaning
+    chk(_m("R14", "r")[:2] == ("R14", 1.0), "strict 路径应原样: %r" % (_m("R14", "r"),))
+    if not CONFORM_KEY:
+        chk(_m("LED2", "d")[0] == "", "默认关时不许翻类型: %r" % (_m("LED2", "d"),))
+        chk(_m("7LED1", "led")[0] == "", "默认关时不许削胶连: %r" % (_m("7LED1", "led"),))
+    else:
+        # `d` 的允许前缀只有 `D`，而 `LED2` 在 `led` 下是干净位号 ⇒ 类型判错，改判 `led`
+        chk(_m("LED2", "d")[:3] == ("LED2", CONFORM_TYPE_PEN, "led"),
+            "d 上的 LED2 应翻成 led: %r" % (_m("LED2", "d"),))
+        # 开头胶连（`7`）可以削；**中间**胶连（`N7ED1`）不许猜 —— 猜出来会是 `D1`
+        chk(_m("7LED1", "led")[:3] == ("LED1", CONFORM_GLUE_PEN, None),
+            "开头胶连应削掉: %r" % (_m("7LED1", "led"),))
+        chk(_m("N7ED1", "led")[0] == "", "中间胶连不许猜: %r" % (_m("N7ED1", "led"),))
+        # `D` 是 `d`/`led` 共有前缀 ⇒ 不足以翻类型（不许把二极管改判成 LED）
+        chk(_m("D3", "d")[:2] == ("D3", 1.0), "共有前缀不得翻类型: %r" % (_m("D3", "d"),))
+
+    # ★ 内涵「遗漏检测」审计（`STAGE2_CONFORM_AUDIT` 默认开，**只写报告**）：
+    #   合成两颗「本该挂上键却挂不上」的元件 —— ① 类型判错（`d` 上的 `LED2`）；
+    #   ② 只信 `designator` 角色（同一块框的 `pin_name` 读作 `7LED1`）。
+    #   开关关时两颗都拿不到位号，但审计必须**把它们点出来**（这就是「检索遗漏」）。
+    au_comps = [{"id": "d0", "type": "d", "bbox_img": [200, 200, 220, 220]},
+                {"id": "d1", "type": "led", "bbox_img": [400, 200, 420, 220]}]
+    au_pins = {"d0": [[210, 200], [210, 220]], "d1": [[410, 200], [410, 220]]}
+    au_texts = [T((200, 224, 240, 238), designator="LED2"),
+                T((400, 224, 440, 238), designator="YXEP1", pin_name="7LED1")]
+    au_res = assign(au_comps, au_pins, au_texts)
+    _au = {r["cid"]: r for r in LAST_CONFORM}
+    if not CONFORM_KEY:
+        chk(au_res["comps"]["d0"]["designator"] is None, "关时 d0 不应挂上位号")
+        if CONFORM_AUDIT:
+            chk(_au.get("d0", {}).get("canon") == "LED2" and _au["d0"]["how"] == "type",
+                "审计应点出 d0 的遗漏(LED2/type): %r" % (_au.get("d0"),))
+            chk(_au.get("d0", {}).get("type_fix") == "led",
+                "审计应给出 d0 的类型改判: %r" % (_au.get("d0"),))
+            chk(_au.get("d1", {}).get("canon") == "LED1" and _au["d1"]["how"] == "glue",
+                "审计应借串角色点出 d1 的遗漏(LED1/glue): %r" % (_au.get("d1"),))
+            chk(_au.get("d1", {}).get("role") == "pin_name",
+                "审计应记下借用的角色: %r" % (_au.get("d1"),))
+    else:
+        chk(bool(au_res["comps"]["d0"]["designator"]), "开时 d0 应挂上 LED2")
+        chk(not _au, "开时已被回收的元件不该再进遗漏审计: %r" % (_au,))
+        # 同一通道的「多余检测」：`led` 的 Name 槽在官方 10GT 里是型号，
+        # 我方 `name = key` ⇒ 这颗必然判错，必须被点出来（带器件名读数位）。
+        _ex = {r["cid"]: r for r in LAST_CONFORM_EXTRA}
+        if CONFORM_AUDIT:
+            chk("d0" in _ex and _ex["d0"]["type"] == "led" and "型号" in _ex["d0"]["why"],
+                "多余检测应点出 d0（led 的 Name 槽口径不符）: %r" % (_ex.get("d0"),))
+
+    print("自检 %d 项：%s" % (n_chk[0], "全部通过" if not fails else "失败"))
     for f in fails:
         print("  FAIL", f)
     return 1 if fails else 0

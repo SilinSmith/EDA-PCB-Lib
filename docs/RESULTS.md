@@ -1936,6 +1936,54 @@ case 1 62.79（+0.78）、case 5 49.46（不动）⇒ **有害的是放宽半径
 
 ---
 
+### 5.11 位号前缀 ⇄ 元件类型互校验（`STAGE2_CONFORM_KEY`）：机制**精确点出被遗漏的元件**，但把输出改过去判负（2026-10-11）
+
+用户 m48732 要的「基于**维度内涵**的识别与校验，用来检索遗漏/多余的元素」这条被落成两件事：
+① 一个**恒开、只写报告的审计**（`STAGE2_CONFORM_AUDIT`，默认 1）；② 一个**默认关**的回收开关
+（`STAGE2_CONFORM_KEY`）。两者共用 `eda-pcb/stage2/assign.py` 的
+`canon_designator_meaning(text, ctype, rescue=None) -> (位号, 保真度, 类型改判, 依据)`，
+`依据 ∈ {"strict","glue","type"}`：
+
+| 依据 | 规则（内涵） | 例 |
+|---|---|---|
+| `strict` | 原 `canon_designator`（前缀 ∈ `TYPE_PREFIX[ctype]`），**逐位不变** | `R14`/`r` |
+| `glue` | 削**开头**胶连后重试（×0.85） | `7LED1` → `LED1`（**中间**胶连 `N7ED1` 不许猜 —— 猜出来是错键 `D1`） |
+| `type` | 前缀在 `TYPE_PREFIX` 里被**唯一**一个类型拥有、且当前类型是它的兄弟（显式小表 `CONFORM_SIBLINGS={"d":("led",),"led":("d",)}`）⇒ 采用该键并**改判类型**（×0.85） | `LED2`/`d` → 键 `LED2` + `led`（`D` 是共有前缀 ⇒ `D3`/`d` 不动） |
+
+**这条内涵是真的、而且精确**：官方 10 张上它一颗不多一颗不少地点出了那 4 颗被丢掉的 LED ——
+case 6 的两颗被 YOLO 判成 `d`（同一块框的**五个角色**都读作 `LED2`/`LED1`，conf 0.98~0.99），
+case 7 的 `led` 只因**只信 `designator` 角色**（读 `YXEP1` 0.399 垃圾）而丢掉，而同一块框的
+`pin_name` 读作 `7LED1` 0.698；case 10 的读法 `Y7EF1`/`N7ED1` 过不了 canon（中间胶连不许猜 ⇒ 不报）。
+
+**但把输出改过去净亏**（回收开关默认关）：
+
+| 口径 | 关 | 开 | Δ |
+|---|---|---|---|
+| 官方 10 张 no-vlm | 59.7423 | 59.6487 | **−0.0936/张**（逐案差之和 −0.9357） |
+| 官方 10 张 VLM | 65.9983 | 65.8295 | **−0.1688/张**（逐案差之和 −1.6885） |
+
+逐案：`case 4 −1.29`（**重复检测被抢号**：`d` 与 `led` 两块框指着同一个 `box_i`，翻开 `d`
+后它距离更近、分数更高，把 `LED1` 从本来就同类型的那颗手里抢走 ⇒ 引脚 tp 25→23）、
+`case 6 +1.25`、`case 7 −0.90`，其余 7 张逐位不变。根因**不在归属**：官方 `component` 判分
+要求 key+type+Name+value+bbox **全对**，而 Golden 的 `Name` 约定是「`c/r/l` 放位号、**`d`/`led`/`box`
+放型号**」（`10GT`: `1N4007`×3、`NCD0603Y2`×2、`GL0603UG01`×2），我方 `assemble.py` 对非 `box`
+一律 `name = key` ⇒ 救回来的元件只是**从 fn 变成 fp**，tp 一分不涨。（case 4 的抢号已用
+`_rank()` 让位修掉，但那救不回上面这条根因。）另注：同一现象在**派生语料**里是相反的
+（`_target_named` 的 `d` 193/193、`led` 180/180 的 `Name` = 位号）⇒ 换约定前不能翻默认。
+
+**恒开的那一半（`STAGE2_CONFORM_AUDIT`）留在生产链路里**，它不碰输出一个字节，只把两类
+报告写进旁路文件 `runs/stage2/_assigned/<case>.json` 的 `no_delete`：
+
+* `conform_audit`（**遗漏**）= 所有归属通道跑完后仍无位号、而内涵规则本来能给键的元件：
+  `{cid, read, canon, how, type_fix, type_now, conf, d, role, box}`。
+* `conform_extra`（**多余**）= 我方发出去的、内涵上**必然判错**的元件（`d`/`led` 的 `Name` 槽在
+  官方口径下是型号，我方 `name = key`），带 `partname_read` 备换约定时使用。
+
+阅读器：`python -X utf8 work/tools/dev/_audit.py --arm <arm> --ledger`。复现：
+`python -X utf8 eda-pcb\tools\eval\fast.py --cases "1,2,3,4,5,6,7,8,9,10" --no-vlm --engine official --out au10 --save au10`。
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |

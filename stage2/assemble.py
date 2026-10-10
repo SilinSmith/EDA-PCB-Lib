@@ -853,7 +853,13 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 continue
             key = "p%03d" % i
         keymap[cid] = key
-        ctype = c.get("type") or "other"
+        # ★ `ctype_fix`：位号通道的「内涵互校验」翻了类型时（官方 case 6 的两颗 LED
+        #   被 YOLO 判成 `d`，而印字读作 `LED1`/`LED2` —— `LED` 前缀只属于 `led`），
+        #   以 `assign` 的记录为准。类型既是输出字段（官方按精确串比），又决定引脚
+        #   图章与脚名别名（下面的 `stamp_pins` / `PIN_NAME_ALIAS`）。
+        #   没有这个字段时逐位退回原来的 `c.get("type")`（默认关时行为不变）。
+        ctype = str(info.get("ctype_fix") or c.get("type") or "other").strip().lower()
+        ct_by_cid[cid] = ctype
         if _is_tp:
             # ★ 三条规则里的 ① / ②：有 CV 形状证据（子类型在 `TP_CV_SUBTYPES` 里）
             #   → `testpoint`，否则 → `pin`。证据来自 `stage1/detect.py` 记在元件上的

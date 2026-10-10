@@ -285,12 +285,26 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
     try:
         from cvparts.hypo import LEDGER as _LG
         from . import structmatch as _sm
+        # ⚠ 不能写 `from . import assign as _as`：`stage2/__init__` 里有
+        #   `from .assign import assign`，包属性 `stage2.assign` 已被**函数**遮蔽，
+        #   那样拿到的是函数（实测 `AttributeError: 'function' object has no
+        #   attribute 'LAST_CONFORM'`）。直接按名字取模块级列表对象即可。
+        from .assign import LAST_CONFORM as _lc
+        from .assign import LAST_CONFORM_EXTRA as _le
         _nd = _LG.dump()
         _nd["demotions_pin"] = len(_sm.HIST_DEMOTED)
         _nd["reserve_pin"] = len(_sm.HIST_RESERVE)
         _nd["demoted"] = _sm.HIST_DEMOTED[-60:]
         _nd["reserve"] = _sm.HIST_RESERVE[-60:]
         _nd["residual"] = list(_sm.LAST_RESIDUAL)[-40:]
+        # ★ 内涵「遗漏检测」（m48732，`STAGE2_CONFORM_AUDIT` 默认开）：本来按内涵
+        #   规则（位号前缀 ⇄ 元件类型互证、削开头胶连）能拿到键、却因为判型/取证
+        #   不对而最终没挂上键的元件。官方 10 张上它恰好点出 4 颗被丢掉的 LED
+        #   （case 6 ×2、case 7、case 10）。**只写旁路报告**，不进交付物。
+        _nd["conform_audit"] = list(_lc)
+        # ★ 内涵「多余检测」（同一开关）：我方发出去的、内涵上必然判错的元件
+        #   （`d`/`led` 的 Name 槽在官方 10GT 里是型号，我方 `name = key`）。
+        _nd["conform_extra"] = list(_le)
         a["no_delete"] = _nd
     except Exception as _e:
         a["no_delete"] = {"error": "%s: %s" % (type(_e).__name__, _e)}
