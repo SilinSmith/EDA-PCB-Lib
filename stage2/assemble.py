@@ -337,6 +337,15 @@ MIN_EDGE_LEN = float(os.environ.get("STAGE2_MIN_EDGE_LEN", "20"))
 # 关 25.3549 / 导线 tp 46 / 导线 F1=0 共 **8** 张）。用户明确在意「某个小分爆 0」，
 # 所以**默认关**、旋钮留着。见 `merge_collinear` 的完整推导。
 EDGE_MERGE = env_on("STAGE2_EDGE_MERGE", "0")
+# ★ 边的端点吸附到本网引脚点的半径（`STAGE2_EDGE_SNAP`，默认 **10.0**）。
+# 见 `assemble()` 网络循环里的长注释：GT 边有 20.2% 的端点落在本网引脚 5px 内，
+# 我们只有 2.1%；机制是 `extract_wires` 挖空元件框 ⇒ 导线断在框边（差 12~20px）。
+# ★ 半径定稿 10（官方 10 张，同一批命令里跑，只改这一个变量）：
+#   no-vlm：0 → 57.04（导线 0.1023）｜**10 → 59.01（导线 0.2993）**｜20（旧默认）≈ 58.5（0.25）
+#   VLM  ：0 → 63.16（0.1085）｜**10 → 65.21（0.3192）**
+#   comp/pin/netH 三通道逐位不变 ⇒ 全部增益都来自 `wire_f1`（它权重 0.10）。
+# 0 之所以塌，是因为不吸附时端点留在框边（差 12~20px > 官方 5px 阈值）；20 会吸到隔壁枝。
+EDGE_SNAP = float(os.environ.get("STAGE2_EDGE_SNAP", "10.0"))
 EDGE_JOIN = float(os.environ.get("STAGE2_EDGE_JOIN", "40.0"))     # 端点相接容差（px）
 EDGE_ANG = float(os.environ.get("STAGE2_EDGE_ANG", "6.0"))        # 共线夹角容差（度）
 
@@ -352,10 +361,13 @@ EDGE_ANG = float(os.environ.get("STAGE2_EDGE_ANG", "6.0"))        # 共线夹角
 #   snap12 0.1582 / 50.9922 · **snap20 0.1648 / 51.0589** · snap24 0.1617 / 51.0274 ·
 #   snap30 0.1536 / 50.9466 · snap40 0.1475 / 50.8854 ⇒ 取 20（再大会吸到隔壁的枝）。
 #   19 张档：off 48.7337 → snap20 49.6574（导线 0.0563 → 0.1487）。
+# ★ 2026-10-10 官方尺复测（10 张，同一批命令、只改半径，与上面两段不同源）：0 → 导线
+#   0.1023（不吸附时端点留在框边，差 12~20px > 官方 5px 阈值）· 12 → 0.2862 ·
+#   **10 → 0.2993（最佳）** · 18 → 0.2684 · 26 → 0.2527 ⇒ 半径默认由 20 改成 **10**。
 # **没有一张被它打成 0**（逐张都 ≥ 基线），这是它能过门槛的关键 —— 对比 `par3`
 # （把同一条导线的两条描边并成一条中心线）netL 0.0868 却把 case 2 打成 0；
 # `par3+snap20` 0.1879 / 51.2898 分数更高但同样爆 0 ⇒ **不合并描边、只做吸附**。
-EDGE_SNAP = float(os.environ.get("STAGE2_EDGE_SNAP", "20.0"))          # 吸附半径（px），0=关
+EDGE_SNAP = float(os.environ.get("STAGE2_EDGE_SNAP", "10.0"))         # 吸附半径（px），0=关
 EDGE_SNAP_ANG = float(os.environ.get("STAGE2_EDGE_SNAP_ANG", "45.0"))  # 只吸到近似垂直的边
 
 
@@ -1139,6 +1151,30 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 refs.append(t)
         if syms_here:
             syms["net_%d" % j] = syms_here
+        # ★ 边端点吸附到**本网自己的引脚点**（`STAGE2_EDGE_SNAP`，默认 0 = 关）。
+        # 依据（官方尺，10GT + `work/_fast_out_kA`）：GT 的 639 条边**有 20.2% 的端点在
+        # 本网某个引脚点 5px 内**（p25 9.0 / p50 42.0 / p75 74.0），而我们 842 条边只有
+        # **2.1%**（p25 19.6 / p50 58.3）。机制：`extract_wires(occlude=[bbox_img])` 把元件框
+        # 挖空，导线因此**断在框边**，而官方引脚点在「框边 ∓ 该符号的引脚长度」（12/15/20px），
+        # 于是我们的边端点系统性差 12~20px —— 这正是 `just_over(118) + off_8_20(158)` 那两桶。
+        # 只吸到**同一张网**的引脚（不是全图最近引脚），避免把端点拽到隔壁网上。
+        if EDGE_SNAP > 0 and edges:
+            _pp = []
+            for _k, _n in refs:
+                _p = ((pins.get(_k) or {}).get("pin_%s" % _n) or {}).get("point")
+                if _p:
+                    _pp.append((float(_p["x"]), float(_p["y"])))
+            for _e in edges.values():
+                for _i in (0, len(_e) - 1):
+                    _q = (_e[_i]["x"], _e[_i]["y"])
+                    _best = None
+                    for _z in _pp:
+                        _dd = math.hypot(_q[0] - _z[0], _q[1] - _z[1])
+                        if _dd <= EDGE_SNAP and (_best is None or _dd < _best[0]):
+                            _best = (_dd, _z)
+                    if _best:
+                        _e[_i]["x"] = round(float(_best[1][0]), 2)
+                        _e[_i]["y"] = round(float(_best[1][1]), 2)
         rec = {"hyperGraph": "(" + ",".join("%s.%s" % t for t in refs) + ")",
                "edges": edges, "_refs": refs, "_segs": segs}
         lb = bind_labels(n, segs, labels)
