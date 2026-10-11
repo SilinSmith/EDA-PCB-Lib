@@ -3220,6 +3220,38 @@ python -X utf8 stage2\assemble.py
 
 ---
 
+### 5.28 队友分支 `codex/improve-pin-network-parsing` 的并入判据（2026-10-16）：读法链**中性**、彩色臂**判负**、证据硬闸门**判负**，但证据的**分辨力**保留（并行线）
+
+**并入范围**（commit `ebabf5d`）：13 个新模块 + 49 个 scaffold + 25 篇队友文档整文件拷入（在 main 上全部不存在 ⇒ 零冲突）；共享文件**只并**可独立 A/B 的三件 —— `stage1/pipeline.py` 的 `apply_color_pins` / `overlay_color_evidence`、`stage2/assign.py` 的 `_best_number_read`，以及 13 个模块 import 必需的 5 个符号（`structmatch.normalize_pin_evidence` / `_frame_anchor_usable` / `trusted_frame_pin_evidence`、`assign._same_image_point` / `_trusted_text_contact` / `_target_index`）。队友 `stage2/assign.py` 的 **507 行绑定主体**与 `stage2/structmatch.py` 的 **879 行**（三方合并后 5 / 7 处冲突，冲突文本存 `work\_tm_conf_*.txt`）**未并** —— 它们是互斥的另一条绑定路径，不是可增量吸收的小件。
+
+| 臂（官方 10 张 `--no-vlm`） | 开关 | 总分 | 元件 / 引脚 / 网络 / 导线 |
+|---|---|---|---|
+| `pev0` 全关（本树基线） | — | **71.65** | 0.8852 / 0.6179 / 0.7345 / 0.3933 |
+| `pev1` 四个追加读取器全开 | `STAGE2_COLOR_NUMBER_CROP` `STAGE2_PIN_TEXT_CROP` `STAGE2_PIN_LANE_CROP` `STAGE2_PIN_NUMBER_REPAIR`=1 | **71.65** | 逐案、逐通道、逐字节**完全相同** |
+| `pev2` 再开彩色端点实测 | +`STAGE1_PIN_COLOR=1` | **56.73** | 引脚 **0.0725**（−0.5454） |
+| `cons0` / `cons1` 一致票 | `STAGE2_PINNUM_CONSENSUS`=0/1 | **71.65 / 71.65** | 10 份交付 JSON 逐字节相同 |
+| `vtdoff` / `vcons0`（val 19，`FUSION_LLM=0`） | — | **25.86** | 0.4779 / 0.1539 / 0.2056 / 0.0476 |
+| `tdoff` → `tdrej` → `tdboth`（信任闸门） | `STAGE2_PIN_TRUST_DROP`=`""`/`rejected`/`rejected+uncertain` | **71.65 → 64.15 → 53.42** | 引脚 0.6179 → 0.4086 → 0.0994 |
+| `vtdoff` → `vtdrej` → `vtdboth`（val 19） | 同上 | **25.86 → 25.86 → 25.55** | 引脚 0.1539 → 0.1539 → 0.1396 |
+
+- **`pev1` 为什么会是 no-op（机制）**：队友的读取器共用 `stage2/pin_text_crops.py:31 _observations(doc, include_horizontal=False)` 的硬门（`:42-64`）—— `ev["source"]` 必须是字符串且 `in COLOR_SOURCES`、`trust == "trusted"`、`frame_confirmed is True`、`math.dist(point, observed) <= .001`、`anchor` 离框边 ≤ 6px 且必须朝外。我们 stage1 的**灰底**证据 `source=None` 全被滤掉 ⇒ 没有「已确认的彩色引脚车道」可用，它们保守地什么都不做。**「读取器能用」和「脚位落在红桩末端」在队友这套语义里是绑死的**：`pev2` 一开，脚位被外移到红桩末端（约 25~38px 外），而 GT 在 3~22px ⇒ 引脚通道直接归零。
+- **信任闸门判负的机制（本节最值钱的一条）**：闸门放下的 26 个 `rejected` 脚**全部**是几何假脚（见下），按理该赚分，实测却 −7.50；`rejected+uncertain` 放下 78 个后引脚 0.6179→0.0994、网络同步跌（0.7345→0.6053），10 张里 6 张引脚 **0.0000**。⇒ **我们下游的绑定/组网把引脚列表的「顺序与索引」当输入吃掉了**，任何中途删除/重排都会连带毁掉同元件其它脚的配对与网络成员，亏分远超被删假脚本身的收益。这与历史判负的「整块并同名轨引脚」（10GT 50.11→49.34）是同一根因。**结论：在本架构里，「按证据删脚」这条路是死的**；证据只能做**非破坏性**消费（改候选权重 / 仲裁优先级），形态与 `工程哲学.md:94` 第①条「追加降权记录 + 从活动集移出」同构，但移出动作必须发生在**绑定之前的候选层**、而不是绑定之后的引脚列表上。
+- **证据的分辨力是真的（并行线保留的依据）**：`work\_evidpow.py` 把队友 `pin_evidence` 的 `trust` 与我们 stage1 框引脚的**几何正确性**交叉（判据：距最近 GT 引脚 ≤5px；★ GT 是文档帧、stage1 是图像帧，必须 `y_img = H - y_gt`）。官方 10 张共 220 个框引脚：`trusted` n=142 未命中 **23.2%**｜`uncertain` n=52 未命中 **100%**｜`rejected` n=26 未命中 **100%**（逐案 1 19/15、10 10/7、2 16/16、3 6/3、4 11/12、5 15/14、6 13/12、7 8/5、8 5/25、9 6/2；总 109 命中 / 111 未命中）。⇒ 它把 **78/220（35%）离任何 GT 引脚都 >5px 的假脚一次不漏地标出**，而我们现有的 `BOX_PIN_DROP_UNREAD` / `BOX_PIN_NEED_NAME` 只看「文字读没读出来」，没有这种图像级判据 ⇒ 按 owner 判据（能处理我们处理不了的问题就并行，否则抛弃）**判定并行**。下一步的正确消费点 = 队里 `STAGE2_PIN_TRUST_BIND` 那种「只影响引脚名称」的窄用法，或我们自己在候选打分里加权。
+- **开关与默认值（全部保持关/中性）**：`STAGE1_PIN_COLOR=0`、`STAGE2_COLOR_NUMBER_CROP=0`、`STAGE2_PIN_TEXT_CROP=0`、`STAGE2_PIN_LANE_CROP=0`、`STAGE2_PIN_NUMBER_REPAIR=0`、`STAGE2_PIN_NAME_OCR=off`、`STAGE2_MONO_PIN_OCR`（继承 `PIN_NAME_OCR`）、`STAGE2_PINNUM_CONSENSUS=0`、**`STAGE2_PIN_TRUST_DROP=""`**（反例装置，留着可复现，不留默认开）。
+- 复现：
+```powershell
+# 三轮挂载 A/B（pev0/pev1/pev2）
+powershell -ExecutionPolicy Bypass -File work\_ev_ab.ps1
+# 信任闸门 A/B（官方 10 + val 19，六臂）
+powershell -ExecutionPolicy Bypass -File work\_td_ab.ps1
+# 证据分辨力（trust × 几何命中）
+python -X utf8 work\_evidpow.py --run work\_fast_out_pev0 --cases-file work\_cases10gt.txt
+# 一致票中性
+powershell -ExecutionPolicy Bypass -File work\_cons_ab.ps1
+```
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |

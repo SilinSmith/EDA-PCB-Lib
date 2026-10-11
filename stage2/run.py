@@ -78,6 +78,17 @@ PIN_NAME_OCR = os.environ.get("STAGE2_PIN_NAME_OCR", "off").strip().lower()
 MONO_PIN_OCR = os.environ.get("STAGE2_MONO_PIN_OCR", PIN_NAME_OCR).strip().lower()
 PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "0")
 
+# ★ 引脚「信任闸门」：用队友 `stage1/pin_evidence.py` 的逐脚图像证据决定哪些脚
+#   不可信（`""`=关；`rejected` / `rejected+uncertain` / `uncertain`）。
+#   这是我们**缺的那条信息**（官方 10 张实测：trusted 的几何未命中率 23.2%，
+#   uncertain / rejected 都是 **100%**，见 `work\_evidpow.py`）。
+#   默认关：闸门会放下 26~78 个脚，网络成员引用可能悬空 ⇒ 必须 A/B 定去留。
+PIN_TRUST_DROP = os.environ.get("STAGE2_PIN_TRUST_DROP", "").strip().lower()
+_TRUST_LEVELS = {"rejected": ("rejected",),
+                 "uncertain": ("uncertain",),
+                 "rejected+uncertain": ("rejected", "uncertain")}
+
+
 # 这些是「参数」类元件，它们旁边没有长器件名，不参与生长
 _VALUE_TYPES = {"r", "c", "l", "fuse", "crystal", "crystal_2pin",
                 "crystal_3pin", "crystal_4pin"}
@@ -185,6 +196,71 @@ def grow_candidates(doc, reads, engine, bgr, max_new: int = 600):
     return out
 
 
+def _trust_drop(doc: dict, mode: str):
+    """★ 引脚「信任闸门」：按队友的逐脚图像证据放下不可信的脚（我们自己的胶水）。
+
+    输入：`doc["pins"]`（stage1 合并后的框引脚，图像帧）与 `doc["pin_evidence"]`
+    （同键、**逐位对齐**的记录：`trust ∈ {trusted, uncertain, rejected}`、
+    `frame_confirmed`、`reason`、`source`、`point_img` …）。
+
+    语义（owner 规矩 ①：**不允许静默消失**）：
+      · 每一枚被放下的脚都写一条 `no_delete` 账本（`kind="drop"`，带原坐标、trust、
+        理由与 by=`stage2.run._trust_drop`），下游/审计仍能看见它曾经存在；
+      · 同时从 `doc["pins"][cid]` 与 `doc["pin_evidence"][cid]` 删**同一批下标**
+        （从后往前删），保证剩下两条列表仍逐位对齐 —— 下游所有按下标取证据的
+        读取器/绑定代码不需要知道闸门的存在。
+
+    为什么只在 stage2 动手：stage1 的网络（`nets` / `hyperGraph` 的成员引用）不重建
+    ⇒ 收益（引脚通道少 fp+fn）与代价（成员引用可能悬空）被隔离成一个可 A/B 的量。
+
+    实测依据（`work\\_evidpow.py`，官方 10 张 220 个框引脚，几何命中判据 ≤5px）：
+      trust=trusted   n=142  未命中 23.2% ｜ uncertain n=52 未命中 100% ｜
+      rejected        n=26   未命中 100%
+    """
+    levels = _TRUST_LEVELS.get(mode)
+    if not levels:
+        return doc, 0
+    pins = doc.get("pins") or {}
+    ev = doc.get("pin_evidence") or {}
+    try:
+        from cvparts.hypo import LEDGER
+    except Exception:  # 账本不可用时也必须能跑（只在诊断层损失溯源）
+        LEDGER = None
+    n = 0
+    for cid in list(pins.keys()):
+        plist = pins.get(cid)
+        recs = ev.get(cid) if isinstance(ev, dict) else None
+        if not isinstance(plist, list) or not isinstance(recs, list):
+            continue
+        drop = []
+        for i, r in enumerate(recs):
+            if i >= len(plist):
+                break
+            if isinstance(r, dict) and str(r.get("trust") or "") in levels:
+                drop.append(i)
+        for i in reversed(drop):
+            pt = list(plist[i]) if isinstance(plist[i], (list, tuple)) else plist[i]
+            r = recs[i] if i < len(recs) else {}
+            recs.pop(i)
+            plist.pop(i)
+            n += 1
+            if LEDGER is not None:
+                try:
+                    LEDGER.record(
+                        "drop", "trust:%s.%d" % (cid, i),
+                        before=[{"point_img": pt,
+                                 "trust": (r or {}).get("trust"),
+                                 "frame_confirmed": (r or {}).get("frame_confirmed"),
+                                 "reason": (r or {}).get("reason"),
+                                 "source": (r or {}).get("source")}],
+                        reason="逐脚图像证据判为 %s（框未贴住/无正常笔画），从活动集移出"
+                               % ((r or {}).get("trust"),),
+                        by="stage2.run._trust_drop")
+                except Exception:
+                    pass
+    return doc, n
+
+
 def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
             roles=None, do_ocr: bool = True, min_conf: float = 0.0,
             texts: str = "both", recut: str = "off") -> dict:
@@ -257,6 +333,21 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         reads = engine.read(bgr, boxes) if roles is None else engine.read(bgr, boxes, roles)
     else:
         reads = [{"bbox": b, "reads": {}} for b in boxes]
+    # ★★ 用**队友的逐脚图像证据**给引脚做「信任闸门」（我们自己的胶水，开关默认关）。
+    #   依据（work\_evidpow.py，官方 10 张的框引脚 220 个）：
+    #       trust=trusted   n=142  几何未命中 23.2%
+    #       trust=uncertain n= 52  几何未命中 100%
+    #       trust=rejected  n= 26  几何未命中 100%
+    #   ⇒ 这就是**我们没有的信息**：它能把「离任何 GT 引脚都 >5px」的假脚全挑出来
+    #     （78/220 = 35%），而我们的判据目前只有「文字读没读出来」。
+    #   闸门只在这一层生效（不动 stage1 已建好的网络引用）⇒ 单独隔离出引脚通道的
+    #   收益/代价，代价方向是**网络成员引用可能变成悬空**，必须 A/B 说了算。
+    #   丢掉的脚印一条 `no_delete` 账本（不静默消失）。
+    if PIN_TRUST_DROP:
+        doc, _n_trust = _trust_drop(doc, PIN_TRUST_DROP)
+        if _n_trust:
+            print("[stage2] 引脚信任闸门（PIN_TRUST_DROP=%s）：放下 %d 个脚"
+                  % (PIN_TRUST_DROP, _n_trust))
     # ★ 队友分支的五个追加式读取器（`docs/引脚与网络提分验证.md`；开关见文件头，
     #   默认全 off，逐条 A/B 后转正）。它们只往 `reads` 里**加**候选：
     #   后续 `assign` / `build_doc` 的既有逻辑一字未改 ⇒ 关掉时逐位不变。
