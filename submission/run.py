@@ -481,6 +481,37 @@ def _merge_lane(lane_dir: Path, final_dir: Path, runs: Path) -> int:
     return n
 
 
+def _publish_preds(lanes: list, final_dir: Path) -> int:
+    """把各 lane **已完成**的 `<case>_Pred.json` 立刻补进主输出目录。
+
+    为什么需要：平台侧超时是**硬杀容器**（官方练习环境实测 `Timeout: 1200 seconds
+    (20 minutes)`，见 `docs/RESULTS.md` §5.46），父进程的收尾合并根本没机会跑；
+    「边跑边发布」保证平台来杀我们时，已经做完的图**仍然躺在输出目录里**。
+
+    只补缺不覆盖（与 `_merge_lane` 同语义），并且拷贝前先 `json.loads` 验一次 ——
+    子进程可能正在写这个文件，半截 JSON 发给判题机等于这题零分。
+    """
+    n = 0
+    for lane in lanes:
+        lf = lane["dir"] / "final_results"
+        if not lf.is_dir():
+            continue
+        for f in sorted(lf.glob("*_Pred.json")):
+            dst = final_dir / f.name
+            if dst.exists():
+                continue
+            try:
+                json.loads(f.read_text(encoding="utf-8"))
+            except Exception:                                       # noqa: BLE001
+                continue                    # 还在写 / 写坏了 ⇒ 下一轮再看
+            try:
+                shutil.copyfile(str(f), str(dst))
+                n += 1
+            except Exception:                                       # noqa: BLE001
+                pass
+    return n
+
+
 def _run_fanout(a) -> int:
     """`-case-workers` > 1 时把 case 分给 N 个独立子进程；否则原样走 `_run(a)`。"""
     in_dir, out_dir = Path(a.input_dir), Path(a.output_dir)
@@ -556,27 +587,62 @@ def _run_fanout(a) -> int:
     deadline = (t_start + budget) if budget > 0 else None
     _log(fp, "墙钟预算 %s（EDA_WALL_BUDGET_S；0 = 不限）"
          % ("%.0f s" % budget if budget > 0 else "不限"))
-    for lane in lanes:
-        p = lane["proc"]
-        if p is None:
-            continue
-        left = None if deadline is None else max(1.0, deadline - time.time())
-        try:
-            rc = p.wait(timeout=left)
-        except subprocess.TimeoutExpired:
-            _log(fp, "⚠️ lane%d 超过墙钟预算 ⇒ 强杀（未产出的图走空壳兜底）" % lane["i"])
+    try:
+        pub_every = float(os.environ.get("EDA_PUBLISH_S", "15") or 15)
+    except Exception:                                               # noqa: BLE001
+        pub_every = 15.0
+    if pub_every > 0:
+        _log(fp, "增量发布间隔 %.0f s（EDA_PUBLISH_S）：lane 的产物边跑边补进输出目录，"
+                 "平台硬杀容器也留得下已完成的图" % pub_every)
+    else:
+        _log(fp, "增量发布关闭（EDA_PUBLISH_S=0）⇒ 父进程若被平台杀掉则输出目录为空")
+    n_pub = 0
+    pending = [ln for ln in lanes if ln["proc"] is not None]
+    while pending:
+        still = []
+        for lane in pending:
+            p = lane["proc"]
+            if p.poll() is None:
+                still.append(lane)
+                continue
+            lane["rc"] = p.returncode
             try:
-                p.kill()
-                p.wait(timeout=30)
+                lane["log"].close()
             except Exception:                                       # noqa: BLE001
                 pass
-            rc = -9
-        lane["rc"] = rc
-        try:
-            lane["log"].close()
-        except Exception:                                           # noqa: BLE001
-            pass
-        _log(fp, "lane%d 结束 rc=%s" % (lane["i"], rc))
+            _log(fp, "lane%d 结束 rc=%s" % (lane["i"], lane["rc"]))
+        if pub_every > 0 and still:
+            got = _publish_preds(lanes, final_dir)
+            if got:
+                n_pub += got
+                _log(fp, "增量发布 %d 份（累计 %d）" % (got, n_pub))
+        if not still:
+            pending = []
+            break
+        if deadline is not None and time.time() >= deadline:
+            for lane in still:
+                _log(fp, "⚠️ lane%d 超过墙钟预算 ⇒ 强杀（未产出的图走空壳兜底）" % lane["i"])
+                try:
+                    lane["proc"].kill()
+                    lane["proc"].wait(timeout=30)
+                except Exception:                                   # noqa: BLE001
+                    pass
+                lane["rc"] = -9
+                try:
+                    lane["log"].close()
+                except Exception:                                   # noqa: BLE001
+                    pass
+            pending = []
+            break
+        wait = pub_every if pub_every > 0 else 5.0
+        if deadline is not None:
+            wait = min(wait, max(0.5, deadline - time.time()))
+        time.sleep(max(0.2, wait))
+    if pub_every > 0:
+        got = _publish_preds(lanes, final_dir)
+        if got:
+            n_pub += got
+            _log(fp, "增量发布（收尾）%d 份（累计 %d）" % (got, n_pub))
 
     n_merge = 0
     for lane in lanes:

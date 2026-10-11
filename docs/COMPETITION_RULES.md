@@ -55,7 +55,14 @@ FinalScore               = FinalScore_Accuracy + FinalScore_Data   # Data ≤ 10
 >   32 路并发去打。
 > - **看门狗**：`EDA_WALL_BUDGET_S`（默认 0 = 不限）到点强杀剩余 lane，父进程对没产出的图
 >   **补空壳**并写出 `decision_log.json`（`summary.lanes[].rc=-9`），保证「超时也留下东西」。
->   回归测试 `eda-pcb\tools\dev\_fantest.py`（16 项：坏图 / 看门狗 / 强制串行 / 自动）。
+>   回归测试 `eda-pcb\tools\dev\_fantest.py`（七个现场，含硬杀容器下的增量发布）。
+> - **增量发布（2026-10-21，§5.47）**：扇出模式下 lane 的产物原本要等**全部** lane 结束才由父
+>   进程收进输出目录，而平台超时是**硬杀容器**（练习环境判题日志原文
+>   `[Ingestion] Timeout: 1200 seconds (20 minutes)`）⇒ 父进程来不及收尾就会输出空目录、
+>   已跑完的图也拿 0 分。新增 **`EDA_PUBLISH_S`（默认 15 s）**：父进程边等边把各 lane 已完成
+>   的 `*_Pred.json` 只补缺不覆盖地拷进输出目录（拷贝前先验一次 JSON）。硬杀 A/B：第 11 s 杀
+>   进程树，开 = 9/10 已交付、关 = 0/10；完整跑完两边都是 10/10（14.4 s / 17.6 s）。
+>   `EDA_PUBLISH_S=0` 退回旧行为。
 > - 每个 lane 各写一份 `runs/fusion/_fusion_report.json`，父进程再合并 ⇒ 顺带消掉了
 >   该文件「读-改-写」的跨 case 竞态。
 

@@ -4773,6 +4773,56 @@ token 排名吃紧或调用配额受限 ⇒ `-lean -vlm-value off`（−70%）�
 
 ---
 
+## §5.47 扇出模式的「增量发布」：平台硬杀容器也留得下已完成的图
+
+**病**（§5.46 读出来的）：平台侧超时**不是软超时，是硬杀容器** —— 官方练习日志原文
+`[Ingestion] Timeout: 1200 seconds (20 minutes)`、`[orchestrate] … budget=1200s`。
+而我们的扇出交付（`submission/run.py -case-workers N`，比赛日档位的默认形态）**只在所有 lane
+结束后**由父进程 `_merge_lane` 把产物并进 `-output/final_results/`：lane 自己把
+`<case>_Pred.json` 写在 `-output/_lanes/laneN/final_results/` 里。
+⇒ 平台在 1200 s 到点杀容器时，父进程的收尾合并根本没机会跑，**输出目录是空的**：
+已经跑完的图也拿 0 分（而规则里「超时未完成的案例不得分」本可以只损失没做完的那些）。
+
+**药**（`eda-pcb/submission/run.py`，三处）：
+1. 新增 `_publish_preds(lanes, final_dir) -> int`：把各 lane **已完成**的
+   `<case>_Pred.json` 补进主输出目录；**只补缺不覆盖**（与 `_merge_lane` 同语义），
+   拷贝前先 `json.loads` 验一次 —— 子进程可能正在写这个文件，半截 JSON 发给判题机等于该题零分。
+2. `_run_fanout` 的等待循环由「逐个 `p.wait(timeout=…)` 阻塞」改为**轮询**（`p.poll()`），
+   每轮先发布再判预算：`deadline` 到点仍按老行为强杀剩余 lane 并走空壳兜底。
+3. 新开关 **`EDA_PUBLISH_S`，默认 `15` s**（`0` = 关闭增量发布 = 旧行为）。
+
+**读数**（本地，10 张官方图 × 4 lane × `-offline`；`work\_pubtest_*`）
+
+| 场景 | 增量发布 | 输出目录里的 `_Pred.json` | 说明 |
+| --- | --- | --- | --- |
+| ★ 第 11 s **硬杀整棵进程树**（模拟平台 1200 s） | 开（`EDA_PUBLISH_S=1`） | **9 / 10** | 第 10 份还在 lane 私有目录里（正被写） |
+| 同上 | 关（`EDA_PUBLISH_S=0`） | **0 / 10** | 10 份全在 `_lanes/lane*/final_results/`，判题机看不到 |
+| 完整跑完 | 开 | 10 / 10，14.4 s | 日志：`增量发布 2 份（累计 2）`@06:53:43 **早于** `lane3 结束 rc=0`@06:53:45 |
+| 完整跑完 | 关 | 10 / 10，17.6 s | 无「增量发布」行，产物只在收尾合并时出现 |
+| 看门狗回归 `EDA_WALL_BUDGET_S=1` | 开 | 10 / 10（**全是空壳三键**），2.9 s | 4 个 lane 全 `rc=-9`，与 §5.42 的 `watchdog` 行一致 |
+
+**结论**：这一条把「平台杀我们」的损失从**全损**降到**只损失没跑完的图**；
+它对分数没有影响（正常路径逐位不变），只在被杀的路径上救命。比赛日护栏因此变成
+「`-case-workers` ≈ 可见 GPU 数 + `EDA_PUBLISH_S=15`（默认）+ `EDA_WALL_BUDGET_S` 按平台预算设」
+——若平台给的就是练习环境那 1200 s，则同时开 `-lean`（实测 ~92 s/例 → ~56 s/例）。
+
+**回归**：`eda-pcb/tools/dev/_fantest.py` 现场 ⑦ 把这条固化下来 —— 起扇出 → 等第一个产物
+出现 → `taskkill /F /T` 杀整棵树 ⇒ 开 `EDA_PUBLISH_S=1` 时输出目录非空、关（`=0`）时为空。
+`docs/COMPETITION_RULES.md` 的看门狗段落同步补了这条护栏与练习环境的 1200 s 原文。
+
+**复现**（10 张图在 `work\_fast_in\1..10.png`，拷成 `work\_pubtest_in\1..10.png`）
+
+```powershell
+$env:EDA_PUBLISH_S = "1"                       # 或 "0" 作对照
+$p = Start-Process python -ArgumentList '-X','utf8','eda-pcb\submission\run.py',
+     '-input','work\_pubtest_in','-output','work\_pubtest_kill1',
+     '-case-workers','4','-offline' -PassThru -NoNewWindow
+Start-Sleep -Seconds 11; taskkill /F /T /PID $p.Id     # 硬杀整棵树 = 平台行为
+(Get-ChildItem work\_pubtest_kill1\final_results\*_Pred.json).Count   # 开=9，关=0
+```
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |

@@ -4,7 +4,7 @@
 
 `tools/` 是本项目「怎么量」的全部家当。每个回答一个具体问题的脚本都在这里，
 配套的用法说明见 `docs/DIAGNOSTICS.md`。
-共 **630** 个脚本。
+共 **659** 个脚本。
 
 
 <a id="data"></a>
@@ -54,7 +54,7 @@
 
 <a id="dev"></a>
 
-## `tools/dev/`（30 个脚本）
+## `tools/dev/`（46 个脚本）
 
 开发辅助（本目录的生成器）。
 
@@ -62,27 +62,40 @@
 |---|---:|---|
 | `_compdump` | 70 | 把单个 case 的 GT 元件 / 预测元件 / keymap 并排打印，用来定位「为什么普通位号配不上」。 |
 | `_compgap` | 107 | component 失分溯源：GT 里哪些元件一个都没配上（连坐标都没配上），按「伪元件 ∅NNN / 普通位号」分开。 |
+| `_conncal` | 60 | 校准官方 connectivity 公式：把官方 report 里的 soft_tp 与几种候选网对得分并排。 |
 | `_cropchk` | 95 | **裁片口径核对**：同一条语料裁片，分别用两个权重读一遍。 |
 | `_ctlib` | 131 | 容器式**库路径解析**回归测试（用户 m42543「各种灾难性现场」）。 |
 | `_desacc` | 128 | **位号挂载体检**：把 GT 元件与产物元件按 JSON 坐标 IoU 配对，统计 |
 | `_desceil` | 203 | **位号重解的天花板探针**：对每个「没挂上位号 / 挂了错位号」的 GT 元件，看它附近 |
 | `_desceiling220` | 16 | 把 `eda-pcb/tools/diag/_des_ceiling.py` 指到 220 张的 stage1 产物上跑（原工具写死 work\stage1_all14）。 |
+| `_desfix` | 99 |  |
 | `_desres` | 259 | **位号重解 pass（原型）**：把「没挂上位号」的元件，用附近**空闲**文字框里读出的位号补上。 |
 | `_deswhy` | 196 | **位号为什么错**：把「认不出来（字形/字体）」和「挂到别的元件上」分开量。 |
 | `_engchk` | 101 | **口径对照**：同一条框，走「语料口径（裸框裁片）」与「stage2 运行口径（`pad_box` 外扩）」 |
-| `_fantest` | 141 | case 级扇出（`-case-workers`）的回归测试：坏图 / 看门狗 / 关掉 / 自动。 |
+| `_fantest` | 242 | case 级扇出（`-case-workers`）的回归测试：坏图 / 看门狗 / 关掉 / 自动 / 护栏 / 离线 / 增量发布。 |
 | `_fontfit` | 174 | 官方渲染用的是哪一款字体？—— 拿真实裁片（GT 文本已知）去套候选字体的字形。 |
 | `_fontsheet` | 80 | 把真实裁片和候选字体的渲染并排画出来，肉眼看哪个像（`_fontfit.py` 的数字靠这个兜底）。 |
 | `_hardtest` | 200 | 灾难现场加固的**故障注入**测试（用户 m42543）。 |
 | `_libmerge` | 51 | 把官方两份元件库合成本地开发用的第三份（**只做测量，不改交付**）。 |
+| `_misswhy` | 217 | 官方尺下的「缺什么」归因：把 component/pin 的 fp/fn 拆成可修/不可修两类。 |
+| `_offdiag` | 118 | 官方口径失分归因：把 component / pin 的失败原因按类别汇总（不改任何东西）。 |
+| `_offscore` | 144 | 用本地 metrics.py 复算官方评测机返回的 *_Pred.json，核对「本地尺 vs 官方尺」。 |
 | `_offtext_eval` | 109 | 在**官方渲染图的域内语料**上评一个 CRNN 权重：只走生产路径（`textrec.infer.Recognizer`）。 |
 | `_padchk` | 179 | 2x2 探针：{交付权重, 域内微调权重} x {紧框裁片, 管线外扩裁片}。 |
+| `_pincolour` | 224 | 彩色图上量「符号引脚桩」与「导线端点」相对 GT 引脚坐标的偏差。 |
 | `_pindiag` | 191 | **引脚失分归因**：官方口径 `pin_f1` 只统计 GT 里 type 为 box 的元件 |
 | `_pinnum` | 190 | **引脚号能不能靠几何推**：官方口径的引脚配对键是 `(元件键, 引脚号)` |
+| `_pinocr` | 180 | _pinocr.py -- how good is our OCR for *box* (IC) pin numbers, and how often is |
 | `_sheet_from_manifest` | 62 | 从已落盘的文字语料 manifest 里挑一批出来拼对照图（核标签真假 / 看还没修好的）。 |
+| `_symbolpin` | 200 | _symbolpin.py -- can a symbol's pin length be learned from the provided 200 |
+| `_symgeom` | 135 |  |
 | `_textrate` | 175 | 量「CRNN 在官方渲染图上读文字的错读率」——按套（10GT / 10_GTcase / train200）× role 分开。 |
+| `_wireceiling` | 129 | wire 通道的「完美切分」上界：把我们的线段在 **GT 边的端点**处切开后重打分。 |
+| `_wirediag` | 218 | 官方 wire 通道（net_line）失分归因：GT 边为什么配不上。 |
+| `_wirepost` | 238 | wire 通道的**离线后处理**候选：不改管线，只改 pred 的 `nets[*]["edges"]` 首尾两点。 |
 | `audit_labels` | 277 | Training-label quality audit for a YOLO dataset — "错误的标号" triage. |
 | `build_trainset_v4` | 599 | Assemble `work/trainset_v4` = `trainset_v3` (optionally label-repaired) + `新补充训练集`. |
+| `checkreport` | 23 | 校验生成的 Word 报告结构（段落/章节/表格/装饰残留）。 |
 | `gen_knobs` | 97 | 扫描源码里所有环境开关，生成 `docs/KNOBS.md`。 |
 | `gen_toolindex` | 96 | 生成 `docs/TOOLS.md` —— `tools/` 下每个脚本的索引（含首行 docstring）。 |
 | `gpu_gate` | 363 | GPU 串行闸门：**同一时刻只允许一个自己起的吃卡任务**，且起之前先确认显存够。 |
@@ -90,10 +103,13 @@
 | `mk_fonttext` | 280 | **官方字体合成语料**：用与官方渲染器同款/同类的字体直接合成文字裁片，补上合成语料的字体域缺口。 |
 | `mk_official_textset` | 523 | 从**官方公开数据**（10GT + 200_train_cases）造一份「域内」文字识别训练集。 |
 | `mk_textrec_manifest` | 152 | 把「官方渲染图上的域内文字语料」（`mk_official_textset.py` 的产物）转成 `textrec` 能直接 |
+| `mkreport` | 718 | 生成赛题六《技术报告》Word 文档（python-docx）。 |
+| `pack_submission` | 346 | 打包一个「可提交」的目录树：`<out>\eda-pcb-main\` + 四个平台文件。 |
+| `pinread_contract` | 213 | 队友 13 个「引脚读取器」的**接口契约检查器**（2026-10-16 统一后新增）。 |
 
 <a id="diag"></a>
 
-## `tools/diag/`（488 个脚本）
+## `tools/diag/`（489 个脚本）
 
 **诊断与归因**：把某一项失分拆到可行动的最小单元，再逐一证伪对策。
 
@@ -587,10 +603,11 @@
 | `_wlen2` | 98 | 位号框「宽/高」能不能预测真实位号的字符数 —— 决定连号窗口能不能靠几何定案。 |
 | `_zerocount` | 42 | 数一数 220 张里每个分项**爆 0 / 近 0** 的图有多少（用当前最佳产物）。 |
 | `adjmeas` | 433 | **相邻信息度量**：位号候选的「行 / 列 run」结构里，邻座的号能不能救回读不出来的号。 |
+| `compare_pin_inference` | 61 | Inference-only worker: GT is never opened by this program. |
 
 <a id="eval"></a>
 
-## `tools/eval/`（29 个脚本）
+## `tools/eval/`（41 个脚本）
 
 **打分尺子**：端到端 A/B、批量评测、结果归档与对比。
 
@@ -598,15 +615,26 @@
 |---|---:|---|
 | `baseline_v2` | 83 | Score the previous model on the NEW yardstick, so a fine-tuned run can still be compared. |
 | `cmp220` | 146 | 两个 `final_results` 目录的逐项对比 —— 专为「全量 220 张跑完看净效果」写。 |
+| `color_pin_rule_ab` | 227 | Replay frozen geometry/OCR while testing measured color terminals. |
+| `compare_manifest` | 257 | Compare saved predictions against a fixed sample manifest. |
 | `confusion` | 173 | 在真实 val 上算「真类 → 预测类」的混淆统计（IoU 贪心匹配）。 |
 | `epoch_budget` | 40 | 从 results.csv 读 time 列，给出每 epoch 真实耗时与 2 小时能跑多少 epoch。 |
-| `fast` | 233 | 小规模快速回归 —— **跑全量 220 张要 78 分钟，改一次代码等不起。** |
+| `fast` | 282 | 小规模快速回归 —— **跑全量 220 张要 78 分钟，改一次代码等不起。** |
 | `fn_fp` | 250 | 把漏检(FN)与误检(FP)样本抠出来，做成可肉眼审阅的接触表。 |
 | `fn_fp_official` | 226 | 按【官方口径】重做 FN/FP 接触表。 |
 | `gt_ink_check` | 64 | GT edge 压墨率卡在 ~48%：是坐标偏了，还是线宽不对？ |
 | `gt_pin_geom` | 151 | 量 GT 的「引脚点相对元件框」几何 —— 为「没有导线触到的引脚」找一条可用的规则。 |
 | `per_class2` | 99 | 按类别打印检测器在某个 split 上的 P/R/mAP50/mAP50-95/实例数，并按「漏检数」排序。 |
+| `pin_lane_repair_ab` | 509 | Evaluate observed pin lane OCR without letting GT guide recognition. |
+| `pin_name_input_diagnosis` | 292 | Trace observed pin-name inputs without changing recognition or GT files. |
+| `pin_name_ocr_ab` | 439 | Controlled pin-name OCR A/B with fresh local OCR and fixed upstream inputs. |
+| `pin_network_ab` | 173 | Compare saved predictions on all 10 official GT examples and historical 9. |
+| `pin_number_ocr_ab` | 532 | Controlled numeral repair A/B against an isolated eighth-round snapshot. |
+| `pin_ocr_independent_ab` | 119 | Frozen recognizer comparison on visually reviewed source text candidates. |
+| `pin_ocr_model_ab` | 181 | Compare two recognizers on the same observed pin-lane images. |
+| `pin_text_repair_ab` | 180 | Replay observed pin geometry while isolating pin text/role repairs. |
 | `pintrace_eval` | 221 | 贪心射线 vs 全局骨架 vs 两者取并 —— 同一把尺子的对照。 |
+| `prepare_pin_ocr_review` | 317 | Prepare a read-only, source-traceable pin OCR review set. |
 | `snap_eval` | 223 | 把「框尺寸错了」和「框位置错了」分开量。 |
 | `stage1_attach_eval` | 141 | 第一阶段第三个交付物的验收：元件 ↔ 导线的几何附着关系。 |
 | `stage1_conn_eval` | 429 | stage1 连通性评测（用户 m04360 第三条）。 |
@@ -620,7 +648,8 @@
 | `stage1_wire_colour` | 167 | 提取线段按「是否真的压在 GT 网表线段上」分组，比较两组的图像颜色。 |
 | `stage1_wire_filter` | 179 | stage1 导线过滤扫描：到底有多少「提取线段」是文字/符号/边框？ |
 | `stage1_wires_eval` | 201 | stage1 导线产出 vs GT 的验收评测。 |
-| `stage2_eval` | 236 | 第二阶段的评测：把 `<pred_dir>\<case>.json` 与官方 GT 对起来。 |
+| `stage2_eval` | 243 | 第二阶段的评测：把 `<pred_dir>\<case>.json` 与官方 GT 对起来。 |
+| `synth_bench` | 247 | 合成集端到端尺子：把 `合成原理图数据集` 的图跑一遍**完整管线**，用项目自己的打分器对着 |
 | `tp_diag` | 119 | 诊断 CV testpoint 检测器的误报：TP 与 FP 的环特征分布差在哪里。 |
 | `tp_probe` | 119 | testpoint 的 CV 可行性探针。 |
 | `tp_probe2` | 86 | 按 case 解剖 testpoint 的三种画法：每个 GT 附近都有哪些圆、半径多少、有没有孔。 |
@@ -637,7 +666,7 @@
 | `_merge_own` | 96 | 把 `own`（独家归属）节点并进**内容更全的那一版** graph，再写回 `graph.json`。 |
 | `_recover` | 70 | 从旧 `workflow.html` 里把内嵌的 graph 抠出来，和 `graph.json` 逐节点对比。 |
 | `build` | 78 | 把 `graph.json` 灌进 `template.html`，产出一个自包含的工作流编辑器。 |
-| `graphcheck` | 342 | `graphcheck.py` —— 工作流图的**接口注册表 + 统一 + 校验器**（用户 m40034 第二项）。 |
+| `graphcheck` | 349 | `graphcheck.py` —— 工作流图的**接口注册表 + 统一 + 校验器**（用户 m40034 第二项）。 |
 
 <a id="gnd"></a>
 

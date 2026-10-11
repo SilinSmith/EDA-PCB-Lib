@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""case 级扇出（`-case-workers`）的回归测试：坏图 / 看门狗 / 关掉 / 自动 / 护栏 / 离线。
+"""case 级扇出（`-case-workers`）的回归测试：坏图 / 看门狗 / 关掉 / 自动 / 护栏 / 离线 / 增量发布。
 
 用法（仓库根 = `eda-pcb/` 的上一级）：
     python -X utf8 eda-pcb\\tools\\dev\\_fantest.py
 
-六个现场（用户 m42543「判题机同时给全部样例且允许并发」）：
+七个现场（用户 m42543「判题机同时给全部样例且允许并发」）：
   ① 扇出 3 路 + 一张坏图 ⇒ 三张都有产物（坏图是空壳）、`decision_log.summary.n_lanes=3`、
      `n_shell=1`、每 lane 摘要都在；
   ② `EDA_WALL_BUDGET_S=1` ⇒ 三个 lane 全被强杀（`rc=-9`），父进程仍写出 **3 份空壳** +
@@ -15,6 +15,8 @@
      `EDA_WALL_BUDGET_S=6900`，用户设过则不覆盖，且不影响产物数。
   ⑥ `-offline` ⇒ 真·零外部调用（`decision_log.config.vlm_client is None` = 父进程从未
      import `vlm.client`）、打印离线档一行、产物件数不变（§5.41）。
+  ⑦ 增量发布（§5.47）：起扇出 → 等到第一个产物 → `taskkill /F /T`（= 平台硬杀容器）
+     ⇒ 开 `EDA_PUBLISH_S=1` 时输出目录非空、关（`=0`）时输出目录为空。
 
 不碰交付产物：全部在 `work\\_fantest\\` 下自建输入/输出。
 """
@@ -25,6 +27,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve()
@@ -77,6 +80,44 @@ def _run(in_dir: Path, out_dir: Path, extra, budget=None, env_extra=None):
             summ = {}
     preds = sorted(p.name for p in (out_dir / "final_results").glob("*_Pred.json"))
     return {"rc": p.returncode, "log": log, "summary": summ, "preds": preds}
+
+
+def _kill_after_first(tin: Path, out_dir: Path, watch: str, env_extra=None,
+                      budget_s=240.0):
+    """起扇出跑，等 `watch` 出现（或进程自己结束）后**杀整棵树**，返回 (命中, 输出目录产物)。
+
+    这是复刻平台行为：平台超时是硬杀容器（§5.46 `Timeout: 1200 seconds`），
+    父进程没有收尾的机会（§5.47 增量发布就是为这一刻设计的）。
+    """
+    if out_dir.exists():
+        shutil.rmtree(out_dir, ignore_errors=True)
+    env = dict(os.environ)
+    env.pop("EDA_WALL_BUDGET_S", None)
+    if env_extra:
+        env.update({k: str(v) for k, v in env_extra.items()})
+    argv = [sys.executable, "-X", "utf8", str(RUNPY), "-input", str(tin),
+            "-output", str(out_dir), "-vlm", "off", "-fusion", "off", "-no-wires",
+            "-case-workers", "3"]
+    p = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT, cwd=str(PKG))
+    t0 = time.time()
+    hit = False
+    while time.time() - t0 < budget_s:
+        if p.poll() is not None:
+            break
+        if next(iter(out_dir.glob(watch)), None) is not None:
+            hit = True
+            break
+        time.sleep(0.5)
+    time.sleep(1.5)                      # 让发布循环再转一圈（EDA_PUBLISH_S=1）
+    subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        p.wait(timeout=60)
+    except Exception:                                               # noqa: BLE001
+        p.kill()
+    preds = sorted(x.name for x in (out_dir / "final_results").glob("*_Pred.json"))
+    return hit, preds
 
 
 def main() -> int:
@@ -176,6 +217,20 @@ def main() -> int:
         "%d/%d" % (len(r["preds"]), n_cases))
     _ll = " ".join(l for l in r["log"].splitlines() if "精简档" in l)[:200]
     chk("打印精简档且 value-batch 4", "精简档" in r["log"] and "value-batch 4" in r["log"], _ll)
+
+    print("=== ⑦ 增量发布（平台硬杀容器：已完成的图必须留在输出目录）===")
+    # §5.47：扇出模式原本要等**全部** lane 结束，父进程才把产物收进输出目录；平台超时是
+    # 硬杀容器 ⇒ 收尾根本没机会跑，已跑完的图也拿 0 分。`EDA_PUBLISH_S`（默认 15 s）
+    # 让父进程边等边发布。这里开/关各杀一次，看输出目录里有没有东西。
+    _hit, _preds = _kill_after_first(tin, tmp / "out_pub", "final_results/*_Pred.json",
+                                     env_extra={"EDA_PUBLISH_S": "1"})
+    chk("硬杀后输出目录非空（开增量发布）", _hit and len(_preds) >= 1,
+        "%d 份%s" % (len(_preds), "" if _hit else "（超时未等到）"))
+    _hit2, _preds2 = _kill_after_first(tin, tmp / "out_nopub",
+                                       "_lanes/lane*/final_results/*_Pred.json",
+                                       env_extra={"EDA_PUBLISH_S": "0"})
+    chk("硬杀后输出目录为空（关增量发布）", _hit2 and not _preds2,
+        "%d 份%s" % (len(_preds2), "" if _hit2 else "（超时未等到）"))
 
     print("\n%d 项通过，%d 项失败%s"
           % (len(ok), len(bad), ("：" + ", ".join(bad)) if bad else ""))
