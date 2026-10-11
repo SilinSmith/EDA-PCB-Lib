@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""第二阶段 · 结构化批量重绑定（单调序列对齐 + 阶梯重排）。
+"""第二阶段 · 结构化批量重绑定（沿框边的位置序列对齐）。
 
 **要解决的问题**（`work\\reports\\错例集_导线与元件.md`）：引脚号/引脚名现在是
 「离哪个引脚最近就归谁」逐个贪心。只要池子里多一个候选（网络标签、符号碎片、
@@ -8,18 +8,14 @@
     期望   1-1  2-2  3-3  4-4
     实得   1 悬空  1-2  2-3  3-4  4 悬空
 
-这里换成两种**整体**候选，按总分取优（并把两者的分歧留给阶段三）：
+这里按候选与引脚的实际几何位置做整体匹配：
 
 * **位置单调对齐**（`align_monotone`）：候选与引脚各自按「所在边 + 沿边坐标」排序，
-  动态规划求最大权单调匹配，两侧都允许悬空；再用**数值单调性**把破坏序列的离群候选
-  直接禁掉。它治的是「多一个候选就顺移一格」。
-* **阶梯重排**（ladder）：当这一排的数值是**严格单调**、个数又与引脚数相同时，
-  按「数值第 k 小 ↔ 位置第 k 个引脚」整体重排。它治的正是上面那种**整体偏移一格**：
-  每一条单独看距离都很大，但整体只有这一个自洽解。
+  动态规划求最大权单调匹配，两侧都允许悬空。这里的单调仅指空间顺序：芯片
+  编号可以任意排列，不按数值递增/递减筛选或重排候选。
 
-**已知边界（不要过度期待）**：若某个数值本身被读错（`7` 读成 `1`），阶梯的单调性会被
-破坏，此时两个候选都会退化，只能靠阶段三的 LLM 看上下文判断 —— 所以 `rebind` 把
-「两种绑定不一致的槽位」原样输出。
+**已知边界**：某个数值本身被读错（`7` 读成 `1`）需要文字重读证据，不能依靠
+相邻编号的数值顺序推断或补写。
 """
 from __future__ import annotations
 
@@ -260,10 +256,11 @@ def name_edge_midpoint(cand: dict, edge: str) -> Optional[Tuple[float, float]]:
 
 
 def _name_edge_midpoint_enabled(rec: dict, bbox: Sequence[float]) -> bool:
-    """Only fresh trusted colour/frame evidence enables this optional score."""
+    """Only fresh trusted color or measured grayscale frame evidence qualifies."""
     return (os.environ.get("STAGE2_PIN_NAME_EDGE_MIDPOINT", "0") == "1"
             and rec.get("trust") == "trusted"
-            and rec.get("source") in _NUMBER_COLOR_SOURCES
+            and (rec.get("source") in _NUMBER_COLOR_SOURCES
+                 or trusted_frame_pin_evidence(rec, bbox))
             and _frame_anchor_usable(rec, bbox))
 
 
@@ -280,7 +277,9 @@ def name_edge_midpoint_distance(cand: dict, bbox: Sequence[float], pins,
     if not checked:
         return None
     rec = checked[index]
-    if (rec.get("trust") != "trusted" or rec.get("source") not in _NUMBER_COLOR_SOURCES
+    if (rec.get("trust") != "trusted"
+            or (rec.get("source") not in _NUMBER_COLOR_SOURCES
+                and not trusted_frame_pin_evidence(rec, bbox, pins[index]))
             or not _frame_anchor_usable(rec, bbox)):
         return None
     middle = name_edge_midpoint(cand, pin_edge(bbox, pins, index, checked))
@@ -310,9 +309,58 @@ _NUMBER_COLOR_SOURCES = frozenset(("red_green_transition", "red_stub_endpoint",
                                   "red_green_transition_uncertain"))
 
 
+def trusted_frame_pin_evidence(rec: dict, bbox: Optional[Sequence[float]] = None,
+                               point: Optional[Sequence[float]] = None) -> bool:
+    """Recognize measured grayscale frame/stroke evidence, without promoting guesses.
+
+    Older stage1 caches have no ``source`` field. Their explicit attached-stroke
+    reason and measurements are usable; a bare trusted flag or confirmed frame
+    alone is not. Require the same clean normal-stroke conditions used by stage1.
+    Callers with a detector box additionally validate the calibrated anchor.
+    """
+    if (not isinstance(rec, dict) or rec.get("trust") != "trusted"
+            or rec.get("frame_confirmed") is not True
+            or rec.get("reason") not in ("frame_attached_normal_stroke",
+                                          "frame_normal_stroke_with_small_gap")
+            or rec.get("source") not in (None, "", "frame_normal_stroke")
+            or rec.get("edge") not in EDGES):
+        return False
+    try:
+        observed, anchor = rec["point_img"], rec["anchor_img"]
+        if len(observed) != 2 or len(anchor) != 2:
+            return False
+        measurements = [float(rec[name]) for name in (
+            "frame_coverage", "normal_ink_run", "normal_ink_hits",
+            "first_ink_distance", "text_overlap_fraction", "branching_fraction")]
+        if not all(math.isfinite(float(v)) for v in (*observed, *anchor, *measurements)):
+            return False
+        coverage, run, hits, first, overlap, branching = measurements
+        tangent = 1 if rec["edge"] in ("left", "right") else 0
+        if abs(float(anchor[tangent]) - float(observed[tangent])) > 3.1:
+            return False
+        normal = 1 - tangent
+        outward = -1 if rec["edge"] in ("left", "top") else 1
+        # A measured outward stroke cannot support an internal candidate.
+        # Permit one raster pixel of endpoint/frame rounding on the inner side.
+        if outward * (float(observed[normal]) - float(anchor[normal])) < -1.0:
+            return False
+        if point is not None and (len(point) != 2
+                or not all(math.isfinite(float(v)) for v in point)
+                or math.dist(observed, point) > 1e-3):
+            return False
+        return (0.65 <= coverage <= 1 and run >= 5 and hits >= 4 and 0 <= first <= 3
+                and 0 <= overlap <= 1 and 0 <= branching <= 1
+                and not (overlap >= 0.6 and branching >= 0.3)
+                and not (overlap >= 0.5 and run <= 14)
+                and (bbox is None or _frame_anchor_usable(rec, bbox)))
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
 def normalize_number_evidence(pins: Sequence[Sequence[float]],
                               evidence: Optional[Sequence[dict]],
-                              require_color: bool = True) -> List[dict]:
+                              require_color: bool = True,
+                              bbox: Optional[Sequence[float]] = None) -> List[dict]:
     """Keep contact trust/side, but never move numbers to a name's frame anchor.
 
     Number labels usually sit above their wire row. Calibrated name anchors
@@ -321,8 +369,11 @@ def normalize_number_evidence(pins: Sequence[Sequence[float]],
     """
     checked = normalize_pin_evidence(pins, evidence)
     if require_color:
-        for rec in checked:
-            if rec.get("trust") == "trusted" and rec.get("source") not in _NUMBER_COLOR_SOURCES:
+        for index, rec in enumerate(checked):
+            source = rec.get("source")
+            if (rec.get("trust") == "trusted"
+                    and not (isinstance(source, str) and source in _NUMBER_COLOR_SOURCES)
+                    and not trusted_frame_pin_evidence(rec, bbox, pins[index])):
                 rec["trust"] = "uncertain"
     if not any(rec.get("trust") == "trusted" for rec in checked):
         return []
@@ -394,7 +445,7 @@ def crossing_number_candidate(cand: dict, bbox: Sequence[float], pins,
     if value is None or not 1 <= value <= 999:
         return False
     checked = normalize_pin_evidence(pins, evidence)
-    trusted_rows = normalize_number_evidence(pins, evidence)
+    trusted_rows = normalize_number_evidence(pins, evidence, bbox=bbox)
     if not trusted_rows:
         return False
     sides = confirmed_frame_sides(bbox, checked)
@@ -448,10 +499,10 @@ def rebind_numbers(bbox: Sequence[float], pins: Sequence[Sequence[float]],
 
     Geometric row/side gates prevent extra glyph contacts from moving a whole
     sequence. Numeric values need not increase in schematic drawing order.
-    The old numeric ladder remains the exact fallback without fresh trust or
-    OCR rectangles; names and network/contact coordinates are not changed.
+    Position alignment remains the fallback without fresh trust or OCR
+    rectangles; names and network/contact coordinates are not changed.
     """
-    evidence = normalize_number_evidence(pins, pin_evidence)
+    evidence = normalize_number_evidence(pins, pin_evidence, bbox=bbox)
     if not evidence or any(_number_rectangle(cand) is None for cand in pool):
         return rebind(bbox, pins, pool, value_of, score_of, cover=cover)
     frames = confirmed_frame_sides(bbox, normalize_pin_evidence(pins, pin_evidence))
@@ -691,70 +742,12 @@ def align_monotone(w: Sequence[Sequence[float]], gap_pen: float = 0.0,
     return pairs
 
 
-def monotone_keep(values: Sequence[Optional[int]],
-                  weights: Sequence[float]) -> Tuple[List[bool], int]:
-    """在一维数值序列上找**严格单调**的最大权子序列（递增与递减里取更优的那个）。
-
-    返回 `(keep 掩码, 方向)`，方向 `+1` 递增 / `-1` 递减 / `0` 无有效序列。
-    用来把「1,2,4,3,5」里的 `3` 认成离群。O(n^2)，一排引脚最多几十个，够用。
-    """
-    n = len(values)
-    if n == 0:
-        return [], 0
-    best_mask, best_dir, best_val = [False] * n, 0, 0.0
-    for direction in (1, -1):
-        dp = [0.0] * n
-        prev = [-1] * n
-        for i in range(n):
-            if values[i] is None or weights[i] <= 0:
-                continue
-            dp[i] = weights[i]
-            for j in range(i):
-                if values[j] is None or dp[j] <= 0:
-                    continue
-                if (values[i] - values[j]) * direction <= 0:
-                    continue
-                if dp[j] + weights[i] > dp[i]:
-                    dp[i] = dp[j] + weights[i]
-                    prev[i] = j
-        k = max(range(n), key=lambda i: dp[i])
-        if dp[k] <= best_val:
-            continue
-        mask = [False] * n
-        t = k
-        while t >= 0:
-            mask[t] = True
-            t = prev[t]
-        best_mask, best_dir, best_val = mask, direction, dp[k]
-    return best_mask, best_dir
-
-
 def num_of(text: str) -> Optional[int]:
     t = (text or "").strip()
     return int(t) if _NUM_RE.match(t) else None
 
 
 # ---------------------------------------------------------------------------
-def _ladder(nums: Sequence[Tuple[int, int]], n_pins: int) -> Optional[List[Tuple[int, int]]]:
-    """阶梯重排：`nums` 是 `[(候选下标, 数值)]`。只在「数值严格单调」且
-    「数值个数恰好等于引脚数」时才给方案，否则返回 None。
-
-    返回一批 `(候选下标, 引脚位次)`，由调用方把「引脚位次」换成真实引脚下标。
-    """
-    if len(nums) != n_pins or n_pins < 3:
-        return None
-    vals = [v for _c, v in nums]
-    inc = all(vals[i] < vals[i + 1] for i in range(len(vals) - 1))
-    dec = all(vals[i] > vals[i + 1] for i in range(len(vals) - 1))
-    if not (inc or dec):
-        return None
-    order = sorted(range(len(nums)), key=lambda i: nums[i][1])
-    if dec:
-        order = order[::-1]           # 数值沿位置递减时，序列要反过来
-    # 位置顺序 != 数值顺序 说明有候选整体错位，阶梯依然是「按数值定序」的那个解
-    return [(nums[order[r]][0], r) for r in range(n_pins)]
-
-
 def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
            pool: Sequence[dict], value_of, score_of,
            gap_pen: float = 0.0, cover: float = 0.0, demote: float = 0.15,
@@ -763,7 +756,7 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
            prioritize_trusted: bool = False,
            name_frame_guard: bool = True,
            frame_rejected_name_pins: Optional[List[int]] = None) -> Tuple[Dict[int, int], List[dict]]:
-    """按边分组，用「单调对齐」与「阶梯重排」各出一个整体方案，**按总分取优**。
+    """按边分组，依照空间顺序进行最大权匹配，不限制读出的编号顺序。
 
     pool 每项要有 `center`；`value_of(cand) -> str` 给候选读出来的串；
     `score_of(cand, pin_index) -> float` 给收益。返回 `({引脚下标: 候选下标}, 待仲裁)`。
@@ -843,7 +836,11 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
 
 def _rebind_groups(groups, pool, value_of, score_of, gap_pen, cover,
                    demote, majority, ladder):
-    """Shared monotone/ladder solver; all point and candidate indices stay original."""
+    """Position-only solver; all point and candidate indices stay original.
+
+    The legacy numeric-heuristic arguments remain accepted for callers, but
+    never filter or reorder an observed number. IC symbol order is arbitrary.
+    """
     out: Dict[int, int] = {}
     ambiguous: List[dict] = []
 
@@ -853,55 +850,8 @@ def _rebind_groups(groups, pool, value_of, score_of, gap_pen, cover,
         n, m = len(cl), len(pl)
         w = [[max(0.0, float(score_of(pool[cl[i]], pl[j]))) for j in range(m)]
              for i in range(n)]
-        vals = [num_of(value_of(pool[cl[i]])) for i in range(n)]
-
         pairs = align_monotone(w, gap_pen, cover)
-
-        # --- 数值离群：破坏严格单调的那个候选 ---
-        nums_all = [v for v in vals if v is not None]
-        if len(nums_all) >= 3:
-            order = [None] * n
-            wts = [0.0] * n
-            for i, j in pairs:
-                order[i] = vals[i]
-                wts[i] = w[i][j]
-            keep, direction = monotone_keep(order, wts)
-            if direction and sum(keep) < len(nums_all):
-                kept = sum(1 for i in range(n) if vals[i] is not None and keep[i])
-                hard = len(nums_all) >= 4 and kept >= majority * len(nums_all)
-                for i in range(n):
-                    if vals[i] is None or keep[i]:
-                        continue
-                    for j in range(m):
-                        w[i][j] = 0.0 if hard else w[i][j] * demote
-                pairs = align_monotone(w, gap_pen, cover)
-
-        # ★ 2026-07 审计修复：这里原来还有一行 `pos = {pl[j]: j for j in range(m)}`，
-        #   建完之后**再也没被读过**（下一行直接用 `pl[j]`/`cl[i]`）。已删。
-        plan_pos: Dict[int, int] = {pl[j]: cl[i] for i, j in pairs}
-        score_pos = sum(w[i][j] + cover for i, j in pairs)
-
-        # --- 阶梯重排作为整体方案的对照组 ---
-        plan_lad: Dict[int, int] = {}
-        score_lad = float("-inf")
-        if ladder:
-            nums = [(i, vals[i]) for i in range(n) if vals[i] is not None]
-            lad = _ladder(nums, m)
-            if lad is not None:
-                plan_lad = {pl[rank]: cl[ci] for ci, rank in lad}
-                score_lad = sum(w[ci][rank] + cover for ci, rank in lad)
-
-        if score_lad > score_pos + 1e-9:
-            chosen, name = plan_lad, "ladder"
-        else:
-            chosen, name = plan_pos, "monotone"
-
-        # 两种方案在同一引脚上给出不同候选 -> 交给阶段三
-        for p, c in chosen.items():
-            other = plan_lad.get(p) if name == "monotone" else plan_pos.get(p)
-            if other is not None and other != c and other != -1:
-                ambiguous.append({"pin": p, "cand": c, "alt": other, "by": name})
-        out.update(chosen)
+        out.update({pl[j]: cl[i] for i, j in pairs})
 
     return out, ambiguous
 
@@ -909,8 +859,11 @@ def _rebind_groups(groups, pool, value_of, score_of, gap_pen, cover,
 # ---------------------------------------------------------------------------
 def _selftest() -> int:
     fails: List[str] = []
+    checks = 0
 
     def chk(c, m):
+        nonlocal checks
+        checks += 1
         if not c:
             fails.append(m)
 
@@ -937,13 +890,6 @@ def _selftest() -> int:
         "交叉矩阵的最优单调解是 (0,1)+(1,2) 两对: %r"
         % (align_monotone(w3, 0.0, 0.0),))
 
-    # --- monotone_keep ---
-    keep, d = monotone_keep([1, 2, 4, 3, 5], [1.0] * 5)
-    chk(sum(keep) == 4 and d == 1 and not keep[3], "应把离群的 3 摘掉: %r %r" % (keep, d))
-    keep2, d2 = monotone_keep([24, 23, 22, 21], [1.0] * 4)
-    chk(all(keep2) and d2 == -1, "递减序列应全留: %r %r" % (keep2, d2))
-    chk(monotone_keep([None, None], [1.0, 1.0])[1] == 0, "全 None 应无方向")
-
     # --- 几何 ---
     bb = [0.0, 0.0, 100.0, 50.0]
     chk(edge_of_point(bb, -10, 25) == "left", "左侧点")
@@ -951,13 +897,6 @@ def _selftest() -> int:
     chk(edge_of_point(bb, 50, -10) == "top", "上方点")
     chk(edge_of_point(bb, 50, 60) == "bottom", "下方点")
     chk(along(bb, "left", 0, 50) == 50.0 and along(bb, "top", 30, 0) == 30.0, "along")
-
-    # --- _ladder ---
-    # 数值 24/23/22 分别属于候选 2/0/1；沿位置**递减**，所以位置第 0 个引脚拿 24。
-    chk(_ladder([(2, 24), (0, 23), (1, 22)], 3) == [(2, 0), (0, 1), (1, 2)],
-        "阶梯应按数值定序: %r" % (_ladder([(2, 24), (0, 23), (1, 22)], 3),))
-    chk(_ladder([(0, 1), (1, 3)], 2) is None, "少于 3 个不给阶梯")
-    chk(_ladder([(0, 1), (1, 3), (2, 2)], 3) is None, "非单调不给阶梯")
 
     # --- rebind：**本模块存在的主因** ---
     bb2 = [0.0, 0.0, 200.0, 400.0]
@@ -968,9 +907,9 @@ def _selftest() -> int:
     score = lambda c, pi: max(0.0, 1.0 - abs(c["center"][1] - pins[pi][1]) / 400.0)
     got, amb = rebind(bb2, pins, pool, lambda c: c["t"], score, cover=0.25)
     chk(got == {0: 0, 1: 1, 2: 2, 3: 3},
-        "整排偏移一格时阶梯应重绑成 1-1/2-2/3-3/4-4: %r" % (got,))
+        "整排位置匹配应为 1-1/2-2/3-3/4-4: %r" % (got,))
 
-    # 多一个离群候选（数值最大却排在最上面）——数值单调性应直接禁掉它
+    # 数值最大但排在最上面的候选仍然合法，不得按编号顺序删除。
     pool2 = [{"center": (-20, 60), "t": "5"},
              {"center": (-20, 140), "t": "1"},
              {"center": (-20, 220), "t": "2"},
@@ -978,9 +917,8 @@ def _selftest() -> int:
     pins2 = [[-10, 60], [-10, 140], [-10, 220], [-10, 300], [-10, 380]]
     score2 = lambda c, pi: max(0.0, 1.0 - abs(c["center"][1] - pins2[pi][1]) / 400.0)
     got2, _ = rebind(bb2, pins2, pool2, lambda c: c["t"], score2, cover=0.25)
-    chk(got2.get(1) == 1 and got2.get(2) == 2 and got2.get(3) == 3,
-        "离群候选 5 不该被配上: %r" % (got2,))
-    chk(got2.get(0) != 0, "位置最上的引脚不该配到数值最大的离群候选: %r" % (got2,))
+    chk(got2 == {0: 0, 1: 1, 2: 2, 3: 3},
+        "非递增编号必须按实际位置全留: %r" % (got2,))
 
     # 数值确实递减（右边缘引脚号 24->21）时应全留、且不许交叉
     pins3 = [[210, 60], [210, 140], [210, 220], [210, 300]]
@@ -996,7 +934,7 @@ def _selftest() -> int:
     got4, _ = rebind(bb2, pins, pool4, lambda c: c["t"], score, cover=0.25)
     chk(got4 == {0: 0, 1: 1, 2: 2, 3: 3}, "非数值走位置对齐: %r" % (got4,))
 
-    print("自检 %d 项：%s" % (24, "全部通过" if not fails else "失败"))
+    print("自检 %d 项：%s" % (checks, "全部通过" if not fails else "失败"))
     for f in fails:
         print("  FAIL", f)
     return 1 if fails else 0

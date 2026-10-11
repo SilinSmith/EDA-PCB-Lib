@@ -604,6 +604,50 @@ def _best_number_read(reads: Dict[str, Tuple[str, float]], fresh_color: bool = F
 
 _COLOR_TEXT_SOURCES = frozenset(("red_green_transition", "red_stub_endpoint",
                                "red_green_transition_uncertain"))
+_MONO_TEXT_SOURCES = frozenset(("mono_pin_name_ppocr", "mono_pin_number_ppocr"))
+
+
+def _trusted_text_contact(record, box=None, point=None):
+    """Accept measured color contacts or independently validated frame strokes."""
+    if not isinstance(record, dict) or record.get("trust") != "trusted":
+        return False
+    if record.get("source") in _COLOR_TEXT_SOURCES:
+        return record.get("frame_confirmed") is True
+    return structmatch.trusted_frame_pin_evidence(record, bbox=box, point=point)
+
+
+def _qualified_mono_views(candidate, role):
+    """Do not compare optional OCR confidence with the legacy model's score."""
+    source = "mono_pin_name_ppocr" if role == "pin_name" else "mono_pin_number_ppocr"
+    meta = candidate.get("mono_pin_ocr")
+    reads = candidate.get("reads") or {}
+    if (candidate.get("source") != source or set(reads) != {role}
+            or not isinstance(meta, dict) or meta.get("backend") != "ppocr_v4_direct"
+            or meta.get("accepted") is not True or meta.get("held_reason")
+            or "glyph_integrity_unresolved" in (meta.get("flags") or [])):
+        return None
+    value = reads[role]
+    try:
+        text, confidence = value[0], float(value[1])
+    except (IndexError, KeyError, TypeError, ValueError, OverflowError):
+        return None
+    if (not isinstance(text, str) or not text or not math.isfinite(confidence)
+            or confidence < .90):
+        return None
+    variants = meta.get("selected_views")
+    if not isinstance(variants, list) or len(variants) != 2:
+        return None
+    for padding, view in zip((2, 4), variants):
+        if not isinstance(view, dict):
+            return None
+        try:
+            certainty = float(view.get("confidence", 0))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if (view.get("padding") != padding or view.get("text") != text
+                or not math.isfinite(certainty) or certainty < .90):
+            return None
+    return meta
 
 
 def _same_image_point(value, expected):
@@ -618,7 +662,7 @@ def _same_image_point(value, expected):
 
 
 def _target_index(text, cid, pins, evidence):
-    """Validate a directional crop target against its observed color contact."""
+    """Validate a crop target against fresh measured contact/frame evidence."""
     target = text.get("pin_target")
     if target is None:
         return None
@@ -633,9 +677,12 @@ def _target_index(text, cid, pins, evidence):
     if not checked:
         return -1
     ev = checked[index]
-    if (ev.get("trust") != "trusted" or ev.get("source") not in _COLOR_TEXT_SOURCES
-            or ev.get("frame_confirmed") is not True
+    mono = text.get("source") in _MONO_TEXT_SOURCES
+    if (not _trusted_text_contact(ev, point=pins[index])
+            or (ev.get("source") not in _COLOR_TEXT_SOURCES and not mono)
             or target.get("edge") != ev.get("edge")):
+        return -1
+    if mono and (target.get("point_img") is None or target.get("anchor_img") is None):
         return -1
     if (target.get("point_img") is not None
             and not _same_image_point(target["point_img"], pins[index])):
@@ -658,8 +705,7 @@ def _name_reservation(candidate, box, pins, evidence):
     if not sides or not structmatch.candidate_inside_confirmed_frame(cand, sides):
         return False
     for index, ev in enumerate(evidence):
-        if (ev.get("trust") == "trusted" and ev.get("source") in _COLOR_TEXT_SOURCES
-                and ev.get("frame_confirmed") is True
+        if (_trusted_text_contact(ev, box, pins[index])
                 and structmatch._name_corridor_distance(cand, box, pins, index, evidence) is not None):
             return True
     return False
@@ -668,15 +714,17 @@ def _name_reservation(candidate, box, pins, evidence):
 def _preferred_name_observation(candidate, cid, box, pins, evidence):
     """Qualify an independent name read without comparing model confidence.
 
-    It must still identify a current trusted colour contact and lie inside its
+    It must identify a current trusted measured contact and lie inside its
     actual frame and name corridor. Empty/held or stale observations cannot
     suppress the existing OCR candidates.
     """
-    meta = candidate.get("pin_name_ocr")
+    mono = candidate.get("source") == "mono_pin_name_ppocr"
+    meta = (_qualified_mono_views(candidate, "pin_name") if mono
+            else candidate.get("pin_name_ocr"))
     reads = candidate.get("reads") or {}
-    if (candidate.get("source") != "color_pin_name_ppocr"
+    if (candidate.get("source") not in ("color_pin_name_ppocr", "mono_pin_name_ppocr")
             or not candidate.get("name_only") or set(reads) != {"pin_name"}
-            or not isinstance(meta, dict) or meta.get("backend") != "ppocr_v4"
+            or not isinstance(meta, dict) or meta.get("backend") != ("ppocr_v4_direct" if mono else "ppocr_v4")
             or meta.get("accepted") is not True or meta.get("held_reason")
             or "glyph_integrity_unresolved" in (meta.get("flags") or [])):
         return None
@@ -701,7 +749,7 @@ def _preferred_name_observation(candidate, cid, box, pins, evidence):
     for other, ev in enumerate(evidence):
         if (other != index and ev.get("trust") == "trusted"
                 and ev.get("frame_confirmed") is True and ev.get("edge") == target["edge"]
-                and ev.get("source") in _COLOR_TEXT_SOURCES
+                and _trusted_text_contact(ev, box, pins[other])
                 and rect[tangent] < ev["anchor_img"][tangent] < rect[tangent + 2]):
             return None
     return index
@@ -711,10 +759,13 @@ def _preferred_number_observation(candidate, cid, box, pins, evidence):
     """Only matching, current, complete digit views can override this row.
 
     PP and CRNN scores are not comparable. The override is local to its
-    verified colour contact; all other observations remain available elsewhere.
+    verified frame contact; all other observations remain available elsewhere.
     """
-    meta, reads = candidate.get("pin_number_ocr"), candidate.get("reads") or {}
-    if (candidate.get("source") != "color_pin_number_ppocr"
+    mono = candidate.get("source") == "mono_pin_number_ppocr"
+    meta = (_qualified_mono_views(candidate, "pin_number") if mono
+            else candidate.get("pin_number_ocr"))
+    reads = candidate.get("reads") or {}
+    if (candidate.get("source") not in ("color_pin_number_ppocr", "mono_pin_number_ppocr")
             or not candidate.get("number_only") or set(reads) != {"pin_number"}
             or not isinstance(meta, dict) or meta.get("backend") != "ppocr_v4_direct"
             or meta.get("accepted") is not True or meta.get("held_reason")
@@ -743,7 +794,7 @@ def _preferred_number_observation(candidate, cid, box, pins, evidence):
     target = candidate["pin_target"]
     if target.get("point_img") is None or target.get("anchor_img") is None:
         return None
-    normalized = structmatch.normalize_number_evidence(pins, evidence)
+    normalized = structmatch.normalize_number_evidence(pins, evidence, bbox=box)
     sides = structmatch.confirmed_frame_sides(box, evidence)
     item = {"bbox": candidate["bbox"], "geometry_bbox": candidate.get("geometry_bbox"),
             "center": candidate["center"], "target_pin": index}
@@ -1108,7 +1159,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         plist = pins.get(cid, [])
         _pe = (structmatch.normalize_name_evidence(
             c["bbox"], plist, (pin_evidence or {}).get(cid)) if PIN_TRUST_BIND else [])
-        _npe = (structmatch.normalize_number_evidence(plist, _pe)
+        _npe = (structmatch.normalize_number_evidence(plist, _pe, bbox=c["bbox"])
                 if PIN_NUMBER_TRUST_BIND and ctype == "box" else [])
         name_reservations = {id(t) for t in cands
                              if ctype == "box" and _name_reservation(t, c["bbox"], plist, _pe)}
@@ -1220,12 +1271,12 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 if target_index == -1:
                     continue
                 preferred = None
-                if slot == "name" and t.get("source") == "color_pin_name_ppocr":
+                if slot == "name" and t.get("source") in ("color_pin_name_ppocr", "mono_pin_name_ppocr"):
                     preferred = (_preferred_name_observation(t, cid, c["bbox"], plist, _pe)
                                  if c["type"] == "box" else None)
                     if preferred is None:
                         continue
-                if slot == "number" and t.get("source") == "color_pin_number_ppocr":
+                if slot == "number" and t.get("source") in ("color_pin_number_ppocr", "mono_pin_number_ppocr"):
                     preferred = (_preferred_number_observation(t, cid, c["bbox"], plist, _pe)
                                  if c["type"] == "box" else None)
                     if preferred is None:
@@ -1334,9 +1385,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     continue
 
             # **结构化批量重绑定**（`structmatch.py`）：不再「谁离引脚最近就归谁」，
-            # 而是把整排候选与整排引脚做单调对齐（两侧都能悬空）、并用数值单调性
-            # 剔掉离群候选、必要时整排按数值阶梯重排。引脚号比引脚名更信数值，所以
-            # `cover` 给得更足。
+            # 而是按空间顺序整排匹配（两侧都能悬空），编号数值可以任意排列。
             _cbb = c["bbox"]
 
             def score_of(c, pi, _pl=plist, _bb=_cbb,
@@ -1410,9 +1459,17 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     continue
                 pinfo[pi][slot] = {"text": cc["text"], "conf": cc["conf"],
                                    "box": list(cc["rec"]["bbox"])}
+                if slot == "number" and cc.get("preferred_number_pin") == pi:
+                    # Only the qualified observation actually selected for
+                    # this physical pin can refresh number-winner evidence.
+                    # A previous missing name must not make a complete new
+                    # number/name pair lose to a weak legacy duplicate.
+                    pinfo[pi]["number_independently_read"] = True
+                    pinfo[pi].pop("number_selection_name", None)
                 if "preferred_name_pin" in cc:
-                    meta = cc["rec"]["pin_name_ocr"]
-                    if "previous_name" in meta:
+                    meta = cc["rec"].get("mono_pin_ocr" if cc["rec"].get("source") == "mono_pin_name_ppocr"
+                                          else "pin_name_ocr", {})
+                    if "previous_name" in meta and not pinfo[pi].get("number_independently_read"):
                         pinfo[pi]["number_selection_name"] = meta["previous_name"]
                 taken_box.add(id(cc["rec"]))
 

@@ -23,6 +23,8 @@ except ImportError:                     # 直接跑脚本（python eda-pcb\stage
     _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
     from envflag import env_on
 
+from stage2 import structmatch
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -543,11 +545,11 @@ def _pin_contact_rank(evidence: dict, point: Sequence[float]) -> Optional[int]:
 def _box_number_winners(raw: Sequence[dict]) -> Dict[int, int]:
     """Choose one existing contact per read number without joining their nets.
 
-    When names are required, a complete measured-color read can replace an
-    unnamed first read; a frame-rejected incumbent also keeps the prior escape
-    hatch. For two complete reads with usable confidence and confirmed contact
-    evidence, geometry precedes OCR confidence only when a measured-color
-    contact participates. Legacy and monochrome reads keep the original policy.
+    Check actual output eligibility before confidence ranking. A complete read
+    from a measured color or clean grayscale frame contact can replace an
+    unnamed first read; a frame-rejected incumbent keeps the prior escape hatch.
+    For two complete reads, the frozen selection name remains the ranking
+    evidence so later name-only OCR does not silently switch physical contacts.
     Numbers, names, points and nets stay on the selected contact.
     """
     winners: Dict[int, int] = {}
@@ -564,10 +566,24 @@ def _box_number_winners(raw: Sequence[dict]) -> Dict[int, int]:
         quality, old_quality = r.get("quality"), old.get("quality")
         selection_name = r.get("selection_name", r["nm"])
         old_selection_name = old.get("selection_name", old["nm"])
-        if not BOX_PIN_DUPLICATE_BEST or not selection_name or quality is None:
+        if not BOX_PIN_DUPLICATE_BEST:
+            continue
+        # A contact deleted by the required-name gate cannot be the winner
+        # over a complete, measured contact. Judge the final name, not a frozen
+        # selection label that a later reader may have removed or replaced.
+        if BOX_PIN_NEED_NAME and not old.get("nm"):
+            if (r.get("nm") and quality is not None
+                    and (r.get("color_contact") is True or r.get("frame_contact") is True
+                         or old.get("name_rejected_by_frame") is True)):
+                winners[v] = i
+            continue
+        if BOX_PIN_NEED_NAME and not r.get("nm"):
+            continue
+        if not selection_name or quality is None:
             continue
         if not old_selection_name:
             if BOX_PIN_NEED_NAME and (r.get("color_contact") is True
+                                     or r.get("frame_contact") is True
                                      or old.get("name_rejected_by_frame") is True):
                 winners[v] = i
             continue
@@ -575,7 +591,9 @@ def _box_number_winners(raw: Sequence[dict]) -> Dict[int, int]:
             continue
         contact_rank, old_rank = r.get("contact_rank"), old.get("contact_rank")
         if (BOX_PIN_NEED_NAME and (r.get("color_contact") is True
-                                  or old.get("color_contact") is True)
+                                  or old.get("color_contact") is True
+                                  or r.get("frame_contact") is True
+                                  or old.get("frame_contact") is True)
                 and contact_rank is not None and old_rank is not None
                 and contact_rank != old_rank):
             if contact_rank > old_rank:
@@ -672,12 +690,15 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             evidence = (contact_evidence[k] if isinstance(contact_evidence, (list, tuple))
                         and k < len(contact_evidence) else None)
             contact_rank = _pin_contact_rank(evidence, pts[k])
+            frame_contact = structmatch.trusted_frame_pin_evidence(
+                evidence, c.get("bbox_img"), pts[k])
             raw.append({"num": num, "nm": nm, "quality": _pin_read_quality(rec),
                         "selection_name": ((selection_name or {}).get("text") or "").strip(),
                         "contact_rank": contact_rank,
                         "color_contact": (contact_rank == 2 and isinstance(evidence, dict)
                                           and isinstance(evidence.get("source"), str)
                                           and evidence.get("source") in COLOR_PIN_SOURCES),
+                        "frame_contact": frame_contact,
                         "name_rejected_by_frame": rec.get("name_rejected_by_frame") is True})
         # **结构期望**（2025-10 按官方 Q&A 重定）。
         #
@@ -1052,7 +1073,13 @@ def _selftest() -> int:
     chk(doc["pins"]["R1"]["pin_1"]["point"]["y"] == 25.0, "y 翻转: %r"
         % (doc["pins"]["R1"]["pin_1"]["point"],))
     chk(doc["pins"]["U1"]["pin_1"]["pinname"] == "VDD", "引脚名")
-    chk(doc["pins"]["U1"]["pin_2"]["pinname"] == "2", "缺名回退引脚号")
+    # Default assembly deliberately drops this unread IC pin. The historical
+    # self-test assumed the old number/name fallback and failed even before
+    # the monochrome changes. Test the selected output policy explicitly.
+    if BOX_PIN_NEED_NAME or BOX_PIN_DROP_UNREAD:
+        chk("pin_2" not in doc["pins"]["U1"], "不输出未读出名号的芯片脚")
+    else:
+        chk(doc["pins"]["U1"].get("pin_2", {}).get("pinname") == "2", "缺名回退引脚号")
     n1 = doc["nets"]["net_1"]
     chk(set(n1["hyperGraph"].strip("()").split(",")) == {"R1.1", "U1.1"},
         "hyperGraph: %r" % (n1["hyperGraph"],))

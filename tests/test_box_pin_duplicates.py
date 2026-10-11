@@ -99,6 +99,52 @@ class BoxPinDuplicateTests(unittest.TestCase):
                 self.assertEqual(doc["pins"]["U1"], {})
                 self.assertEqual(doc["__pin_index"], {})
 
+    @staticmethod
+    def frame_evidence(point, **updates):
+        rec = {"trust": "trusted", "point_img": point, "edge": "right",
+               "frame_confirmed": True, "anchor_img": [200, point[1]],
+               "reason": "frame_attached_normal_stroke", "frame_coverage": 1.,
+               "normal_ink_run": 22, "normal_ink_hits": 22, "first_ink_distance": 1,
+               "text_overlap_fraction": 0., "branching_fraction": .071}
+        return dict(rec, **updates)
+
+    def test_grayscale_complete_measured_read_replaces_unnamed_incumbent(self):
+        records = [self.frame_evidence([212, 120]), self.frame_evidence([212, 180])]
+        for string_keys in (False, True):
+            with self.subTest(string_keys=string_keys):
+                doc = self.build([self.read("88", "", .99, .99),
+                                  self.read("88", "PC14-OSC32_IN", .8, .9)],
+                                 evidence=records, string_keys=string_keys)
+                self.assertEqual(doc["__pin_index"], {"ic": {"1": "pin_88"}})
+                self.assertEqual(doc["pins"]["U1"]["pin_88"]["pinname"], "PC14-OSC32_IN")
+                self.assertEqual(doc["pins"]["U1"]["pin_88"]["point"], {"x": 212., "y": 120.})
+                self.assertEqual(next(iter(doc["nets"].values()))["hyperGraph"], "(U1.88)")
+
+    def test_final_name_eligibility_precedes_frozen_selection_name(self):
+        first = dict(self.read("88", ""), number_selection_name={"text": "OLD", "conf": .99})
+        records = [self.frame_evidence([212, 120]), self.frame_evidence([212, 180])]
+        doc = self.build([first, self.read("88", "VDD", .8, .9)], evidence=records)
+        self.assertEqual(doc["__pin_index"], {"ic": {"1": "pin_88"}})
+
+    def test_unnamed_successor_with_frozen_name_cannot_displace_outputtable_read(self):
+        second = dict(self.read("88", ""), number_selection_name={"text": "OLD", "conf": .99})
+        records = [self.frame_evidence([212, 120]), self.frame_evidence([212, 180])]
+        doc = self.build([self.read("88", "VDD", .8, .9), second], evidence=records)
+        self.assertEqual(doc["__pin_index"], {"ic": {"0": "pin_88"}})
+
+    def test_grayscale_claim_must_be_complete_measured_and_index_aligned(self):
+        invalid = ({"trust": "uncertain"}, {"frame_confirmed": False},
+                   {"normal_ink_run": 1}, {"normal_ink_hits": 1},
+                   {"anchor_img": [180, 180]}, {"point_img": [212, 120]},
+                   {"reason": "actual_frame_unconfirmed"}, {"first_ink_distance": 4})
+        for updates in invalid:
+            with self.subTest(updates=updates):
+                records = [self.frame_evidence([212, 120]),
+                           self.frame_evidence([212, 180], **updates)]
+                doc = self.build([self.read("88", ""), self.read("88", "VDD")],
+                                 evidence=records)
+                self.assertEqual(doc["pins"]["U1"], {})
+
     def test_invalid_or_unconfirmed_color_claim_cannot_replace_unnamed_incumbent(self):
         claims = (self.evidence("trusted", [212, 180], source="other"),
                   self.evidence("trusted", [212, 180], source=["red_green_transition"]),
