@@ -89,7 +89,7 @@ def _confirmed_numbers(doc, reads, min_conf):
 
 
 def read_pin_names(doc, reads, engine, bgr, *, mode: str = "auto",
-                   min_conf: float = 0.0):
+                   min_conf: float = 0.0, grey_evidence: bool = False):
     """Return role-limited observations; weak/held ones have empty ``reads``.
 
     The optional recognizer receives the same isolated gray32 input used in
@@ -104,7 +104,8 @@ def read_pin_names(doc, reads, engine, bgr, *, mode: str = "auto",
     if mode == "off" or bgr is None or getattr(bgr, "ndim", 0) != 3:
         return []
     reads = _threshold_reads(reads, min_conf)
-    candidates, cleaned = pin_lane_boxes(doc, bgr, reads=reads)
+    candidates, cleaned = pin_lane_boxes(doc, bgr, reads=reads,
+                                         grey_evidence=grey_evidence)
     names = [c for c in candidates if c["role"] == "pin_name"
              and "glyph_integrity_unresolved" not in (c.get("flags") or [])]
     if not names:

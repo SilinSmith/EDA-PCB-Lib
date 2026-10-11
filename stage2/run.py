@@ -78,6 +78,14 @@ PIN_NAME_OCR = os.environ.get("STAGE2_PIN_NAME_OCR", "off").strip().lower()
 MONO_PIN_OCR = os.environ.get("STAGE2_MONO_PIN_OCR", PIN_NAME_OCR).strip().lower()
 PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "0")
 
+# ★ 引脚「灰底证据」通道（`STAGE2_PIN_GREY_EVIDENCE`，默认 0）：
+#   队友的读音器（`pin_text_crops._observations`）只认「彩色端点」证据
+#   （`source ∈ COLOR_SOURCES`），而 `stage1/pin_evidence.py` 对我们的 220 个框
+#   引脚写的是**灰底**记录（没有 `source` 字段）⇒ 读数器长期是 no-op。
+#   打开后：`trust == "trusted"` + `frame_confirmed` + 点与证据点一致 + 锚点贴框
+#   的灰底记录也能开出车道（几何判据一字未改，只放宽 source 门）。
+PIN_GREY_EVIDENCE = env_on("STAGE2_PIN_GREY_EVIDENCE", "0")
+
 # ★ 引脚「信任闸门」：用队友 `stage1/pin_evidence.py` 的逐脚图像证据决定哪些脚
 #   不可信（`""`=关；`rejected` / `rejected+uncertain` / `uncertain`）。
 #   这是我们**缺的那条信息**（官方 10 张实测：trusted 的几何未命中率 23.2%，
@@ -95,16 +103,16 @@ PIN_READERS = [
     ("color_number", COLOR_NUMBER_CROP, "color_crops", "read_color_numbers",
      ("pin_number",), {}),
     ("pin_text", PIN_TEXT_CROP, "pin_text_crops", "read_pin_texts",
-     ("pin_name", "pin_number"), {}),
+     ("pin_name", "pin_number"), {"grey_evidence": PIN_GREY_EVIDENCE}),
     ("pin_lane", PIN_LANE_CROP, "pin_lane_reading", "read_pin_lanes",
      ("pin_name", "pin_number"),
      {"include_names": lambda roles: roles is None or "pin_name" in roles,
       "include_numbers": lambda roles: roles is None or "pin_number" in roles,
-      "cleanup": PIN_LANE_CLEANUP}),
+      "cleanup": PIN_LANE_CLEANUP, "grey_evidence": PIN_GREY_EVIDENCE}),
     ("pin_number_repair", PIN_NUMBER_REPAIR, "pin_number_reading", "read_pin_numbers",
-     ("pin_number",), {}),
+     ("pin_number",), {"grey_evidence": PIN_GREY_EVIDENCE}),
     ("pin_name_ocr", PIN_NAME_OCR != "off", "pin_name_reading", "read_pin_names",
-     ("pin_name",), {"mode": PIN_NAME_OCR}),
+     ("pin_name",), {"mode": PIN_NAME_OCR, "grey_evidence": PIN_GREY_EVIDENCE}),
     ("mono_pin_ocr", MONO_PIN_OCR != "off", "mono_pin_reading", "read_mono_pin_texts",
      ("pin_name", "pin_number"),
      {"mode": MONO_PIN_OCR,

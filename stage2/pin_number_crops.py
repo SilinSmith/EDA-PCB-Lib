@@ -152,18 +152,19 @@ def _vertical_completion(mask, original, target, peers):
     return completed, expanded, evidence
 
 
-def number_repair_boxes(doc, image, reads=None):
+def number_repair_boxes(doc, image, reads=None, *, grey_evidence: bool = False):
     """Return only number candidates and an independent cleaned gray copy.
 
     Metadata preserves the original geometry/flags as well as every removed
     contact fragment and completion decision. Input documents, OCR records,
     and image pixels are never changed. Unproven clipping stays unresolved.
+    ``grey_evidence`` widens eligibility to monochrome trusted evidence.
     """
-    candidates, cleaned = pin_lane_boxes(doc, image, reads=reads)
+    candidates, cleaned = pin_lane_boxes(doc, image, reads=reads, grey_evidence=grey_evidence)
     if cleaned is None:
         return [], None
     cleaned = cleaned.copy()
-    observations = list(_observations(doc, include_horizontal=True))
+    observations = list(_observations(doc, include_horizontal=True, grey_evidence=grey_evidence))
     observed = {(o["component_id"], o["pin_index"]): o for o in observations}
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     chroma = image.max(2).astype(np.int16) - image.min(2).astype(np.int16)

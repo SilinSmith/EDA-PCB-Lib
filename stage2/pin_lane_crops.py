@@ -256,7 +256,7 @@ def _source_evidence(observation, role, glyph, region, reads, peers, colored, ma
     return sorted(flags), sources
 
 
-def pin_lane_boxes(doc, image, reads=None):
+def pin_lane_boxes(doc, image, reads=None, *, grey_evidence: bool = False):
     """Return ``(candidates, cleaned_gray)`` in original image coordinates.
 
     Only box components with trusted, current colour contacts and confirmed
@@ -266,10 +266,12 @@ def pin_lane_boxes(doc, image, reads=None):
 
     Existing OCR contributes diagnostic flags only.  The caller may use those
     flags for selective extra recognition and must keep existing candidates.
+    ``grey_evidence`` widens eligibility to the monochrome trusted evidence
+    records (see ``pin_text_crops._observations``).
     """
     if image is None or getattr(image, "ndim", 0) != 3 or image.shape[2] != 3:
         return [], None
-    observations = list(_observations(doc, include_horizontal=True))
+    observations = list(_observations(doc, include_horizontal=True, grey_evidence=grey_evidence))
     # Reuse the established colour/fringe mask without the old OCR-number gate.
     # Passing no reads returns the cleaned view while creating no legacy boxes.
     _, cleaned = color_number_boxes(doc, image, [])
@@ -279,7 +281,8 @@ def pin_lane_boxes(doc, image, reads=None):
     strong_colored = (chroma >= 50) & (gray < 230)
     near_color = cv2.dilate(strong_colored.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
     colored = strong_colored | (near_color & (chroma > 25) & (gray >= 100) & (gray < 230))
-    name_boxes, _ = pin_text_boxes(doc, image, include_horizontal=True)
+    name_boxes, _ = pin_text_boxes(doc, image, include_horizontal=True,
+                                   grey_evidence=grey_evidence)
     names = {(b["pin_target"]["component_id"], b["pin_target"]["pin_index"]): b
              for b in name_boxes if b["role"] == "pin_name"}
     candidates = []

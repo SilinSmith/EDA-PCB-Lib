@@ -159,7 +159,7 @@ def _direction_votes(reads):
 
 def read_pin_lanes(doc, reads, engine, bgr, *, include_names: bool = True,
                    include_numbers: bool = True, cleanup: str = "light",
-                   min_conf: float = 0.0):
+                   min_conf: float = 0.0, grey_evidence: bool = False):
     """Append targeted, role-limited reads without altering original candidates.
 
     Both raw and cleaned inputs use the same isolated sampling convention.
@@ -177,7 +177,8 @@ def read_pin_lanes(doc, reads, engine, bgr, *, include_names: bool = True,
     if recognizer is None:
         return []
     reads = _threshold_reads(reads, min_conf)
-    candidates, clean_gray = pin_lane_boxes(doc, bgr, reads=reads)
+    candidates, clean_gray = pin_lane_boxes(doc, bgr, reads=reads,
+                                           grey_evidence=grey_evidence)
     if not candidates:
         return []
     existing = assign(doc.get("components", []), doc.get("pins", {}), reads,

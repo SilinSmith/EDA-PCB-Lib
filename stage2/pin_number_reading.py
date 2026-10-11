@@ -51,7 +51,8 @@ def _agreement(variants, threshold):
     return values[0][0], min(v[1] for v in values)
 
 
-def read_pin_numbers(doc, reads, engine, bgr, *, min_conf: float = 0.0):
+def read_pin_numbers(doc, reads, engine, bgr, *, min_conf: float = 0.0,
+                     grey_evidence: bool = False):
     """Add qualified digits; missing optional PP runtime keeps the old path.
 
     ``engine`` is retained for the pipeline's reader interface; this recognizer
@@ -64,7 +65,8 @@ def read_pin_numbers(doc, reads, engine, bgr, *, min_conf: float = 0.0):
     if bgr is None or getattr(bgr, "ndim", 0) != 3:
         return []
     reads = _threshold_reads(reads, min_conf)
-    candidates, cleaned = number_repair_boxes(doc, bgr, reads=reads)
+    candidates, cleaned = number_repair_boxes(doc, bgr, reads=reads,
+                                             grey_evidence=grey_evidence)
     candidates = [c for c in candidates
                   if "glyph_integrity_unresolved" not in c.get("flags", [])]
     if not candidates:

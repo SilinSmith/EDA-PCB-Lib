@@ -6,12 +6,12 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **429** 个开关。
+共 **430** 个开关。
 
 ## 目录
 
 - [stage1](#stage1)（134）
-- [stage2](#stage2)（127）
+- [stage2](#stage2)（128）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（115）
 - [vlm](#vlm)（12）
@@ -168,7 +168,7 @@
 
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
-| `CV_UNIFIED` | `"0"` | `stage2/run.py:512` |
+| `CV_UNIFIED` | `"0"` | `stage2/run.py:520` |
 | `FUSION_PIN_LIBSEQ` | `"1"` | `stage2/pinlib.py:105` |
 | `FUSION_PIN_LIBSEQ_FUZZY` | `"0.85"` | `stage2/pinlib.py:108` |
 | `FUSION_PIN_LIBSEQ_MARGIN` | `"0.06"` | `stage2/pinlib.py:109` |
@@ -269,6 +269,7 @@
 | `STAGE2_PIN_ALONG` | `"1"` | `stage2/assign.py:352` |
 | `STAGE2_PIN_ANCHOR` | `"12"` | `stage2/structmatch.py:54` |
 | `STAGE2_PIN_COVER` | `"0.15"` | `stage2/assign.py:356` |
+| `STAGE2_PIN_GREY_EVIDENCE` | `"0"` | `stage2/run.py:87` |
 | `STAGE2_PIN_LANE_CLEANUP` | `"light"` | `stage2/run.py:76` |
 | `STAGE2_PIN_LANE_CROP` | `"0"` | `stage2/run.py:75` |
 | `STAGE2_PIN_NAME_OCR` | `"off"` | `stage2/run.py:77` |
@@ -278,7 +279,7 @@
 | `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:782` |
 | `STAGE2_PIN_STUB_MERGE` | `"12"` | `stage2/assign.py:304` |
 | `STAGE2_PIN_TEXT_CROP` | `"0"` | `stage2/run.py:74` |
-| `STAGE2_PIN_TRUST_DROP` | `""` | `stage2/run.py:86` |
+| `STAGE2_PIN_TRUST_DROP` | `""` | `stage2/run.py:94` |
 | `STAGE2_PREFIX` | `"strict"` | `stage2/assign.py:156` |
 | `STAGE2_PREFIX_SKEL` | `"0"` | `stage2/assign.py:166` |
 | `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1552` |

@@ -3292,6 +3292,41 @@ powershell -ExecutionPolicy Bypass -File ..\work\_ifx_ab.ps1
 python -X utf8 ..\work\_ifx_cmp.py ifx1 tmon
 ```
 
+### 5.30 ★ 引脚读音器「灰底证据」门（`STAGE2_PIN_GREY_EVIDENCE=1`，默认 0）：官方 10 张 `--no-vlm` **71.65 → 73.63（+1.98）**，赚分全在车道读数器（2026-10-16）
+
+**为什么之前全是 no-op**：5.29 统一接口后，四个读音器在官方 10 张上**逐字节零改动**（`ifx1` ≡ `tmon`）。根因在它们共用的入口 `stage2/pin_text_crops.py:45 _observations()`：它要求 `isinstance(ev["source"], str) and ev["source"] in COLOR_SOURCES`，即只认**彩色端点**证据（队友 `stage1/pincolor.py` 的 `red_green_transition` / `red_stub_endpoint`）。而我们对 220 个框引脚写的 `pin_evidence` 是**灰底**记录（`stage1/pin_evidence.py::build_pin_evidence`），**没有 `source` 字段** ⇒ 门永远不开。彩色臂（`pev2` = 56.73）又因为彩色实测把脚位定在红桩末端（离 GT 3~22px）而判负 ⇒ 两条路都堵死。
+
+**药**：给这条门加一个显式的**灰底入口**——`_observations(doc, include_horizontal, grey_evidence)`，`grey_evidence=True` 时 `source` 缺失/为空**也算合格**，其余判据一字未改（`trust == "trusted"`、`frame_confirmed is True`、`point` 与 `ev["point_img"]` 差 ≤ 0.001、锚点离框边 ≤ 6px 且在切向对齐、脚点朝外）。开关由 `stage2/run.py` 读（契约不变）：`STAGE2_PIN_GREY_EVIDENCE`（`env_on`，默认 `"0"`），经 `PIN_READERS` 的 kwargs 传进 `read_pin_texts` / `read_pin_lanes` / `read_pin_numbers` / `read_pin_names` 与两个裁片器 `pin_text_boxes` / `pin_lane_boxes` / `number_repair_boxes`；`pin_lane_reading._unsafe_number_source()` 里的观测统计**故意仍用彩色门**（安全启发式保持原样）。契约检查器 `tools/dev/pinread_contract.py` 复跑仍 16/16 通过。
+
+**官方 10 张 `--no-vlm` 子集分解**（都开 `STAGE2_PIN_GREY_EVIDENCE=1`；`gL`=只开车道、`gT`=只开整词、`gN`=只开号修复、`gy1`=四个全开）：
+
+| 臂 | 读音器 | 总分 | 元件 | 引脚 | 网络 | 导线 | 逐字节关系 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `gy0`（基线） | 四个全开、灰底关 | 71.65 | 0.8852 | 0.6179 | 0.7345 | 0.3933 | 与 `ifx1`/`tmon` **逐字节相同** |
+| **`gL`** | **只车道** | **73.63** | 0.8852 | **0.6796** | **0.7476** | 0.3919 | 与 `gy1` 只差 2 张 |
+| `gLN` | 车道 + 号修复 | 73.63 | 0.8852 | 0.6796 | 0.7476 | 0.3919 | 同上 |
+| `gLT` | 车道 + 整词 | 73.60 | 0.8852 | 0.6746 | 0.7498 | 0.3934 | 与 `gy1` 逐字节相同 |
+| `gy1` | 四个全开 | 73.60 | 0.8852 | 0.6746 | 0.7498 | 0.3934 | 6/10 张产物与 `gy0` 不同 |
+| `gT` | 只整词 | 71.65 | 0.8852 | 0.6146 | 0.7366 | 0.3949 | 净中性（引脚 −0.0033 / 网络 +0.0021） |
+| `gN` | 只号修复 | 71.65 | 0.8852 | 0.6179 | 0.7345 | 0.3933 | **no-op**（数字路径要 PP-OCR，本机未装 `rapidocr-onnxruntime`） |
+| — | 四个全关（`gy0` 的对照） | 71.65 | 0.8852 | 0.6179 | 0.7345 | 0.3933 | 见 5.29 |
+
+⇒ **结论**：① 灰底证据门值 **+1.98**，是本分支并入以来**第一个正收益**；② 赚分**全部来自「车道读数器」**（`pin_lane`：按车道切口 + 单样本独立识别 + 选择性恢复）；③ 叠加「整词读数器」反而把 73.63 拉回 73.60（引脚 −0.005、网络 +0.002）⇒ **可选臂 = 只开车道**；④ 号修复与彩色号在无 PP-OCR 的机器上是 no-op。运行代价可忽略：官方 10 张阶段二 14.0s → 16.7s。
+
+**val 19 张**（`FUSION_LLM` 关不掉，两臂同批）：读音器全开、灰底关 **26.13** → 灰底开 **26.20**（+0.07；引脚 0.1539→0.1538、网络 0.2082→0.2102、导线 0.0499→0.0509）。⇒ 派生语料上**不亏**，但增益远小于官方 10（与历史规律一致：val 的框引脚本来就少）。
+
+**复现**：
+
+```bat
+cd eda-pcb
+powershell -ExecutionPolicy Bypass -File ..\work\_gy_ab.ps1     &rem 官方 10 + val 19 两套语料，灰底 0/1
+powershell -ExecutionPolicy Bypass -File ..\work\_gy_sub.ps1    &rem 读音器子集分解（gL/gN/gT/gLN/gLT）
+python -X utf8 ..\work\_greyprobe.py --run ..\work\_fast_out_curA --cases 1,5   &rem 同文档上的车道/读数产量对比
+python -X utf8 tools\dev\pinread_contract.py
+```
+
+**默认值处置**：机制先以默认 `0` 落地（关掉时逐字节不变，见 `gy0` ≡ `ifx1`）；**翻默认要等交付口径（VLM 开）同批 A/B**——`work/_gy_vlm.ps1`（臂 `gyv0` 车道开+灰底关 / `gyv1` 车道开+灰底开，都 VLM 开），因为 VLM 的位号/网名抽样抖动在单张上可达 ±3.6 分，必须同批对照。
+
 ---
 
 ## 6. 归因尺子（怎么把失分拆成可行动项）

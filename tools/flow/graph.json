@@ -2074,9 +2074,13 @@
     [
      "STAGE2_PIN_LANE_CLEANUP",
      "light"
+    ],
+    [
+     "STAGE2_PIN_GREY_EVIDENCE",
+     "0（本轮新增；=1 时灰底 trusted 证据也能开车道：官方 10 张 --no-vlm 71.65→73.63）"
     ]
    ],
-   "note": "**进度：🧩 已并入（默认关，待 A/B）**\n三个裁片模块（`pin_lane_crops.py` 344 行 / `pin_text_crops.py` 263 行 / `color_crops.py` 249 行）与 `pin_number_crops.py`（220 行）、`mono_pin_crops.py`（250 行）都在这一层：**只决定切哪块**。\n\nself-imposed 约束（docstring）：`pin_lane_crops` *the windows use the current measured pin and frame contact, never a recognised number or an expected pin label*；`pin_number_crops` *recognized strings never set a crop*；`mono_pin_crops` *this path never erases black pixels*（不靠擦线猜细 `1`）。\n\n★ 这与我们的 `stage1/pincol.py`（引脚列格点窗口）+ `stage2/pinname.py`（引脚名救援）是**同类但不同尺子**的做法：我们按列/格点，它按**彩色引脚车道**；两条并存，A/B 后再决定谁当默认。",
+   "note": "**进度：🧩 已并入（默认关，待 A/B）**\n三个裁片模块（`pin_lane_crops.py` 344 行 / `pin_text_crops.py` 263 行 / `color_crops.py` 249 行）与 `pin_number_crops.py`（220 行）、`mono_pin_crops.py`（250 行）都在这一层：**只决定切哪块**。\n\nself-imposed 约束（docstring）：`pin_lane_crops` *the windows use the current measured pin and frame contact, never a recognised number or an expected pin label*；`pin_number_crops` *recognized strings never set a crop*；`mono_pin_crops` *this path never erases black pixels*（不靠擦线猜细 `1`）。\n\n★ 这与我们的 `stage1/pincol.py`（引脚列格点窗口）+ `stage2/pinname.py`（引脚名救援）是**同类但不同尺子**的做法：我们按列/格点，它按**彩色引脚车道**；两条并存，A/B 后再决定谁当默认。\n\n★ 2026-10-16（5.30）：`_observations()` 的硬门只认彩色端点证据（`source ∈ COLOR_SOURCES`），我们的灰底证据没有 `source` ⇒ 三个裁片器一直是 no-op。新增 `grey_evidence` 入口（`STAGE2_PIN_GREY_EVIDENCE=1`）后，`trust=trusted + frame_confirmed + 锚点贴框` 的灰底记录也能开窗；只开车道读数器时官方 10 张 `--no-vlm` **71.65 → 73.63（+1.98）**。",
    "code": "stage2/pin_lane_crops.py:pin_lane_boxes"
   },
   {
@@ -2135,9 +2139,13 @@
     [
      "STAGE2_ISOLATED_OCR",
      "恒开（避免 CRNN 依赖最长裁片）"
+    ],
+    [
+     "STAGE2_PIN_GREY_EVIDENCE",
+     "0（本轮新增；=1 时灰底 trusted 证据也能开车道：官方 10 张 --no-vlm 71.65→73.63）"
     ]
    ],
-   "note": "**进度：🧩 已并入 `stage2/run.py::process()`（默认关，待 A/B）**\n接线点：`reads = engine.read(...)` 之后、`assign(...)` 之前，与队友分支同一位置；四个读取器都是**纯追加**（`reads = list(reads) + read_*(...)`），关掉时逐位不变（自检已过：`assign` 18 项 / `structmatch` 32 项 / `assemble` 23 项）。\n\nself-imposed 约束：`pin_lane_reading` *selective pin text recovery from observed geometry, never expected labels*；`pin_number_reading` *two fixed white-margin views must agree*（不一致就不确认）；`isolated_ocr` 单样本独立识别，避免 CRNN 的双向上下文被最长裁片带偏。\n\n★ 依赖：`from .assign import assign`（已加 `pin_evidence=` 形参）与 `structmatch.trusted_frame_pin_evidence`（已并入）。",
+   "note": "**进度：🧩 已并入 `stage2/run.py::process()`（默认关，待 A/B）**\n接线点：`reads = engine.read(...)` 之后、`assign(...)` 之前，与队友分支同一位置；四个读取器都是**纯追加**（`reads = list(reads) + read_*(...)`），关掉时逐位不变（自检已过：`assign` 18 项 / `structmatch` 32 项 / `assemble` 23 项）。\n\nself-imposed 约束：`pin_lane_reading` *selective pin text recovery from observed geometry, never expected labels*；`pin_number_reading` *two fixed white-margin views must agree*（不一致就不确认）；`isolated_ocr` 单样本独立识别，避免 CRNN 的双向上下文被最长裁片带偏。\n\n★ 依赖：`from .assign import assign`（已加 `pin_evidence=` 形参）与 `structmatch.trusted_frame_pin_evidence`（已并入）。\n\n★ 2026-10-16（5.30）：读数器**终于真的动手了**——官方 10 张 `--no-vlm` 下「车道读数器 + 灰底证据」= **73.63**（引脚 0.6179→0.6796、网络 0.7345→0.7476），叠加整词读数器回落到 73.60，号修复/彩色号在本机是 no-op（缺 `rapidocr-onnxruntime`）。val 19 同批 26.13 → 26.20。交付口径（VLM 开）同批 A/B 见 `work/_gy_vlm.ps1`。",
    "code": "stage2/pin_lane_reading.py:read_pin_lanes"
   },
   {
@@ -2196,9 +2204,13 @@
     [
      "依赖",
      "requirements.pin-name-ocr.txt（rapidocr-onnxruntime==1.4.4 + onnxruntime==1.31.0）"
+    ],
+    [
+     "STAGE2_PIN_GREY_EVIDENCE",
+     "0（本轮新增；=1 时灰底 trusted 证据也能开车道：官方 10 张 --no-vlm 71.65→73.63）"
     ]
    ],
-   "note": "**进度：🧩 已并入（默认 off；本机缺 `rapidocr_onnxruntime` ⇒ auto 会告警回退、on 会报错）**\n第八轮 + 第十轮：可选 PP-OCR 名称识别器（`pin_name_ocr.py` 229 行，包内含 `ch_PP-OCRv4_rec_infer.onnx` 并校验 SHA256，只加载识别模型）与黑白引脚通道（`mono_pin_reading.py` 242 行 / `mono_pin_crops.py` 250 行，两种固定白边视图必须一致才确认）。\n\n★ 它换的是**引脚文字识别器**，不是交付 CRNN：我们的交付 OCR 权重仍是 `ocr_mix`（这条不动）。要真跑得先 `python -m pip install -r requirements.pin-name-ocr.txt`（允许联网，见 `docs/COMPETITION_RULES.md:176`）。",
+   "note": "**进度：🧩 已并入（默认 off；本机缺 `rapidocr_onnxruntime` ⇒ auto 会告警回退、on 会报错）**\n第八轮 + 第十轮：可选 PP-OCR 名称识别器（`pin_name_ocr.py` 229 行，包内含 `ch_PP-OCRv4_rec_infer.onnx` 并校验 SHA256，只加载识别模型）与黑白引脚通道（`mono_pin_reading.py` 242 行 / `mono_pin_crops.py` 250 行，两种固定白边视图必须一致才确认）。\n\n★ 它换的是**引脚文字识别器**，不是交付 CRNN：我们的交付 OCR 权重仍是 `ocr_mix`（这条不动）。要真跑得先 `python -m pip install -r requirements.pin-name-ocr.txt`（允许联网，见 `docs/COMPETITION_RULES.md:176`）。\n\n★ 2026-10-16（5.30）：本机无 `rapidocr-onnxruntime` ⇒ `STAGE2_PIN_NAME_OCR=auto` 告警回退、`STAGE2_PIN_NUMBER_REPAIR=1` 实测为 **no-op**（71.65 与全关逐点相同）。",
    "code": "stage2/pin_name_ocr.py:get_pin_name_ocr"
   }
  ],
