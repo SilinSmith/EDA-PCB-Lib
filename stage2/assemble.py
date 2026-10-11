@@ -222,7 +222,25 @@ BOX_PIN_DROP_CAP = _DROP_MODE in ("cap", "max", "ceiling")
 #     （case 2），能补出号的只有 3 条 ⇒ 这条通道的本质收益就是「把库能认的那几根脚救回来」。
 _BOX_NEED_NAME_MODE = os.environ.get("STAGE2_BOX_PIN_NEED_NAME", "2").strip().lower()
 BOX_PIN_NEED_NAME = _BOX_NEED_NAME_MODE not in ("", "0", "false", "off", "none")
-BOX_PIN_NEED_NAME_LATE = _BOX_NEED_NAME_MODE in ("2", "late", "lib", "after")
+# ★ 模式 `3` **也必须在「迟到」组里**：`:1335` 的早闸门是「非 LATE 且没名字 ⇒ 丢」，
+#   若 3 不置 LATE，桩在早闸门就被丢了、根本走不到下面那条被放宽的迟到闸门
+#   （实测：`STAGE2_BOX_PIN_NEED_NAME=3` 若 LATE=False，官方 10 张一根脚都不多）。
+BOX_PIN_NEED_NAME_LATE = _BOX_NEED_NAME_MODE in ("2", "late", "lib", "after",
+                                                 "3", "kept", "readnum")
+# ★★★ 模式 `3`（`kept`/`readnum`）：**只丢「连号都不是读出来的」那些桩**。
+#     病：交付档里还留着一批「号读对了、名字没读到、库也补不出名」的桩被迟到闸门丢掉
+#     （官方 10 张实测 13 条 `pin.missing`，例如 case 2 `U3` 槽 4 号 '3' 无名、
+#     case 6 `U2`/`U4` 槽 1 名 'OUT' 无号、case 7 `U1` 槽 9 名 'N' 无号）。
+#     它们**同时**是 netH 的缺成员（`_netloss.py` 的 ②a 12 条）—— 丢掉等于引脚通道记一个
+#     `fn`、网络通道再丢一个真成员。发出去：引脚通道变成 `name_mismatch`（fp+fn，
+#     与「不发」在 tp+fp+fn 上完全同值，见 `metrics.py:475-476`），网络通道白赚一个成员。
+#     位置补出来的号（`kept=False`）仍然丢 —— 那是「假引脚塞进网络」的来源。
+# ★ 实测判负（离线 `work\_libslot.py --mode 0` + 官方 10 张，同批对照）：`3` 让引脚
+#   597→599、`pin.missing` 13→11、`pin.name_mismatch` 10→**12**、`net.pred_pins` 365→367、
+#   `net.soft_tp` 124.59→**124.92**（真成员确实进来了），但**总分 79.1526→78.9533（−0.1993）**
+#   —— 引脚通道 `name_mismatch`=fp+fn（与「不发」同值再加一个 fp），且多出 1 张 pred 网
+#   本身就是纯 fp。⇒ **默认仍是 `2`，模式 3 只作为已量过的备选留档**（别再默认打开）。
+_BOX_NEED_NAME_KEEPREAD = _BOX_NEED_NAME_MODE in ("3", "kept", "readnum")
 
 # ★ 官方元器件库（`cpntLibrary`）引脚先验的**总闸**：`STAGE2_LIB_PINS`，**默认 `1`（开）**。
 # ★★ 默认值在 2026-10-09 **从 `0` 翻成 `1`**，依据是 220 张回归（`work\tools\diag\_libpins_cpu.py`
@@ -542,6 +560,11 @@ def snap_edge_ends(nets: Dict[str, dict], radius: float = None,
 EDGE_SPLIT = float(os.environ.get("STAGE2_EDGE_SPLIT", "3.0"))    # 切点容差 px，0 = 关
 EDGE_SPLIT_COL = float(os.environ.get("STAGE2_EDGE_SPLIT_COL", "0.90"))  # 共线邻居不算切点
 EDGE_DEDUP = float(os.environ.get("STAGE2_EDGE_DEDUP", "2.0"))    # 去重容差 px，0 = 关
+# ★ 第二遍去重（**切分之后**再跑一次）：切分会把两条只部分重合的长边切成同一批小段，
+#   于是同一张网里留下几何一模一样的两条边 —— 第一遍必须在切分前跑（共线孪生不能当
+#   切点），所以这批残渣只能在切分后清。0 = 关。官方 10 张：875 条边、net_line
+#   0.3862 → 0.3993（tp 311 → 311、fp 610 → 564），总分 79.3735 → 79.5042（+0.1307）。
+EDGE_DEDUP2 = float(os.environ.get("STAGE2_EDGE_DEDUP2", "2.0"))  # 第二遍去重容差 px，0 = 关
 
 
 def _seg_ends(seg):
@@ -575,12 +598,14 @@ def _cut_point(p, a, b, tol: float):
 
 def split_dedup_edges(nets: Dict[str, dict], split_tol: float = None,
                       dedup_tol: float = None,
-                      col_tol: float = None) -> Dict[str, int]:
-    """就地做「去重 + 结点切分」（见上面长注释），返回 {dup, split, added} 计数。"""
+                      col_tol: float = None,
+                      dedup2_tol: float = None) -> Dict[str, int]:
+    """就地做「去重 + 结点切分 + 再去重」（见上面长注释），返回 {dup, dup2, split, added}。"""
     split_tol = EDGE_SPLIT if split_tol is None else split_tol
     dedup_tol = EDGE_DEDUP if dedup_tol is None else dedup_tol
     col_tol = EDGE_SPLIT_COL if col_tol is None else col_tol
-    st = {"dup": 0, "split": 0, "added": 0}
+    dedup2_tol = EDGE_DEDUP2 if dedup2_tol is None else dedup2_tol
+    st = {"dup": 0, "dup2": 0, "split": 0, "added": 0}
     for rec in nets.values():
         edges = rec.get("edges") or {}
         segs = []                      # [(a, b, 原值)]
@@ -590,7 +615,7 @@ def split_dedup_edges(nets: Dict[str, dict], split_tol: float = None,
                 segs.append((e[0], e[1], _v))
         if not segs:
             continue
-        st0 = (st["dup"], st["split"])
+        st0 = (st["dup"], st["split"], st["dup2"])
         # —— ① 去重：两端点（正反皆算）都与已保留的某条重合就丢
         kept: List[tuple] = []
         if dedup_tol > 0:
@@ -644,7 +669,32 @@ def split_dedup_edges(nets: Dict[str, dict], split_tol: float = None,
                     out.append((chain[i], chain[i + 1], None))
         else:
             out = list(kept)
-        if st["dup"] == st0[0] and st["split"] == st0[1] and len(out) == len(segs):
+        # —— ③ 第二遍去重：切分本身会造出新的重合边。
+        #    两条只部分重合的长边（第一遍去不掉）在同一批切点上会被切成同一批小段，
+        #    于是同一张网里留下几何完全一样的两条边。第一遍去重必须跑在切分**之前**
+        #    （共线孪生邻居不能当切点），所以这批残渣只能在这里清。
+        #    ★ 安全性：同一张网内的配对是一对一的，两条重合边不可能都配上同一条 GT 边，
+        #      丢掉其中一条不可能丢 tp —— 官方 10 张实测 tp 311 → 311，fp 610 → 564
+        #      （总分 79.3735 → 79.5042，+0.1307）。
+        if dedup2_tol > 0 and len(out) > 1:
+            _kept2: List[tuple] = []
+            _out2: List[tuple] = []
+            for (a, b, _v) in out:
+                dup = False
+                for (c, d, _w) in _kept2:
+                    if (_pt_close(a, c, dedup2_tol) and _pt_close(b, d, dedup2_tol)) or \
+                       (_pt_close(a, d, dedup2_tol) and _pt_close(b, c, dedup2_tol)):
+                        dup = True
+                        break
+                if dup:
+                    st["dup2"] += 1
+                else:
+                    _kept2.append((a, b, _v))
+                    _out2.append((a, b, _v))
+            if st["dup2"]:
+                out = _out2
+        if (st["dup"] == st0[0] and st["split"] == st0[1]
+                and st["dup2"] == st0[2] and len(out) == len(segs)):
             continue                   # 这一条网没动过 ⇒ 原值原样留着
         _new = {}
         for i, (p0, p1, _v) in enumerate(out, 1):
@@ -1322,7 +1372,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             #     而是要求「有名字 —— 读到的或库里补的都算」；仍然**不**发射
             #     「拿号当名」的桩，因为号≠名必然 `name_mismatch` = fp+fn 双罚。
             if (ctype == "box" and BOX_PIN_NEED_NAME and BOX_PIN_NEED_NAME_LATE
-                    and not r.get("nm") and not _lib_named):
+                    and not r.get("nm") and not _lib_named
+                    and (not _BOX_NEED_NAME_KEEPREAD or not r.get("kept", True))):
                 if os.environ.get("STAGE2_DBG_PINS") or LIB_PINS_DBG:
                     print("[libpins] 迟到闸门 元件=%r 号=%s（号读到了、名没有、库也没补出）→ 丢"
                           % (name, num))
@@ -1481,8 +1532,9 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 continue
             _kept["net_%d" % (len(_kept) + 1)] = _v
         out_nets = _kept
-    if EDGE_SPLIT > 0 or EDGE_DEDUP > 0:
-        # ★ 边的「去重 + 结点切分」（`STAGE2_EDGE_SPLIT` / `STAGE2_EDGE_DEDUP`，见长注释）。
+    if EDGE_SPLIT > 0 or EDGE_DEDUP > 0 or EDGE_DEDUP2 > 0:
+        # ★ 边的「去重 + 结点切分 + 再去重」（`STAGE2_EDGE_SPLIT` / `STAGE2_EDGE_DEDUP` /
+        #   `STAGE2_EDGE_DEDUP2`，见长注释）。
         # 必须放在**全部合并/焊接之后**：这时每条网里的边才齐，切点才找得全。
         # 只动 `edges`（首尾两点），`hyperGraph`/引脚一律不碰 ⇒ 元件/引脚/netH 通道逐位不变。
         split_dedup_edges(out_nets)
@@ -1839,6 +1891,26 @@ def _selftest() -> int:
                      (40.0, 50.0, 100.0, 50.0)], "切分后的边集合: %r" % (_pts,))
         chk(all(len(e) == 2 for e in _t["net_1"]["edges"].values()),
             "切出来的每条边只留两个点")
+
+    # ★ 第二遍去重（`STAGE2_EDGE_DEDUP2`）：两条**部分重合**的长边（第一遍去不掉，
+    #   因为端点不同）在同一批切点上会被切成同一批小段 ⇒ 切分后必须再去一次重。
+    #   夹具：短母线 (0,50)-(100,50) + 长母线 (0,50)-(140,50) + 抽头 (100,50)-(100,80)
+    #   + 反向重复边 (100,50)-(0,50) ⇒ 去重 1（第一遍）、切分 1（长母线在抽头处断开）、
+    #   再去重 1（两条短母线小段重合），最后剩 3 条边。
+    _t2 = {"net_1": {"edges": {
+        "edge_1": [{"x": 0.0, "y": 50.0}, {"x": 100.0, "y": 50.0}],
+        "edge_2": [{"x": 0.0, "y": 50.0}, {"x": 140.0, "y": 50.0}],
+        "edge_3": [{"x": 100.0, "y": 50.0}, {"x": 100.0, "y": 80.0}],
+        "edge_4": [{"x": 100.0, "y": 50.0}, {"x": 0.0, "y": 50.0}],
+    }}}
+    _st2 = split_dedup_edges(_t2)
+    if EDGE_SPLIT > 0 and EDGE_DEDUP > 0 and EDGE_DEDUP2 > 0:
+        chk(_st2["dup"] == 1 and _st2["split"] == 1 and _st2["dup2"] == 1,
+            "第二遍去重计数: %r" % (_st2,))
+        _pts2 = sorted((e[0]["x"], e[0]["y"], e[1]["x"], e[1]["y"])
+                       for e in _t2["net_1"]["edges"].values())
+        chk(_pts2 == [(0.0, 50.0, 100.0, 50.0), (100.0, 50.0, 100.0, 80.0),
+                      (100.0, 50.0, 140.0, 50.0)], "再去重后的边集合: %r" % (_pts2,))
 
     # 网络标签合并：两条 net 贴同名标签 -> 并成一条
     merged = merge_by_label({
