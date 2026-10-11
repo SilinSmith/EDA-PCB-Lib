@@ -49,6 +49,50 @@ _MONO_TEXT_SOURCES = frozenset(("mono_pin_name_ppocr", "mono_pin_number_ppocr"))
 # 模块的 `_target_index` 用，也方便离线探针复查。不参与返回签名。
 LAST_PIN_EVIDENCE: Dict[str, List] = {}
 
+# ★ 队友分支 `codex/improve-pin-network-parsing` 的「同框多角色一致票」读法
+#   （`stage2/assign.py:573`）。他们默认 1；我们**先默认 0**（要 A/B 后才谈默认值，
+#   用户 m40034 的规矩：改了识别逻辑必须 A/B）。
+#   语义：5 个识别角色（CRNN 的多路读法）里 **>=3 个**读出同一个数字串才叫一致；
+#   只有「原读法置信度 < 0.6」这种**不定**情形才允许用一致票改写，且要求位数相同
+#   （绝不靠「图纸顺序」推断数字）。作用域只在**引脚号**这一路。
+PINNUM_CONSENSUS = env_on("STAGE2_PINNUM_CONSENSUS", "0")
+
+
+def _best_number_read(reads: Dict[str, Tuple[str, float]], fresh_color: bool = False):
+    """Use stronger same-box agreement only for an uncertain numeric glyph.
+
+    ★ 逐字并入队友实现（`codex/improve-pin-network-parsing:stage2/assign.py:573`），
+    `fresh_color` 参数保留但我们的默认路径不传（那一路要彩色读数语料）。
+    """
+    original = _best_read(reads, "pin_number", fit_pinnum)
+    if not PINNUM_CONSENSUS or original is None:
+        return original
+    groups = {}
+    for txt, conf in reads.values():
+        if txt.isdigit() and fit_pinnum(txt) > 0:
+            groups.setdefault(txt, []).append(float(conf))
+    # Three agreeing role reads are a majority of the five recognizer roles.
+    supported = [(max(cs), txt) for txt, cs in groups.items() if len(cs) >= 3]
+    if not supported:
+        return original
+    conf, txt = max(supported)
+    if original[2] >= 0.6:
+        # Role probabilities are not correctness guarantees. Revisit a strong
+        # short read only when three strong reads of this same glyph agree on
+        # its unshortened digits. Never infer a number from drawing order.
+        cs = groups[txt]
+        if not (fresh_color and len(txt) > len(original[1])
+                and len([v for v in cs if v >= 0.85]) >= 3
+                and 1 <= int(txt) <= 999):
+            return original
+        fit = fit_pinnum(txt)
+        return fit * (0.3 + 0.7 * conf), txt, conf, fit
+    if txt == original[1] or conf <= original[2] or len(txt) != len(original[1]):
+        return original
+    fit = fit_pinnum(txt)
+    score = fit * (0.3 + 0.7 * max(0.0, min(1.0, conf)))
+    return score, txt, conf, fit
+
 
 def _same_image_point(value, expected):
     try:
@@ -1493,7 +1537,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     continue
                 if (not want_inside) and (t["inside"] or t["d"] > _dlim):
                     continue
-                got = _best_read(t["reads"], role, fit_fn)
+                got = (_best_number_read(t["reads"]) if (slot == "number" and PINNUM_CONSENSUS)
+                       else _best_read(t["reads"], role, fit_fn))
                 if not got:
                     continue
                 s, txt, conf, f = got
