@@ -3585,7 +3585,8 @@ ok 93 / **pos_far 25** / absent 12 / name_diff 6（`work/_pinfar.py` 逐脚摊�
    **case 7 `U1`（GT 13 / 引线 18px）、case 9 `U2`（GT 9 / 红段 41px）、case 5 `U1`（GT 9 / 红段 38px）的 GT 点
    都落在引线内部**，图像上没有任何可测信号标出它。把量距单位修对（`L = 我方离框边距离 + d`，首版把 d 误当
    从框边量、重复扣了 12px ⇒ 假读数 0.5019）后重跑：**F1 0.7072 → 0.1977**（逐案 c2 0.9677→0、c10 0.8696→0.087）。
-   ⇒ 默认 `12` 保持，`docs/KNOBS.md` 不动。
+   ⇒ 默认 `12` 保持，`docs/KNOBS.md` 不动。（`work/_pincolscan.py` 把这套量法推广到全部 **136 个 box 脚**：
+   `|L_meas − L_gt|` 均 **12.13**px、落在 5px 内只 **15.4%**；对照「恒 12」均 **3.56**px ⇒ 同一结论。）
 
 **三、并网成员的 125 条缺口归因（`work/_netgap.py`）**
 
@@ -3610,6 +3611,91 @@ python -X utf8 ..\work\_ceiling.py --set official --collapse 1     &rem 官方 Q
 python -X utf8 ..\work\_pinled.py defconfirm ..\work\_cases10gt.txt &rem 逐案 tp/fp/fn + 失败原因
 python -X utf8 ..\work\_pinmap.py 7 945 336 1015 350               &rem 引脚邻域颜色字符图（人眼判几何）
 python -X utf8 ..\work\_netgap.py defconfirm ..\work\_cases10gt.txt &rem 网成员缺口分类
+```
+
+### 5.34 ★ 导线通道逐边归因 + 自由端回缩 `STAGE2_EDGE_TRIM` 转正 + 折叠口径下的网成员缺口（2026-10-17，用户 m57955「优化」）
+
+§5.33 的梯子指出交付口径三大块丢分 = 引脚 6.37 / 网络 7.58 / 导线 6.37；引脚位置四条修法已全部判负，
+本节处理**导线**，并顺带把网络成员缺口在**官方 QA 口径**下重新归因。
+
+**一、导线通道逐边归因（`tools/dev/_linegap.py`）**
+
+用法坑：`--dir` 要传**臂目录**（脚本自己拼 `final_results`），`--cases` 是**逗号列表**不是文件：
+
+```bat
+python -X utf8 ..\work\tools\dev\_linegap.py --dir ..\work\_fast_out_defconfirm --cases 1,10,2,3,4,5,6,7,8,9 --all
+```
+
+官方 10：**GT 边 639 / 我方边 874 | tp 312、fp 557、fn 327**（≈ 梯子里的导线 F1 0.40）。被 5px 端点门挡掉的
+近失距离桶：`5–10px: 184`、`10–20px: 86`、`20–50px: 20`、`>50px: 22`；874 条 fp 里「有近失候选、只差一点」
+**312** 条，「连近失候选都没有」**250** 条（多出来的碎段/长段）。两个机制：
+
+1. **我方边系统性比 GT 长 5~10px**（我方跟到渲染墨迹末端，GT 是源图连接点）；典型
+   `GT (1336,1029)->(1432,1029)` len 96 vs 我方 `(1326,1028.8)->(1431,1029)` len 105；case 1 一条轨右端恒多 5.0~5.1px，
+   **刚好卡在门外**。
+2. **GT 在每个结点切分，我们把共线段合并**：GT `(1432,999)->(1432,970)`、`(1432,970)->(1432,941)` 两条 29/30，
+   我方合成一条 57.1 ⇒ 一条对两条必然 1 fn + 1 fp。现有 `split_dedup_edges` 的 `STAGE2_EDGE_SPLIT_COL=0.90`
+   **明确把共线邻居排除在切点之外**，正是这个差别（本轮未动这条，见下）。
+
+**二、自由端回缩 `STAGE2_EDGE_TRIM`（默认 `3.0`，转正）**
+
+离线扫描（`work/_wiretrim.py`，把每条边的端点按结点/贴引脚判据分类后整体回缩再重打分）：
+
+| 作用范围 | 官方 10 d=0 | d=2 | d=3 | d=4 | d=5 | d=6 | 派生 19（d=3） |
+|---|---|---|---|---|---|---|---|
+| `free`（只动自由端） | 79.14 | 79.30 | **79.30** | 79.03 | 78.84 | 78.72 | 31.08（d=0 30.96） |
+| `pin`（只动贴引脚端） | — | 79.22 | 79.15 | — | — | — | 30.99 |
+| `all`（两端都动） | — | 79.11 | — | 77.96 | — | — | 31.00 |
+
+⇒ 3px 是拐点、≥4 开始把对的边也拉歪；**必须只动自由端**（原点在端点、朝内、长度要求 `L > delta + 1`）。
+
+实装（`eda-pcb/stage2/assemble.py`）：`EDGE_TRIM = float(os.environ.get("STAGE2_EDGE_TRIM", "3.0"))` +
+`def trim_free_ends(nets, delta=None, jtol=3.0) -> {"trim": n}`，调用点紧跟 `split_dedup_edges(out_nets)` 之后
+（必须在切分/去重之后，结点是那一步才定下来的）。「自由端」= 同网内没有别的边的端点贴在此点（`_pt_close`）
+**且**没有别的边的内部穿过此点（`_cut_point`）。
+
+端到端 A/B（官方 10、VLM 开、`fast.py` protocol2 均值；控制臂逐字节校验）：
+
+| 臂 | `STAGE2_EDGE_TRIM` | 总分 | 元件 | 引脚 | 网络 | 导线 |
+|---|---|---|---|---|---|---|
+| `trim0`（控制） | 0 | **79.14** | 0.9819 | 0.7452 | 0.7728 | 0.4008 |
+| `trimdef`（第一次） | 3 | 79.66 | 0.9819 | 0.7633 | 0.7706 | 0.4147 |
+| `trimdef2`（复核） | 3 | **79.30** | 0.9819 | 0.7452 | 0.7728 | **0.4162** |
+| `trimv0`（派生 19、控制） | 0 | 31.03 | 0.5849 | 0.1704 | 0.2428 | 0.0729 |
+| `trimv`（派生 19） | 3 | **31.10** | 0.5862 | 0.1704 | 0.2402 | **0.0847** |
+
+* `trim0` vs 旧基线 `defconfirm`：**11 文件逐字节相同 10**（只差 `run.log`）⇒ 关掉时零差异，控制有效。
+* `trimdef` 第一次的引脚 0.7633 **不可复现**（复核回到 0.7452）⇒ 那是 VLM 阶段的运气；**可归因的真实收益 =
+  导线通道 +0.0154 F1 ≈ +0.154 分**（且与离线扫描预测的 0.4162 逐位一致）。
+* ⚠ **run-to-run 抖动 ≈ ±0.2**：同配置两次跑出 79.66 / 79.30；派生 19 的管线**不是逐字节确定的**
+  （`trimv0` vs 基线 `cfv`：20 文件相同 9 / 不同 11，差的正是 VLM 阶段），val 侧 ±0.1 的差值不可当真。
+  `_judge.py` 在 val 用例 id 上会 `ZeroDivisionError`（`work/_judge.py:108`），val 只用 `fast.py` 均值。
+
+**三、折叠口径下的网成员缺口（`tools/dev/_netmiss.py --net-pin-collapse 1`）**
+
+官方 10：GT 成员 487 / 我方 366、tp 349、**fn 138（28.34%）**；分类 **`no_pin` 11 / `other` 14 / `unnet` 113**
+（box 成员只有 `no_pin` 11 / `other` 3 / `unnet` 1）。折叠口径下缺口主体变成
+**`unnet` = 脚 emit 了但没进任何网**——正是电源/地符号那批（`p009…p025`）。这**不是 bug 而是标定过的设计**：
+
+* `eda-pcb/stage2/assemble.py:332` `NET_DROP_UNKEYED = env_on("STAGE2_NET_DROP_UNKEYED","1")` 把兜底键 `pNNN`
+  的引用从 hyperGraph 剪掉；**官方标定尺**（bbox20 / ∅坐标匹配 / 只算 box 引脚 / 软 Dice / refs 字面比）：
+  `=0` **73.4368** → `=1` **76.2000（+2.76，netH 0.6338→0.7162）**。
+* 机理：`∅NNN` 是渲染器随机生成的内部脚号，坐标匹配后**键能对上、脚号永远对不上**，把它加进 hyperGraph
+  只增大 |P| 拉低 Dice。**同一批产物在旧折叠口径上是 −4.42（符号反转）** ⇒ 口径选错会把结论带反。
+* 配套：`NET_DROP_PWRONLY=1`(:343) 丢「只有电源符号的孤网」（+1.4383）、`STAGE2_SYM_MERGE=0`(:360，默认关)
+  合并电源符号净亏 −0.104。
+* ⇒ **交付口径下网络失分不在「成员表」而在网↔网的一对一配对**（`_netoracle.py` 上界：全部引脚引用求交
+  tp 上限 299 / 实际 190 ⇒ 109 个 tp 丢在分组，pred 304 条网 vs GT 160 条）。
+
+**四、复现**
+
+```bat
+cd eda-pcb
+python -X utf8 ..\work\tools\dev\_linegap.py --dir ..\work\_fast_out_defconfirm --cases 1,10,2,3,4,5,6,7,8,9 --all
+python -X utf8 ..\work\_wiretrim.py defconfirm ..\work\_cases10gt.txt 0,2,3,4,5,6   &rem 离线回缩扫描
+powershell -NoProfile -ExecutionPolicy Bypass -File ..\work\_trim_ab.ps1          &rem 四臂 A/B（约 20 min）
+python -X utf8 ..\work\tools\dev\_netmiss.py --run ..\work\_fast_out_defconfirm --cases 1,10,2,3,4,5,6,7,8,9 --net-pin-collapse 1
+python -X utf8 ..\work\_pincolscan.py 1,10,2,3,4,5,6,7,8,9                          &rem 引脚落点第四条修法（判负）
 ```
 
 ---

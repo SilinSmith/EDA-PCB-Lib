@@ -6,12 +6,12 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **431** 个开关。
+共 **432** 个开关。
 
 ## 目录
 
 - [stage1](#stage1)（134）
-- [stage2](#stage2)（129）
+- [stage2](#stage2)（130）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（115）
 - [vlm](#vlm)（12）
@@ -188,7 +188,7 @@
 | `STAGE2_CONFORM_TYPE_PEN` | `"0.85"` | `stage2/assign.py:551` |
 | `STAGE2_CPNT_LIB` | `""` | `stage2/libpins.py:90` |
 | `STAGE2_DBG_CID` | — | `stage2/assign.py:220` |
-| `STAGE2_DBG_PINS` | — *(4 处)* | `stage2/assemble.py:1286` |
+| `STAGE2_DBG_PINS` | — *(4 处)* | `stage2/assemble.py:1359` |
 | `STAGE2_DEMOTE_HARD` | `"0.05"` | `stage2/structmatch.py:36` |
 | `STAGE2_DESIG_MAXW` | `"6.0"` | `stage2/assign.py:342` |
 | `STAGE2_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:76` |
@@ -201,6 +201,7 @@
 | `STAGE2_EDGE_SNAP_ANG` | `"45.0"` | `stage2/assemble.py:486` |
 | `STAGE2_EDGE_SPLIT` | `"3.0"` | `stage2/assemble.py:578` |
 | `STAGE2_EDGE_SPLIT_COL` | `"0.90"` | `stage2/assemble.py:579` |
+| `STAGE2_EDGE_TRIM` | `"3.0"` | `stage2/assemble.py:610` |
 | `STAGE2_FREE_STEAL` | `"1"` | `stage2/assign.py:400` |
 | `STAGE2_GLOBAL_MATCH` | `"0"` | `stage2/assign.py:1141` |
 | `STAGE2_GROW_MIN` | `"0.9"` | `stage2/run.py:38` |
@@ -277,15 +278,15 @@
 | `STAGE2_PIN_NUMBER_REPAIR` | `"0"` | `stage2/run.py:79` |
 | `STAGE2_PIN_RESIDUAL` | `"0"` | `stage2/assign.py:364` |
 | `STAGE2_PIN_RESIDUAL_MIN` | `"0"` | `stage2/assign.py:365` |
-| `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:800` |
+| `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:873` |
 | `STAGE2_PIN_STUB_MERGE` | `"12"` | `stage2/assign.py:304` |
 | `STAGE2_PIN_TEXT_CROP` | `"0"` | `stage2/run.py:74` |
 | `STAGE2_PIN_TRUST_DROP` | `""` | `stage2/run.py:94` |
 | `STAGE2_PREFIX` | `"strict"` | `stage2/assign.py:156` |
 | `STAGE2_PREFIX_SKEL` | `"0"` | `stage2/assign.py:166` |
-| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1575` |
-| `STAGE2_RAIL_SPLIT` | `"1"` | `stage2/assemble.py:1586` |
-| `STAGE2_STAMP_ONE_SIDE` | `"1"` | `stage2/assemble.py:816` |
+| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1652` |
+| `STAGE2_RAIL_SPLIT` | `"1"` | `stage2/assemble.py:1663` |
+| `STAGE2_STAMP_ONE_SIDE` | `"1"` | `stage2/assemble.py:889` |
 | `STAGE2_STEAL` | `"80"` | `stage2/assign.py:398` |
 | `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:366` |
 | `STAGE2_TIGHT_ROLES` | `"pin_number,pin_name"` | `stage2/text.py:129` |

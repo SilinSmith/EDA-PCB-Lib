@@ -584,6 +584,31 @@ EDGE_DEDUP = float(os.environ.get("STAGE2_EDGE_DEDUP", "2.0"))    # 去重容差
 #   0.3862 → 0.3993（tp 311 → 311、fp 610 → 564），总分 79.3735 → 79.5042（+0.1307）。
 EDGE_DEDUP2 = float(os.environ.get("STAGE2_EDGE_DEDUP2", "2.0"))  # 第二遍去重容差 px，0 = 关
 
+# ★★ 自由端回缩（`STAGE2_EDGE_TRIM`，默认 3.0 px，0 = 关）。
+#
+# 病（上面第 ③ 条「端点系统性过冲 ~5px」的量化，`work\_wiretrim.py` / `_linegap.py`）：
+#   官方 10 张、交付口径：GT 边 639 / 我方边 874，tp 312 / fp 562 / fn 327（导线 F1 0.4008）；
+#   被 5px 门挡掉的近失里 **5~10px 桶有 184 条**，逐例看就是「我方比 GT 多伸出去一点」
+#   （GT(843,911)->(944,911) len 101 vs 我方 (949,910.8)->(843,910) len 106 —— 左端到点，
+#   右端多 5px，d=5.0 刚好卡在门外；`STAGE1_PIN_OUT_BOX` 恒 12 与 GT 逐案逐侧的外伸不同）。
+#
+# 药：只把**自由端**（同网内没有别的边贴在这个端点上；结点/共线接缝一律不动）沿边方向
+#   朝内回缩 delta px。离线扫描（`python -X utf8 work\_wiretrim.py defconfirm work\_cases10gt.txt 0,2,3,4,5`）：
+#     官方 10：d=0 **79.1419**（导线 0.4008，tp/fp/fn 312/562/327）
+#              d=2 **79.2969**（0.4163，325/549/314）· d=3 **79.2965**（0.4162，323/551/316）
+#              d=4 79.0255 · d=5 78.8356 · d=6 78.7179 ⇒ **3 是拐点，≥4 开始把对的也拉歪**
+#     派生 19（臂 cfv，`work/_cases_v4val.txt`）：d=0 30.9589 → d=2 31.0290 → d=3 **31.0784**
+#   「所有端」一律回缩在官方 10 上大亏（d=2 79.1148 / d=4 77.9591）⇒ 必须只动自由端。
+# 只动 `edges` 首尾两点 ⇒ 元件/引脚/netH 三个通道逐位不变（与上面的切分/去重同性质）。
+#
+# ★ 端到端 A/B（`work\_trim_ab.ps1`，官方 10 张、VLM 开、`fast.py` 的 protocol2 均值）：
+#   `STAGE2_EDGE_TRIM=0` **79.14**（导线 0.4008）＝ 旧基线逐字节相同（11 文件同 10、只差 run.log）
+#   `STAGE2_EDGE_TRIM=3` **79.30**（导线 **0.4162**）· 同配置第二次 79.66（那次的引脚 0.7633 是
+#   VLM 阶段的运气，第三次复核回落 0.7452）⇒ **可归因的是导线通道 +0.0154 F1 = +0.154 分**，
+#   总分的 run-to-run 抖动 ±0.2 来自 VLM 阶段（`trim0` 与 `defconfirm` 逐字节相同 → 关掉时零差异）。
+#   派生 19 张（臂 `cfv`/`trimv0`/`trimv`）：导线 0.0727/0.0729 → **0.0847**（+0.12 分，方向同）。
+EDGE_TRIM = float(os.environ.get("STAGE2_EDGE_TRIM", "3.0"))  # 自由端回缩 px，0 = 关
+
 
 def _seg_ends(seg):
     """一条边的 (首点, 尾点) 坐标元组；不合法返回 None。"""
@@ -721,6 +746,54 @@ def split_dedup_edges(nets: Dict[str, dict], split_tol: float = None,
             else:
                 _new["edge_%d" % i] = [{"x": round(p0[0], 2), "y": round(p0[1], 2)},
                                        {"x": round(p1[0], 2), "y": round(p1[1], 2)}]
+        rec["edges"] = _new
+    return st
+
+
+def trim_free_ends(nets: Dict[str, dict], delta: float = None,
+                   jtol: float = 3.0) -> Dict[str, int]:
+    """把导线边的**自由端**沿边方向朝内回缩 `delta` px（见上面长注释）。
+
+    自由端 = 同一条网里没有别的边的端点贴在这个点上、也没有别的边的内部穿过它
+    （即不是结点/接缝）。返回 {"trim": 回缩的端点数}。
+    """
+    delta = EDGE_TRIM if delta is None else delta
+    st = {"trim": 0}
+    if delta <= 0:
+        return st
+    for rec in nets.values():
+        edges = rec.get("edges") or {}
+        segs = []
+        for _k, _v in edges.items():
+            e = _seg_ends(_v)
+            if e is not None:
+                segs.append((e[0], e[1]))
+        if not segs:
+            continue
+        out: List[tuple] = []
+        for i, (a, b) in enumerate(segs):
+            new = []
+            for (p, q) in ((a, b), (b, a)):
+                junc = False
+                for j, (c, d) in enumerate(segs):
+                    if j == i:
+                        continue
+                    if (_pt_close(p, c, jtol) or _pt_close(p, d, jtol)
+                            or _cut_point(p, c, d, jtol)):
+                        junc = True
+                        break
+                L = math.hypot(q[0] - p[0], q[1] - p[1])
+                if (not junc) and L > delta + 1.0:
+                    ux, uy = (q[0] - p[0]) / L, (q[1] - p[1]) / L
+                    new.append((p[0] + ux * delta, p[1] + uy * delta))
+                    st["trim"] += 1
+                else:
+                    new.append(p)
+            out.append((new[0], new[1]))
+        _new = {}
+        for i, (p0, p1) in enumerate(out, 1):
+            _new["edge_%d" % i] = [{"x": round(p0[0], 2), "y": round(p0[1], 2)},
+                                   {"x": round(p1[0], 2), "y": round(p1[1], 2)}]
         rec["edges"] = _new
     return st
 
@@ -1561,6 +1634,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # 必须放在**全部合并/焊接之后**：这时每条网里的边才齐，切点才找得全。
         # 只动 `edges`（首尾两点），`hyperGraph`/引脚一律不碰 ⇒ 元件/引脚/netH 通道逐位不变。
         split_dedup_edges(out_nets)
+    if EDGE_TRIM > 0:
+        # ★ 自由端回缩（`STAGE2_EDGE_TRIM`，默认 3.0 px，见长注释）：必须在切分/去重
+        #   **之后**跑 —— 结点是在切分那一步才定下来的，先回缩会把结点也拉动。
+        trim_free_ends(out_nets)
     _pidx: Dict[str, Dict[str, str]] = {}
     for (_c, _k), _pk in pin_pk.items():
         _pidx.setdefault(_c, {})[str(_k)] = _pk
