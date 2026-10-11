@@ -3895,12 +3895,17 @@ python -X utf8 tools\eval\stage2_eval.py ..\work\_pinoracle_all --quiet
 
 **二、裁判看到的三件事（`work\_judgereport.py` 汇总）**
 
-1. ★★ **引脚号根本不是问题**：`pin_number_accuracy_on_matched = 1.000`（**10/10 案**），脚名 0.789~0.964 才是。
+1. ⚠️ **更正（见 §5.39）**：`pin_number_accuracy_on_matched = 1.000`（**10/10 案**）是**废话指标** ——
+   判题机的引脚匹配**本身就要求** `pin_<号>` 相等，它只说「配上的那些脚号当然相等」，**不能**读成
+   「脚号读数没问题」。脚号在这份报告里的真地址是 `pin.id_f1`（同键同号即 tp，忽略脚名与点距）：
+   合计 tp 293 / fp 248 / fn 201 = **0.5662**，可达上限 **0.8773**（GT 脚 494 里有 108 个属于 `∅NNN`
+   元件，键精确口径下永远拿不到）⇒ 交付口径上脚号**还有 ~0.19 id_f1（≈ +4.8 分）**的空间，
+   而且失分主因是**元件键错**（243 个 id-fp 落在 GT 不存在的键上），不是读错数字（同批真读错只有 5 个）。
    错误样例计数：`pin:extra` 144｜`comp:missing` 115｜`comp:extra` 108｜`pin:missing` 94｜
    `pin:['tip_position']` 22｜`pin:['tip_position','pin_name']` 21｜`pin:['pin_name']` 16｜`comp:attribute_or_position_mismatch` 14；
    `pin.failed_checks`：**tip_position 43 / pin_name 37**；`tip_distance_px` 共 **293 条**（各案 mean 的均 5.36；case 8 最惨
    mean 20.42 / p95 100.74 / max 317.10，case 4 最好 1.68/4.10/6.12）。
-   ⇒ §5.35 里「引脚号上界 +2.95」只存在于**我们自己的派生尺子**；交付口径上这一项没有可赢的分，剩下的全是
+   ⇒ §5.35 里「引脚号上界 +2.95」只存在于**我们自己的派生尺子**；交付口径的引脚失分在
    **元件键（missing 115 + extra 108）+ 脚点位置（43）+ 脚名（37）+ 多余的脚（144）**。
 2. 连通性：只有 case 1 的 `unmapped_pred_pin_references = 18`（那次提交保留了 ∅ 引用），其余 9 案为 0；
    gt/pred 网络数 1:10/17｜2:24/14｜3:16/18｜4:14/14｜5:17/19｜6:22/25｜7:13/18｜8:18/15｜9:11/13｜10:15/18；
@@ -4052,6 +4057,151 @@ python -X utf8 ..\work\_offval.py --arms duvoff,duvon
 python -X utf8 ..\work\_pwrnum.py --cases 1,2
 python -X utf8 ..\work\_netcmp.py --cases 2
 python -X utf8 ..\work\_leadcol.py
+```
+
+---
+
+### 5.39 ★★★ VLM 臂的兜底键引脚**绕过**了「无名元件不发脚」的闸：判题机复刻尺 **+3.7401**（pin +0.1496），协议尺 **±0.0000**；随附 ⑪ 引用收尾（`FUSION_REF_PRUNE`）；同时更正 §5.37「脚号 100% 正确」的过度解读（2026-10-19，goal 第 3 轮）
+
+**一、先纠一个过度解读（上一节的 二.1）**
+
+`pin_number_accuracy_on_matched = 1.000`（10/10）是**废话指标**：判题机的引脚匹配判据里就写着
+`component key and pin_<number> exact`（§5.37 一 的 `protocol` 原文），配上的一对当然同号。
+脚号的真尺子是 `pin.id_f1`（同键 + 同号即 tp，忽略脚名与点距）：case 1 的 `f1` 是 tp 23/fp 50/fn 37 = **0.345865**，
+而 `id_f1` 是 tp 28/fp 45/fn 32 = **0.421053**。10 案合计：`f1` tp 234/fp 307/fn 260、`id_f1` tp 293/fp 248/fn 201
+（逐案 `f1/id_f1`：1 .3459/.4211｜2 .3711/.4330｜3 .5155/.6598｜4 .4130/.4783｜5 .3364/.4112｜6 .4286/.5429｜
+7 .5833/.7292｜8 .4889/.6889｜9 .5231/.6462｜10 .5763/.7288）——**号对但名或点错 59 条**（名错 16 / 点错 22）。
+工具：`work\_pinid.py`。
+
+**二、一把**已验证**的 id 层尺子（`work\_pinidset.py`）**
+
+纯集合算 `(同键, 同 pin_<号>)` 的 tp/fp/fn，并把它拆成「fp 落在 GT 也有的键上（= 号错/多出）」vs
+「fp 落在别的键上（= 键错）」、「fn 落在有名元件上（= 漏产）」vs「fn 落在 ∅ 上（= 不可达）」。
+**与判题机报告的 `id_f1` 10 案逐位相同**（tp 与 f1）：1 .4211/tp28、2 .4330/21、3 .6598/32、4 .4783/22、
+5 .4112/22、6 .5429/38、7 .7292/35、8 .6889/31、9 .6462/21、10 .7288/43。
+GT 脚总数 **494**，其中 **108** 个属于 `∅NNN` 元件（键精确口径下永远拿不到）⇒ **可达上限 id_f1 = 0.8773**。
+
+| 臂 | id tp/fp/fn | id_f1 | fp@已知键 | fp@别的键 | fn@有名件 | fn@∅ | 结论 |
+|---|---|---|---|---|---|---|---|
+| 2026-10-09 第 6 次提交 | 293/248/201 | 0.5662 | 5 | **243** | 93 | 108 | 键错是主因 |
+| `_fast_out_trimdef2`（交付臂，VLM 开） | 374/224/120 | **0.6850** | **3** | **221** | **12** | 108 | 号几乎不读错，缺的是键与漏产 |
+| `_fast_out_du10off`（`--no-vlm`） | 345/3/149 | **0.8195** | 3 | 0 | 41 | 108 | 同一套管线，只差 VLM |
+
+**三、根因：一行 `_unkeyed` 被上游「洗白」的位号绕过**
+
+`eda-pcb\stage2\assemble.py` 的 `build_doc` 里，`_unkeyed` 只在**兜底分支**里被置真
+（`if not key or key in components: … key = "p%03d" % i; _unkeyed = True`，:1240-1250 附近），
+而融合/求解层会把**已经发过的兜底键当成「读出来的位号」回填**：
+`assigned[cid]["designator"]["canon"] == "p012"`、`_by == "solve:vlm:enrich"`（`runs/fusion/_assigned/1.json`）。
+于是 `build_doc` 走的是 designator 分支、`_unkeyed` 保持 `False` ⇒ **:1289 的 `PIN_DROP_UNKEYED` 闸不触发**，
+`pNNN` 的合成脚号又回到交付文档里。逐阶段取证（case 1）：`runs/stage2/1.json` 里 `p012` 的引脚表**是空的**，
+`runs/fusion/1.json` 里变成 `pin_1/pin_2/pin_3`；8 个兜底键元件共 **25** 脚（`p018/p019` 各 4 脚、`p020` 2 脚）。
+官方 10 张合计：**兜底键元件框 110 个、脚 221 条、指向它们的 `hyperGraph` 引用 0 条**（`work\_undroppins.py`）。
+这 221 条在判题机 id 层**全是 fp**，而同批「真读错号」只有 3 条。
+
+**四、修法与 A/B（两把尺子 + 一条回归）**
+
+修法（`stage2/assemble.py`，新增开关 `STAGE2_PIN_DROP_LAUNDERED`，默认 1；`=0` 复现修复前行为）：
+
+```python
+elif PIN_DROP_LAUNDERED and FKEY_RE.match(str(key)):
+    _unkeyed = True      # 兜底键被上游回填 ⇒ 按键形状认回无名元件（判据同 metrics.is_unkeyed）
+```
+
+| 口径 | 修前 | 修后 | Δ |
+|---|---|---|---|
+| 判题机复刻尺（官方 10 张，`_offscore.py --engine official`）总分 | 61.7856 | **65.5257** | **+3.7401** |
+| …其中 `pin` | 0.596239 | **0.745844** | +0.1496 |
+| …其中 `comp` / `netH` / `netL` | 0.522323 / 0.772785 / 0.416246 | 逐位不变 | 0 |
+| `protocol2` 主尺（官方 10 张，`fast.py --engine protocol2`） | 79.30 | **79.30** | **±0.0000**（它只算 box 引脚） |
+| 派生 19 张（判题机复刻尺，池 GT，`_offval.py`，n=18） | 18.2511（`pinunctl`） | **19.3963** | **+1.1452**（其中 pin +0.045806） |
+| 派生 19 张（**端到端**再跑一遍，VLM 开，判题机复刻尺） | 18.2511 | **19.2424** | **+0.9913**（见下面「VLM 不确定性」） |
+| 派生 19 张（`protocol2` 主尺） | 31.25 | **31.25** | **±0.0000** |
+| 派生 19 张（判题机复刻尺）⑪ 再摘悬空引用 | 19.3963 | **19.4065** | **+0.0102**（protocol2 31.25→31.26；**只存在于离线代理那一路**，见五） |
+
+方法说明：官方 10 张的「修后」用**离线代理**（`work\_undroppins.py` 把已有产物里的这批引脚组剪掉，
+再用判题机复刻尺打分）——它与代码修法**等价**，因为 `_unkeyed` 在整个 `build_doc` 里只有那一个使用点，
+且这 221 条脚**没有任何 `hyperGraph` 引用**（引用侧更早就由 `NET_DROP_UNKEYED=1` 剪干净了）。
+回归（`--no-vlm` 路径必须是 no-op）：`fast.py --cases 2 --no-vlm --out reg2` 的 `2_Pred.json` 与
+`work\_fast_out_du10off\final_results\2_Pred.json` **SHA256 逐字节相同**（`9E2FF114…21370`）。
+VLM 臂的端到端确认（本次真跑）：判题机复刻尺 **18.2511（`pinunctl`，闸关）→ 19.2424（`pinunval`）**、
+`protocol2` **31.25 → 31.06** —— 跨运行的差里有 VLM 采样噪声（见 五 的「VLM 不确定性」），
+判决证据是下面四/五两张「同一次上游 + 单变量」表。基线 `work/_fast_base/{pinunctl,pinunval}.json`。
+
+**五、代码路径复核（不是离线代理）与旁证**
+
+- `work\_pinun_replay.py`（新）：**重放 `stage2.assemble.build_doc`**（就是 `fusion/run.py:130` 用的那一支），
+  输入直接用同一次运行落下的中间产物（`runs/stage1/<c>.stage1.json` + `runs/fusion/_assigned/<c>.json`），
+  于是**不用 VLM/GPU** 就能看代码改动的真效果。官方 10 张读数：
+  闸关 = 兜底框 **110** 个 / 引脚 **221** 条 / 指向它们的引用 **0** 条；闸开 = 兜底框 110 / 引脚 **0** / 引用 **0**。
+- `work\_refscan.py`（新）：在**交付 JSON** 上扫「指向 `pNNN` 的引用」三处（顶层 `pins` / `nets[*].pins` /
+  `nets[*].hyperGraph`）。官方 10 张的交付臂（`_fast_out_trimdef2`）与 `--no-vlm` 臂（`_fast_out_duvoff`，
+  608 个兜底框）都是 **0 条**（对照：2026-10 之前的旧臂 `_fast_out_du0val` 有 **843** 条，那时网闸默认关）。
+  ★★ 但**派生 19 张的 VLM 对照臂不是 0**：`work/_fast_out_pinunctl` 的 `0121=11 / 0151=4 / 0163=1 / 0166=14`
+  ——共 **30 条**指向兜底键的 `hyperGraph` 引用（`0121` 的 `net_11` 里 `p007.2,p011.2,p012.1,…`）。
+  也就是说：**引脚闸门一开，这 30 条引用立刻变成悬空引用**（判题机报告的
+  `unmapped_pred_pin_references` 数的就是这类东西）⇒ 因此追加了下面 ⑪ 这一步。
+- ★ 顺带钉死一个实现细节：`stage2/assemble.py:1583` 那条「按 FKEY 形状剪引用」是**会被绕过的** ——
+  `weld_nets` / `_merge_nets` 收尾时会用「`_refs` ∪ `hyperGraph` 解析出的引用」**重建**
+  `hyperGraph`（`:1876` / `:1639`），把过滤掉的名字又带回来。所以引用收尾必须放在**出口**（融合层
+  写盘前），放在中间任何一步都不成立。
+- ⑪ **引用收尾（本次落进代码，作为出口不变量）**：`fusion/run.py` 新增 `FUSION_REF_PRUNE`（默认 1，
+  `=0` 复现旧行为）与 `_prune_orphan_refs(pred)`，在 `LR.refine(pred)` 之后、写盘之前执行；判据 =
+  「**兜底键形状（`^p\d{3,4}$`）且该键在本文件里没有引脚**」⇒ 正好是引脚闸门的补集，因此**动不了
+  `STAGE2_NET_DROP_UNKEYED=0` 那条臂**（∅ 符号的键是 `∅NNN`，不匹配）。按 owner m40034 ④
+  「不许静默丢弃」：每条被摘掉的引用都进 `cvparts.hypo.LEDGER`（`prune_ref` 事件）并汇总进
+  case 报告 `ref_prune`。
+  ★ **但端到端跑完发现：这条在真实链路上是空操作**（19 张 `ref_prune` 合计 **0** 条、悬空引用 **0** 条），
+  因为**引用是从引脚造出来的** —— 引脚闸门一开，`pNNN` 的引脚没了，引用自然也不会生成：
+  `_refscan.py` 在 val 上的对照（同一套 19 张）：
+
+  | 臂 | 兜底元件 | 引脚组 | 指向兜底键的 `hyperGraph` 引用 |
+  |---|---|---|---|
+  | `_fast_out_pinunctl`（修前，闸关） | 535 | 532（**1153 脚**） | **30** |
+  | `_fast_out_pinunval`（修后，端到端） | 535 | **0** | **0** |
+
+  所以「引用一起剪」那 **+0.0102** 只出现在**离线代理那一路**（`_undroppins.py` 是在**已经定稿**的
+  产物上剪引脚，引用不会跟着消失）。⑪ 保留的理由是**出口不变量**（交付文档绝不引用自己没发出的引脚），
+  代价为 0；单元验证（对已落盘产物直接调 `_prune_orphan_refs`）：控制臂 `0121`/`0166` **摘 0 条**，
+  闸开臂 `0121` **摘 11 条** / `0166` **摘 14 条**（与离线代理逐位一致）。
+- ★ **VLM 不确定性（量级校准）**：端到端再跑一遍的 val 读数与「同一次 VLM 输出 + 离线代理」有 Δ：
+  判题机复刻尺 **19.2424 vs 19.3963**（−0.15）、`protocol2` **31.06 vs 31.25**（−0.19）。两次 VLM 段的
+  自报计数就不同（改名 **123 → 124** 个元件、改写引脚 **204 → 206**、位号调用 388 → 385）⇒ 本机
+  `http://127.0.0.1:1234/v1` 的 VLM 是**采样式**的，**跨运行的 A/B 不能当判决证据**。判决证据只能用
+  「同一次上游 + 单变量离线/重放」那一对（本节的四、五两张表）。另外要看的是**修法只动 pin 通道**：
+  端到端 val 的 `protocol2` 里 pin **0.1703 vs 0.1704**（不动），差值全部落在元件与网络（各 −0.003）
+  这两个**补丁碰不到**的通道上 —— 判题机复刻尺上同向（comp 0.1748 vs 0.1771、conn 0.2248 vs 0.2279）。
+- 旁证（`work\_compwhy.py`，按判题机的键精确口径在官方 10 张上算）：GT 元件 **254 = 有名 146 + ∅ 108**；
+  我们产出 146 个有名框 + **110** 个 `pNNN` 框。**`fn` 里有名元件 0 个、`fp` 里 110 个全是 `pNNN` 框**
+  （与判题机报告的 `comp:missing 115 / comp:extra 108` 同形状）⇒ **comp 通道现在唯一剩下的差异就是
+  ∅ 符号本身**：146 个有名元件的键 100% 对上了。也就是说「翻 `STAGE2_DROP_UNKEYED`」这个口径赌注
+  （协议尺保留 +8.87/+10.24 vs 判题机复刻尺丢掉 +3.3315/+1.0058，两组都是 `--no-vlm` 臂上量的）
+  **不是本次修复引入的**，本次修复在两把尺子上都非负。
+
+**六、复现**
+
+```bat
+cd eda-pcb
+python -X utf8 ..\work\_pinidset.py --pred ..\work\_fast_out_trimdef2\final_results --no-report
+python -X utf8 ..\work\_undroppins.py --src ..\work\_fast_out_trimdef2\final_results --dst ..\work\_fast_out_pinun_sim\final_results
+python -X utf8 ..\work\tools\dev\_offscore.py --engine official --run ..\work\_fast_out_pinun_sim
+python -X utf8 ..\work\_pinun_replay.py --runs ..\work\_fast_out_trimdef2\runs
+python -X utf8 ..\work\_refscan.py --dir ..\work\_fast_out_trimdef2\final_results
+python -X utf8 ..\work\_compwhy.py --pred ..\work\_fast_out_trimdef2\final_results
+python -X utf8 tools\eval\fast.py --cases 2 --no-vlm --out reg2
+:: 派生 19 张（VLM 臂）：修前对照 → 只剪引脚 → 再剪悬空引用
+::   $env:STAGE2_PIN_DROP_LAUNDERED='0'; python -X utf8 tools\eval\fast.py --cases <val> --out pinunctl
+$val = (Get-Content ..\work\_cases_v4val.txt -Raw).Trim()
+python -X utf8 ..\work\_refscan.py --dir ..\work\_fast_out_pinunctl\final_results --cases-file ..\work\_cases_v4val.txt --dangling
+python -X utf8 ..\work\_undroppins.py --src ..\work\_fast_out_pinunctl\final_results --dst ..\work\_fast_out_pinunvsim\final_results  --cases $val
+python -X utf8 ..\work\_undroppins.py --src ..\work\_fast_out_pinunctl\final_results --dst ..\work\_fast_out_pinunvsim2\final_results --cases $val --prune-refs
+python -X utf8 ..\work\_offval.py --arms pinunctl,pinunvsim,pinunvsim2
+python -X utf8 tools\eval\fast.py --cases $val --score-only --out pinunvsim2 --engine protocol2
+python -X utf8 tools\eval\fast.py --cases $val --out pinunval       :: 端到端（VLM 开，约 9 分钟）
+python -X utf8 ..\work\_offval.py --arms pinunctl,pinunval
+python -X utf8 ..\work\_refscan.py --dir ..\work\_fast_out_pinunval\final_results --cases-file ..\work\_cases_v4val.txt
+:: 引用收尾的对照（旧行为）：
+::   $env:FUSION_REF_PRUNE='0'; python -X utf8 tools\eval\fast.py --cases $val --out pinunvctl
 ```
 
 ---

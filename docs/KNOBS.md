@@ -6,14 +6,14 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **433** 个开关。
+共 **435** 个开关。
 
 ## 目录
 
 - [stage1](#stage1)（134）
-- [stage2](#stage2)（130）
+- [stage2](#stage2)（131）
 - [stage3](#stage3)（2）
-- [fusion](#fusion)（115）
+- [fusion](#fusion)（116）
 - [vlm](#vlm)（12）
 - [textrec](#textrec)（13）
 - [cvparts](#cvparts)（10）
@@ -172,12 +172,12 @@
 | `FUSION_PIN_LIBSEQ` | `"1"` | `stage2/pinlib.py:105` |
 | `FUSION_PIN_LIBSEQ_FUZZY` | `"0.85"` | `stage2/pinlib.py:108` |
 | `FUSION_PIN_LIBSEQ_MARGIN` | `"0.06"` | `stage2/pinlib.py:109` |
-| `STAGE1_MERGE_TP` | `"0"` | `stage2/assemble.py:143` |
+| `STAGE1_MERGE_TP` | `"0"` | `stage2/assemble.py:158` |
 | `STAGE2_BOTH_TOL` | `"0.65"` | `stage2/text.py:87` |
 | `STAGE2_BOXIC_LIB` | `""` | `stage2/libpins.py:91` |
-| `STAGE2_BOX_PIN_DROP_UNREAD` | `"mixed"` | `stage2/assemble.py:202` |
-| `STAGE2_BOX_PIN_NEED_NAME` | `"2"` | `stage2/assemble.py:241` |
-| `STAGE2_BOX_PIN_PARTIAL` | `"1"` | `stage2/assemble.py:176` |
+| `STAGE2_BOX_PIN_DROP_UNREAD` | `"mixed"` | `stage2/assemble.py:217` |
+| `STAGE2_BOX_PIN_NEED_NAME` | `"2"` | `stage2/assemble.py:256` |
+| `STAGE2_BOX_PIN_PARTIAL` | `"1"` | `stage2/assemble.py:191` |
 | `STAGE2_CKPT` | `r"Y:\workspace\EDA\work\ocr_mix\runs\best.pt"` | `stage2/text.py:42` |
 | `STAGE2_COLOR_NUMBER_CROP` | `"0"` | `stage2/run.py:73` |
 | `STAGE2_CONFORM_AUDIT` | `"1"` | `stage2/assign.py:560` |
@@ -188,41 +188,41 @@
 | `STAGE2_CONFORM_TYPE_PEN` | `"0.85"` | `stage2/assign.py:551` |
 | `STAGE2_CPNT_LIB` | `""` | `stage2/libpins.py:90` |
 | `STAGE2_DBG_CID` | — | `stage2/assign.py:220` |
-| `STAGE2_DBG_PINS` | — *(4 处)* | `stage2/assemble.py:1363` |
+| `STAGE2_DBG_PINS` | — *(4 处)* | `stage2/assemble.py:1394` |
 | `STAGE2_DEMOTE_HARD` | `"0.05"` | `stage2/structmatch.py:36` |
 | `STAGE2_DESIG_MAXW` | `"6.0"` | `stage2/assign.py:342` |
 | `STAGE2_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:76` |
-| `STAGE2_EDGE_ANG` | `"6.0"` | `stage2/assemble.py:421` |
-| `STAGE2_EDGE_DEDUP` | `"2.0"` | `stage2/assemble.py:584` |
-| `STAGE2_EDGE_DEDUP2` | `"2.0"` | `stage2/assemble.py:589` |
-| `STAGE2_EDGE_JOIN` | `"40.0"` | `stage2/assemble.py:420` |
-| `STAGE2_EDGE_MERGE` | `"0"` | `stage2/assemble.py:410` |
-| `STAGE2_EDGE_SNAP` | `"10.0"` *(2 处)* | `stage2/assemble.py:419` |
-| `STAGE2_EDGE_SNAP_ANG` | `"45.0"` | `stage2/assemble.py:490` |
-| `STAGE2_EDGE_SPLIT` | `"3.0"` | `stage2/assemble.py:582` |
-| `STAGE2_EDGE_SPLIT_COL` | `"0.90"` | `stage2/assemble.py:583` |
-| `STAGE2_EDGE_TRIM` | `"3.0"` | `stage2/assemble.py:614` |
+| `STAGE2_EDGE_ANG` | `"6.0"` | `stage2/assemble.py:436` |
+| `STAGE2_EDGE_DEDUP` | `"2.0"` | `stage2/assemble.py:599` |
+| `STAGE2_EDGE_DEDUP2` | `"2.0"` | `stage2/assemble.py:604` |
+| `STAGE2_EDGE_JOIN` | `"40.0"` | `stage2/assemble.py:435` |
+| `STAGE2_EDGE_MERGE` | `"0"` | `stage2/assemble.py:425` |
+| `STAGE2_EDGE_SNAP` | `"10.0"` *(2 处)* | `stage2/assemble.py:434` |
+| `STAGE2_EDGE_SNAP_ANG` | `"45.0"` | `stage2/assemble.py:505` |
+| `STAGE2_EDGE_SPLIT` | `"3.0"` | `stage2/assemble.py:597` |
+| `STAGE2_EDGE_SPLIT_COL` | `"0.90"` | `stage2/assemble.py:598` |
+| `STAGE2_EDGE_TRIM` | `"3.0"` | `stage2/assemble.py:629` |
 | `STAGE2_FREE_STEAL` | `"1"` | `stage2/assign.py:400` |
 | `STAGE2_GLOBAL_MATCH` | `"0"` | `stage2/assign.py:1141` |
 | `STAGE2_GROW_MIN` | `"0.9"` | `stage2/run.py:38` |
 | `STAGE2_GROW_PER_COMP` | `"4"` | `stage2/run.py:40` |
-| `STAGE2_LIB_PINS` | `"1"` *(2 处)* | `stage2/assemble.py:285` |
-| `STAGE2_LIB_PINS_DBG` | `"0"` | `stage2/assemble.py:287` |
+| `STAGE2_LIB_PINS` | `"1"` *(2 处)* | `stage2/assemble.py:300` |
+| `STAGE2_LIB_PINS_DBG` | `"0"` | `stage2/assemble.py:302` |
 | `STAGE2_LIB_PINS_FUZZY` | `"0.85"` | `stage2/libpins.py:199` |
 | `STAGE2_LIB_REFINE` | `"1"` | `stage2/librefine.py:56` |
 | `STAGE2_LIB_REFINE_WHEN` | `"any"` | `stage2/librefine.py:62` |
-| `STAGE2_MIN_EDGE_LEN` | `"20"` | `stage2/assemble.py:384` |
+| `STAGE2_MIN_EDGE_LEN` | `"20"` | `stage2/assemble.py:399` |
 | `STAGE2_MONO_PIN_OCR` | `PIN_NAME_OCR` | `stage2/run.py:78` |
 | `STAGE2_MULTI_H` | `"0.43"` | `stage2/text.py:95` |
 | `STAGE2_MULTI_W` | `"0.15"` | `stage2/text.py:94` |
 | `STAGE2_NETLABEL_MIN_H` | `"9"` | `stage2/assign.py:482` |
 | `STAGE2_NETLABEL_MIN_W` | `"12"` | `stage2/assign.py:481` |
-| `STAGE2_NET_DROP_PWRONLY` | `"1"` | `stage2/assemble.py:347` |
-| `STAGE2_NET_DROP_UNKEYED` | `"1"` | `stage2/assemble.py:336` |
-| `STAGE2_NET_WELD` | `"16"` | `stage2/assemble.py:466` |
-| `STAGE2_NET_WELD_COS` | `"0.5"` | `stage2/assemble.py:468` |
-| `STAGE2_NET_WELD_MIN` | `"6.0"` | `stage2/assemble.py:467` |
-| `STAGE2_NET_WELD_TPAD` | `"3.0"` | `stage2/assemble.py:469` |
+| `STAGE2_NET_DROP_PWRONLY` | `"1"` | `stage2/assemble.py:362` |
+| `STAGE2_NET_DROP_UNKEYED` | `"1"` | `stage2/assemble.py:351` |
+| `STAGE2_NET_WELD` | `"16"` | `stage2/assemble.py:481` |
+| `STAGE2_NET_WELD_COS` | `"0.5"` | `stage2/assemble.py:483` |
+| `STAGE2_NET_WELD_MIN` | `"6.0"` | `stage2/assemble.py:482` |
+| `STAGE2_NET_WELD_TPAD` | `"3.0"` | `stage2/assemble.py:484` |
 | `STAGE2_NODELETE` | `"1"` | `stage2/structmatch.py:34` |
 | `STAGE2_OWN_ASSIGN` | `"0"` | `stage2/assign.py:205` |
 | `STAGE2_OWN_BBOX` | `"1"` | `stage2/assign.py:186` |
@@ -270,6 +270,7 @@
 | `STAGE2_PIN_ALONG` | `"1"` | `stage2/assign.py:352` |
 | `STAGE2_PIN_ANCHOR` | `"12"` | `stage2/structmatch.py:54` |
 | `STAGE2_PIN_COVER` | `"0.15"` | `stage2/assign.py:356` |
+| `STAGE2_PIN_DROP_LAUNDERED` | `"1"` | `stage2/assemble.py:109` |
 | `STAGE2_PIN_DROP_UNKEYED` | `"1"` | `stage2/assemble.py:94` |
 | `STAGE2_PIN_GREY_EVIDENCE` | `"0"` | `stage2/run.py:87` |
 | `STAGE2_PIN_LANE_CLEANUP` | `"light"` | `stage2/run.py:76` |
@@ -278,21 +279,21 @@
 | `STAGE2_PIN_NUMBER_REPAIR` | `"0"` | `stage2/run.py:79` |
 | `STAGE2_PIN_RESIDUAL` | `"0"` | `stage2/assign.py:364` |
 | `STAGE2_PIN_RESIDUAL_MIN` | `"0"` | `stage2/assign.py:365` |
-| `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:877` |
+| `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:892` |
 | `STAGE2_PIN_STUB_MERGE` | `"12"` | `stage2/assign.py:304` |
 | `STAGE2_PIN_TEXT_CROP` | `"0"` | `stage2/run.py:74` |
 | `STAGE2_PIN_TRUST_DROP` | `""` | `stage2/run.py:94` |
 | `STAGE2_PREFIX` | `"strict"` | `stage2/assign.py:156` |
 | `STAGE2_PREFIX_SKEL` | `"0"` | `stage2/assign.py:166` |
-| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1656` |
-| `STAGE2_RAIL_SPLIT` | `"1"` | `stage2/assemble.py:1667` |
-| `STAGE2_STAMP_ONE_SIDE` | `"1"` | `stage2/assemble.py:893` |
+| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1687` |
+| `STAGE2_RAIL_SPLIT` | `"1"` | `stage2/assemble.py:1698` |
+| `STAGE2_STAMP_ONE_SIDE` | `"1"` | `stage2/assemble.py:908` |
 | `STAGE2_STEAL` | `"80"` | `stage2/assign.py:398` |
-| `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:370` |
+| `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:385` |
 | `STAGE2_TIGHT_ROLES` | `"pin_number,pin_name"` | `stage2/text.py:129` |
-| `STAGE2_TP_CV_SUBTYPES` | `"ring3"` | `stage2/assemble.py:145` |
-| `STAGE2_TP_LEDGER` | `"0"` | `stage2/assemble.py:160` |
-| `STAGE2_TP_TRUST_EVIDENCE` | `"1"` | `stage2/assemble.py:157` |
+| `STAGE2_TP_CV_SUBTYPES` | `"ring3"` | `stage2/assemble.py:160` |
+| `STAGE2_TP_LEDGER` | `"0"` | `stage2/assemble.py:175` |
+| `STAGE2_TP_TRUST_EVIDENCE` | `"1"` | `stage2/assemble.py:172` |
 | `STAGE2_VALUE_DISTW` | `"0.035"` | `stage2/assign.py:463` |
 | `STAGE2_VALUE_NETNAME` | `"0"` | `stage2/assign.py:452` |
 | `STAGE2_VALUE_STEAL` | `"40"` | `stage2/assign.py:409` |
@@ -316,7 +317,7 @@
 |---|---|---|
 | `AXIS_CHAR_CAL` | — | `fusion/axis.py:133` |
 | `AXIS_CHAR_SIG` | — | `fusion/axis.py:130` |
-| `FUSION_ASSIGNED_DIR` | `str(RUN_DIR / "stage2" / "_assigned"` | `fusion/run.py:190` |
+| `FUSION_ASSIGNED_DIR` | `str(RUN_DIR / "stage2" / "_assigned"` | `fusion/run.py:274` |
 | `FUSION_AUDIT` | `"1"` | `fusion/audit.py:76` |
 | `FUSION_AUDIT_FULLW` | `"880"` | `fusion/audit.py:77` |
 | `FUSION_AUDIT_KINDS` | `"net_short,net_rail_merge,key_duplicate,key_type_mismatch,va` | `fusion/audit.py:82` |
@@ -326,11 +327,11 @@
 | `FUSION_AUDIT_SCORE` | `"1.30"` | `fusion/audit.py:68` |
 | `FUSION_AXIS` | `"1"` | `fusion/axis.py:87` |
 | `FUSION_AXIS_VERT` | `"0"` | `fusion/axis.py:155` |
-| `FUSION_BASE` | `"ours"` | `fusion/run.py:131` |
+| `FUSION_BASE` | `"ours"` | `fusion/run.py:215` |
 | `FUSION_BOXSCAN` | `"0"` | `fusion/claims.py:151` |
 | `FUSION_BOX_PIN_PRIOR` | `"0"` | `fusion/priors.py:135` |
-| `FUSION_CASES` | `""` | `fusion/run.py:403` |
-| `FUSION_CONV_EXACT` | `"1"` | `fusion/run.py:93` |
+| `FUSION_CASES` | `""` | `fusion/run.py:496` |
+| `FUSION_CONV_EXACT` | `"1"` | `fusion/run.py:94` |
 | `FUSION_CROPFIX` | `"1"` | `fusion/cropfix.py:61` |
 | `FUSION_CROPFIX_LADDER` | `"0.5,1.0,2.0,4.0"` | `fusion/cropfix.py:54` |
 | `FUSION_CROPFIX_MAX` | `"24"` | `fusion/cropfix.py:57` |
@@ -373,16 +374,16 @@
 | `FUSION_JUDGE_SHEET_MAX` | `"36"` | `fusion/llm_judge.py:741` |
 | `FUSION_JUDGE_SHEET_MIN` | `"9999"` | `fusion/llm_judge.py:745` |
 | `FUSION_JUDGE_WHY` | `"1"` | `fusion/llm_judge.py:514` |
-| `FUSION_LLM` | `"1"` | `fusion/run.py:89` |
+| `FUSION_LLM` | `"1"` | `fusion/run.py:90` |
 | `FUSION_LLM_SCORE` | `"1.5"` | `fusion/llm_judge.py:45` |
 | `FUSION_MAX_CANDS` | `"8"` | `fusion/solve.py:73` |
 | `FUSION_MAX_OPEN` | `"24"` | `fusion/solve.py:49` |
-| `FUSION_MERGE_PIN_MIN` | `"8"` | `fusion/run.py:160` |
+| `FUSION_MERGE_PIN_MIN` | `"8"` | `fusion/run.py:244` |
 | `FUSION_MIN_NET_PINS` | `"2"` | `fusion/plausible.py:57` |
 | `FUSION_OPEN_FREEFORM` | `"1"` | `fusion/solve.py:71` |
 | `FUSION_OPEN_FREEFORM_MAX` | `"8"` | `fusion/solve.py:60` |
 | `FUSION_OPEN_MARGIN` | `"0.10"` | `fusion/solve.py:47` |
-| `FUSION_OUT_DIR` | `str(ROOT / "work" / "_fusion_out"` | `fusion/run.py:70` |
+| `FUSION_OUT_DIR` | `str(ROOT / "work" / "_fusion_out"` | `fusion/run.py:71` |
 | `FUSION_READ_DROP1` | `"0.40"` | `fusion/priors.py:426` |
 | `FUSION_READ_DROP1O` | `"0.12"` | `fusion/priors.py:427` |
 | `FUSION_READ_DROPM` | `"0.12"` | `fusion/priors.py:428` |
@@ -391,6 +392,7 @@
 | `FUSION_READ_INS` | `"0.30"` | `fusion/priors.py:429` |
 | `FUSION_READ_ROW_OVERLAP` | `"0.5"` | `fusion/priors.py:282` |
 | `FUSION_READ_SUB` | `"0.05"` | `fusion/priors.py:430` |
+| `FUSION_REF_PRUNE` | `"1"` | `fusion/run.py:113` |
 | `FUSION_REGION_MIN` | `"120"` | `fusion/claims.py:114` |
 | `FUSION_REGION_PAD` | `"24"` | `fusion/claims.py:112` |
 | `FUSION_REGION_TOPK` | `"1"` | `fusion/claims.py:156` |
@@ -399,7 +401,7 @@
 | `FUSION_RESCAN_MAX` | `"12"` | `fusion/rescan.py:40` |
 | `FUSION_RESCAN_SCORE` | `"1.2"` | `fusion/rescan.py:38` |
 | `FUSION_RESCAN_VALUE` | `"0"` | `fusion/rescan.py:98` |
-| `FUSION_ROUNDS` | `"2"` | `fusion/run.py:77` |
+| `FUSION_ROUNDS` | `"2"` | `fusion/run.py:78` |
 | `FUSION_RUN_ALTWINDOW` | `"0"` | `fusion/priors.py:247` |
 | `FUSION_RUN_DIR` | `r"Y:\workspace\EDA\work\_submit_out220r36\runs"` *(3 处)* | `fusion/audit.py:554` |
 | `FUSION_RUN_ORDER` | `"1"` | `fusion/priors.py:259` |
@@ -417,7 +419,7 @@
 | `FUSION_SHAPE_W` | `"0.0"` | `fusion/priors.py:164` |
 | `FUSION_SHEET_OUT` | `r"Y:\workspace\EDA\work\preview\_judge_sheet.png"` | `fusion/llm_judge.py:856` |
 | `FUSION_SHEET_TIMEOUT` | `"300"` | `fusion/llm_judge.py:878` |
-| `FUSION_STAGE1_DIR` | `str(RUN_DIR / "stage1"` *(2 处)* | `fusion/run.py:188` |
+| `FUSION_STAGE1_DIR` | `str(RUN_DIR / "stage1"` *(2 处)* | `fusion/run.py:272` |
 | `FUSION_TOP_WINDOWS` | `"3"` | `fusion/priors.py:225` |
 | `FUSION_VALUE_MIN_N` | `"4"` | `fusion/plausible.py:55` |
 | `FUSION_VALUE_RATIO` | `"4.0"` | `fusion/plausible.py:53` |
@@ -427,7 +429,7 @@
 | `FUSION_VLM_PIN_NUM` | `"1"` | `fusion/claims.py:82` |
 | `FUSION_VLM_PIN_SCORE` | `"1.15"` | `fusion/claims.py:74` |
 | `FUSION_VLM_SCORE` | `"1.15"` | `fusion/claims.py:71` |
-| `FUSION_WORKERS` | `"1"` | `fusion/run.py:425` |
+| `FUSION_WORKERS` | `"1"` | `fusion/run.py:518` |
 | `VLM_TIMEOUT` | `"600"` *(3 处)* | `fusion/audit.py:75` |
 
 <a id="vlm"></a>

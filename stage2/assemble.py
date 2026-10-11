@@ -93,6 +93,21 @@ DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "0")
 # 离线代理脚本：`work/_unkeyed_proxy.py`（V0 原样 / V1 连元件一起丢 / V2 只丢引脚）。
 PIN_DROP_UNKEYED = env_on("STAGE2_PIN_DROP_UNKEYED", "1")
 
+# ★★ 「被洗白的兜底键」也认回无名元件（`STAGE2_PIN_DROP_LAUNDERED`，默认 1）。
+#
+# 上游（`assigned[cid]["designator"]["canon"]`，实测 `_by = "solve:vlm:enrich"`）会把**已经
+# 发过的兜底键 `pNNN`** 当成「读出来的位号」回填，于是 `build_doc` 的 designator 分支拿到一个
+# 「有键」的元件、`_unkeyed` 保持 `False` ⇒ 上面那道 `PIN_DROP_UNKEYED` 闸被**绕过**，VLM 臂
+# 的交付文档里又多出 `pNNN` 的合成脚号。
+# 实证（VLM 臂，官方 10 张）：`pNNN` **元件框 110 个、脚 221 条、引用 0 条**；判题机 `pin.id_f1`
+# 层这 221 条全是 fp（同批「脚号读错」只有 3 条）——`work/_pinidset.py`、`work/_undroppins.py`。
+# 离线代理（把已有产物里的这批引脚组剪掉，`work/_undroppins.py` + `_offscore.py --engine official`）：
+# 官方 10 张 **61.7856 → 65.5257（+3.7401）**，其中 pin 0.596239 → 0.745844（+0.1496），
+# comp/netH/netL **逐位不变**；`protocol2` 主尺 **79.30 → 79.30（±0.0000**，它只算 box 引脚）；
+# 派生集同向（见 `docs/RESULTS.md` §5.39）。
+# `=0` 退回修复前的行为（**只作 A/B 对照**，不要当交付口径）。
+PIN_DROP_LAUNDERED = env_on("STAGE2_PIN_DROP_LAUNDERED", "1")
+
 # ---------------------------------------------------------------------------
 # ★★ 内部合并类 `tp` 的**文本闸门**（只跟 `STAGE1_MERGE_TP=1` 配套，默认 off）。
 #
@@ -1247,6 +1262,22 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             if DROP_UNKEYED:
                 continue
             key = "p%03d" % i
+            _unkeyed = True
+        elif PIN_DROP_LAUNDERED and FKEY_RE.match(str(key)):
+            # ★★ 2026-1x 修：兜底键**不总是这里发的** —— 融合/求解层会把已经发过的
+            #   `pNNN` 当成「读出来的位号」回填（`assigned[cid]["designator"]["canon"]`，
+            #   实测 `_by = "solve:vlm:enrich"`），于是本函数的 `designator` 分支拿到一个
+            #   「有键」的元件、`_unkeyed` 保持 `False` ⇒ 下面 :PIN_DROP_UNKEYED 那道闸
+            #   被**绕过**，`pNNN` 的合成脚号又回到交付文档里。
+            #   实证（`work/_fast_out_trimdef2`，VLM 臂，case 1）：stage2 里 `p012` 的引脚
+            #   表是**空的**，融合后变成 `pin_1/pin_2/pin_3`，8 个兜底键元件共 25 个脚；
+            #   判题机 `pin.id_f1` 层它们是纯 fp（10 张合计 **221** 个 id-fp 全部来自这里，
+            #   而「脚号读错」只有 3 个）——`work/_pinidset.py`。
+            #   判据用**键的形状**（与 `schematic_parser/metrics.py:is_unkeyed`、
+            #   本文件 `NET_DROP_UNKEYED` 的判据同源）：`pNNN` 不是任何真位号的形状。
+            #   ⚠️ 这里**只**认回引脚闸；元件框留不留仍由上面的 `DROP_UNKEYED` 决定
+            #   （上游回填的 `pNNN` 在 `DROP_UNKEYED=1` 下本来也不会被丢，属于既有不一致，
+            #   不在本次改动范围内 —— 默认 `DROP_UNKEYED=0`，两者行为一致）。
             _unkeyed = True
         keymap[cid] = key
         # ★ `ctype_fix`：位号通道的「内涵互校验」翻了类型时（官方 case 6 的两颗 LED

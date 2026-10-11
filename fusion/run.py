@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -91,6 +92,89 @@ DO_LLM = env_on("FUSION_LLM", "1")
 #   的长注释）。`0` = 老行为（判据慢一轮，几乎总会跑满 `MAX_ROUNDS`），保留它只是
 #   为了让那次 A/B 的两条臂都能逐字节复现。
 CONV_EXACT = env_on("FUSION_CONV_EXACT", "1")
+# ★★ 交付文档里**不能有悬空引用**（指着一个本文件没发出的引脚）。开关名：`FUSION_REF_PRUNE`。
+#
+# 病（`work/_fast_out_trimdef2` 那类 VLM 臂）：兜底键元件（`pNNN`）的引脚被
+# `STAGE2_PIN_DROP_LAUNDERED` / `STAGE2_PIN_DROP_UNKEYED` 摘掉之后，**网络侧还留着
+# `p012.1` 这样的引用** —— 它指向一个文档里根本不存在的引脚。判题机报告里
+# `connectivity.diagnostics.unmapped_pred_pin_references` 数得就是这类东西
+# （第 6 次提交 case 1 有 18 条，因此 `conn` 少了一截）。
+#
+# 实测（`work/_undroppins.py --prune-refs`，判题机复刻尺 `work/_offval.py`）：
+#   · val 19 张：悬空引用 **30 条**（0121=11 / 0151=4 / 0163=1 / 0166=14，其余 0），
+#     摘掉后 **19.3963 → 19.4065（+0.0102）**、protocol2 **31.25 → 31.26（+0.01）**；
+#   · 官方 10 张：本来就 0 条 ⇒ 逐位不变（±0.0000）。
+# 只在「**兜底键形状**（`pNNN`）**且该键在本文件里没有引脚**」时才摘 —— 这条判据
+# 正好是引脚闸门的补集，所以它动不了 `STAGE2_NET_DROP_UNKEYED=0` 那条臂
+# （∅ 符号的键是 `∅NNN`，不匹配 `FKEY_RE`，那条臂要留的引用原样保留）。
+#
+# 按 owner m40034 ④「不许静默丢弃」的规矩：每条被摘掉的引用都进
+# `cvparts.hypo.LEDGER`（`prune_ref` 事件），并汇总进本 case 的报告 `ref_prune`。
+REF_PRUNE = env_on("FUSION_REF_PRUNE", "1")
+_FKEY_RE = re.compile(r"^p\d{3,4}$")          # 形状同 `stage2/assemble.py:305`
+
+
+def _prune_orphan_refs(doc: dict) -> dict:
+    """摘掉「指向本文件没有发出的引脚」的兜底键引用（见上面 `REF_PRUNE` 的记录）。"""
+    if not REF_PRUNE:
+        return {"on": False}
+    comps = doc.get("components") or {}
+    pins = doc.get("pins") or {}
+
+    def _has_pin(key: str, num: str) -> bool:
+        grp = pins.get(key) or {}
+        if not grp:
+            return False
+        if ("pin_%s" % num) in grp:
+            return True
+        # 少数臂把 `pins[k]` 的键写成脚名，兜一层
+        return any(str((v or {}).get("pinname")) == str(num) for v in grp.values())
+
+    try:
+        from cvparts.hypo import LEDGER                  # 进程内默认账本
+    except Exception:                                    # noqa: BLE001
+        LEDGER = None
+
+    n = 0
+    ex: List[str] = []
+    for nid, nv in (doc.get("nets") or {}).items():
+        if not isinstance(nv, dict):
+            continue
+        hg = nv.get("hyperGraph")
+        if isinstance(hg, str) and hg.strip():
+            toks = [t.strip() for t in hg.strip().strip("()").split(",") if t.strip()]
+            keep = []
+            for t in toks:
+                key, _, num = t.partition(".")
+                if key and num and _FKEY_RE.match(key) and key not in comps:
+                    # 键都没有 ⇒ 整条引用都是悬空的
+                    n += 1
+                    if len(ex) < 5:
+                        ex.append("%s:%s" % (nid, t))
+                    if LEDGER is not None:
+                        LEDGER.record("prune_ref", nid, before=[t],
+                                      reason="兜底键元件不在本文件里",
+                                      by="fusion.ref_prune")
+                    continue
+                if key and num and _FKEY_RE.match(key) and not _has_pin(key, num):
+                    n += 1
+                    if len(ex) < 5:
+                        ex.append("%s:%s" % (nid, t))
+                    if LEDGER is not None:
+                        LEDGER.record("prune_ref", nid, before=[t],
+                                      reason="引脚的产出被兜底键闸门摘掉 ⇒ 引用会悬空",
+                                      by="fusion.ref_prune")
+                    continue
+                keep.append(t)
+            if len(keep) != len(toks):
+                nv["hyperGraph"] = "(" + ",".join(keep) + ")"
+        pl = nv.get("pins")
+        if isinstance(pl, list) and pl:
+            nv["pins"] = [t for t in pl if not (
+                isinstance(t, str) and "." in t
+                and _FKEY_RE.match(t.split(".", 1)[0])
+                and not _has_pin(t.split(".", 1)[0], t.split(".", 1)[1]))]
+    return {"on": True, "n_refs": n, "examples": ex}
 
 
 def _load(path: Path) -> dict:
@@ -367,6 +451,15 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
         rep["librefine"] = LR.refine(pred, log=log)
     except Exception as exc:                               # noqa: BLE001
         rep["librefine"] = {"err": str(exc)}
+    # ---- ⑪ 引用收尾：交付文档里不能有悬空引用（`FUSION_REF_PRUNE`，见函数上方长注释）----
+    # 必须放在**最后**（`librefine` 之后、写盘之前）：只有这里的 `pred` 才是出门的那一份，
+    # 前面 `build_doc` / `weld_nets` / `_merge_nets` 都会重建 `hyperGraph`，
+    # 在中间任何一步摘引用都可能被下一步的并集又带回来（`stage2/assemble.py:1583` 的
+    # 兜底键过滤就是这么被 `:1876` 的重建绕过的）。
+    try:
+        rep["ref_prune"] = _prune_orphan_refs(pred)
+    except Exception as exc:                               # noqa: BLE001
+        rep["ref_prune"] = {"err": str(exc)}
     try:
         rep["redetect"] = IT.redetect_hints(pred, doc)
     except Exception:                                      # noqa: BLE001
