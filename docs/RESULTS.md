@@ -3329,6 +3329,63 @@ python -X utf8 tools\dev\pinread_contract.py
 
 ---
 
+### 5.31 ★ 无名元引脚闸门 `STAGE2_PIN_DROP_UNKEYED`（默认 1）；GT 语义定案；派生语料失分的两个真原因（2026-10-17）
+
+**一、无名元（兜底键）引脚闸门（已经验、转正）**
+
+`work/_compdbg.py`（官方 10 张 `curA`）：判题机复刻尺（`unkeyed_match="off"`，∅NNN 按键精确）下 226 个元件级事件里 **218 个**来自我们给电源/地符号发的兜底键 `pNNN`（`component.extra 110` / `component.missing 108` / `bbox_mismatch 4` / `text_mismatch 2` / `type_mismatch 2`）；书面尺（`unkeyed_match="gt"`）下它们全部配上（`coord_matched 108`），但其中 **43 个**栽在判题机 5px 框容差上（我们的 gnd 框系统性偏 13~18px：case 1 五颗 14.8/14.1/15.5/13.6/13.7）。
+
+既然是「任何口径都赢不了」，就别发它们的引脚：`eda-pcb/stage2/assemble.py` 在 `DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "0")`（`:76`）旁加 **`PIN_DROP_UNKEYED = env_on("STAGE2_PIN_DROP_UNKEYED", "1")`**——前者决定**元件框**留不留、后者只决定**引脚**发不发（⚠️ 与 `STAGE2_NET_DROP_UNKEYED` 同进退）。实现：循环里 `_unkeyed = False`；兜底键分支 `key = "p%03d" % i` 处置 `_unkeyed = True`；`pts = st1_pins.get(cid) or []` 之前 `if _unkeyed and PIN_DROP_UNKEYED: continue`。
+
+| 尺子 | `pu0`（发） | `pu1`（不发） | Δ |
+| --- | --- | --- | --- |
+| protocol2（书面+标定） | 71.65 | 71.65 | **±0.00**（逐案总分表逐位相同） |
+| harness / **judge**（线上复刻） | 引脚 0.5651 | 引脚 **0.7155** | **+0.1504 × 0.25 权重 = +3.76** |
+
+`work/_pu_ab.ps1`（官方 10 张 `--no-vlm`）；10 份 `_Pred.json` **全部不同**（`_ifx_cmp`：相同 0 / 不同 11）——「总分逐位相同、产物逐字节全变」正说明该改动只动无名元引脚（protocol2 的 `pin_box_only=True` 本来就不算它们，网络引用也早被 `STAGE2_NET_DROP_UNKEYED` 剪掉）。离线代理复核 `work/_unkeyed_proxy.py pu1`：`V0`（原样）= `V2`（丢引脚）⇒ 71.65 / judge 60.89 / judge_gt 68.88；`V1`（连框一起丢）62.77 / 64.55 / 64.55。兜底键元件类型分布 `{'gnd': 60, 'v': 49, 'd': 1}`（**没有一颗 IC**）⇒ 不可能误伤 box 引脚。
+
+**二、GT 语义定案（回答用户 m56805 第①③项）**
+
+- `components[K].bbox` = **元件本体**；`pins[K][pk].point` = **电气连接点**，在体外 10~15px（`C151` bbox `[68,1033,84,1053]`、`pin_2.point=(76,1063)`）；`nets[n].edges[e]` = **两个电结点之间的直线段**（结点 = 引脚点或共享线结点），**没有「笔画中心线」概念**。GT 边端点与其 `point` 本身有 0~4.1px 抖动（net_3：C151 0.0 / C152 1.0 / C153 2.8 / C154 2.2 / C155 3.0 / C156 4.1）。
+- `work/_occgeo.py curA`（全 10 张）：**GT 边穿框 = 0 条**；端点落在框内 **35/639**，逐条细查**全是 `c`（电容）**、端点正压在本体框边上（例 case 3 C5 bbox `[1624,477,1640,497]` 端点 `(1633,497)`）。我们的骨架端点在框边 ±3px 内 **46/1740**、配对网内端点到本网 GT 引脚点 ≤5px **14/1740（0.8%）** ⇒ 现状不是「线被框截短」，而是「一张密骨架图 + 多数端点是内部结点」。
+- ⇒ **「挖空框时保留骨架」没有真导线可保留**（框内只有丝印/本体轮廓）；与历史判负互证：`STAGE1_OCC_MODE=keep` 端到端 39.18→**37.66（−1.52）**、`STAGE1_WIRE_BRIDGE=1` 28 张实测**桥出 0 条**、`occlude=[]` 后边召回不动。**这条支线结案**。
+- 顺带归档：彩色梯度当「加线」通道也是负的（旧 10 张 `work/_wireab10_w10_{base,edge,erel}.log`：56.70 → 56.56 → 55.69；旧 28 张导线 tp 209 → 172 → 159）。
+
+**三、派生语料（≈线上分布）失分的两个真原因（新探针 `work/_valpin.py`，val 19 张、交付口径 `wddefval`）**
+
+合计 detail：`pin.missing 771` / `pin.extra 129` / `pin.name_mismatch 51` / `pin.position_mismatch 52`；`component.coord_matched 409` / `extra 218` / `missing 268` / `bbox_mismatch 49` / `text_mismatch 56` / `type_mismatch 13`。⇒ **漏发远多于错发**，且两个通道同时欠账。
+
+**原因 1：元件键（位号）错 ⇒ 连带整颗 IC 的引脚全丢。** `metrics.assign_components` 是「**键匹配优先**」（`gc & pc`），坐标匹配只对 **GT 的 `∅NNN`** 生效（`unkeyed_match='gt'`），而**线上复刻尺 `unkeyed_match="off"` 连坐标匹配都没有** ⇒ 键不同 = 元件算 fp+fn、它的每个引脚也全算 fn/fp。实测：
+
+| case | GT 键（`Name`） | 我们的键（`Name`） | 结果 |
+| --- | --- | --- | --- |
+| 0047 | `INTVcc3`（`LTM4643`） | `LTM4643`（`DMs3`） | bbox 差 ~1px、双方各 26 脚，**0 分** |
+| 0166 | `U8`（`U8`） | `P1`（`OBA1E`） | bbox 差 0.45px，GT 20 脚 / 我们 17 脚，**0 分** |
+| 0026 | `U2`（`U2`，bbox 146×556） | 该处没有 box 元件 | 纯 missing |
+| 0002 | `IC2`（`BCM2835`） | `IC2`（`BCM2835`）✅ 键对上了 | 但引脚号见原因 2 |
+
+即：**c/r 这些小件的键我们是对的**（所以 `coord_matched 409`），错的是 IC 的位号——这正好落在 `RESULTS.md:842` 早已标出的**位号绑定**瓶颈上，而且它同时是元件通道（权重 .30）与引脚通道（权重 .25）的共同上游。
+
+**原因 2：引脚号是「位置号」而不是「库里的封装号」。** 唯一键匹配上的 IC `0002/IC2`（BCM2835）：GT 只有 8 个脚，键 `pin_70..pin_77`、名 `XTALN/XTALP/AGND2/AGND1/PLL_VDD_OUT/PLL_VDD/XOSC_VDD/PLL_1V8`；我们发 **15 个位置脚 `pin_1..pin_15`**（名字读得还不错：`AGND2`/`AGND1`/`XOSC_VDD`/`PLL_VDD`/`PLL_1V8`，另有 `N`/`XTA`/`VDD` 碎片）⇒ **交集 0**。官方库 `data/BoxICLibrary_200cases.json["BCM2835"]` 恰好只有这 8 个脚、号与 GT **逐位相同**（`XTALN→70`、`AGND2→72`、`PLL_VDD→75`、`XOSC_VDD→76`、`PLL_1V8→77`）⇒ **「名 → 库号」是可行的**（不是「读印出来的号」）。
+
+**原因 2 的现成装置已存在但默认关**：`stage2/pinlib.py` 的 `PB.repair_slots`（「库给多值、图给顺序」回填，开关 `FUSION_PIN_LIBSEQ` 默认 **0**），`fusion/run.py:350` 在 `_assemble` **之前**调用它（必须，因为 `build_doc` 才是丢桩那一步）。单案取证：`FUSION_PIN_LIBSEQ=1` 跑 case 0002 ⇒ 我们的 `AGND2→pin_72`、`AGND1→pin_73`、`XOSC_VDD→pin_76`、`PLL_1V8→pin_77`（**8 个 GT 脚里救回 4 个**）；没救回的是 `PLL_VDD`（库里同名 `VDD` 有 13 个、唯一性判据主动放弃）与 `XTALN/XTALP`（我们读成 `N`/`XTA` 碎片）。⇒ 下一步就是它的**真 A/B**（`work/_lsq_ab.ps1`：val 19 的 `lsq0/lsq1` + 官方 10 的 `lsq10/lsq11`，都 VLM 开）。
+
+**四、黑白扫描件安全（回答用户 m56805 第②项）**：把 case 1 去色（`work/_grey.py`，灰度三通道写进 `work/_grey_in/1.png`）后走完整交付管线（`-vlm auto`，墙钟 28.3s，**无异常**）⇒ protocol2 **80.40**，四通道 0.9091 / 0.7059 / 0.8572 / 0.5472 与彩色 `curA` case 1 **逐位相同**（产物字节不同、评分字段全同）。机制：`pipeline/pskel.py:242 wire_colour_mask` 在 `chroma p90 < 22` 时返回 `None`（自失效），Di Zenzo 彩色梯度在无彩图上恒 0。⇒ 灰度输入不需要任何额外开关。
+
+**复现**：
+```bat
+cd eda-pcb
+powershell -ExecutionPolicy Bypass -File ..\work\_pu_ab.ps1        &rem 无名元引脚闸门 A/B（pu0/pu1）+ 四尺
+python -X utf8 ..\work\_compdbg.py curA                            &rem 元件通道事件归因（无名元 218/226）
+python -X utf8 ..\work\_occgeo.py curA                             &rem GT 边 vs 元件框几何
+python -X utf8 ..\work\_unkeyed_proxy.py curA                      &rem 离线 V0/V1/V2 代理
+python -X utf8 ..\work\_valpin.py wddefval                         &rem 派生语料引脚/元件通道逐案诊断
+python -X utf8 ..\work\_grey.py 1 & python -X utf8 tools\eval\fast.py --cases 1 --out grey1 --score-only
+python -X utf8 ..\work\_judge.py sixth curA wddef gyv1 wc_dom      &rem 四把尺子对同一批产物
+```
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |

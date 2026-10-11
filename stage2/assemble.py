@@ -76,6 +76,24 @@ FREE_TOL = 2.0          # 两个端点离多近算「接上了」
 DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "0")
 
 # ---------------------------------------------------------------------------
+# ★★ 兜底键元件（`pNNN`）的**引脚一个都不发**（`STAGE2_PIN_DROP_UNKEYED`，默认 1）。
+#
+# 与上面 `DROP_UNKEYED` 的分工：`DROP_UNKEYED` 决定**元件框**留不留（留 = 赌书面口径
+# 的坐标匹配），本开关只决定**引脚**发不发 —— 因为那批引脚在**任何一把尺**下都是纯 fp：
+#   * 判题机复刻尺（`work/_judge.py` 的 judge，按键精确匹配）：我们的 `pNNN` 永远配不上
+#     GT 的 `∅NNN` ⇒ 每颗的 `pin_1..pin_k` 全部落进 `pin.extra`。官方 10 张元件级
+#     fp/fn 里 **208/226 个事件都是这批无名元**（`work/_compdbg.py`）。
+#   * 坐标匹配尺（书面口径 Q5，`unkeyed_match='gt'`）：`rewrite_keys` 把 `pNNN` 改写成
+#     `∅NNN` 之后，GT 那些引脚键是**源文档内部号**（实测 `pin_111`，名字 `P_27`），
+#     我们的位置号 `pin_1/pin_2` 与名字 `1/2` 依旧一个都配不上 ⇒ 同样纯 fp。
+#     实测：把它们的引脚与超图引用剪掉，`judge` +3.75、`judge_gt` +3.75、`protocol2` ±0.00。
+#   * 网络侧更早就这么做了（`NET_DROP_UNKEYED=1`，见 :314 的长注释）。
+# ⚠️ 反例（因此保留开关）：若把 `NET_DROP_UNKEYED=0` 与本开关一起改，超图里会留下
+#    指向「没有引脚表」的元件的引用 —— 两者要么一起留、要么一起剪。
+# 离线代理脚本：`work/_unkeyed_proxy.py`（V0 原样 / V1 连元件一起丢 / V2 只丢引脚）。
+PIN_DROP_UNKEYED = env_on("STAGE2_PIN_DROP_UNKEYED", "1")
+
+# ---------------------------------------------------------------------------
 # ★★ 内部合并类 `tp` 的**文本闸门**（只跟 `STAGE1_MERGE_TP=1` 配套，默认 off）。
 #
 # 业主原话（m00001）：「testpoint 和跟他搞混的那个则直接合并成一个（YOLO识别阶段），
@@ -1119,6 +1137,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     for i, c in enumerate(comps):
         cid = c["id"]
         info = a.get(cid) or {}
+        _unkeyed = False
         # `canon` 是前缀矫正后的规范位号（`Rl4` -> `R14`）；没有就用原始读法。
         # 输出键必须用规范位号 —— 官方按 key 匹配元件，一个字符错整条链就丢。
         _d = info.get("designator") or {}
@@ -1151,6 +1170,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             if DROP_UNKEYED:
                 continue
             key = "p%03d" % i
+            _unkeyed = True
         keymap[cid] = key
         # ★ `ctype_fix`：位号通道的「内涵互校验」翻了类型时（官方 case 6 的两颗 LED
         #   被 YOLO 判成 `d`，而印字读作 `LED1`/`LED2` —— `LED` 前缀只属于 `led`），
@@ -1189,6 +1209,9 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                            "bbox": [round(float(x), 2) for x in bbox]}
 
         pts = st1_pins.get(cid) or []
+        if _unkeyed and PIN_DROP_UNKEYED:
+            # 兜底键元件的引脚一个都不发（见文件顶 `PIN_DROP_UNKEYED` 的长注释）。
+            continue
         if not pts:
             continue
         # 两脚贴章元件：官方点位是「中心 ±SPAN」的理想图章点，不是走线接点。
