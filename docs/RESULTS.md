@@ -3977,10 +3977,16 @@ python -X utf8 ..\work\_sideest.py --arm trimdef2 --cases ..\work\_cases10gt.txt
 
 **二、`STAGE2_DROP_UNKEYED`：两把尺子符号相反 ⇒ 是赌注，不是单向胜利**
 
-| 臂（`fast.py --cases 1,10,2,…,9 --no-vlm`） | protocol2（主尺） | 判题机复刻尺（标定后） |
+| 臂（`fast.py --no-vlm`，四臂同一发车 `pwsh-986`） | protocol2（主尺） | 判题机复刻尺（标定后） |
 |---|---|---|
-| `=0` 保留无名框（现行默认） | **71.81** | 59.8389 |
-| `=1` 丢掉无名框 | 62.94 | **63.1704** |
+| 官方 10 张 `=0` 保留无名框（现行默认） | **71.81** | 59.8389 |
+| 官方 10 张 `=1` 丢掉无名框 | 62.94 | **63.1704** |
+| 派生 18 张 `=0` 保留（`duvoff`） | **26.51** | 14.3330 |
+| 派生 18 张 `=1` 丢掉（`duvon`） | 16.27 | **15.3388** |
+
+- **两把尺子在两套集上都是符号相反**（官方 10：保留 +8.87 / 丢掉 +3.3315；派生 18：保留 +10.24 / 丢掉 **+1.0058**）
+  ⇒ 不是单案噪声，是**口径**决定的整套结论。派生集用 `work\_offval.py` 打（`_offscore.py` 只认官方 10 的 GT 目录）；
+  `0037-Datasheet` 的 GT 在 `10_GTcase` 而不在 `200_train_cases` ⇒ 派生集实际 n=18。
 
 - 差值**全在 component**：protocol2 保留 **+8.87**（comp 0.8852→0.5894，pin/conn/wire 逐位同）；
   判题机尺丢掉 **+3.3315**（comp 0.404835→0.515887 = **+0.1111**，pin 0.715529/netH 0.734498/netL 0.409819 逐位同）。
@@ -4042,6 +4048,7 @@ cd eda-pcb
 python -X utf8 ..\work\tools\dev\_offscore.py --engine official
 python -X utf8 ..\work\tools\dev\_offscore.py --engine official --run ..\work\_fast_out_du10on
 python -X utf8 ..\work\_dropun_ab.py
+python -X utf8 ..\work\_offval.py --arms duvoff,duvon
 python -X utf8 ..\work\_pwrnum.py --cases 1,2
 python -X utf8 ..\work\_netcmp.py --cases 2
 python -X utf8 ..\work\_leadcol.py
