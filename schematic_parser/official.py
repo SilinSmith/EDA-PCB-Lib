@@ -13,7 +13,7 @@
 | pin | `component key and pin_<number> exact; owner exists in both components; pinname exact; point Euclidean threshold` |
 | wire | `one-to-one direction-invariant two-point edge matching within Hungarian-matched nets` |
 | connectivity | `Hungarian one-to-one pin-set soft F1` |
-| 阈值 | `spatial_match_threshold_px = 5.0`（引脚点距/导线）；**bbox 四坐标容差 = 20px**（见下第 6 条） |
+| 阈值 | `spatial_match_threshold_px = 5.0`（**引脚点距 / bbox 四坐标 / 导线端点全用它**，见下第 6 条） |
 | 权重 | component .30 / pin .25 / connectivity .35 / wire .10 |
 
 ## 从官方报告里反推出来的判定细节（每条都有 `20261009引入` 的实证）
@@ -31,11 +31,21 @@
 5. `component_stage` / `wire_stage` / `connectivity_stage` **不进总分**（case 1:
    `0.3*0.272727 + 0.25*0.345865 + 0.35*0.295378 + 0.1*0.012945 = 0.272961` = 27.2961 ✓），
    所以本文件不复刻它们。
-6. **bbox 的容差是 20px**（业主 2026-10 指正：「bbox 对准到 20px，之前的判题机写错了」）。
-   复盘：官方 `protocol` 里只有一个 `spatial_match_threshold_px = 5.0`，我们把它**同时**用到了
-   引脚点距和 bbox 四坐标上 —— 这是错的。实测把 bbox 那处改成 20px（官方 10 张、交付臂）：
-   component `tp 132→136 / fp 10→6 / fn 122→118`，F1 `0.6667→0.6869`；4 个元件的文本三项
-   全对、只有四坐标最大误差落在 5~15px。可用 `OFFICIAL_BBOX_PX` 覆盖（默认 20.0）。
+6. **bbox 的容差是 5px**（2026-10 曾按「业主指正」写成 20px，**已被真实判题机报告推翻**）。
+   `OFFICIAL_BBOX_PX` 扫 5/8/12/16/20：只有 `=5` 时 component 逐案等于判题机
+   （case 3 0.4615 / case 7 0.6250 / case 9 0.5294；均值 0.487847 = 官方 0.487847）。
+7. **连通性按字面比，非 box 脚号不折叠**（`collapse_nonbox=False`）：`=True` 时连通性
+   均值 0.529815、逐案高于判题机；`=False` 时 0.496836 = 官方 0.496836，**10 案逐案全等**，
+   且 `matched_net_pairs` 与报告逐对一致（case 1 的 7 对）。可用 `OFFICIAL_COLLAPSE=1` 复现旧口径。
+
+## 与判题机的对账状态（2026-10 复核 `report/submission/20261009T140206Z`）
+
+| 通道 | 复刻 vs 判题机 |
+|---|---|
+| component | **逐案全等**（均值 0.487847） |
+| pin | **逐案全等**（均值 0.458210） |
+| connectivity | **逐案全等**（均值 0.496836） |
+| wire | 9/10 案逐位相同；case 6 差 1 条段（0.086275 vs 0.094118，判题机多认一条 `max_endpoint_error_px = 5.0` 的边界段） |
 
 ## 用法
 
@@ -58,19 +68,26 @@ except Exception:  # pragma: no cover
     _HAVE_SCIPY = False
 
 THRESHOLD_PX = 5.0
-# ★★ **bbox 的容差是 20px，不是 5px**（业主 2026-10 指正：判题机里 bbox 对准到 20px，
-# 我们复刻时把它和引脚点距混成了一个 `spatial_match_threshold_px = 5.0`，于是把本来
-# 该算 tp 的元件判成 `failed_checks: ["bbox"]`）。
-# 实测（官方 10 张、交付臂 `work/_fast_out_lr1`，体检脚本 `work\tools\dev\_bboxgap.py`）：
-#   阈 5px：component tp 132 / fp 10 / fn 122，F1 0.6667
-#   阈 20px：component tp 136 / fp 6  / fn 118，F1 0.6869（+0.0202）
-# 也就是**多出 4 个元件**（文本三项全对、只有四坐标最大误差落在 5~15px 之间）。
-# 只改 bbox：引脚点距（`:pin`）与导线（`wire`）仍按 5px —— 业主这句话只针对 bbox。
-BBOX_PX = float(os.environ.get("OFFICIAL_BBOX_PX", "20.0"))
+# ★★ **bbox 的容差就是 5px（= 官方 `protocol` 的 `spatial_match_threshold_px`）**。
+# 2026-10 曾按「业主指正」把它写成 20px，但**拿真实判题机报告逐案复核时被推翻**：
+#   `work\tools\dev\_offscore.py --engine official`（pred = `scoring_result (5)\final_results`，
+#   GT = `10GT`，官方值读 `report/submission/20261009T140206Z/*.json` 的 `scores`）
+#     OFFICIAL_BBOX_PX=5  → component 均值 0.487847 = 官方 0.487847，**10 案逐案全等**
+#     OFFICIAL_BBOX_PX≥8  → case 3 0.5385 / case 7 0.6667 / case 9 0.5882 都**高于**判题机
+#                           （0.4615 / 0.6250 / 0.5294）⇒ 20px 太松。
+# 也就是说 `protocol` 里那**唯一一个** 5.0 同时管引脚点距、bbox 四坐标与导线端点。
+BBOX_PX = float(os.environ.get("OFFICIAL_BBOX_PX", "5.0"))
 # 引脚**点距**（`tip_position`）的容差，默认 5.0 = 官方 `spatial_match_threshold_px`。
-# ★ 这个开关只为「量一下改成 20px 会翻回多少」而存在，**默认不动**：业主 2026-10 的指正
-# 只提到 bbox。要试：`$env:OFFICIAL_PIN_PX='20'` 再跑 `fast.py --score-only`。
+# ★ 这个开关只为「量一下改成 20px 会翻回多少」而存在，**默认不动**。要试：
+# `$env:OFFICIAL_PIN_PX='20'` 再跑 `fast.py --score-only`。
 PIN_PX = float(os.environ.get("OFFICIAL_PIN_PX", "5.0"))
+# 连通性是否把非 box 元件的脚号折成 `*`。★ **判题机不折**（字面比）：
+# 同一把尺子上 `collapse_nonbox=True` 时连通性均值 0.529815、**逐案高于**判题机
+# （case 3 0.6578 vs 0.6088、case 7 0.5303 vs 0.4443、case 10 0.4861 vs 0.4012），
+# 改成 `False` 后 0.496836 = 官方 0.496836 且 **10 案逐案全等**，
+# 连 `connectivity.diagnostics.matched_net_pairs`（case 1 的 7 对）都与报告逐对一致。
+# 要复现旧的折叠口径：`$env:OFFICIAL_COLLAPSE='1'`。
+COLLAPSE_NONBOX = os.environ.get("OFFICIAL_COLLAPSE", "0") not in ("0", "false", "False", "", "no")
 WEIGHTS = {'component': 0.30, 'pin': 0.25, 'connectivity': 0.35, 'wire': 0.10}
 
 # `hyperGraph` 里的成员引用：`U1.101` / `C151.2` / `∅208.206`
@@ -412,7 +429,8 @@ def wire_f1(gt: dict, pred: dict, pairs: Sequence[Tuple[str, str]]) -> F1:
 # ---------------------------------------------------------------------------
 
 def evaluate_case(gt_doc: dict, pred_doc: dict, case_id: str = '',
-                  collapse_nonbox: bool = True, net_mode: str = 'f1') -> CaseScore:
+                  collapse_nonbox: bool = COLLAPSE_NONBOX,
+                  net_mode: str = 'f1') -> CaseScore:
     comp = component_f1(gt_doc, pred_doc)
     pin = pin_f1(gt_doc, pred_doc)
     conn, pairs = connectivity_f1(gt_doc, pred_doc, collapse_nonbox, net_mode)

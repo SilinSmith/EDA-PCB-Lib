@@ -3958,6 +3958,97 @@ python -X utf8 ..\work\_sideest.py --arm trimdef2 --cases ..\work\_cases10gt.txt
 
 ---
 
+### 5.38 ★★ 官方尺复刻**已与判题机逐案全等**（bbox 默认 20→5、连通性 `collapse_nonbox` 默认 True→False）；`STAGE2_DROP_UNKEYED` 是**赌注**（协议尺 +8.87 / 判题机尺 +3.33）；∅NNN 的号不可从图上恢复；引线第 7 条修法判负（2026-10-19，goal 第 3 轮）
+
+**一、尺子纠错：两处默认值错了，改完 comp/pin/conn 三通道与判题机逐案全等**
+
+| 通道 | 改前 | 改后 | 证据 |
+|---|---|---|---|
+| component | `BBOX_PX = 20.0`（「业主 2026-10 指正」） | **`5.0`** = 官方 `protocol` 里唯一那个 `threshold_px` | 20px 时 case 3/7/9 = 0.5385/0.6667/0.5882，**高于**判题机的 0.4615/0.6250/0.5294；5px 时 10 案逐案全等、均值同为 **0.487847** |
+| connectivity | `collapse_nonbox=True` | **`False`**（按**字面**比 hyperGraph 引用） | True 时逐案偏高（case 3 0.6578 vs 0.6088｜case 7 0.5303 vs 0.4443｜case 10 0.4861 vs 0.4012）；改 False 后均值 **0.496836** = 官方，且 `diagnostics.matched_net_pairs` 与报告**逐对同序** |
+
+- 标定命令（不带任何环境变量即判题机口径）：`python -X utf8 work\tools\dev\_offscore.py --engine official` ⇒
+  `LOCAL mean comp 0.487847 / pin 0.458210 / conn 0.496836` **与 `scores.txt` 的三个通道完全一致**；
+  wire `0.080396` vs `0.081180`（只 case 6 差 1 段，权重 0.10 ⇒ 0.0008）；总分 44.2839 vs 44.2917。
+- 遗留（wire case 6）：我们匹配上的网对里 ≤5.5px 候选 12 个，其中 `net_8/net_14 e0/0` 的 `max_endpoint_error_px`
+  恰为 **5.000000000**（判题机认），而 `net_1/net_6` 的 `e1/3` 与 `e1/7` 共用同一个 GT 边下标 1 冲突 ⇒ 我们 11、判题机 12。
+  判为边界并列，不追。
+- 开关：`OFFICIAL_COLLAPSE=1` 复现旧折叠口径；`OFFICIAL_BBOX_PX=20` 复现旧松尺。
+
+**二、`STAGE2_DROP_UNKEYED`：两把尺子符号相反 ⇒ 是赌注，不是单向胜利**
+
+| 臂（`fast.py --cases 1,10,2,…,9 --no-vlm`） | protocol2（主尺） | 判题机复刻尺（标定后） |
+|---|---|---|
+| `=0` 保留无名框（现行默认） | **71.81** | 59.8389 |
+| `=1` 丢掉无名框 | 62.94 | **63.1704** |
+
+- 差值**全在 component**：protocol2 保留 **+8.87**（comp 0.8852→0.5894，pin/conn/wire 逐位同）；
+  判题机尺丢掉 **+3.3315**（comp 0.404835→0.515887 = **+0.1111**，pin 0.715529/netH 0.734498/netL 0.409819 逐位同）。
+- 结构（`work\_fast_out_du10off\final_results\*_Pred.json`，10 案）：`pNNN` **元件框 114 个、引脚 0 个、超图引用 0 条** ⇒
+  现行 `STAGE2_PIN_DROP_UNKEYED=1`（`assemble.py:94`）与 `STAGE2_NET_DROP_UNKEYED=1`（`:336`）已把引脚与引用剪掉，
+  `STAGE2_DROP_UNKEYED=0`（`:76`）留下的框是**纯 fp**（判题机 component 键精确、∅ 无坐标兜底 ⇒ 全 `extra`）。
+- 离线四臂（`work\_dropun_ab.py`，直接对 2026-10-09 提交的 `final_results` 打分）：A0 原样 **44.2839**｜
+  A1 丢兜底键引脚 **47.4542（+3.1704，全在 pin）**｜A2 再把引用从 hyperGraph 剪掉 47.4542（+0）｜
+  B 连元件框一起删 **51.4409（比 A2 +3.9867，全在 comp）**。
+- 连通性侧的同一件事：case 2 的 GT 有 24 条网，其中 **17 条含 ∅ 电源符号**，而我们这边**一条都没盖住**
+  （`work\_netcmp.py --cases 2`：我们 `net_1 = R8 U4` 正好盖住无电源的 `GT net_23`）——
+  因为 `STAGE2_NET_DROP_UNKEYED=1` 把引用剪了，而判题机按字面比引用 ⇒ 这些网对永远配不上。
+- 处置：**默认维持 `0`**（不给未证实的口径下注）。本条与 §5.20 的 +12.49 互为镜像，唯一能定胜负的事实仍是
+  「新判题机是否仍键精确」，而 **2026-10-14 之后我们没有任何官方报告**（全盘只有 `20261009引入\theSixthSubmission_44.29\` 那一份）。
+
+**三、∅NNN 的号不可从图上恢复（新取证 `work\_pwrnum.py`）**
+
+- case 1：GND 五个号 **109/113/117/121/125**（步长 4），3.3V 三个 **200/202/208**；**号序 ≠ 读序**
+  （读序 208,121,200,125,117,109,202,113）。
+- case 2：16 个号 104…181，主步长 4，夹着 6/8/14/5 的跳。脚号 ≈ 元件号 −2（case 1 全对），但 `∅110 → pin_83` 例外。
+- ⇒ 号是**源文件里的对象序号**（同一个 case 内两类电源还隔了 75 个号），与几何、读序、元件值都无关 ⇒
+  **42.5% 的 GT 元件在键精确口径下永久 `missing`**（10GT 254 元件 = 146 named + 108 ∅）：只能靠口径改变，不能靠算。
+
+**四、pin 通道剩余失分的分类**
+
+`python -X utf8 eda-pcb\tools\diag\_pinwhy.py --pred work\_fast_out_trimdef2\final_results --cases 1,10,2,3,4,5,6,7,8,9`：
+桶合计 `tp 93 / **position_mismatch 25** / missing 12 / name_mismatch 6 / extra 3`；逐案 pinF1 case8 0.3030｜case7 0.5333｜
+case5 0.6111｜case6 0.6429｜case1 0.7059｜case4 0.8182｜case10 0.8696｜case2 0.9677｜case3/9 1.0000 ⇒
+**最大单项 = 25 条 `position_mismatch`，正是那 5 条引线长度坏边的全部引脚**（§5.36/§5.37）。
+判题机侧同一结论：`pin_number_accuracy_on_matched = 1.000`（10/10）、`pin_name` 0.789~0.964、`tip_position` 43 条。
+
+**五、引线长度：第 7 条修法「颜色转变」判负（`work\_leadcol.py`）**
+
+| 读数 | 值 |
+|---|---|
+| 有颜色线索的边 | 35 / 37 |
+| 其中 `\|cue−GT\|≤5px` | **5** |
+| `cue` 的堆积位置 | 21 条边堆在 **19~20**（GT 是 6~22，无关）；case 5/9 的边堆在 38~41 |
+
+- 动机是 case 8（彩色图）`U1` 左边引线暗红（~140,20,20）、导线绿（~40,150,40），第 1 个「变绿」像素在 `d≈20` 而 GT `L=22`；
+  实测它量到的是「文字/引线/导线」的墨色切换，不是引线终点：唯一亮点 case 8 `U1 L` 11 脚一致给 20（err 2.0），
+  但同一规则会把 case 2/4/5/6/9/10 上本来正确的 12 改成 ~20 ⇒ **判负**。
+- ⇒ 七条修法（按名查表／墨迹外延／脚号文字框／边级墨迹簇／尺寸节距回归／线宽阶跃／**颜色转变**）**全部判负**，
+  `PIN_OUT_BOX=12` 不翻；恒 12 的坏边只有 5 条：case1 U1 R=20｜case8 U1 L=22｜case4 U1 R=6｜case6 U4 R=6｜case10 U2 B=6。
+
+**六、m02404「GND 按本质模式拆开跑」已经不是待办（指针）**
+
+- `eda-pcb\stage2\assemble.py:1657` `RAIL_SPLIT = env_on("STAGE2_RAIL_SPLIT", "1")`（默认开）+ `rail_mode()`(:1673) +
+  `_net_rail_modes()`(:1693) + `weld_nets` 拒焊「本质模式不相交」的地网(:1798) + 自检(:2108)：
+  **内部**把 `GND`/`AGND`/`VSSA`/`PGND` 当不同的地，**输出 JSON 的 `type` 仍折叠回 `gnd`** —— 正是 m02404 的要求。
+- 交付域取证：`10GT` 的 ∅ 值只有 `GND` 59 + 电源 49（`+5V` 21 / `3.3V` 13 / `VCC` 10 / `+12V` 3 / `+3.3V` 1 / `VDD_1.9V` 1），
+  **没有 AGND/PGND/DGND**；池（`200_train_cases`）里才有 `AGND` 61 / `PGND` 16 / `IGND` 12 / `I-GND` 12 / `DGND` 2 …
+- 池里含带标签特殊地的 45 个 case、184 颗元件，**没有一个与纯 `GND` 共网**（0/45）⇒ GT 确实按「本质不同的地」分开，与本实装一致。
+
+**七、复现**
+
+```bat
+cd eda-pcb
+python -X utf8 ..\work\tools\dev\_offscore.py --engine official
+python -X utf8 ..\work\tools\dev\_offscore.py --engine official --run ..\work\_fast_out_du10on
+python -X utf8 ..\work\_dropun_ab.py
+python -X utf8 ..\work\_pwrnum.py --cases 1,2
+python -X utf8 ..\work\_netcmp.py --cases 2
+python -X utf8 ..\work\_leadcol.py
+```
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |
