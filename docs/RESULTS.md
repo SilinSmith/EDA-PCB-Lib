@@ -4733,6 +4733,46 @@ python -X utf8 work\_offval.py --arms tok_dvoffvf,tok_dvms2                    :
 
 ---
 
+## §5.46 官方练习环境回传的实测读数（2026-10-09 第六次提交，回答「平台能不能用视觉」）
+
+材料：`20261009引入\theSixthSubmission_44.29\scoring_result (5)\`（判题机回传包，
+`summary.json` / `scores.txt` / `orchestration.json` / `decision_log.json` + 逐案例产物）。
+**这是目前唯一的官方真值**，此前只用到它的 `report/submission/20261009T140206Z/*.json`
+来校准 `schematic_parser/official.py`，本节的其它字段是今天新读的。
+
+| 项 | 官方实测值 | 出处 |
+| --- | --- | --- |
+| 完成情况 | 10/10 导出、0 跳过 | `summary.json` |
+| 总分 | **44.291703** | `scores.txt` |
+| 四项 F1 | 元件 0.487847 / 引脚 0.458210 / 连接 0.496836 / 导线 0.081180 | `scores.txt` |
+| token 统计 | **−1（未统计）** | `scores.txt` |
+| 墙钟 / 预算 | **924 s / 1200 s**（grace 30 s） | `orchestration.json` |
+| GPU | `gpu_devices "1"`、`NVIDIA_VISIBLE_DEVICES=void`（练习容器单卡） | `orchestration.json` / `decision_log.json` |
+| 端点 | `LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`、`LLM_MODEL=qwen3.7-plus` | `decision_log.json` |
+| ★ 视觉通道 | `vlm="auto"`、**`n=10` / `n_failed=0`**、改名 **14**、值调用 117、名调用 22、`name_err 0` | `decision_log.json` |
+| 其它配置 | `llm_mode="off"`、`imgsz=1600`、`workers=1`、`vlm_workers=4`、`do_wires=True` | `decision_log.json` |
+| 阶段一计时（case 1） | YOLO 1.01 s + CV 0.03 + 导线 0.34 + 射线 0.05 + 文本 0.05 + 引脚 0.15 ⇒ **总 2.02 s** | `decision_log.json` |
+
+**结论（三条，都是可行动的）**
+
+1. **视觉不是风险**：注入的 `qwen3.7-plus` 端点确实接受图像 —— 22 次名称问询 0 失败、
+   14 个改名生效。COMPETITION_RULES 里「疑似纯文本模型」的担忧可以降级为「已验证可用」，
+   `-vlm off` 只作为**兜底档**保留（无网络/端点变更时）。⚠️ 但这是 2026-10-09 的端点行为，
+   正式评测仍以 `preflight()` 探测结果为准（`vlm/client.py` 已有降级路径）。
+2. **时间预算比「2 小时」更紧**：练习容器给出 **1200 s 硬预算**（10 例），我们那次用了
+   **924 s**（92 s/例），其中阶段一仅 2 s/例 ⇒ **时间几乎全花在阶段二/融合与外部调用上**。
+   按 30~50 例、8×A800 正式环境估算，必须靠 `-case-workers` 扇出（外部调用是 I/O 密集，
+   可并行），并保留 `EDA_WALL_BUDGET_S` 看门狗 + 空壳兜底，否则超时案例会被双重惩罚。
+3. **平台分与本地尺子的关系**：44.29 对应的是**更早的代码状态**，不能与今天的 79.66/73.37
+   直接比；本地复刻尺只用于**相对比较与回归**，绝对分以平台回传为准。
+
+**对比赛日档位的含义**：视觉可用 ⇒ 首选 `-lean`（token −39%、分数不降）；
+token 排名吃紧或调用配额受限 ⇒ `-lean -vlm-value off`（−70%）；
+端点不可用/超时风险高 ⇒ `-offline`（0 调用，复刻尺 62.02 / 协议尺 73.37，本轮 §5.43–§5.45 已把
+它与默认档的差距从 −9.62 压到 −6.29）。
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |
