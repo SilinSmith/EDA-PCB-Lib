@@ -1,0 +1,13 @@
+# compat_allow.txt —— 「已接受」的属性链清单
+#
+# 用法：compat_audit.py scan --repo . --manifest evalenv_manifest.json --allow compat_allow.txt
+#
+# 格式：每行一条属性链，后面可以跟 `# 原因`。
+# 命中这里的属性链仍然会出现在报告里（在「已接受」一节），但**不算失败**、不影响退出码。
+#
+# 什么该写进来：确认无害、但静态扫描看不出来的情况 —— 典型是调用点已经有 hasattr 兜底，
+# 或者该文件根本不进提交包。
+# 什么**不该**写进来：还没处理的缺失属性。那是真问题，别往这里藏。
+
+cv2.ximgproc            # tools/diag/_wiretj.py:72 调用点已用 hasattr(cv2,'ximgproc') 保护；且 tools/ 整个目录不进提交包
+cv2.ximgproc.thinning   # 同上

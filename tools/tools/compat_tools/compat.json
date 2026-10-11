@@ -1,0 +1,43 @@
+{
+  "env": {
+    "python": "3.12.3",
+    "torch": "2.5.1+cu121",
+    "torchvision": "0.20.1+cu121",
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "cv2": "4.10.0",
+    "PIL": "12.3.0",
+    "ultralytics": "8.4.175",
+    "yaml": "6.0.2",
+    "psutil": "7.2.2",
+    "matplotlib": "3.11.2",
+    "torch.cuda.is_available": "True",
+    "torch.version.cuda": "12.1",
+    "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "cv2 有 ximgproc(contrib)": "False",
+    "opencv dist-info": "opencv_python_headless-4.10.0.84.dist-info"
+  },
+  "n_chains": 183,
+  "missing": [],
+  "unknown": [],
+  "accepted": [
+    {
+      "chain": "cv2.ximgproc",
+      "failed_at": "cv2.ximgproc",
+      "sites": [
+        "tools/diag/_wiretj.py:72"
+      ],
+      "reason": "tools/diag/_wiretj.py:72 调用点已用 hasattr(cv2,'ximgproc') 保护；且 tools/ 整个目录不进提交包"
+    },
+    {
+      "chain": "cv2.ximgproc.thinning",
+      "failed_at": "cv2.ximgproc",
+      "sites": [
+        "tools/diag/_wiretj.py:72"
+      ],
+      "reason": "同上"
+    }
+  ],
+  "np_cross": [],
+  "manifest": "C:\\Users\\22647\\Documents\\deepseek-harness\\default-workspace\\团队仓库_待提交\\tools\\版本适配\\evalenv_manifest.json"
+}
