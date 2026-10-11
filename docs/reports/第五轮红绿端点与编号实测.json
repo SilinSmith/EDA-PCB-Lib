@@ -1,0 +1,4092 @@
+{
+  "schema_version": 1,
+  "run_date": "2026-10-09",
+  "baseline_commit": "653158ae",
+  "final_arm": "color_number_ocr",
+  "scope": {
+    "official_cases": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10"
+    ],
+    "color_diagnostic_cases": [
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10"
+    ],
+    "gt_box_pins": 110,
+    "type_reference": "official10/type_list.md",
+    "gt_files_modified": false,
+    "public_200_300_used_for_reliable_evaluation": false
+  },
+  "evidence_boundary": "fixed detected components, wire segments and OCR reads; rerun color terminals, binding, assembly and net attachment; not a fresh detector/OCR run; extra external digit OCR is freshly run with the same captured checkpoint",
+  "coordinate_rule": "connected color pins use measured red/green transitions; floating pins use measured red endpoints",
+  "coordinate_conventions": {
+    "stage1": "original-image pixels, top-left origin",
+    "final_json": "original-image pixels, bottom-left origin"
+  },
+  "diagnostic_definition": "Same GT component and pin number, exact pin name, same physical side, tangential error <= 5 pixels; normal displacement ignored. Not an official score.",
+  "diagnostic": {
+    "baseline_correct": 37,
+    "color_without_extra_number_ocr_correct": 54,
+    "final_correct": 60,
+    "original_color_strict_tp": 34,
+    "original_strict_tp_name_number_side_row_regressions": 0,
+    "correct_name_number_side_row_but_gt_coordinate_conflicts": 54,
+    "remaining_errors": 50
+  },
+  "scores": {
+    "baseline": {
+      "cases": 10,
+      "mean_score": 54.8662,
+      "component_f1": 0.791879,
+      "pin_f1": 0.438992,
+      "net_hypergraph_f1": 0.551297,
+      "net_line_f1": 0.083961,
+      "pin_counts": {
+        "tp": 46,
+        "fp": 37,
+        "fn": 90
+      }
+    },
+    "final": {
+      "cases": 10,
+      "mean_score": 47.7962,
+      "component_f1": 0.791879,
+      "pin_f1": 0.11167,
+      "net_hypergraph_f1": 0.582537,
+      "net_line_f1": 0.085929,
+      "pin_counts": {
+        "tp": 18,
+        "fp": 91,
+        "fn": 118
+      }
+    }
+  },
+  "ab_scores": {
+    "baseline": {
+      "cases": 10,
+      "mean_score": 54.8662,
+      "component_f1": 0.791879,
+      "pin_f1": 0.438992,
+      "net_hypergraph_f1": 0.551297,
+      "net_line_f1": 0.083961,
+      "pin_counts": {
+        "tp": 46,
+        "fp": 37,
+        "fn": 90
+      }
+    },
+    "binding_only": {
+      "cases": 10,
+      "mean_score": 54.8662,
+      "component_f1": 0.791879,
+      "pin_f1": 0.438992,
+      "net_hypergraph_f1": 0.551297,
+      "net_line_f1": 0.083961,
+      "pin_counts": {
+        "tp": 46,
+        "fp": 37,
+        "fn": 90
+      }
+    },
+    "color_rule": {
+      "cases": 10,
+      "mean_score": 47.5204,
+      "component_f1": 0.791879,
+      "pin_f1": 0.111177,
+      "net_hypergraph_f1": 0.575502,
+      "net_line_f1": 0.084198,
+      "pin_counts": {
+        "tp": 18,
+        "fp": 91,
+        "fn": 118
+      }
+    },
+    "color_legacy_binding": {
+      "cases": 10,
+      "mean_score": 46.7217,
+      "component_f1": 0.791879,
+      "pin_f1": 0.096988,
+      "net_hypergraph_f1": 0.56342,
+      "net_line_f1": 0.082093,
+      "pin_counts": {
+        "tp": 16,
+        "fp": 79,
+        "fn": 120
+      }
+    },
+    "color_number_ocr": {
+      "cases": 10,
+      "mean_score": 47.7962,
+      "component_f1": 0.791879,
+      "pin_f1": 0.11167,
+      "net_hypergraph_f1": 0.582537,
+      "net_line_f1": 0.085929,
+      "pin_counts": {
+        "tp": 18,
+        "fp": 91,
+        "fn": 118
+      }
+    }
+  },
+  "ab_color_diagnostic_correct": {
+    "baseline": 37,
+    "binding_only": 37,
+    "color_rule": 54,
+    "color_legacy_binding": 48,
+    "color_number_ocr": 60
+  },
+  "per_case_color_diagnostic": [
+    {
+      "case": "2",
+      "gt": 16,
+      "old_axis_correct": 6,
+      "new_axis_correct": 16,
+      "color_points": 16,
+      "independent_pixel_supported": 16,
+      "coordinate_conflicts": 16,
+      "remaining_errors": 0
+    },
+    {
+      "case": "3",
+      "gt": 6,
+      "old_axis_correct": 4,
+      "new_axis_correct": 4,
+      "color_points": 6,
+      "independent_pixel_supported": 6,
+      "coordinate_conflicts": 3,
+      "remaining_errors": 2
+    },
+    {
+      "case": "4",
+      "gt": 12,
+      "old_axis_correct": 6,
+      "new_axis_correct": 8,
+      "color_points": 12,
+      "independent_pixel_supported": 12,
+      "coordinate_conflicts": 6,
+      "remaining_errors": 4
+    },
+    {
+      "case": "5",
+      "gt": 18,
+      "old_axis_correct": 6,
+      "new_axis_correct": 7,
+      "color_points": 18,
+      "independent_pixel_supported": 17,
+      "coordinate_conflicts": 7,
+      "remaining_errors": 11
+    },
+    {
+      "case": "6",
+      "gt": 16,
+      "old_axis_correct": 3,
+      "new_axis_correct": 8,
+      "color_points": 16,
+      "independent_pixel_supported": 16,
+      "coordinate_conflicts": 8,
+      "remaining_errors": 8
+    },
+    {
+      "case": "7",
+      "gt": 8,
+      "old_axis_correct": 2,
+      "new_axis_correct": 4,
+      "color_points": 8,
+      "independent_pixel_supported": 8,
+      "coordinate_conflicts": 4,
+      "remaining_errors": 4
+    },
+    {
+      "case": "8",
+      "gt": 16,
+      "old_axis_correct": 4,
+      "new_axis_correct": 7,
+      "color_points": 16,
+      "independent_pixel_supported": 16,
+      "coordinate_conflicts": 5,
+      "remaining_errors": 9
+    },
+    {
+      "case": "9",
+      "gt": 6,
+      "old_axis_correct": 3,
+      "new_axis_correct": 3,
+      "color_points": 6,
+      "independent_pixel_supported": 6,
+      "coordinate_conflicts": 3,
+      "remaining_errors": 3
+    },
+    {
+      "case": "10",
+      "gt": 12,
+      "old_axis_correct": 3,
+      "new_axis_correct": 3,
+      "color_points": 12,
+      "independent_pixel_supported": 12,
+      "coordinate_conflicts": 2,
+      "remaining_errors": 9
+    }
+  ],
+  "per_case_local_scores": [
+    {
+      "case": "1",
+      "baseline": {
+        "score": 43.489,
+        "component_f1": 0.454545,
+        "pin_f1": 0.510638,
+        "net_hypergraph_f1": 0.480769,
+        "net_line_f1": 0.025974,
+        "pin_counts": {
+          "tp": 12,
+          "fp": 9,
+          "fn": 14
+        }
+      },
+      "final": {
+        "score": 43.489,
+        "component_f1": 0.454545,
+        "pin_f1": 0.510638,
+        "net_hypergraph_f1": 0.480769,
+        "net_line_f1": 0.025974,
+        "pin_counts": {
+          "tp": 12,
+          "fp": 9,
+          "fn": 14
+        }
+      },
+      "extra_number_reads": 0
+    },
+    {
+      "case": "2",
+      "baseline": {
+        "score": 50.2025,
+        "component_f1": 0.785714,
+        "pin_f1": 0.48,
+        "net_hypergraph_f1": 0.40625,
+        "net_line_f1": 0.041237,
+        "pin_counts": {
+          "tp": 6,
+          "fp": 3,
+          "fn": 10
+        }
+      },
+      "final": {
+        "score": 42.78,
+        "component_f1": 0.785714,
+        "pin_f1": 0.0,
+        "net_hypergraph_f1": 0.535211,
+        "net_line_f1": 0.047619,
+        "pin_counts": {
+          "tp": 0,
+          "fp": 16,
+          "fn": 16
+        }
+      },
+      "extra_number_reads": 26
+    },
+    {
+      "case": "3",
+      "baseline": {
+        "score": 67.1551,
+        "component_f1": 0.884615,
+        "pin_f1": 0.727273,
+        "net_hypergraph_f1": 0.628571,
+        "net_line_f1": 0.043478,
+        "pin_counts": {
+          "tp": 4,
+          "fp": 1,
+          "fn": 2
+        }
+      },
+      "final": {
+        "score": 53.5187,
+        "component_f1": 0.884615,
+        "pin_f1": 0.181818,
+        "net_hypergraph_f1": 0.628571,
+        "net_line_f1": 0.043478,
+        "pin_counts": {
+          "tp": 1,
+          "fp": 4,
+          "fn": 5
+        }
+      },
+      "extra_number_reads": 9
+    },
+    {
+      "case": "4",
+      "baseline": {
+        "score": 58.4163,
+        "component_f1": 0.816327,
+        "pin_f1": 0.526316,
+        "net_hypergraph_f1": 0.5625,
+        "net_line_f1": 0.108108,
+        "pin_counts": {
+          "tp": 5,
+          "fp": 2,
+          "fn": 7
+        }
+      },
+      "final": {
+        "score": 51.6278,
+        "component_f1": 0.816327,
+        "pin_f1": 0.190476,
+        "net_hypergraph_f1": 0.606061,
+        "net_line_f1": 0.116402,
+        "pin_counts": {
+          "tp": 2,
+          "fp": 7,
+          "fn": 10
+        }
+      },
+      "extra_number_reads": 14
+    },
+    {
+      "case": "5",
+      "baseline": {
+        "score": 55.8723,
+        "component_f1": 0.846154,
+        "pin_f1": 0.344828,
+        "net_hypergraph_f1": 0.591549,
+        "net_line_f1": 0.116279,
+        "pin_counts": {
+          "tp": 5,
+          "fp": 6,
+          "fn": 13
+        }
+      },
+      "final": {
+        "score": 47.4314,
+        "component_f1": 0.846154,
+        "pin_f1": 0.0,
+        "net_hypergraph_f1": 0.594595,
+        "net_line_f1": 0.123596,
+        "pin_counts": {
+          "tp": 0,
+          "fp": 16,
+          "fn": 18
+        }
+      },
+      "extra_number_reads": 27
+    },
+    {
+      "case": "6",
+      "baseline": {
+        "score": 45.0843,
+        "component_f1": 0.710526,
+        "pin_f1": 0.26087,
+        "net_hypergraph_f1": 0.469388,
+        "net_line_f1": 0.081818,
+        "pin_counts": {
+          "tp": 3,
+          "fp": 4,
+          "fn": 13
+        }
+      },
+      "final": {
+        "score": 42.3353,
+        "component_f1": 0.710526,
+        "pin_f1": 0.0,
+        "net_hypergraph_f1": 0.574257,
+        "net_line_f1": 0.09205,
+        "pin_counts": {
+          "tp": 0,
+          "fp": 10,
+          "fn": 16
+        }
+      },
+      "extra_number_reads": 17
+    },
+    {
+      "case": "7",
+      "baseline": {
+        "score": 57.0153,
+        "component_f1": 0.875,
+        "pin_f1": 0.4,
+        "net_hypergraph_f1": 0.575342,
+        "net_line_f1": 0.062827,
+        "pin_counts": {
+          "tp": 2,
+          "fp": 0,
+          "fn": 6
+        }
+      },
+      "final": {
+        "score": 45.8906,
+        "component_f1": 0.875,
+        "pin_f1": 0.0,
+        "net_hypergraph_f1": 0.552632,
+        "net_line_f1": 0.029851,
+        "pin_counts": {
+          "tp": 0,
+          "fp": 5,
+          "fn": 8
+        }
+      },
+      "extra_number_reads": 8
+    },
+    {
+      "case": "8",
+      "baseline": {
+        "score": 58.0423,
+        "component_f1": 0.85,
+        "pin_f1": 0.24,
+        "net_hypergraph_f1": 0.698413,
+        "net_line_f1": 0.20979,
+        "pin_counts": {
+          "tp": 3,
+          "fp": 6,
+          "fn": 13
+        }
+      },
+      "final": {
+        "score": 55.924,
+        "component_f1": 0.85,
+        "pin_f1": 0.142857,
+        "net_hypergraph_f1": 0.707692,
+        "net_line_f1": 0.208333,
+        "pin_counts": {
+          "tp": 2,
+          "fp": 10,
+          "fn": 14
+        }
+      },
+      "extra_number_reads": 36
+    },
+    {
+      "case": "9",
+      "baseline": {
+        "score": 62.3791,
+        "component_f1": 0.882353,
+        "pin_f1": 0.6,
+        "net_hypergraph_f1": 0.583333,
+        "net_line_f1": 0.04918,
+        "pin_counts": {
+          "tp": 3,
+          "fp": 1,
+          "fn": 3
+        }
+      },
+      "final": {
+        "score": 48.391,
+        "component_f1": 0.882353,
+        "pin_f1": 0.0,
+        "net_hypergraph_f1": 0.612245,
+        "net_line_f1": 0.04918,
+        "pin_counts": {
+          "tp": 0,
+          "fp": 5,
+          "fn": 6
+        }
+      },
+      "extra_number_reads": 6
+    },
+    {
+      "case": "10",
+      "baseline": {
+        "score": 51.0058,
+        "component_f1": 0.813559,
+        "pin_f1": 0.3,
+        "net_hypergraph_f1": 0.516854,
+        "net_line_f1": 0.100917,
+        "pin_counts": {
+          "tp": 3,
+          "fp": 5,
+          "fn": 9
+        }
+      },
+      "final": {
+        "score": 46.5742,
+        "component_f1": 0.813559,
+        "pin_f1": 0.090909,
+        "net_hypergraph_f1": 0.533333,
+        "net_line_f1": 0.122807,
+        "pin_counts": {
+          "tp": 1,
+          "fp": 9,
+          "fn": 11
+        }
+      },
+      "extra_number_reads": 21
+    }
+  ],
+  "geometry_audit": {
+    "measured_color_points": 110,
+    "connected_true": 100,
+    "connected_false": 7,
+    "connected_unknown": 3,
+    "independent_pixel_supported": 109,
+    "independent_requires_visual_review": 1,
+    "visual_review": {
+      "case": "5",
+      "component_id": "c0001",
+      "point_img": [
+        678.0,
+        310.0
+      ],
+      "result": "Confirmed green no-connect cross in nc-bend-contact-sheet.png; connected=False remains appropriate."
+    },
+    "unknown_connection_visual_review": "All 3 unknown points are immediate bends in cases 3, 7 and 9; retain legacy attachment behavior."
+  },
+  "validation": {
+    "tests_run": 194,
+    "tests_result": "OK",
+    "run_case_frozen_upstream_integration": [
+      {
+        "case": "3",
+        "pipeline_errors": [],
+        "box_color_pins": 6,
+        "network_index_valid": true
+      },
+      {
+        "case": "8",
+        "pipeline_errors": [],
+        "box_color_pins": 16,
+        "network_index_valid": true
+      }
+    ],
+    "black_case_1_final_document_equals_baseline": true,
+    "source_hashes_checked_after_replay": true
+  },
+  "known_limits": [
+    "The 10GT cases are development data, not an independent hidden test.",
+    "Complete detector and initial OCR pipeline were not rerun.",
+    "Unseen styles, mixed black/color pins, very short/long/thick stubs, or incomplete red frames are not guaranteed.",
+    "Case 3 U1.pin_6 LX remains missing from final numbered output.",
+    "OCR spelling and number errors remain; 50 color GT entries do not satisfy the diagnostic.",
+    "Strict score on the current GT is lower; this change is not evidence of improved official contest score."
+  ],
+  "coordinate_conflicts": [
+    {
+      "case": "2",
+      "component": "U1",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 621.0,
+          "y": 800.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "GND",
+        "point": {
+          "x": 609.0,
+          "y": 800.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.0,
+        "signed_normal_error": -12.0,
+        "strict_5px": false,
+        "distance": 12.0
+      }
+    },
+    {
+      "case": "2",
+      "component": "U1",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "VCC",
+        "point": {
+          "x": 621.0,
+          "y": 781.0
+        }
+      },
+      "baseline": {
+        "pinname": "GND",
+        "point": {
+          "x": 616.3,
+          "y": 800.0
+        }
+      },
+      "new": {
+        "pinname": "VCC",
+        "point": {
+          "x": 609.0,
+          "y": 780.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -12.0,
+        "strict_5px": false,
+        "distance": 12.041594578792296
+      }
+    },
+    {
+      "case": "2",
+      "component": "U1",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "SCL",
+        "point": {
+          "x": 621.0,
+          "y": 760.0
+        }
+      },
+      "baseline": {
+        "pinname": "SCL",
+        "point": {
+          "x": 616.3,
+          "y": 761.5
+        }
+      },
+      "new": {
+        "pinname": "SCL",
+        "point": {
+          "x": 609.0,
+          "y": 760.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.5,
+        "signed_normal_error": -12.0,
+        "strict_5px": false,
+        "distance": 12.010412149464313
+      }
+    },
+    {
+      "case": "2",
+      "component": "U1",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "SDA",
+        "point": {
+          "x": 621.0,
+          "y": 740.0
+        }
+      },
+      "baseline": {
+        "pinname": "SDA",
+        "point": {
+          "x": 616.3,
+          "y": 740.0
+        }
+      },
+      "new": {
+        "pinname": "SDA",
+        "point": {
+          "x": 609.0,
+          "y": 741.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -12.0,
+        "strict_5px": false,
+        "distance": 12.041594578792296
+      }
+    },
+    {
+      "case": "2",
+      "component": "U2",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 1022.0,
+          "y": 806.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "GND",
+        "point": {
+          "x": 1010.0,
+          "y": 806.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.0,
+        "signed_normal_error": -12.0,
+        "strict_5px": false,
+        "distance": 12.0
+      }
+    },
+    {
+      "case": "2",
+      "component": "U2",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "VCC",
+        "point": {
+          "x": 1022.0,
+          "y": 787.0
+        }
+      },
+      "baseline": {
+        "pinname": "VCC",
+        "point": {
+          "x": 1018.0,
+          "y": 786.5
+        }
+      },
+      "new": {
+        "pinname": "VCC",
+        "point": {
+          "x": 1010.0,
+          "y": 786.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -12.0,
+        "strict_5px": false,
+        "distance": 12.041594578792296
+      }
+    },
+    {
+      "case": "2",
+      "component": "U2",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "SCL",
+        "point": {
+          "x": 1022.0,
+          "y": 767.0
+        }
+      },
+      "baseline": {
+        "pinname": "SCL",
+        "point": {
+          "x": 1018.0,
+          "y": 767.0
+        }
+      },
+      "new": {
+        "pinname": "SCL",
+        "point": {
+          "x": 1010.0,
+          "y": 766.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -12.0,
+        "strict_5px": false,
+        "distance": 12.041594578792296
+      }
+    },
+    {
+      "case": "2",
+      "component": "U2",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "SDA",
+        "point": {
+          "x": 1022.0,
+          "y": 747.0
+        }
+      },
+      "baseline": {
+        "pinname": "SDA",
+        "point": {
+          "x": 1018.0,
+          "y": 746.0
+        }
+      },
+      "new": {
+        "pinname": "SDA",
+        "point": {
+          "x": 1010.0,
+          "y": 746.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.5,
+        "signed_normal_error": -12.0,
+        "strict_5px": false,
+        "distance": 12.010412149464313
+      }
+    },
+    {
+      "case": "2",
+      "component": "U3",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 811.0,
+          "y": 427.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "GND",
+        "point": {
+          "x": 798.5,
+          "y": 426.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.5,
+        "signed_normal_error": -12.5,
+        "strict_5px": false,
+        "distance": 12.509996003196804
+      }
+    },
+    {
+      "case": "2",
+      "component": "U3",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "VCC",
+        "point": {
+          "x": 811.0,
+          "y": 407.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "VCC",
+        "point": {
+          "x": 798.5,
+          "y": 407.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.0,
+        "signed_normal_error": -12.5,
+        "strict_5px": false,
+        "distance": 12.5
+      }
+    },
+    {
+      "case": "2",
+      "component": "U3",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "SCL",
+        "point": {
+          "x": 811.0,
+          "y": 387.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "SCL",
+        "point": {
+          "x": 798.0,
+          "y": 387.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.0,
+        "signed_normal_error": -13.0,
+        "strict_5px": false,
+        "distance": 13.0
+      }
+    },
+    {
+      "case": "2",
+      "component": "U3",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "SDA",
+        "point": {
+          "x": 811.0,
+          "y": 367.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "SDA",
+        "point": {
+          "x": 797.5,
+          "y": 367.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.0,
+        "signed_normal_error": -13.5,
+        "strict_5px": false,
+        "distance": 13.5
+      }
+    },
+    {
+      "case": "2",
+      "component": "U4",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 1281.0,
+          "y": 433.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "GND",
+        "point": {
+          "x": 1269.0,
+          "y": 432.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -12.0,
+        "strict_5px": false,
+        "distance": 12.041594578792296
+      }
+    },
+    {
+      "case": "2",
+      "component": "U4",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "VCC",
+        "point": {
+          "x": 1281.0,
+          "y": 413.0
+        }
+      },
+      "baseline": {
+        "pinname": "GND",
+        "point": {
+          "x": 1276.4,
+          "y": 434.0
+        }
+      },
+      "new": {
+        "pinname": "VCC",
+        "point": {
+          "x": 1269.0,
+          "y": 412.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.5,
+        "signed_normal_error": -12.0,
+        "strict_5px": false,
+        "distance": 12.010412149464313
+      }
+    },
+    {
+      "case": "2",
+      "component": "U4",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "SCL",
+        "point": {
+          "x": 1281.0,
+          "y": 392.0
+        }
+      },
+      "baseline": {
+        "pinname": "VCC",
+        "point": {
+          "x": 1276.4,
+          "y": 412.5
+        }
+      },
+      "new": {
+        "pinname": "SCL",
+        "point": {
+          "x": 1269.0,
+          "y": 393.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -12.0,
+        "strict_5px": false,
+        "distance": 12.041594578792296
+      }
+    },
+    {
+      "case": "2",
+      "component": "U4",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "SDA",
+        "point": {
+          "x": 1281.0,
+          "y": 374.0
+        }
+      },
+      "baseline": {
+        "pinname": "SDA",
+        "point": {
+          "x": 1276.4,
+          "y": 372.5
+        }
+      },
+      "new": {
+        "pinname": "SDA",
+        "point": {
+          "x": 1269.0,
+          "y": 373.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -12.0,
+        "strict_5px": false,
+        "distance": 12.041594578792296
+      }
+    },
+    {
+      "case": "3",
+      "component": "U1",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "BS",
+        "point": {
+          "x": 946.0,
+          "y": 742.0
+        }
+      },
+      "baseline": {
+        "pinname": "BS",
+        "point": {
+          "x": 946.1,
+          "y": 741.0
+        }
+      },
+      "new": {
+        "pinname": "BS",
+        "point": {
+          "x": 953.0,
+          "y": 741.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.5,
+        "signed_normal_error": 7.0,
+        "strict_5px": false,
+        "distance": 7.0178344238090995
+      }
+    },
+    {
+      "case": "3",
+      "component": "U1",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 801.0,
+          "y": 742.0
+        }
+      },
+      "baseline": {
+        "pinname": "GND",
+        "point": {
+          "x": 804.1,
+          "y": 742.0
+        }
+      },
+      "new": {
+        "pinname": "GND",
+        "point": {
+          "x": 796.0,
+          "y": 741.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.5,
+        "signed_normal_error": -5.0,
+        "strict_5px": false,
+        "distance": 5.024937810560445
+      }
+    },
+    {
+      "case": "3",
+      "component": "U1",
+      "pin": "pin_5",
+      "gt": {
+        "pinname": "IN",
+        "point": {
+          "x": 801.0,
+          "y": 772.0
+        }
+      },
+      "baseline": {
+        "pinname": "IN",
+        "point": {
+          "x": 804.1,
+          "y": 772.5
+        }
+      },
+      "new": {
+        "pinname": "IN",
+        "point": {
+          "x": 796.0,
+          "y": 771.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -5.0,
+        "strict_5px": false,
+        "distance": 5.0990195135927845
+      }
+    },
+    {
+      "case": "4",
+      "component": "U1",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "VSS",
+        "point": {
+          "x": 398.0,
+          "y": 821.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "VSS",
+        "point": {
+          "x": 390.5,
+          "y": 822.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -7.5,
+        "strict_5px": false,
+        "distance": 7.566372975210778
+      }
+    },
+    {
+      "case": "4",
+      "component": "U1",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "VIN",
+        "point": {
+          "x": 535.0,
+          "y": 812.0
+        }
+      },
+      "baseline": {
+        "pinname": "VIN",
+        "point": {
+          "x": 541.1,
+          "y": 812.5
+        }
+      },
+      "new": {
+        "pinname": "VIN",
+        "point": {
+          "x": 547.0,
+          "y": 812.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.0,
+        "signed_normal_error": 12.0,
+        "strict_5px": false,
+        "distance": 12.0
+      }
+    },
+    {
+      "case": "4",
+      "component": "U2",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "VOUT",
+        "point": {
+          "x": 1541.0,
+          "y": 792.0
+        }
+      },
+      "baseline": {
+        "pinname": "VOUT",
+        "point": {
+          "x": 1540.8,
+          "y": 791.5
+        }
+      },
+      "new": {
+        "pinname": "VOUT",
+        "point": {
+          "x": 1547.0,
+          "y": 792.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.0,
+        "signed_normal_error": 6.0,
+        "strict_5px": false,
+        "distance": 6.0
+      }
+    },
+    {
+      "case": "4",
+      "component": "U3",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 956.0,
+          "y": 340.0
+        }
+      },
+      "baseline": {
+        "pinname": "GND",
+        "point": {
+          "x": 958.3,
+          "y": 339.5
+        }
+      },
+      "new": {
+        "pinname": "GND",
+        "point": {
+          "x": 964.5,
+          "y": 339.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.5,
+        "signed_normal_error": 8.5,
+        "strict_5px": false,
+        "distance": 8.514693182963201
+      }
+    },
+    {
+      "case": "4",
+      "component": "U3",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "BAT",
+        "point": {
+          "x": 956.0,
+          "y": 359.0
+        }
+      },
+      "baseline": {
+        "pinname": "BAT",
+        "point": {
+          "x": 958.3,
+          "y": 360.0
+        }
+      },
+      "new": {
+        "pinname": "BAT",
+        "point": {
+          "x": 964.5,
+          "y": 359.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.0,
+        "signed_normal_error": 8.5,
+        "strict_5px": false,
+        "distance": 8.5
+      }
+    },
+    {
+      "case": "4",
+      "component": "U3",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "VCC",
+        "point": {
+          "x": 776.0,
+          "y": 360.0
+        }
+      },
+      "baseline": {
+        "pinname": "VCC",
+        "point": {
+          "x": 776.2,
+          "y": 359.0
+        }
+      },
+      "new": {
+        "pinname": "VCC",
+        "point": {
+          "x": 768.0,
+          "y": 359.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -8.0,
+        "strict_5px": false,
+        "distance": 8.06225774829855
+      }
+    },
+    {
+      "case": "5",
+      "component": "U1",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 651.0,
+          "y": 767.0
+        }
+      },
+      "baseline": {
+        "pinname": "GND",
+        "point": {
+          "x": 654.6,
+          "y": 765.5
+        }
+      },
+      "new": {
+        "pinname": "GND",
+        "point": {
+          "x": 681.0,
+          "y": 766.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 1.0,
+        "signed_normal_error": 30.0,
+        "strict_5px": false,
+        "distance": 30.01666203960727
+      }
+    },
+    {
+      "case": "5",
+      "component": "U1",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "EN",
+        "point": {
+          "x": 517.0,
+          "y": 786.0
+        }
+      },
+      "baseline": {
+        "pinname": "EN",
+        "point": {
+          "x": 512.1,
+          "y": 785.0
+        }
+      },
+      "new": {
+        "pinname": "EN",
+        "point": {
+          "x": 485.0,
+          "y": 786.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.0,
+        "signed_normal_error": -32.0,
+        "strict_5px": false,
+        "distance": 32.0
+      }
+    },
+    {
+      "case": "5",
+      "component": "U1",
+      "pin": "pin_5",
+      "gt": {
+        "pinname": "L",
+        "point": {
+          "x": 517.0,
+          "y": 865.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "L",
+        "point": {
+          "x": 485.0,
+          "y": 865.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.0,
+        "signed_normal_error": -32.0,
+        "strict_5px": false,
+        "distance": 32.0
+      }
+    },
+    {
+      "case": "5",
+      "component": "U2",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 1639.0,
+          "y": 537.0
+        }
+      },
+      "baseline": {
+        "pinname": "GND",
+        "point": {
+          "x": 1640.7,
+          "y": 536.0
+        }
+      },
+      "new": {
+        "pinname": "GND",
+        "point": {
+          "x": 1667.0,
+          "y": 537.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.0,
+        "signed_normal_error": 28.0,
+        "strict_5px": false,
+        "distance": 28.0
+      }
+    },
+    {
+      "case": "5",
+      "component": "U2",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "EN",
+        "point": {
+          "x": 1498.0,
+          "y": 557.0
+        }
+      },
+      "baseline": {
+        "pinname": "EN",
+        "point": {
+          "x": 1498.5,
+          "y": 556.0
+        }
+      },
+      "new": {
+        "pinname": "EN",
+        "point": {
+          "x": 1471.5,
+          "y": 556.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.5,
+        "signed_normal_error": -26.5,
+        "strict_5px": false,
+        "distance": 26.504716561397142
+      }
+    },
+    {
+      "case": "5",
+      "component": "U2",
+      "pin": "pin_5",
+      "gt": {
+        "pinname": "L",
+        "point": {
+          "x": 1498.0,
+          "y": 636.0
+        }
+      },
+      "baseline": {
+        "pinname": "L",
+        "point": {
+          "x": 1498.5,
+          "y": 635.5
+        }
+      },
+      "new": {
+        "pinname": "L",
+        "point": {
+          "x": 1471.0,
+          "y": 635.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.5,
+        "signed_normal_error": -27.0,
+        "strict_5px": false,
+        "distance": 27.004629232781554
+      }
+    },
+    {
+      "case": "5",
+      "component": "U3",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "VIN",
+        "point": {
+          "x": 537.0,
+          "y": 322.0
+        }
+      },
+      "baseline": {
+        "pinname": "VIN",
+        "point": {
+          "x": 539.6,
+          "y": 322.0
+        }
+      },
+      "new": {
+        "pinname": "VIN",
+        "point": {
+          "x": 532.0,
+          "y": 321.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.5,
+        "signed_normal_error": -5.0,
+        "strict_5px": false,
+        "distance": 5.024937810560445
+      }
+    },
+    {
+      "case": "6",
+      "component": "U2",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "OUT",
+        "point": {
+          "x": 790.0,
+          "y": 892.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "OUT",
+        "point": {
+          "x": 799.5,
+          "y": 891.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 1.0,
+        "signed_normal_error": 9.5,
+        "strict_5px": false,
+        "distance": 9.5524865872714
+      }
+    },
+    {
+      "case": "6",
+      "component": "U2",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 790.0,
+          "y": 872.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "GND",
+        "point": {
+          "x": 799.5,
+          "y": 871.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 1.0,
+        "signed_normal_error": 9.5,
+        "strict_5px": false,
+        "distance": 9.5524865872714
+      }
+    },
+    {
+      "case": "6",
+      "component": "U2",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "EN",
+        "point": {
+          "x": 649.0,
+          "y": 852.0
+        }
+      },
+      "baseline": {
+        "pinname": "EN",
+        "point": {
+          "x": 650.2,
+          "y": 851.0
+        }
+      },
+      "new": {
+        "pinname": "EN",
+        "point": {
+          "x": 642.0,
+          "y": 851.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -7.0,
+        "strict_5px": false,
+        "distance": 7.0710678118654755
+      }
+    },
+    {
+      "case": "6",
+      "component": "U2",
+      "pin": "pin_5",
+      "gt": {
+        "pinname": "IN",
+        "point": {
+          "x": 649.0,
+          "y": 891.0
+        }
+      },
+      "baseline": {
+        "pinname": "IN",
+        "point": {
+          "x": 650.2,
+          "y": 891.0
+        }
+      },
+      "new": {
+        "pinname": "IN",
+        "point": {
+          "x": 642.0,
+          "y": 891.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.0,
+        "signed_normal_error": -7.0,
+        "strict_5px": false,
+        "distance": 7.0
+      }
+    },
+    {
+      "case": "6",
+      "component": "U4",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "OUT",
+        "point": {
+          "x": 1757.0,
+          "y": 903.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "OUT",
+        "point": {
+          "x": 1769.5,
+          "y": 902.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.5,
+        "signed_normal_error": 12.5,
+        "strict_5px": false,
+        "distance": 12.509996003196804
+      }
+    },
+    {
+      "case": "6",
+      "component": "U4",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 1757.0,
+          "y": 883.0
+        }
+      },
+      "baseline": {
+        "pinname": "OUT",
+        "point": {
+          "x": 1763.2,
+          "y": 902.0
+        }
+      },
+      "new": {
+        "pinname": "GND",
+        "point": {
+          "x": 1769.5,
+          "y": 883.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.0,
+        "signed_normal_error": 12.5,
+        "strict_5px": false,
+        "distance": 12.5
+      }
+    },
+    {
+      "case": "6",
+      "component": "U4",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "EN",
+        "point": {
+          "x": 1620.0,
+          "y": 863.0
+        }
+      },
+      "baseline": {
+        "pinname": "EN",
+        "point": {
+          "x": 1620.2,
+          "y": 862.5
+        }
+      },
+      "new": {
+        "pinname": "EN",
+        "point": {
+          "x": 1613.0,
+          "y": 863.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.0,
+        "signed_normal_error": -7.0,
+        "strict_5px": false,
+        "distance": 7.0
+      }
+    },
+    {
+      "case": "6",
+      "component": "U4",
+      "pin": "pin_5",
+      "gt": {
+        "pinname": "IN",
+        "point": {
+          "x": 1620.0,
+          "y": 903.0
+        }
+      },
+      "baseline": {
+        "pinname": "IN",
+        "point": {
+          "x": 1643.8,
+          "y": 933.8
+        }
+      },
+      "new": {
+        "pinname": "IN",
+        "point": {
+          "x": 1613.0,
+          "y": 902.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.5,
+        "signed_normal_error": -7.0,
+        "strict_5px": false,
+        "distance": 7.0178344238090995
+      }
+    },
+    {
+      "case": "7",
+      "component": "U1",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "IN",
+        "point": {
+          "x": 809.0,
+          "y": 659.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "IN",
+        "point": {
+          "x": 803.0,
+          "y": 659.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.0,
+        "signed_normal_error": -6.0,
+        "strict_5px": false,
+        "distance": 6.0
+      }
+    },
+    {
+      "case": "7",
+      "component": "U1",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "SW",
+        "point": {
+          "x": 973.0,
+          "y": 620.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "SW",
+        "point": {
+          "x": 979.0,
+          "y": 620.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.0,
+        "signed_normal_error": 6.0,
+        "strict_5px": false,
+        "distance": 6.0
+      }
+    },
+    {
+      "case": "7",
+      "component": "U1",
+      "pin": "pin_5",
+      "gt": {
+        "pinname": "BST",
+        "point": {
+          "x": 973.0,
+          "y": 659.0
+        }
+      },
+      "baseline": {
+        "pinname": "BST",
+        "point": {
+          "x": 972.0,
+          "y": 660.0
+        }
+      },
+      "new": {
+        "pinname": "BST",
+        "point": {
+          "x": 979.0,
+          "y": 659.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.0,
+        "signed_normal_error": 6.0,
+        "strict_5px": false,
+        "distance": 6.0
+      }
+    },
+    {
+      "case": "7",
+      "component": "U1",
+      "pin": "pin_7",
+      "gt": {
+        "pinname": "VCC",
+        "point": {
+          "x": 809.0,
+          "y": 581.0
+        }
+      },
+      "baseline": {
+        "pinname": "VCC",
+        "point": {
+          "x": 810.4,
+          "y": 580.0
+        }
+      },
+      "new": {
+        "pinname": "VCC",
+        "point": {
+          "x": 802.0,
+          "y": 580.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.5,
+        "signed_normal_error": -7.0,
+        "strict_5px": false,
+        "distance": 7.0178344238090995
+      }
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "NC",
+        "point": {
+          "x": 973.0,
+          "y": 501.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "NC",
+        "point": {
+          "x": 978.0,
+          "y": 501.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.5,
+        "signed_normal_error": 5.0,
+        "strict_5px": false,
+        "distance": 5.024937810560445
+      }
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 1181.0,
+          "y": 463.0
+        }
+      },
+      "baseline": {
+        "pinname": "GND",
+        "point": {
+          "x": 1184.3,
+          "y": 462.5
+        }
+      },
+      "new": {
+        "pinname": "GND",
+        "point": {
+          "x": 1191.0,
+          "y": 462.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 1.0,
+        "signed_normal_error": 10.0,
+        "strict_5px": false,
+        "distance": 10.04987562112089
+      }
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "VDD",
+        "point": {
+          "x": 1181.0,
+          "y": 719.0
+        }
+      },
+      "baseline": {
+        "pinname": "VDD",
+        "point": {
+          "x": 1184.3,
+          "y": 718.0
+        }
+      },
+      "new": {
+        "pinname": "VDD",
+        "point": {
+          "x": 1191.5,
+          "y": 719.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.0,
+        "signed_normal_error": 10.5,
+        "strict_5px": false,
+        "distance": 10.5
+      }
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_5",
+      "gt": {
+        "pinname": "VDDREG",
+        "point": {
+          "x": 1181.0,
+          "y": 680.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "VDDREG",
+        "point": {
+          "x": 1191.0,
+          "y": 679.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 1.0,
+        "signed_normal_error": 10.0,
+        "strict_5px": false,
+        "distance": 10.04987562112089
+      }
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_7",
+      "gt": {
+        "pinname": "VDDIO",
+        "point": {
+          "x": 1181.0,
+          "y": 699.0
+        }
+      },
+      "baseline": {
+        "pinname": "VDDIO",
+        "point": {
+          "x": 1184.3,
+          "y": 698.5
+        }
+      },
+      "new": {
+        "pinname": "VDDIO",
+        "point": {
+          "x": 1191.5,
+          "y": 699.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.0,
+        "signed_normal_error": 10.5,
+        "strict_5px": false,
+        "distance": 10.5
+      }
+    },
+    {
+      "case": "9",
+      "component": "U2",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 829.0,
+          "y": 601.0
+        }
+      },
+      "baseline": {
+        "pinname": "GND",
+        "point": {
+          "x": 828.1,
+          "y": 600.5
+        }
+      },
+      "new": {
+        "pinname": "GND",
+        "point": {
+          "x": 799.0,
+          "y": 600.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -30.0,
+        "strict_5px": false,
+        "distance": 30.01666203960727
+      }
+    },
+    {
+      "case": "9",
+      "component": "U2",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "EN",
+        "point": {
+          "x": 967.0,
+          "y": 581.0
+        }
+      },
+      "baseline": {
+        "pinname": "EN",
+        "point": {
+          "x": 970.5,
+          "y": 580.0
+        }
+      },
+      "new": {
+        "pinname": "EN",
+        "point": {
+          "x": 998.5,
+          "y": 580.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.5,
+        "signed_normal_error": 31.5,
+        "strict_5px": false,
+        "distance": 31.50396800404673
+      }
+    },
+    {
+      "case": "9",
+      "component": "U2",
+      "pin": "pin_5",
+      "gt": {
+        "pinname": "IN",
+        "point": {
+          "x": 967.0,
+          "y": 601.0
+        }
+      },
+      "baseline": {
+        "pinname": "IN",
+        "point": {
+          "x": 970.5,
+          "y": 600.5
+        }
+      },
+      "new": {
+        "pinname": "IN",
+        "point": {
+          "x": 997.5,
+          "y": 600.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 1.0,
+        "signed_normal_error": 30.5,
+        "strict_5px": false,
+        "distance": 30.516389039334257
+      }
+    },
+    {
+      "case": "10",
+      "component": "U1",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "VIN",
+        "point": {
+          "x": 482.0,
+          "y": 542.0
+        }
+      },
+      "baseline": {
+        "pinname": "VIN",
+        "point": {
+          "x": 484.4,
+          "y": 541.0
+        }
+      },
+      "new": {
+        "pinname": "VIN",
+        "point": {
+          "x": 477.0,
+          "y": 541.0
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -5.0,
+        "strict_5px": false,
+        "distance": 5.0990195135927845
+      }
+    },
+    {
+      "case": "10",
+      "component": "U1",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 482.0,
+          "y": 522.0
+        }
+      },
+      "baseline": {
+        "pinname": "GND",
+        "point": {
+          "x": 484.4,
+          "y": 521.5
+        }
+      },
+      "new": {
+        "pinname": "GND",
+        "point": {
+          "x": 477.0,
+          "y": 521.5
+        }
+      },
+      "new_check": {
+        "correct": true,
+        "missing": false,
+        "same_name": true,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.5,
+        "signed_normal_error": -5.0,
+        "strict_5px": false,
+        "distance": 5.024937810560445
+      }
+    }
+  ],
+  "remaining_errors": [
+    {
+      "case": "3",
+      "component": "U1",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "FB",
+        "point": {
+          "x": 946.0,
+          "y": 713.0
+        }
+      },
+      "baseline": {
+        "pinname": "F",
+        "point": {
+          "x": 946.1,
+          "y": 713.0
+        }
+      },
+      "new": {
+        "pinname": "F",
+        "point": {
+          "x": 953.5,
+          "y": 712.5
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.5,
+        "signed_normal_error": 7.5,
+        "strict_5px": false,
+        "distance": 7.516648189186454
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "3",
+      "component": "U1",
+      "pin": "pin_6",
+      "gt": {
+        "pinname": "LX",
+        "point": {
+          "x": 946.0,
+          "y": 772.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "4",
+      "component": "U1",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "VOUT",
+        "point": {
+          "x": 398.0,
+          "y": 803.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "4",
+      "component": "U2",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 1375.0,
+          "y": 812.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "4",
+      "component": "U3",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "CHRG",
+        "point": {
+          "x": 956.0,
+          "y": 320.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "4",
+      "component": "U3",
+      "pin": "pin_5",
+      "gt": {
+        "pinname": "PROG",
+        "point": {
+          "x": 776.0,
+          "y": 320.0
+        }
+      },
+      "baseline": {
+        "pinname": "PROO",
+        "point": {
+          "x": 776.2,
+          "y": 320.5
+        }
+      },
+      "new": {
+        "pinname": "PROO",
+        "point": {
+          "x": 768.0,
+          "y": 320.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.0,
+        "signed_normal_error": -8.0,
+        "strict_5px": false,
+        "distance": 8.0
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "5",
+      "component": "U1",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "VOUT",
+        "point": {
+          "x": 651.0,
+          "y": 865.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "5",
+      "component": "U1",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "FB",
+        "point": {
+          "x": 651.0,
+          "y": 826.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "F",
+        "point": {
+          "x": 681.0,
+          "y": 825.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 1.0,
+        "signed_normal_error": 30.0,
+        "strict_5px": false,
+        "distance": 30.01666203960727
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "5",
+      "component": "U1",
+      "pin": "pin_6",
+      "gt": {
+        "pinname": "VIN",
+        "point": {
+          "x": 517.0,
+          "y": 826.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "5",
+      "component": "U1",
+      "pin": "pin_7",
+      "gt": {
+        "pinname": "PP",
+        "point": {
+          "x": 651.0,
+          "y": 786.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "P",
+        "point": {
+          "x": 678.0,
+          "y": 786.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.0,
+        "signed_normal_error": 27.0,
+        "strict_5px": false,
+        "distance": 27.0
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "5",
+      "component": "U2",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "VOUT",
+        "point": {
+          "x": 1639.0,
+          "y": 636.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "5",
+      "component": "U2",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "FB",
+        "point": {
+          "x": 1639.0,
+          "y": 596.0
+        }
+      },
+      "baseline": {
+        "pinname": "F",
+        "point": {
+          "x": 1640.7,
+          "y": 595.5
+        }
+      },
+      "new": {
+        "pinname": "F",
+        "point": {
+          "x": 1667.0,
+          "y": 596.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.0,
+        "signed_normal_error": 28.0,
+        "strict_5px": false,
+        "distance": 28.0
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "5",
+      "component": "U2",
+      "pin": "pin_6",
+      "gt": {
+        "pinname": "VIN",
+        "point": {
+          "x": 1498.0,
+          "y": 596.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "5",
+      "component": "U2",
+      "pin": "pin_7",
+      "gt": {
+        "pinname": "PP",
+        "point": {
+          "x": 1639.0,
+          "y": 557.0
+        }
+      },
+      "baseline": {
+        "pinname": "P",
+        "point": {
+          "x": 1640.7,
+          "y": 556.0
+        }
+      },
+      "new": {
+        "pinname": "P",
+        "point": {
+          "x": 1664.5,
+          "y": 556.5
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.5,
+        "signed_normal_error": 25.5,
+        "strict_5px": false,
+        "distance": 25.5049014897137
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "5",
+      "component": "U3",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "ADJ(GND)",
+        "point": {
+          "x": 537.0,
+          "y": 360.967033
+        }
+      },
+      "baseline": {
+        "pinname": "9",
+        "point": {
+          "x": 563.0,
+          "y": 392.9
+        }
+      },
+      "new": {
+        "pinname": "4",
+        "point": {
+          "x": 532.5,
+          "y": 361.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.03296699999998509,
+        "signed_normal_error": -4.5,
+        "strict_5px": false,
+        "distance": 4.500120756500763
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "5",
+      "component": "U3",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "VOUT(TAB)",
+        "point": {
+          "x": 537.0,
+          "y": 342.0
+        }
+      },
+      "baseline": {
+        "pinname": "VOUTAO",
+        "point": {
+          "x": 539.6,
+          "y": 341.5
+        }
+      },
+      "new": {
+        "pinname": "VOUTAO",
+        "point": {
+          "x": 532.5,
+          "y": 341.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -4.5,
+        "strict_5px": false,
+        "distance": 4.6097722286464435
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "5",
+      "component": "U3",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "TAB",
+        "point": {
+          "x": 739.0,
+          "y": 342.0
+        }
+      },
+      "baseline": {
+        "pinname": "TAE",
+        "point": {
+          "x": 741.4,
+          "y": 341.0
+        }
+      },
+      "new": {
+        "pinname": "TAE",
+        "point": {
+          "x": 748.5,
+          "y": 341.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 1.0,
+        "signed_normal_error": 9.5,
+        "strict_5px": false,
+        "distance": 9.5524865872714
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "6",
+      "component": "U1",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "IN",
+        "point": {
+          "x": 486.0,
+          "y": 437.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "6",
+      "component": "U1",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 505.0,
+          "y": 437.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "6",
+      "component": "U1",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "OUT",
+        "point": {
+          "x": 525.0,
+          "y": 437.0
+        }
+      },
+      "baseline": {
+        "pinname": "o",
+        "point": {
+          "x": 525.0,
+          "y": 435.7
+        }
+      },
+      "new": {
+        "pinname": "o",
+        "point": {
+          "x": 525.0,
+          "y": 429.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "bottom",
+        "pred_side": "bottom",
+        "tangent_error": 0.0,
+        "signed_normal_error": -8.0,
+        "strict_5px": false,
+        "distance": 8.0
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "6",
+      "component": "U2",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "FAULT",
+        "point": {
+          "x": 790.0,
+          "y": 852.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "6",
+      "component": "U3",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "IN",
+        "point": {
+          "x": 1402.0,
+          "y": 452.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "6",
+      "component": "U3",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 1421.0,
+          "y": 452.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "6",
+      "component": "U3",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "OUT",
+        "point": {
+          "x": 1441.0,
+          "y": 452.0
+        }
+      },
+      "baseline": {
+        "pinname": "O",
+        "point": {
+          "x": 1420.0,
+          "y": 448.2
+        }
+      },
+      "new": {
+        "pinname": "C",
+        "point": {
+          "x": 1440.0,
+          "y": 441.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "bottom",
+        "pred_side": "bottom",
+        "tangent_error": 1.0,
+        "signed_normal_error": -11.0,
+        "strict_5px": false,
+        "distance": 11.045361017187261
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "6",
+      "component": "U4",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "FAULT",
+        "point": {
+          "x": 1757.0,
+          "y": 864.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "7",
+      "component": "U1",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "AGND",
+        "point": {
+          "x": 881.0,
+          "y": 550.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "7",
+      "component": "U1",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 910.0,
+          "y": 550.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "7",
+      "component": "U1",
+      "pin": "pin_6",
+      "gt": {
+        "pinname": "EN",
+        "point": {
+          "x": 809.0,
+          "y": 620.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "7",
+      "component": "U1",
+      "pin": "pin_8",
+      "gt": {
+        "pinname": "FB",
+        "point": {
+          "x": 973.0,
+          "y": 581.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "EN",
+        "point": {
+          "x": 802.0,
+          "y": 620.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": false,
+        "gt_side": "right",
+        "pred_side": "left",
+        "tangent_error": 39.0,
+        "signed_normal_error": -171.0,
+        "strict_5px": false,
+        "distance": 175.3909917869216
+      },
+      "issues": [
+        "name_mismatch",
+        "side_mismatch",
+        "tangential_error_over_5px"
+      ]
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "NC",
+        "point": {
+          "x": 973.0,
+          "y": 521.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "NRESET",
+        "point": {
+          "x": 975.0,
+          "y": 600.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 79.0,
+        "signed_normal_error": 2.0,
+        "strict_5px": false,
+        "distance": 79.02531240052139
+      },
+      "issues": [
+        "name_mismatch",
+        "tangential_error_over_5px"
+      ]
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_6",
+      "gt": {
+        "pinname": "NC",
+        "point": {
+          "x": 973.0,
+          "y": 481.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_8",
+      "gt": {
+        "pinname": "GNDIO",
+        "point": {
+          "x": 1181.0,
+          "y": 443.0
+        }
+      },
+      "baseline": {
+        "pinname": "MOTION",
+        "point": {
+          "x": 982.9,
+          "y": 699.5
+        }
+      },
+      "new": {
+        "pinname": "MOTION",
+        "point": {
+          "x": 975.0,
+          "y": 699.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": false,
+        "gt_side": "right",
+        "pred_side": "left",
+        "tangent_error": 256.0,
+        "signed_normal_error": -206.0,
+        "strict_5px": false,
+        "distance": 328.5909310982274
+      },
+      "issues": [
+        "name_mismatch",
+        "side_mismatch",
+        "tangential_error_over_5px"
+      ]
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_9",
+      "gt": {
+        "pinname": "MOTION",
+        "point": {
+          "x": 973.0,
+          "y": 699.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_11",
+      "gt": {
+        "pinname": "MOSI",
+        "point": {
+          "x": 973.0,
+          "y": 719.0
+        }
+      },
+      "baseline": {
+        "pinname": "MOS",
+        "point": {
+          "x": 982.9,
+          "y": 723.5
+        }
+      },
+      "new": {
+        "pinname": "NC",
+        "point": {
+          "x": 977.0,
+          "y": 521.5
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 197.5,
+        "signed_normal_error": 4.0,
+        "strict_5px": false,
+        "distance": 197.54050217613602
+      },
+      "issues": [
+        "name_mismatch",
+        "tangential_error_over_5px"
+      ]
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_12",
+      "gt": {
+        "pinname": "MISO",
+        "point": {
+          "x": 973.0,
+          "y": 619.0
+        }
+      },
+      "baseline": {
+        "pinname": "ISO",
+        "point": {
+          "x": 982.9,
+          "y": 624.5
+        }
+      },
+      "new": {
+        "pinname": "ISO",
+        "point": {
+          "x": 975.0,
+          "y": 620.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": 2.0,
+        "strict_5px": false,
+        "distance": 2.23606797749979
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_14",
+      "gt": {
+        "pinname": "NRESET",
+        "point": {
+          "x": 973.0,
+          "y": 601.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_15",
+      "gt": {
+        "pinname": "LED_P",
+        "point": {
+          "x": 973.0,
+          "y": 640.0
+        }
+      },
+      "baseline": {
+        "pinname": "LED",
+        "point": {
+          "x": 982.9,
+          "y": 640.5
+        }
+      },
+      "new": {
+        "pinname": "LED",
+        "point": {
+          "x": 975.0,
+          "y": 640.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.0,
+        "signed_normal_error": 2.0,
+        "strict_5px": false,
+        "distance": 2.0
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "8",
+      "component": "U1",
+      "pin": "pin_16",
+      "gt": {
+        "pinname": "NC",
+        "point": {
+          "x": 973.0,
+          "y": 462.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "9",
+      "component": "U2",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "BS",
+        "point": {
+          "x": 829.0,
+          "y": 619.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "ES",
+        "point": {
+          "x": 799.0,
+          "y": 620.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 1.0,
+        "signed_normal_error": -30.0,
+        "strict_5px": false,
+        "distance": 30.01666203960727
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "9",
+      "component": "U2",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "FB",
+        "point": {
+          "x": 829.0,
+          "y": 581.0
+        }
+      },
+      "baseline": {
+        "pinname": "F",
+        "point": {
+          "x": 828.1,
+          "y": 581.5
+        }
+      },
+      "new": {
+        "pinname": "F",
+        "point": {
+          "x": 800.5,
+          "y": 580.5
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "left",
+        "pred_side": "left",
+        "tangent_error": 0.5,
+        "signed_normal_error": -28.5,
+        "strict_5px": false,
+        "distance": 28.50438562747845
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "9",
+      "component": "U2",
+      "pin": "pin_6",
+      "gt": {
+        "pinname": "SW",
+        "point": {
+          "x": 967.0,
+          "y": 620.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "10",
+      "component": "U1",
+      "pin": "pin_4",
+      "gt": {
+        "pinname": "VIA",
+        "point": {
+          "x": 482.0,
+          "y": 481.5
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "10",
+      "component": "U1",
+      "pin": "pin_5",
+      "gt": {
+        "pinname": "FB",
+        "point": {
+          "x": 605.0,
+          "y": 482.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "F",
+        "point": {
+          "x": 613.0,
+          "y": 482.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.0,
+        "signed_normal_error": 8.0,
+        "strict_5px": false,
+        "distance": 8.0
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "10",
+      "component": "U1",
+      "pin": "pin_6",
+      "gt": {
+        "pinname": "VB",
+        "point": {
+          "x": 605.0,
+          "y": 502.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "10",
+      "component": "U1",
+      "pin": "pin_7",
+      "gt": {
+        "pinname": "VS",
+        "point": {
+          "x": 605.0,
+          "y": 522.0
+        }
+      },
+      "baseline": {
+        "pinname": "VSS",
+        "point": {
+          "x": 606.9,
+          "y": 521.0
+        }
+      },
+      "new": {
+        "pinname": "VSS",
+        "point": {
+          "x": 613.0,
+          "y": 521.5
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 0.5,
+        "signed_normal_error": 8.0,
+        "strict_5px": false,
+        "distance": 8.0156097709407
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "10",
+      "component": "U1",
+      "pin": "pin_8",
+      "gt": {
+        "pinname": "IS",
+        "point": {
+          "x": 605.0,
+          "y": 542.0
+        }
+      },
+      "baseline": null,
+      "new": {
+        "pinname": "V",
+        "point": {
+          "x": 613.5,
+          "y": 502.0
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "right",
+        "pred_side": "right",
+        "tangent_error": 40.0,
+        "signed_normal_error": 8.5,
+        "strict_5px": false,
+        "distance": 40.893153461184674
+      },
+      "issues": [
+        "name_mismatch",
+        "tangential_error_over_5px"
+      ]
+    },
+    {
+      "case": "10",
+      "component": "U1",
+      "pin": "pin_9",
+      "gt": {
+        "pinname": "VIN",
+        "point": {
+          "x": 605.0,
+          "y": 561.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "10",
+      "component": "U2",
+      "pin": "pin_1",
+      "gt": {
+        "pinname": "Vout",
+        "point": {
+          "x": 1624.0,
+          "y": 642.0
+        }
+      },
+      "baseline": null,
+      "new": null,
+      "new_check": {
+        "correct": false,
+        "missing": true
+      },
+      "issues": [
+        "missing_numbered_output"
+      ]
+    },
+    {
+      "case": "10",
+      "component": "U2",
+      "pin": "pin_2",
+      "gt": {
+        "pinname": "GND",
+        "point": {
+          "x": 1663.0,
+          "y": 737.0
+        }
+      },
+      "baseline": {
+        "pinname": "D",
+        "point": {
+          "x": 1663.0,
+          "y": 738.4
+        }
+      },
+      "new": {
+        "pinname": "D",
+        "point": {
+          "x": 1664.0,
+          "y": 766.5
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "top",
+        "pred_side": "top",
+        "tangent_error": 1.0,
+        "signed_normal_error": 29.5,
+        "strict_5px": false,
+        "distance": 29.516944286290883
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    },
+    {
+      "case": "10",
+      "component": "U2",
+      "pin": "pin_3",
+      "gt": {
+        "pinname": "VIn",
+        "point": {
+          "x": 1703.0,
+          "y": 642.0
+        }
+      },
+      "baseline": {
+        "pinname": "F",
+        "point": {
+          "x": 1703.0,
+          "y": 635.2
+        }
+      },
+      "new": {
+        "pinname": "F",
+        "point": {
+          "x": 1703.5,
+          "y": 609.5
+        }
+      },
+      "new_check": {
+        "correct": false,
+        "missing": false,
+        "same_name": false,
+        "same_side": true,
+        "gt_side": "bottom",
+        "pred_side": "bottom",
+        "tangent_error": 0.5,
+        "signed_normal_error": -32.5,
+        "strict_5px": false,
+        "distance": 32.50384592629001
+      },
+      "issues": [
+        "name_mismatch"
+      ]
+    }
+  ],
+  "source_hashes": {
+    "stage1/pincolor.py": "f4895723b50af8ce22db0f634a8b78c1fb64a3036807bdd4291df3fbcaf06d11",
+    "stage1/pipeline.py": "935644c47682707d79b45c26fc28d5fba7b624f60594c8b58a7a544458461b24",
+    "stage1/nets.py": "75a93febe3e28ef7def3abfd16e43d15a70366f4e1024d5be523cd59e6788c0c",
+    "stage2/assign.py": "c936a8bafd56cf98fbf77d21922861981d15f500c1df40006a2a72486bb0cbd4",
+    "stage2/structmatch.py": "60859c9f6c893345fed9640572bebd9d59d370a7c7d8219d8dda86992b68fa86",
+    "stage2/assemble.py": "da025e66976281bed2e441272e8f13c33cb78d2763e4efa04576c05ab26e1fef",
+    "stage2/color_crops.py": "3310666c768b079041870c9dff5c57b76bd884cf1429f1537c005bb92916a6c9",
+    "stage2/run.py": "7e2203cec6ca2ebee841f925618137604b84cccca732fe8ba96fea0dd691dd81"
+  },
+  "ocr_checkpoint_sha256": "f089e38b4940e3501b06dd17c5dd6a975eeb145a6030f030b40fa3f994ed2cf5",
+  "input_and_output_sha256": {
+    "official10/2/2.json": "69c4ca59bc5ad1585922754cdd95c172a9702fc1eb491236b7ab5c6e14f5430f",
+    "baseline/2.json": "c721b9b8a0d48e8c0ca061401796549cf8ccac6f54c231bdc8c289fa64b00cce",
+    "color_number_ocr/2.json": "780eedab3a40aaad5d39038fdde2085db35236e82fe3466b860b7a1f79e2bd27",
+    "stage1/2.stage1.json": "3be21f781274b7c61763e661d46ccb74f94764562b9c70a930b20d2f95d82528",
+    "official10/2/2.png": "c6ebc4573158340b64c3f5247e6cb0e2fb9f7325974ad27641dbfb31a770f229",
+    "official10/3/3.json": "ab40961f5920c4948522263aa03ddbd7dccd16c82c5cdc31985e5eb1274285e5",
+    "baseline/3.json": "a373b1d0f4f3ad83858e6f0301a3112a048ead11e3c7153eab8202c8d97809d4",
+    "color_number_ocr/3.json": "8973bd5ed02e99c5b0b9a1e82b7ca66afe7506f688006ef6f2e9dfe974733813",
+    "stage1/3.stage1.json": "0e1257a52053004903cbf917cdfa4c194c585a294b35b43f1a2732192feaaeef",
+    "official10/3/3.png": "30c65062c9032ee83e20b9a16cbe33e0ea40beb2ac532e632fd51d5294bdecb8",
+    "official10/4/4.json": "2b5c13c4abba511037bfa0f19200f3e3c37a163e7222d8340ea94279dcd1d6e9",
+    "baseline/4.json": "8d20ebb8b37f7a92baadca1cae613eff18c3e26c50f5b31e3879c58cf3bf5794",
+    "color_number_ocr/4.json": "7205c700010028f4bfe621aad7194762bb6bbd2eb26d5da7494b3bea9fbf9b1b",
+    "stage1/4.stage1.json": "07ea34d58b817c314a6179c82c8fc4375967dbbaa2686f0a82bd56fdd4656675",
+    "official10/4/4.png": "d3b167ae7f08159272e5a5950c572e2aa5870c822cde57d007eabd61ce9d71c0",
+    "official10/5/5.json": "8df3c482636189ba05491744736c2f5cf5702d72bd11882f199fe7c14fd4d871",
+    "baseline/5.json": "7ca4c052fdddb795f8fa06a72e6a559d610a320d610d3a018352ee4a0fa3e76a",
+    "color_number_ocr/5.json": "051b1dd2d6951261609efb30cfd6627ae71ed56d1bb2824a605bcc2b395ba1a1",
+    "stage1/5.stage1.json": "3edaed992d078ae27ebea803b3f1c08d1b98e0a19081b39bb8ec8ec897bceb52",
+    "official10/5/5.png": "f39ffdc2677a9b535d25067f55199cd324195614319084717bb54df02f4c83fb",
+    "official10/6/6.json": "ae89511ea46d393111ac6b904a7d6efd537051cc4034f9e8b25fe7fd2dd6ae45",
+    "baseline/6.json": "6f7ff67124ee8468b39d36d941aa5b184a4c4afd757e99fd6ad1dc0ca8d3a759",
+    "color_number_ocr/6.json": "851d34553eb2841ff050ba739e75253b84d8afdc660dc59359e5608d74124e12",
+    "stage1/6.stage1.json": "42aa1ec2f5b6f34915c21dbb2404efaa506f275ef6561f9b20e2d3d59997decf",
+    "official10/6/6.png": "1437dcc7a48b969730f4329bfddcdbb2aa0669146afa28e1f30401e3c3e86984",
+    "official10/7/7.json": "1f7cdd82e6ba1f2f393c15387452b394ca1cca618c5831392f56594c2619e055",
+    "baseline/7.json": "c2a2d5e5993d26ecc2d2d3c9311560555d752d67cd1744e1c90b7a929bcdb7d2",
+    "color_number_ocr/7.json": "e7430ecb8bdffa832e9137015eacd30c1f542f5ce70a0d8f0ac0a7e8ce0b2553",
+    "stage1/7.stage1.json": "ee5feac3362c3d63f454d0086acd00d15ab4e65d33a527a7d6285061732cbe15",
+    "official10/7/7.png": "7a403f9bf4af26fdef6bae4499ec30aee9e0ed85ec31935afe02e17bbcec7deb",
+    "official10/8/8.json": "77bf1a79dfabb18215860e4dae21bf1f39780d9f02bfdc8204f33538b70b1fba",
+    "baseline/8.json": "3c8eb0fc4f71f2eea6db2a2eaf636c7906561a9ef32f9d3c7c1d278940447064",
+    "color_number_ocr/8.json": "42ad6fc966505d5f3015df12d96da00f13e949aad60c99dda1ba8f8672bcf5bd",
+    "stage1/8.stage1.json": "15bcc5a76144950b3ad567fbbc29d5b69c09586aa2c18d3a834da2e25876ea3a",
+    "official10/8/8.png": "4b450fd6e00caaba1ca1cf34cdd1eeae64d3af7de9c7eda8bd4d2e9cd5d70c13",
+    "official10/9/9.json": "7f572a6fac8546f600f236dde902ac35e7936ccf6e0a51ef2ff6745769cb685c",
+    "baseline/9.json": "25146cabedb26b874e4754bdcdcf7015b43be972fdebe178125525960b97c33c",
+    "color_number_ocr/9.json": "d8edb891390d0bf0517302d4368703461ca3eaf0569daac3037bf7c71cff4b74",
+    "stage1/9.stage1.json": "c18aa31d7efd06fb9b724c3768bddba236db1699b1d4bb5fafab3442ffe68b08",
+    "official10/9/9.png": "7848e01f5594d01ccc0b65fab1c8d7b3679eb7b94d9c4124424c6afd6abd3886",
+    "official10/10/10.json": "f807a90420fe5a9818f1df574e62830b37cd1e6cbaa05138570c909a413c4522",
+    "baseline/10.json": "39e929566086c5240fc8084f04844f97f1cef69503efa29f803ac06431db7970",
+    "color_number_ocr/10.json": "ae541e6aa0837be68f24795af29302ee1952a67066d18efd8352dd18f248b6f0",
+    "stage1/10.stage1.json": "9ac674a02f650c389e8d9bd357f05987fbe71e1a04257c684b65e7aae2bbd79d",
+    "official10/10/10.png": "53a92db828b48cb71a8554214a238c8043b393cb8db206ff4f0d0944980ef223"
+  },
+  "validation_artifact_sha256": {
+    "color-rule-ab.json": "43c6d63b496ce1c5750290e04ce1f10d8a00d2b984e82eef88507030e55cbf7e",
+    "pipeline-integration.json": "1a6b685f03f5abf861f800de882a352569f9d56ec9d3aac9b32d7b28da9e0965",
+    "regression-tests.txt": "57fcd8c0ff0e15ea30f4342531df9ba63c3d0568e5e07446e1c431d54d584979"
+  },
+  "independent_audit_sha256": "5c7c4438a9f43813b0744325302f9a4d9d1b0910291496fc555dece7a56e229a"
+}

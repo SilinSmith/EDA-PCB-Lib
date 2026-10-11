@@ -23,6 +23,7 @@
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -66,6 +67,144 @@ except Exception:                       # pragma: no cover
 
 EDGES = ("left", "top", "right", "bottom")
 _NUM_RE = re.compile(r"^\d{1,3}$")
+
+# ---------------------------------------------------------------------------
+# ★ 来自队友分支 `origin/codex/improve-pin-network-parsing`（2026-10-15 并入）：
+#   「引脚图像证据」通道的**校验层**。三个函数都是**纯判定**（无副作用、不写状态）：
+#
+#   * `normalize_pin_evidence(pins, evidence)`：把 stage1 写下的逐脚证据与**当前**
+#     引脚点表对齐。长度不符 / 点与证据的 `point_img` 不一致 ⇒ 返回 `[]`（整条
+#     可选通道关闭），单条不合格 ⇒ 该条降级成 `{"trust": "uncertain"}`。
+#     动机：旧缓存或后续改过引脚点表时，绝不能把某根脚的联系置信度张冠李戴。
+#   * `_frame_anchor_usable(rec, bbox)`：证据条目的框边锚点是否与检测框几何自洽
+#     （`|anchor.轴 − 框边| <= 7.1`、`|anchor.切向 − point.切向| <= 3.1`，含栅格端点
+#     与 0.1px 序列化取整的余量）。
+#   * `trusted_frame_pin_evidence(rec, bbox, point)`：识别**实测出来的**灰度框边/短桩
+#     证据，绝不把猜测提升成可信：必须有 `trust == "trusted"`、`frame_confirmed is True`、
+#     `reason ∈ {frame_attached_normal_stroke, frame_normal_stroke_with_small_gap}`、
+#     `source ∈ {None, "", frame_normal_stroke}`，且六项测量全部有限并与阈值自洽
+#     （`coverage >= 0.65`、`normal_ink_run >= 5`、`normal_ink_hits >= 4`、`first_ink_distance <= 3`）。
+#
+# 接线现状：`stage2/assign.py` 的 `_trusted_text_contact` / `_target_index` 会调它，
+# 队友那五个引脚读法模块（`stage2/pin_lane_reading.py` 等）也 import 它。**只有**在
+# `STAGE2_PIN_EVIDENCE`/`STAGE1_PIN_COLOR` 这类通道打开、`doc["pin_evidence"]` 真的
+# 有实测记录时才会判 True；证据缺失时一律 False（保守退化，不影响既有行为）。
+def _frame_anchor_usable(rec: dict, bbox: Sequence[float]) -> bool:
+    if rec.get("frame_confirmed") is not True or rec.get("edge") not in EDGES:
+        return False
+    try:
+        bx0, by0, bx1, by1 = (float(v) for v in bbox)
+        if not all(math.isfinite(v) for v in (bx0, by0, bx1, by1)):
+            return False
+        if bx1 <= bx0 or by1 <= by0:
+            return False
+        edge = rec["edge"]
+        axis = 0 if edge in ("left", "right") else 1
+        expected = {"left": bx0, "top": by0, "right": bx1, "bottom": by1}[edge]
+        anchor, point = rec["anchor_img"], rec["point_img"]
+        if len(anchor) != 2 or len(point) != 2:
+            return False
+        if not all(math.isfinite(float(v)) for v in (*anchor, *point)):
+            return False
+        # Stage1 searches six pixels normal to the frame and three along it.
+        # Include its raster endpoint and 0.1px serialization rounding.
+        return (abs(float(anchor[axis]) - expected) <= 7.1
+                and abs(float(anchor[1 - axis]) - float(point[1 - axis])) <= 3.1)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def normalize_pin_evidence(pins: Sequence[Sequence[float]],
+                           evidence: Optional[Sequence[dict]]) -> List[dict]:
+    """Validate the stage1 evidence-to-point correspondence before trusting it.
+
+    An old cache, or a point list changed after evidence was built, must never
+    attach the confidence of one contact to another. A missing/invalid record
+    is uncertain; a length mismatch or wholly invalid correspondence disables
+    this optional path altogether. Valid uncertain geometry still stays active.
+    """
+    if not evidence or len(evidence) != len(pins):
+        return []
+    out = []
+    n_valid = 0
+    for point, rec in zip(pins, evidence):
+        fallback = {"trust": "uncertain"}
+        if not isinstance(rec, dict):
+            out.append(fallback)
+            continue
+        raw = rec.get("point_img")
+        try:
+            valid = (len(raw) == 2 and all(math.isfinite(float(v)) for v in raw)
+                     and math.hypot(float(raw[0]) - float(point[0]),
+                                    float(raw[1]) - float(point[1])) <= 1e-3)
+        except (TypeError, ValueError, OverflowError):
+            valid = False
+        if not valid or rec.get("edge") not in EDGES:
+            out.append(fallback)
+            continue
+        n_valid += 1
+        item = dict(rec)
+        if item.get("trust") not in ("trusted", "uncertain", "rejected"):
+            item["trust"] = "uncertain"
+        anchor = item.get("anchor_img")
+        try:
+            good_anchor = (len(anchor) == 2
+                           and all(math.isfinite(float(v)) for v in anchor))
+        except (TypeError, ValueError, OverflowError):
+            good_anchor = False
+        if not good_anchor:
+            item.pop("anchor_img", None)
+        out.append(item)
+    return out if n_valid else []
+
+
+def trusted_frame_pin_evidence(rec: dict, bbox: Optional[Sequence[float]] = None,
+                               point: Optional[Sequence[float]] = None) -> bool:
+    """Recognize measured grayscale frame/stroke evidence, without promoting guesses.
+
+    Older stage1 caches have no ``source`` field. Their explicit attached-stroke
+    reason and measurements are usable; a bare trusted flag or confirmed frame
+    alone is not. Require the same clean normal-stroke conditions used by stage1.
+    Callers with a detector box additionally validate the calibrated anchor.
+    """
+    if (not isinstance(rec, dict) or rec.get("trust") != "trusted"
+            or rec.get("frame_confirmed") is not True
+            or rec.get("reason") not in ("frame_attached_normal_stroke",
+                                          "frame_normal_stroke_with_small_gap")
+            or rec.get("source") not in (None, "", "frame_normal_stroke")
+            or rec.get("edge") not in EDGES):
+        return False
+    try:
+        observed, anchor = rec["point_img"], rec["anchor_img"]
+        if len(observed) != 2 or len(anchor) != 2:
+            return False
+        measurements = [float(rec[name]) for name in (
+            "frame_coverage", "normal_ink_run", "normal_ink_hits",
+            "first_ink_distance", "text_overlap_fraction", "branching_fraction")]
+        if not all(math.isfinite(float(v)) for v in (*observed, *anchor, *measurements)):
+            return False
+        coverage, run, hits, first, overlap, branching = measurements
+        tangent = 1 if rec["edge"] in ("left", "right") else 0
+        if abs(float(anchor[tangent]) - float(observed[tangent])) > 3.1:
+            return False
+        normal = 1 - tangent
+        outward = -1 if rec["edge"] in ("left", "top") else 1
+        # A measured outward stroke cannot support an internal candidate.
+        # Permit one raster pixel of endpoint/frame rounding on the inner side.
+        if outward * (float(observed[normal]) - float(anchor[normal])) < -1.0:
+            return False
+        if point is not None and (len(point) != 2
+                or not all(math.isfinite(float(v)) for v in point)
+                or math.dist(observed, point) > 1e-3):
+            return False
+        return (0.65 <= coverage <= 1 and run >= 5 and hits >= 4 and 0 <= first <= 3
+                and 0 <= overlap <= 1 and 0 <= branching <= 1
+                and not (overlap >= 0.6 and branching >= 0.3)
+                and not (overlap >= 0.5 and run <= 14)
+                and (bbox is None or _frame_anchor_usable(rec, bbox)))
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
 
 # 最近一次 `rebind` 的**残差回填**明细（`{"pin","cand","d","edge"}`）。只给调试用，
 # 不参与返回签名（`rebind` 的返回元数被 stage2 与自检依赖）。

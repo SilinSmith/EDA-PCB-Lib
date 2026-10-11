@@ -200,7 +200,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "输入 PNG + 坐标系",
    "sub": "每 case 一张图 + 可选 GT；坐标 y 向上（已实测无歧义）",
    "x": 40,
-   "y": 2570,
+   "y": 2662,
    "w": 280,
    "file": "submission/run.py",
    "ins": [],
@@ -240,7 +240,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "① 符号检测",
    "sub": "YOLO + CV 复核 / 去多假设：元件符号的框与类型",
    "x": 432,
-   "y": 2143,
+   "y": 2235,
    "w": 280,
    "file": "stage1/detect.py + stage1/bigic.py",
    "ins": [
@@ -294,7 +294,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "② 文字区域定位",
    "sub": "cvparts/textbox.py：只定位「哪里有字」，不识别",
    "x": 432,
-   "y": 1879,
+   "y": 1971,
    "w": 280,
    "file": "cvparts/textbox.py",
    "ins": [
@@ -338,7 +338,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "③ 裁剪尺度归一",
    "sub": "pad_box + crop_gray：线上比直调低 68%，峰在 +3，现默认已越峰",
    "x": 824,
-   "y": 2470,
+   "y": 3332,
    "w": 280,
    "file": "stage2/text.py pad_box + textrec/dataset.py",
    "ins": [
@@ -407,7 +407,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "④ CRNN 识别",
    "sub": "textrec：5 角色 CRNN+CTC；颜色即语义（绿线/暗红框/蓝位号/黑脚号）",
    "x": 1216,
-   "y": 793,
+   "y": 2340,
    "w": 280,
    "file": "textrec/infer.py",
    "ins": [
@@ -477,7 +477,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "⑤ LLM / VLM 读取",
    "sub": "qwen3.5-9b：位号 / 值 / 器件型号 / 逐引脚号名 —— 只是证据源之一，不是终审",
    "x": 1216,
-   "y": 366,
+   "y": 361,
    "w": 280,
    "file": "vlm/enrich.py（753 行）",
    "ins": [
@@ -541,7 +541,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "⑥ 导线与结点",
    "sub": "wires.py：线过碎片化 → 规则 5；★ 色相询问曾是无界黑洞（315s→8.3s）",
    "x": 432,
-   "y": 1404,
+   "y": 1496,
    "w": 280,
    "file": "stage1/wires.py",
    "ins": [
@@ -598,7 +598,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "⑦ 引脚点",
    "sub": "引脚：pin+netH = 60% 权重同一根因；★ 三分账 = 不产出 23 / 读错 22 / 没检测 6；读法全对的上界 +4.60",
    "x": 1216,
-   "y": 1390,
+   "y": 788,
    "w": 280,
    "file": "stage1/pintrace.py",
    "ins": [
@@ -667,7 +667,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "⑧ 初始网络",
    "sub": "nets.py 连通分量 → hyperGraph",
    "x": 2000,
-   "y": 1564,
+   "y": 1531,
    "w": 280,
    "file": "stage1/nets.py",
    "ins": [
@@ -731,7 +731,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★ 常识与先验表",
    "sub": "priors.py 的六类先验 + 三条闸（逐条列在下面）",
    "x": 40,
-   "y": 1426,
+   "y": 1518,
    "w": 300,
    "file": "fusion/priors.py（911 行）",
    "ins": [],
@@ -800,8 +800,8 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "★ 证据池",
    "sub": "claims.py：候选池是所有裁决的唯一入口；但 pin.* 出不了文档",
-   "x": 2392,
-   "y": 1621,
+   "x": 2784,
+   "y": 1713,
    "w": 300,
    "file": "fusion/claims.py（744 行）",
    "ins": [
@@ -888,8 +888,8 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "★ 约束求解",
    "sub": "solve.py：贪心+增广路；零候选槽位永远问不到 LLM",
-   "x": 2784,
-   "y": 1851,
+   "x": 3176,
+   "y": 1943,
    "w": 300,
    "file": "fusion/solve.py（470 行）",
    "ins": [
@@ -946,8 +946,8 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "★★ 全局合理性检查（结构）",
    "sub": "这个电路讲不讲得通？违反电气/拓扑常识的地方就是要找的错误点",
-   "x": 3176,
-   "y": 1563,
+   "x": 3568,
+   "y": 1655,
    "w": 300,
    "file": "fusion/plausible.py",
    "ins": [
@@ -1005,8 +1005,8 @@ textarea{resize:vertical;min-height:170px}
    "kind": "dead",
    "title": "★★ 字符串合理性修正（内容）",
    "sub": "器件型号/位号明显读错一个字符时，用命名规律修回来",
-   "x": 2784,
-   "y": 1525,
+   "x": 3176,
+   "y": 1617,
    "w": 300,
    "file": "（已证否）fixstr.py",
    "ins": [
@@ -1060,8 +1060,8 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "★ 冲突与缺口",
    "sub": "两个来源不一致的 / 违反约束的 / 读不出来的",
-   "x": 3568,
-   "y": 1598,
+   "x": 3960,
+   "y": 1690,
    "w": 300,
    "file": "fusion/solve.py + fusion/plausible.py",
    "ins": [
@@ -1111,8 +1111,8 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "★★ LLM 判断 + 定位 + 排序",
    "sub": "llm_judge.py：候选二选一 + **上下文块（官方 9 张 +0.79）**；整表判负",
-   "x": 3960,
-   "y": 850,
+   "x": 4352,
+   "y": 942,
    "w": 300,
    "file": "fusion/llm_judge.py（484 行）",
    "ins": [
@@ -1192,8 +1192,8 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "★ 按优先级定向重扫",
    "sub": "rescan.py：重扫必须带已确认的上下文，否则只是把同一个问题再问一遍",
-   "x": 4744,
-   "y": 1730,
+   "x": 5136,
+   "y": 1822,
    "w": 300,
    "file": "fusion/rescan.py（336 行）",
    "ins": [
@@ -1247,8 +1247,8 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "★ 迭代控制",
    "sub": "新证据回池 → 再解，直到收敛或到轮数上限",
-   "x": 5136,
-   "y": 1710,
+   "x": 5528,
+   "y": 1802,
    "w": 300,
    "file": "fusion/run.py:145-181",
    "ins": [
@@ -1299,7 +1299,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 请求合并与预算闸门",
    "sub": "请求合并：引脚网格已合并（4025→1051）；值通道拼图实测判负",
    "x": 40,
-   "y": 982,
+   "y": 1074,
    "w": 280,
    "file": "vlm/enrich.py",
    "ins": [],
@@ -1353,8 +1353,8 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "装配官方格式",
    "sub": "assemble.py：坐标在这层翻转；但 num_of 没导出 ⇒ 引脚裁决回不去键",
-   "x": 3176,
-   "y": 1905,
+   "x": 3568,
+   "y": 1997,
    "w": 260,
    "file": "stage2/assemble.py（960 行）",
    "ins": [
@@ -1400,8 +1400,8 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "导出最终结果",
    "sub": "run.py:380-400：四层静默降级，导出成功的张数不区分来自哪一层",
-   "x": 3568,
-   "y": 1914,
+   "x": 3960,
+   "y": 2006,
    "w": 260,
    "file": "submission/run.py:380-400",
    "ins": [
@@ -1449,8 +1449,8 @@ textarea{resize:vertical;min-height:170px}
    "kind": "param",
    "title": "官方标尺 metrics.py",
    "sub": "官方标尺：加权 F1 之和，不在管线里；一笔 mismatch 亏三处",
-   "x": 3960,
-   "y": 1993,
+   "x": 4352,
+   "y": 2085,
    "w": 260,
    "file": "schematic_parser/metrics.py",
    "ins": [
@@ -1506,7 +1506,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 裁切方向反馈",
    "sub": "cropfix.py：唯一「LLM 引导重框+重识别」；安全但惰性，生产默认关",
    "x": 1608,
-   "y": 1191,
+   "y": 1268,
    "w": 280,
    "file": "fusion/cropfix.py（456 行）",
    "ins": [
@@ -1571,8 +1571,8 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "★★ 现实规律判断（电学合理性）",
    "sub": "audit.py：问的是「电学上成不成立」，只提候选不改结论",
-   "x": 4352,
-   "y": 1658,
+   "x": 4744,
+   "y": 1750,
    "w": 300,
    "file": "fusion/audit.py（588 行）",
    "ins": [
@@ -1731,7 +1731,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★★ 独家归属（一个东西只有一个主人）",
    "sub": "争同一个位置的主张者 → 只留一个；判负者降权并入，不销毁",
    "x": 824,
-   "y": 2965,
+   "y": 2470,
    "w": 300,
    "file": "cvparts/own.py",
    "ins": [
@@ -1850,7 +1850,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "⑦b 引脚列枚举（格点补脚）",
    "sub": "pincol.py：按引脚列等距格点补出漏检的脚，再交给并网",
    "x": 1608,
-   "y": 1742,
+   "y": 2090,
    "w": 280,
    "file": "stage1/pincol.py",
    "ins": [
@@ -1915,8 +1915,8 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "★★ 引脚号候选：归属 + 沿边对齐",
    "sub": "assign.py / structmatch.py：谁贴在这颗元件上，以及号怎么排",
-   "x": 1608,
-   "y": 2198,
+   "x": 2392,
+   "y": 1787,
    "w": 300,
    "file": "stage2/assign.py · stage2/structmatch.py",
    "ins": [
@@ -1981,7 +1981,7 @@ textarea{resize:vertical;min-height:170px}
    "title": "★ IC 不补位置号",
    "sub": "priors.py：稀疏封装号是印出来的，位置先验会覆盖它",
    "x": 1216,
-   "y": 2942,
+   "y": 2937,
    "w": 300,
    "file": "fusion/priors.py",
    "ins": [
@@ -2027,8 +2027,8 @@ textarea{resize:vertical;min-height:170px}
    "kind": "exec",
    "title": "★★ GT 保真度检查（自造 GT 会骗你）",
    "sub": "在派生档上调参前先量 GT 保真度：80.3% 的失配数学上不可赢",
-   "x": 3960,
-   "y": 2432,
+   "x": 4352,
+   "y": 2524,
    "w": 300,
    "file": "work/tools/diag/_desigsrc.py · _boxkey.py · _desigabsent.py",
    "ins": [
@@ -2075,6 +2075,289 @@ textarea{resize:vertical;min-height:170px}
     "★ **在派生档上调参前必须先量 GT 保真度**。报告 `work\\reports\\GT保真度与位号上限.md`、`work\\reports\\引脚号回归与桩偏移.md`"
    ],
    "code": "tools/diag/_desigsrc.py"
+  },
+  {
+   "id": "ev_pincolor",
+   "group": "ev",
+   "kind": "exec",
+   "title": "⑦c 彩色引脚端点实测",
+   "sub": "红桩 + 真实绿线转折；不再按固定距离放点（队友分支并入，默认关）",
+   "x": 824,
+   "y": 3827,
+   "w": 300,
+   "file": "stage1/pincolor.py",
+   "ins": [
+    {
+     "id": "img",
+     "label": "原图",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "det",
+     "label": "元件框",
+     "kind": "det",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "pins",
+     "label": "实测引脚点",
+     "kind": "pins",
+     "role": "produce"
+    }
+   ],
+   "params": [
+    [
+     "STAGE1_PIN_COLOR",
+     "0（队友默认 1）"
+    ],
+    [
+     "STAGE1_PIN_DIRECTION_GUARD",
+     "0"
+    ],
+    [
+     "STAGE1_PIN_ATTACHMENT_GUARD",
+     "0"
+    ]
+   ],
+   "note": "**进度：🧩 已并入（默认关，待 A/B）**\n来源：队友分支 `origin/codex/improve-pin-network-parsing`（12 个提交，基点 `a6d06f0`）。模块本体原样拷入（`stage1/pincolor.py`，294 行）。\n\n它做的事：把 IC 引脚测成「**红色桩 + 真实绿线转折**」——沿框边逐条找红桩的实测端点，再用绿线在框外的转折校正；docstring 明写 *never places a pin at a fixed distance from its component box*，与我们的常数 12 外推（`stage1/pins.py` + `STAGE2_EDGE_SNAP`）是**两条互斥口径**。\n\n★ 我们这一侧的既有结论：GT 的引脚点是**源图导线端点**，渲染出来的桩长是渲染库常数，四条图像信号（号字框 / 桩色跳变 / 桩色区间 / 渲染桩长）全部判负 ⇒ 常数 12 已近最优（命中 83.6%）。队友这条只在**彩色**图上生效，所以合起来要看的是「彩色图里实测端点是否比常数 12 更准」。\n\n接线现状：模块已拷入，**尚未**接进 `stage1/pipeline.py`（要接就得同时把 `pin_evidence` 写进 stage1 文档，见 `ev_pinevid`）。",
+   "code": "stage1/pincolor.py:extract_color_pins"
+  },
+  {
+   "id": "ev_pinevid",
+   "group": "ev",
+   "kind": "exec",
+   "title": "⑦d 逐脚图像证据",
+   "sub": "给合并后的 IC 引脚候选做图像证据排序（只排名，绝不移动/删除引脚）",
+   "x": 1216,
+   "y": 3495,
+   "w": 300,
+   "file": "stage1/pin_evidence.py",
+   "ins": [
+    {
+     "id": "img",
+     "label": "原图",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "det",
+     "label": "元件框",
+     "kind": "det",
+     "role": "consume"
+    },
+    {
+     "id": "pins",
+     "label": "引脚点",
+     "kind": "pins",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "evid",
+     "label": "逐脚证据",
+     "kind": "pins",
+     "role": "produce"
+    }
+   ],
+   "params": [
+    [
+     "输出",
+     "doc[\"pin_evidence\"]"
+    ]
+   ],
+   "note": "**进度：🧩 已并入（默认关，待 A/B）**\n来源同上（`stage1/pin_evidence.py`，275 行）。docstring 的自我约束：*ranks candidates; it never moves or removes an output pin. A short unconnected pin is valid. OCR boxes are soft evidence, not an erasure mask.*\n\n每条证据的字段（下游 `_trusted_text_contact` / `trusted_frame_pin_evidence` 读）：`trust ∈ {trusted, uncertain, rejected}`、`source`、`edge`、`frame_confirmed`、`point_img`、`anchor_img`，以及六项测量 `frame_coverage` / `normal_ink_run` / `normal_ink_hits` / `first_ink_distance` / `text_overlap_fraction` / `branching_fraction`。\n\n★ 校验层已并入我们的 `stage2/structmatch.py`（`normalize_pin_evidence` / `_frame_anchor_usable` / `trusted_frame_pin_evidence`）与 `stage2/assign.py`（`_trusted_text_contact` / `_target_index` / `LAST_PIN_EVIDENCE`）：**证据缺失或与当前引脚点表不一致时一律退化**（返回 `[]` / `False`），所以没接 stage1 这一环时行为不变。",
+   "code": "stage1/pin_evidence.py:build_pin_evidence"
+  },
+  {
+   "id": "ev_pinlane",
+   "group": "ev",
+   "kind": "exec",
+   "title": "⑦e 引脚车道裁片",
+   "sub": "由已确认的引脚车道切名称/号窗口（不用识别结果、不用期望标签）",
+   "x": 1608,
+   "y": 2546,
+   "w": 300,
+   "file": "stage2/pin_lane_crops.py · stage2/pin_text_crops.py · stage2/color_crops.py",
+   "ins": [
+    {
+     "id": "img",
+     "label": "原图",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "pins",
+     "label": "引脚点",
+     "kind": "pins",
+     "role": "consume"
+    },
+    {
+     "id": "evid",
+     "label": "逐脚证据",
+     "kind": "pins",
+     "role": "consume"
+    },
+    {
+     "id": "reads",
+     "label": "已有读数",
+     "kind": "reads",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "crops",
+     "label": "裁片窗口",
+     "kind": "boxes",
+     "role": "produce"
+    }
+   ],
+   "params": [
+    [
+     "STAGE2_COLOR_NUMBER_CROP",
+     "0（队友默认 1）"
+    ],
+    [
+     "STAGE2_PIN_TEXT_CROP",
+     "0（队友默认 1）"
+    ],
+    [
+     "STAGE2_PIN_LANE_CROP",
+     "0（队友默认 1）"
+    ],
+    [
+     "STAGE2_PIN_LANE_CLEANUP",
+     "light"
+    ]
+   ],
+   "note": "**进度：🧩 已并入（默认关，待 A/B）**\n三个裁片模块（`pin_lane_crops.py` 344 行 / `pin_text_crops.py` 263 行 / `color_crops.py` 249 行）与 `pin_number_crops.py`（220 行）、`mono_pin_crops.py`（250 行）都在这一层：**只决定切哪块**。\n\nself-imposed 约束（docstring）：`pin_lane_crops` *the windows use the current measured pin and frame contact, never a recognised number or an expected pin label*；`pin_number_crops` *recognized strings never set a crop*；`mono_pin_crops` *this path never erases black pixels*（不靠擦线猜细 `1`）。\n\n★ 这与我们的 `stage1/pincol.py`（引脚列格点窗口）+ `stage2/pinname.py`（引脚名救援）是**同类但不同尺子**的做法：我们按列/格点，它按**彩色引脚车道**；两条并存，A/B 后再决定谁当默认。",
+   "code": "stage2/pin_lane_crops.py:pin_lane_boxes"
+  },
+  {
+   "id": "ev_pinread",
+   "group": "ev",
+   "kind": "exec",
+   "title": "⑦f 引脚车道读数（追加候选）",
+   "sub": "单样本独立识别 + 双视图一致才确认；结果只 append 进 reads，不删不改",
+   "x": 2000,
+   "y": 2269,
+   "w": 300,
+   "file": "stage2/pin_lane_reading.py · stage2/pin_number_reading.py · stage2/isolated_ocr.py",
+   "ins": [
+    {
+     "id": "img",
+     "label": "原图",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "crops",
+     "label": "裁片窗口",
+     "kind": "boxes",
+     "role": "consume"
+    },
+    {
+     "id": "reads",
+     "label": "已有读数",
+     "kind": "reads",
+     "role": "consume"
+    },
+    {
+     "id": "engine",
+     "label": "识别器",
+     "kind": "engine",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "reads",
+     "label": "追加读数",
+     "kind": "reads",
+     "role": "produce"
+    }
+   ],
+   "params": [
+    [
+     "STAGE2_PIN_NUMBER_REPAIR",
+     "0（队友默认 1）"
+    ],
+    [
+     "STAGE2_PIN_LANE_CLEANUP",
+     "light"
+    ],
+    [
+     "STAGE2_ISOLATED_OCR",
+     "恒开（避免 CRNN 依赖最长裁片）"
+    ]
+   ],
+   "note": "**进度：🧩 已并入 `stage2/run.py::process()`（默认关，待 A/B）**\n接线点：`reads = engine.read(...)` 之后、`assign(...)` 之前，与队友分支同一位置；四个读取器都是**纯追加**（`reads = list(reads) + read_*(...)`），关掉时逐位不变（自检已过：`assign` 18 项 / `structmatch` 32 项 / `assemble` 23 项）。\n\nself-imposed 约束：`pin_lane_reading` *selective pin text recovery from observed geometry, never expected labels*；`pin_number_reading` *two fixed white-margin views must agree*（不一致就不确认）；`isolated_ocr` 单样本独立识别，避免 CRNN 的双向上下文被最长裁片带偏。\n\n★ 依赖：`from .assign import assign`（已加 `pin_evidence=` 形参）与 `structmatch.trusted_frame_pin_evidence`（已并入）。",
+   "code": "stage2/pin_lane_reading.py:read_pin_lanes"
+  },
+  {
+   "id": "ev_pinppocr",
+   "group": "ev",
+   "kind": "exec",
+   "title": "⑦g 可选 PP-OCR 引脚名/号（默认关）",
+   "sub": "只认已归一化到 CRNN 32px 高度的灰度图；不抽字形、不选方向、不修字符串",
+   "x": 1608,
+   "y": 1819,
+   "w": 300,
+   "file": "stage2/pin_name_ocr.py · stage2/pin_name_reading.py · stage2/mono_pin_reading.py",
+   "ins": [
+    {
+     "id": "img",
+     "label": "原图",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "reads",
+     "label": "已有读数",
+     "kind": "reads",
+     "role": "consume"
+    },
+    {
+     "id": "evid",
+     "label": "逐脚证据",
+     "kind": "pins",
+     "role": "consume"
+    },
+    {
+     "id": "engine",
+     "label": "识别器",
+     "kind": "engine",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "reads",
+     "label": "追加读数",
+     "kind": "reads",
+     "role": "produce"
+    }
+   ],
+   "params": [
+    [
+     "STAGE2_PIN_NAME_OCR",
+     "off（队友默认 auto）"
+    ],
+    [
+     "STAGE2_MONO_PIN_OCR",
+     "继承 STAGE2_PIN_NAME_OCR"
+    ],
+    [
+     "依赖",
+     "requirements.pin-name-ocr.txt（rapidocr-onnxruntime==1.4.4 + onnxruntime==1.31.0）"
+    ]
+   ],
+   "note": "**进度：🧩 已并入（默认 off；本机缺 `rapidocr_onnxruntime` ⇒ auto 会告警回退、on 会报错）**\n第八轮 + 第十轮：可选 PP-OCR 名称识别器（`pin_name_ocr.py` 229 行，包内含 `ch_PP-OCRv4_rec_infer.onnx` 并校验 SHA256，只加载识别模型）与黑白引脚通道（`mono_pin_reading.py` 242 行 / `mono_pin_crops.py` 250 行，两种固定白边视图必须一致才确认）。\n\n★ 它换的是**引脚文字识别器**，不是交付 CRNN：我们的交付 OCR 权重仍是 `ocr_mix`（这条不动）。要真跑得先 `python -m pip install -r requirements.pin-name-ocr.txt`（允许联网，见 `docs/COMPETITION_RULES.md:176`）。",
+   "code": "stage2/pin_name_ocr.py:get_pin_name_ocr"
   }
  ],
  "links": [
@@ -2402,10 +2685,105 @@ textarea{resize:vertical;min-height:170px}
    "from": "export.file",
    "to": "gtcheck.file",
    "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pincolor.img",
+   "kind": "data"
+  },
+  {
+   "from": "ev_sym.det",
+   "to": "ev_pincolor.det",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pinevid.img",
+   "kind": "data"
+  },
+  {
+   "from": "ev_sym.det",
+   "to": "ev_pinevid.det",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pincolor.pins",
+   "to": "ev_pinevid.pins",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pinlane.img",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pincolor.pins",
+   "to": "ev_pinlane.pins",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pinevid.evid",
+   "to": "ev_pinlane.evid",
+   "kind": "data"
+  },
+  {
+   "from": "ev_ocr.reads",
+   "to": "ev_pinlane.reads",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pinlane.crops",
+   "to": "ev_pinread.crops",
+   "kind": "data"
+  },
+  {
+   "from": "ev_ocr.reads",
+   "to": "ev_pinread.reads",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pinread.img",
+   "kind": "data"
+  },
+  {
+   "from": "batch.plan",
+   "to": "ev_pinread.engine",
+   "kind": "param"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pinppocr.img",
+   "kind": "data"
+  },
+  {
+   "from": "ev_ocr.reads",
+   "to": "ev_pinppocr.reads",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pinevid.evid",
+   "to": "ev_pinppocr.evid",
+   "kind": "data"
+  },
+  {
+   "from": "batch.plan",
+   "to": "ev_pinppocr.engine",
+   "kind": "param"
+  },
+  {
+   "from": "ev_pinread.reads",
+   "to": "ownnum.reads",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pinppocr.reads",
+   "to": "ownnum.reads",
+   "kind": "data"
   }
  ],
  "layout": {
-  "bands": 14
+  "bands": 15
  }
 }
 </script>

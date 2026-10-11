@@ -116,6 +116,13 @@ NODE_CODE = {
     "ownnum": "stage2/structmatch.py:rebind",
     "boxpinprior": "fusion/priors.py:slot_boxes",
     "gtcheck": "tools/diag/_desigsrc.py",
+    # ⑦c..⑦g：队友分支 `codex/improve-pin-network-parsing` 的引脚证据/读数链（已并入，
+    # 识别侧开关默认关，等 A/B 后再翻；模块与符号名逐个核对过）。
+    "ev_pincolor": "stage1/pincolor.py:extract_color_pins",
+    "ev_pinevid": "stage1/pin_evidence.py:build_pin_evidence",
+    "ev_pinlane": "stage2/pin_lane_crops.py:pin_lane_boxes",
+    "ev_pinread": "stage2/pin_lane_reading.py:read_pin_lanes",
+    "ev_pinppocr": "stage2/pin_name_ocr.py:get_pin_name_ocr",
     # fixstr / boxscan 页面自己写着「已证否 / 要补」⇒ 由 NODE_STUB 声明，不编造绑定。
 }
 NODE_STUB = {"fixstr": "已证否", "boxscan": "要补"}

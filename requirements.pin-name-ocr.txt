@@ -1,0 +1,7 @@
+# Optional CPU recognizer for trusted colour-pin names/numbers and measured
+# monochrome left/right pin glyphs.
+# Install after the repository's base requirements, in the same Python env.
+# The package includes ch_PP-OCRv4_rec_infer.onnx; production checks its SHA256.
+# Detection and angle classification keep their existing paths.
+rapidocr-onnxruntime==1.4.4
+onnxruntime==1.31.0

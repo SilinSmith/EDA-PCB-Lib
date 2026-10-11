@@ -18,6 +18,7 @@ except ImportError:                     # 直接跑脚本（python eda-pcb\stage
     import sys as _sys, os as _os       # `sys.path[0]` 是本目录，得把 eda-pcb\ 补上
     _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
     from envflag import env_on
+import math
 import os
 import re
 import sys
@@ -27,6 +28,79 @@ import numpy as np
 
 from . import structmatch
 from .expect import expect as expect_kind, fragment_score, score_expect
+
+# ---------------------------------------------------------------------------
+# ★ 来自队友分支 `origin/codex/improve-pin-network-parsing`（2026-10-15 并入）：
+#   「引脚图像证据」通道在 assign 侧的**入口校验**。队友那五个引脚读法模块
+#   （`stage2/pin_lane_reading.py` / `mono_pin_reading.py` / `pin_number_reading.py` /
+#   `pin_name_reading.py`）会 `from .assign import assign, _target_index`，并在内部
+#   用 `assign(..., pincol=..., pin_evidence=...)` 反查「现有绑定」⇒ 这里给出所需符号。
+#
+#   `_target_index(text, cid, pins, evidence)`：某个裁片带 `pin_target`
+#   （`{component_id, pin_index, edge, point_img, anchor_img}`）时，核验它指向的那根脚
+#   是否真有**新鲜的**实测接触证据。返回 `None`（没有 target）/ `-1`（不可信）/ 下标。
+#   `_trusted_text_contact`：彩色接触要求 `frame_confirmed`；灰度则走
+#   `structmatch.trusted_frame_pin_evidence`（实测帧边/短桩，绝不提升猜测）。
+# ---------------------------------------------------------------------------
+_COLOR_TEXT_SOURCES = frozenset(("red_green_transition", "red_stub_endpoint",
+                                 "red_green_transition_uncertain"))
+_MONO_TEXT_SOURCES = frozenset(("mono_pin_name_ppocr", "mono_pin_number_ppocr"))
+# 最近一次 `assign` 收到的逐脚图像证据（`{cid: [record, ...]}`）；给队友那五个读法
+# 模块的 `_target_index` 用，也方便离线探针复查。不参与返回签名。
+LAST_PIN_EVIDENCE: Dict[str, List] = {}
+
+
+def _same_image_point(value, expected):
+    try:
+        values = tuple(float(v) for v in value)
+        other = tuple(float(v) for v in expected)
+        return (len(values) == len(other) == 2
+                and all(math.isfinite(v) for v in values + other)
+                and math.dist(values, other) <= 0.001)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _trusted_text_contact(record, box=None, point=None):
+    """Accept measured color contacts or independently validated frame strokes."""
+    if not isinstance(record, dict) or record.get("trust") != "trusted":
+        return False
+    if record.get("source") in _COLOR_TEXT_SOURCES:
+        return record.get("frame_confirmed") is True
+    return structmatch.trusted_frame_pin_evidence(record, bbox=box, point=point)
+
+
+def _target_index(text, cid, pins, evidence):
+    """Validate a crop target against fresh measured contact/frame evidence."""
+    target = text.get("pin_target")
+    if target is None:
+        return None
+    if not isinstance(target, dict) or target.get("component_id") != cid:
+        return -1
+    index = target.get("pin_index")
+    if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(pins):
+        return -1
+    # Only freshness/point alignment is needed here; actual body/corridor
+    # checks are repeated by the binding code with the component rectangle.
+    checked = structmatch.normalize_pin_evidence(pins, evidence)
+    if not checked:
+        return -1
+    ev = checked[index]
+    mono = text.get("source") in _MONO_TEXT_SOURCES
+    if (not _trusted_text_contact(ev, point=pins[index])
+            or (ev.get("source") not in _COLOR_TEXT_SOURCES and not mono)
+            or target.get("edge") != ev.get("edge")):
+        return -1
+    if mono and (target.get("point_img") is None or target.get("anchor_img") is None):
+        return -1
+    if (target.get("point_img") is not None
+            and not _same_image_point(target["point_img"], pins[index])):
+        return -1
+    if (target.get("anchor_img") is not None
+            and not _same_image_point(target["anchor_img"], ev.get("anchor_img"))):
+        return -1
+    return index
+
 
 # 位号前缀策略（`STAGE2_PREFIX` 环境变量切臂）。**默认 `strict`，是实测的赢家**：
 # 5 张官方图（0001/0025/0050/0059/0101）逐张权重得分之和 —— off 20.00 / **strict 26.67** / force 24.86。
@@ -999,16 +1073,26 @@ def _own_match_pick(desig_all: Dict[str, List[dict]]) -> List[Tuple[str, dict]]:
 
 def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[dict],
            near: float = NEAR, far: float = FAR,
-           global_match: bool = None, pincol: Dict[str, List] = None) -> dict:
+           global_match: bool = None, pincol: Dict[str, List] = None,
+           pin_evidence: Dict[str, List] = None) -> dict:
     """components: stage1 的元件表（要有 id/type/bbox_img）
     pins:       stage1 的 {cid: [[x,y], ...]}（图像坐标）
     texts:      `stage2.text.TextEngine.read` 的输出
     pincol:     stage1 的引脚列记录 {cid: [record, ...]}（`stage1/pincol.py`），
                 用来把引脚号/名直接按**窗口**归位（见下面 `PINCOL_GUIDE` 那段）。
+    pin_evidence: stage1 的**逐脚图像证据** {cid: [record, ...]}（队友分支的
+                `stage1/pin_evidence.py` / `stage1/pincolor.py` 产出，字段
+                `trust/source/edge/frame_confirmed/anchor_img/point_img` + 六项测量）。
+                ★ 目前只**接收并挂到模块状态** `LAST_PIN_EVIDENCE`，供队友那五个读法
+                模块（经 `_target_index` / `_trusted_text_contact`）做保守校验；本函数
+                自己的绑定流程**尚未**消费它（队友那套 `STAGE2_PIN_TRUST_BIND` /
+                `STAGE2_PIN_DIGIT_ENTITY` 识别逻辑要单独 A/B 后才会接进来）。
 
     global_match 默认取环境变量 `STAGE2_GLOBAL_MATCH`（默认关）。
     220 张实测：见 `stage2/README.md`（这一项一直是关的，从未在当前管线上量过）。
     """
+    global LAST_PIN_EVIDENCE
+    LAST_PIN_EVIDENCE = pin_evidence or {}
     if global_match is None:
         global_match = env_on("STAGE2_GLOBAL_MATCH", "0")
     # ★ 「不删除只削弱」：一个 case 的降权/保留池从零开始累计（`structmatch.HIST_*`），

@@ -20,6 +20,13 @@ from pathlib import Path
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
+# 「假值词表」的唯一实现（`eda-pcb/envflag.py`）；`stage2/assign.py` 用的是同一份。
+try:
+    from envflag import env_on
+except ImportError:                     # 直接跑脚本时 `sys.path[0]` 是本目录
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from envflag import env_on
+
 from .text import DEFAULT_CKPT, TextEngine, detect_texts, imread_unicode, read_stage1_texts
 from .assign import assign, dist_to_rect
 from .assemble import build_doc
@@ -39,6 +46,38 @@ PINCOL_WIN_TEXTS = os.environ.get("STAGE2_PINCOL_WIN", "1").strip().lower() not 
 PINCOL_WIN_KEYS = tuple(k.strip() for k in
                         os.environ.get("STAGE2_PINCOL_WIN_KEYS", "out_win").split(",")
                         if k.strip())
+
+# ---------------------------------------------------------------------------
+# ★★ 队友分支 `origin/codex/improve-pin-network-parsing` 的**五个引脚读法模块**
+#    （2026-10-15 并入；模块本体原样拷入，接口与开关名沿用他们的命名）：
+#
+#    这五个读取器都是**纯追加**：由「已确认的引脚/车道几何」再切一批裁片、读一轮，
+#    把结果 append 进 `reads`，再由 `assign` 统一消化 —— 不动已有读数、不删候选，
+#    因此与我们的 `pincol`/`pinname`/`pinrot` 通道**并列**而不是替换。
+#
+#    ★ 默认值：这里先全部 **off**（队友分支里默认是 1/auto），因为并进来必须先做
+#      A/B（用户 m55811 的要求：改了识别逻辑的要 A/B）。逐个 A/B 有正收益的再翻默认。
+#      · `STAGE2_COLOR_NUMBER_CROP`  =1 彩色引脚外部脚号重裁（`stage2/color_crops.py`）
+#      · `STAGE2_PIN_TEXT_CROP`      =1 完整旋转引脚词（`stage2/pin_text_crops.py`）
+#      · `STAGE2_PIN_LANE_CROP`      =1 独立引脚车道窗口 + 选择性恢复
+#                                        （`stage2/pin_lane_crops.py` / `pin_lane_reading.py`）
+#        `STAGE2_PIN_LANE_CLEANUP`   =light/heavy，车道裁片的去杂强度
+#      · `STAGE2_PIN_NUMBER_REPAIR`  =1 脚号几何保守修复 + 双视图一致才确认
+#                                        （`stage2/pin_number_crops.py` / `pin_number_reading.py`）
+#      · `STAGE2_PIN_NAME_OCR`       =auto/on/off 可选 PP-OCR 名称识别
+#                                        （`stage2/pin_name_reading.py`，需 `requirements.pin-name-ocr.txt`）
+#        `STAGE2_MONO_PIN_OCR`       继承它；黑白引脚通道（`stage2/mono_pin_reading.py`）
+#    依赖：`stage2/isolated_ocr.py`（单样本独立识别，避免 CRNN 依赖最长裁片）。
+#    可选依赖：`rapidocr-onnxruntime`（本机未装 ⇒ auto 会告警回退，on 会报错）。
+# ---------------------------------------------------------------------------
+COLOR_NUMBER_CROP = env_on("STAGE2_COLOR_NUMBER_CROP", "0")
+PIN_TEXT_CROP = env_on("STAGE2_PIN_TEXT_CROP", "0")
+PIN_LANE_CROP = env_on("STAGE2_PIN_LANE_CROP", "0")
+PIN_LANE_CLEANUP = os.environ.get("STAGE2_PIN_LANE_CLEANUP", "light").strip().lower()
+PIN_NAME_OCR = os.environ.get("STAGE2_PIN_NAME_OCR", "off").strip().lower()
+MONO_PIN_OCR = os.environ.get("STAGE2_MONO_PIN_OCR", PIN_NAME_OCR).strip().lower()
+PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "0")
+
 # 这些是「参数」类元件，它们旁边没有长器件名，不参与生长
 _VALUE_TYPES = {"r", "c", "l", "fuse", "crystal", "crystal_2pin",
                 "crystal_3pin", "crystal_4pin"}
@@ -218,6 +257,40 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         reads = engine.read(bgr, boxes) if roles is None else engine.read(bgr, boxes, roles)
     else:
         reads = [{"bbox": b, "reads": {}} for b in boxes]
+    # ★ 队友分支的五个追加式读取器（`docs/引脚与网络提分验证.md`；开关见文件头，
+    #   默认全 off，逐条 A/B 后转正）。它们只往 `reads` 里**加**候选：
+    #   后续 `assign` / `build_doc` 的既有逻辑一字未改 ⇒ 关掉时逐位不变。
+    if do_ocr:
+        if COLOR_NUMBER_CROP and (roles is None or "pin_number" in roles):
+            from .color_crops import read_color_numbers
+            reads = list(reads) + read_color_numbers(doc, reads, engine, bgr)
+        if PIN_TEXT_CROP and (roles is None or any(r in roles for r in ("pin_name", "pin_number"))):
+            from .pin_text_crops import read_pin_texts
+            extra = read_pin_texts(doc, reads, engine, bgr)
+            if roles is not None:
+                extra = [dict(r, reads={k: v for k, v in r["reads"].items() if k in roles})
+                         for r in extra if any(k in roles for k in r["reads"])]
+            reads = list(reads) + extra
+        if PIN_LANE_CROP and (roles is None or any(r in roles for r in ("pin_name", "pin_number"))):
+            from .pin_lane_reading import read_pin_lanes
+            reads = list(reads) + read_pin_lanes(
+                doc, reads, engine, bgr,
+                include_names=roles is None or "pin_name" in roles,
+                include_numbers=roles is None or "pin_number" in roles,
+                cleanup=PIN_LANE_CLEANUP, min_conf=min_conf)
+        if PIN_NUMBER_REPAIR and (roles is None or "pin_number" in roles):
+            from .pin_number_reading import read_pin_numbers
+            reads = list(reads) + read_pin_numbers(doc, reads, engine, bgr, min_conf=min_conf)
+        if PIN_NAME_OCR != "off" and (roles is None or "pin_name" in roles):
+            from .pin_name_reading import read_pin_names
+            reads = list(reads) + read_pin_names(doc, reads, bgr, mode=PIN_NAME_OCR,
+                                                 min_conf=min_conf)
+        if MONO_PIN_OCR != "off" and (roles is None or any(r in roles for r in ("pin_name", "pin_number"))):
+            from .mono_pin_reading import read_mono_pin_texts
+            reads = list(reads) + read_mono_pin_texts(
+                doc, reads, engine, bgr, min_conf=min_conf, mode=MONO_PIN_OCR,
+                include_names=roles is None or "pin_name" in roles,
+                include_numbers=roles is None or "pin_number" in roles)
     t2 = time.time()
 
     for r in reads:
@@ -226,7 +299,7 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                 r["reads"][k] = ("", conf)
 
     a = assign(doc.get("components") or [], doc.get("pins") or {}, reads,
-               pincol=doc.get("pincol"))
+               pincol=doc.get("pincol"), pin_evidence=doc.get("pin_evidence"))
     if recut in ("expect", "grow", "both") and do_ocr:
         extra = []
         if recut in ("expect", "both"):
@@ -240,7 +313,7 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                         r["reads"][k] = ("", conf)
             reads = list(reads) + list(extra)
             a = assign(doc.get("components") or [], doc.get("pins") or {}, reads,
-                       pincol=doc.get("pincol"))
+                       pincol=doc.get("pincol"), pin_evidence=doc.get("pin_evidence"))
     # ★ 引脚名救援（`stage2/pinname.py`，`STAGE2_PINNAME_RESCUE` 默认**开**，2026-10-16）：
     #   「号读对了、名字没读到」的 box 脚以前会被 `assemble.py` 的 NEED_NAME 闸门
     #   整条丢掉（官方 9 张：缺号 51 里有 23 根 = 45%）。这里从脚点往体内切带、

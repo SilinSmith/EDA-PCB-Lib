@@ -44,6 +44,13 @@ from stage1 import wires as wires_mod          # noqa: E402
 from stage1 import pintrace as ray_mod         # noqa: E402
 from stage1 import nets as nets_mod            # noqa: E402
 from stage1 import pincol as pincol_mod        # noqa: E402
+# ★ 队友分支 `codex/improve-pin-network-parsing` 的引脚证据链（2026-10-16 并入，默认关）：
+#   `pincolor` = 在图像上实测红色桩/绿线转折得到「彩色已确认的引脚端点」；
+#   `pin_evidence` = 逐脚量六项图像证据（框覆盖率/墨迹连续长度/文字重叠/分支率…）。
+#   它们产出的 `doc["pin_color"]` / `doc["pin_evidence"]` 正是 stage2 那五个
+#   「引脚车道裁片 / 读数」读取器的**输入**（没有它，那些读取器实测是 no-op）。
+from stage1 import pin_evidence as evidence_mod  # noqa: E402
+from stage1 import pincolor as color_mod       # noqa: E402
 from stage1.detect import Detector             # noqa: E402
 from stage1 import detect as det_mod           # noqa: E402
 
@@ -79,6 +86,99 @@ BIGIC_ON = env_on("STAGE1_BIGIC", "1")
 #     枚举前 5px 命中   3/64   （stage1 只给 8 个点）
 #     枚举后 5px 命中  63/64   （L 32 个 pitch 9.99、R 31 个 pitch 9.96）
 PINC_ON = env_on("STAGE1_PINC", "1")
+
+# ★★ 彩色引脚端点实测（队友 `stage1/pincolor.py`）。**默认 off，等 A/B**。
+# 为什么需要它：stage2 那五个「引脚车道裁片 / 读数」读取器（`pin_lane_crops` /
+# `pin_lane_reading` / `pin_text_crops` / `color_crops` / `pin_number_reading`）
+# 的输入是「**已确认的彩色引脚车道**」+ `doc["pin_evidence"]`。我们原来不产这两个
+# 键 ⇒ 挂上读取器后实测**零改动**（`work/_tm_ab.ps1`：`tmoff` 71.65 vs `tmon` 71.65，
+# 逐案逐通道逐位相同）。要让它生效，必须连同这条证据链一起开。
+#   `extract_color_pins` = 只在图像上量「红色桩 + 真实绿线转折」，**不按固定距离
+#   摆引脚**（队友的硬约束：短而未连的引脚是合法的；绿色 no-connect 叉不算导线）。
+#   `STAGE1_PIN_DIRECTION_GUARD` / `STAGE1_PIN_ATTACHMENT_GUARD` 是队友另两条
+#   方向/穿体判据，他们自己默认也是 0（未定案），这里照抄默认值。
+PIN_COLOR_ON = env_on("STAGE1_PIN_COLOR", "0")
+PIN_DIRECTION_GUARD = env_on("STAGE1_PIN_DIRECTION_GUARD", "0")
+PIN_ATTACHMENT_GUARD = env_on("STAGE1_PIN_ATTACHMENT_GUARD", "0")
+
+
+def apply_color_pins(components, pins, pin_synth, color_records):
+    """Apply measured color terminals after grid merging, before net indexing.
+
+    A confirmed red frame with pins on it supplies stronger evidence than
+    gray text/grid guesses. Replace legacy guesses on color-confirmed sides.
+    On a fully confirmed red frame all sides are scanned, including sides with
+    no red pin strokes. Unconfirmed sides and monochrome components keep the
+    legacy candidates. The dropped guesses remain in the diagnostic ledger.
+
+    ★ 逐字并入队友实现（`codex/improve-pin-network-parsing:stage1/pipeline.py:76`），
+    只把 `math` 的用法原样保留 —— 被替换掉的旧猜测进 `ledger`，**不静默消失**。
+    """
+    result = {cid: list(points) for cid, points in pins.items()}
+    synth = {cid: list(flags) for cid, flags in (pin_synth or {}).items()}
+    overlays, connected, ledger = {}, {}, {}
+    for comp in components:
+        cid = comp["id"]
+        if comp.get("type") != "box":
+            continue
+        recs = color_records.get(cid) or []
+        if not recs:
+            continue
+        # Do not treat arbitrary caller metadata as a confirmed color stroke.
+        recs = [dict(r) for r in recs if r.get("frame_confirmed") is True
+                and r.get("edge") in ("top", "right", "bottom", "left")
+                and len(r.get("point_img") or []) == 2
+                and all(math.isfinite(float(v)) for v in r["point_img"])]
+        if not recs:
+            continue
+        confirmed = {e for r in recs for e in r.get("confirmed_edges", [])}
+        covered = {r["edge"] for r in recs}
+        if confirmed == {"top", "right", "bottom", "left"}:
+            covered = confirmed
+        old = result.get(cid) or []
+        old_flags = synth.get(cid) or []
+        kept, kept_flags, dropped = [], [], []
+        for index, p in enumerate(old):
+            edge = evidence_mod._EDGES[evidence_mod._candidate_edge(p, comp["bbox_img"])]
+            if edge in covered:
+                dropped.append({"index": index, "point_img": list(p), "edge": edge,
+                                "reason": "replaced_by_frame_attached_color_strokes"})
+            else:
+                kept.append(tuple(p))
+                kept_flags.append(old_flags[index] if index < len(old_flags) else 0)
+        measured = []
+        flags, connections = [], []
+        for r in recs:
+            r["point_img"] = [round(float(v), 1) for v in r["point_img"]]
+            if r.get("anchor_img"):
+                r["anchor_img"] = [round(float(v), 1) for v in r["anchor_img"]]
+            r["trust"] = "trusted"
+            measured.append(tuple(r["point_img"]))
+            connections.append(r.get("connected"))
+            flags.append(int(r.get("connected") is False))
+        result[cid] = measured + kept
+        synth[cid] = flags + kept_flags
+        overlays[cid] = recs + [None] * len(kept)
+        connected[cid] = connections + [None] * len(kept)
+        ledger[cid] = {"measured": recs, "replaced_guesses": dropped,
+                       "confirmed_edges": sorted(confirmed),
+                       "retained_unconfirmed_side": len(kept)}
+    return result, synth, overlays, connected, ledger
+
+
+def overlay_color_evidence(evidence, overlays):
+    """Keep evidence exactly aligned with the post-color pin sequence.
+
+    ★ 逐字并入队友实现（`...:stage1/pipeline.py:137`）。
+    """
+    result = dict(evidence)
+    for cid, recs in overlays.items():
+        old = result.get(cid) or [{} for _ in recs]
+        if len(old) != len(recs):
+            old = [{} for _ in recs]
+        result[cid] = [dict(r) if r is not None else dict(prior)
+                       for prior, r in zip(old, recs)]
+    return result
 
 
 def _pt_seg_dist(p, a, b) -> float:
@@ -301,6 +401,11 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
     # = 0.70 分在结构上拿不到。这里补上「段 -> 连通分量 -> 挂引脚 -> net」这一步。
     comp_pins, nets, seg_groups, pin_s = {}, [], [], 0.0
     pincol_cols, pincol_stat, pin_synth = {}, {}, {}
+    # ★ 队友证据链的产物（默认空 ⇒ 下游一切如旧）：`pin_evidence` = 逐脚图像证据，
+    #   `pin_color` = 被彩色实测替换后的引脚序列（进 `pin_evidence` 的对齐用），
+    #   `color_overlays` = 与最终引脚序列**逐位对齐**的彩色记录（含 None 占位）。
+    pin_evidence = {}
+    color_overlays, pin_connected, pin_color = {}, {}, {}
     # ★★ 「不丢弃」的**留痕**通道（owner 哲学：证据不能被悄悄抹掉）。
     #   `build_nets` 会把「够不着任何导线而被硬截断的引脚」写进 `orphans`、
     #   把「软判据区间内勉强挂上的引脚」写进 `weak`。历史行为是 `if g < 0: continue`
@@ -329,6 +434,18 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                 except Exception as e:
                     traceback.print_exc()
                     errs.append(f"pincol: {type(e).__name__}: {e}")
+            # ★★ 彩色引脚端点实测（队友 `stage1/pincolor.py`，默认关）：
+            #   在「已确认的红色框」上把灰色/格点猜出来的旧引脚换成**实测端点**。
+            #   只动「彩色已确认的那几侧」，未确认侧与黑白元件保持原样；被换掉的
+            #   旧猜测进 `ledger`（诊断账本），不会静默消失。
+            if PIN_COLOR_ON:
+                try:
+                    color_records = color_mod.extract_color_pins(bgr, comps)
+                    comp_pins, pin_synth, color_overlays, pin_connected, pin_color = \
+                        apply_color_pins(comps, comp_pins, pin_synth, color_records)
+                except Exception as e:
+                    traceback.print_exc()
+                    errs.append(f"pin_color: {type(e).__name__}: {e}")
             # ★ 把**墨迹掩膜**传给网络装配：`_weld_unions` 用它判断两个端点之间的
             # 直线上是否真的有墨。结点圆点造成的断口是**画出来的**（圆点本身就是墨），
             # 而「把不相干的两条线凑近」的假配对连线必然穿过空白。
@@ -357,6 +474,20 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
             comp_pins, nets, seg_groups = {}, [], []
         pin_s = round(time.time() - t_p, 2)
 
+        # ★★ 逐脚图像证据（队友 `stage1/pin_evidence.py`，默认算，成本 ~0.1 s/张）：
+        #   它必须对着**最终合并后**的引脚序列算 —— 坐标在这一行之前已经定稿。
+        #   它的失败**不能**抹掉本来有效的引脚/网络（所以自己一层 try）。
+        #   `ink` 用二维墨迹掩膜（`_ink`），`texts` 只当**软证据**（文字掩膜），
+        #   绝不擦像素；最后用 `overlay_color_evidence` 把彩色那批记录对齐回来。
+        try:
+            pin_evidence = evidence_mod.build_pin_evidence(
+                comps, comp_pins, _ink, texts)
+        except Exception as e:
+            traceback.print_exc()
+            errs.append(f"pin_evidence: {type(e).__name__}: {e}")
+            pin_evidence = {}
+        pin_evidence = overlay_color_evidence(pin_evidence, color_overlays)
+
     tm = dict(tm)
     tm["wires_s"] = round(t_w, 2)
     tm["rays_s"] = round(t_r, 2)
@@ -370,6 +501,11 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         "components": comps,
         "pins": {cid: [[round(float(p[0]), 1), round(float(p[1]), 1)] for p in pl]
                  for cid, pl in comp_pins.items()},
+        # ★ 队友证据链的两个键（`STAGE1_PIN_COLOR` 关时：`pin_color` 为空 dict，
+        #   `pin_evidence` 仍是逐脚实测记录 —— stage2 的读取器只认「已确认车道」，
+        #   所以证据本身不改变任何输出，只是把「为什么这么判断」留给下游）。
+        "pin_evidence": pin_evidence,
+        "pin_color": pin_color,
         "nets": nets,
         # ★ 引脚接线的「留痕」：`orphans` = 够不着导线而被截断的引脚（历史上直接消失）、
         #   `weak` = 软判据区间内勉强挂上的引脚（带 `d`，下游可降权）。**不参与评分**，

@@ -854,6 +854,176 @@
      "role": "sink"
     }
    ]
+  },
+  {
+   "id": "ev_pincolor",
+   "title": "⑦c 彩色引脚端点实测",
+   "group": "ev",
+   "file": "stage1/pincolor.py",
+   "code": "stage1/pincolor.py:extract_color_pins",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "det",
+     "kind": "det",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "pins",
+     "kind": "pins",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_pinevid",
+   "title": "⑦d 逐脚图像证据",
+   "group": "ev",
+   "file": "stage1/pin_evidence.py",
+   "code": "stage1/pin_evidence.py:build_pin_evidence",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "det",
+     "kind": "det",
+     "role": "consume"
+    },
+    {
+     "id": "pins",
+     "kind": "pins",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "evid",
+     "kind": "pins",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_pinlane",
+   "title": "⑦e 引脚车道裁片",
+   "group": "ev",
+   "file": "stage2/pin_lane_crops.py · stage2/pin_text_crops.py · stage2/color_crops.py",
+   "code": "stage2/pin_lane_crops.py:pin_lane_boxes",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "pins",
+     "kind": "pins",
+     "role": "consume"
+    },
+    {
+     "id": "evid",
+     "kind": "pins",
+     "role": "consume"
+    },
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "crops",
+     "kind": "boxes",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_pinread",
+   "title": "⑦f 引脚车道读数（追加候选）",
+   "group": "ev",
+   "file": "stage2/pin_lane_reading.py · stage2/pin_number_reading.py · stage2/isolated_ocr.py",
+   "code": "stage2/pin_lane_reading.py:read_pin_lanes",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "crops",
+     "kind": "boxes",
+     "role": "consume"
+    },
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "consume"
+    },
+    {
+     "id": "engine",
+     "kind": "engine",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_pinppocr",
+   "title": "⑦g 可选 PP-OCR 引脚名/号（默认关）",
+   "group": "ev",
+   "file": "stage2/pin_name_ocr.py · stage2/pin_name_reading.py · stage2/mono_pin_reading.py",
+   "code": "stage2/pin_name_ocr.py:get_pin_name_ocr",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "consume"
+    },
+    {
+     "id": "evid",
+     "kind": "pins",
+     "role": "consume"
+    },
+    {
+     "id": "engine",
+     "kind": "engine",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "produce"
+    }
+   ]
   }
  ],
  "links": [
@@ -1180,6 +1350,101 @@
   {
    "from": "export.file",
    "to": "gtcheck.file",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pincolor.img",
+   "kind": "data"
+  },
+  {
+   "from": "ev_sym.det",
+   "to": "ev_pincolor.det",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pinevid.img",
+   "kind": "data"
+  },
+  {
+   "from": "ev_sym.det",
+   "to": "ev_pinevid.det",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pincolor.pins",
+   "to": "ev_pinevid.pins",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pinlane.img",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pincolor.pins",
+   "to": "ev_pinlane.pins",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pinevid.evid",
+   "to": "ev_pinlane.evid",
+   "kind": "data"
+  },
+  {
+   "from": "ev_ocr.reads",
+   "to": "ev_pinlane.reads",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pinlane.crops",
+   "to": "ev_pinread.crops",
+   "kind": "data"
+  },
+  {
+   "from": "ev_ocr.reads",
+   "to": "ev_pinread.reads",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pinread.img",
+   "kind": "data"
+  },
+  {
+   "from": "batch.plan",
+   "to": "ev_pinread.engine",
+   "kind": "param"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pinppocr.img",
+   "kind": "data"
+  },
+  {
+   "from": "ev_ocr.reads",
+   "to": "ev_pinppocr.reads",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pinevid.evid",
+   "to": "ev_pinppocr.evid",
+   "kind": "data"
+  },
+  {
+   "from": "batch.plan",
+   "to": "ev_pinppocr.engine",
+   "kind": "param"
+  },
+  {
+   "from": "ev_pinread.reads",
+   "to": "ownnum.reads",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pinppocr.reads",
+   "to": "ownnum.reads",
    "kind": "data"
   }
  ]

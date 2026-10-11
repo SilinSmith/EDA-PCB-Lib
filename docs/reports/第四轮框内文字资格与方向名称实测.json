@@ -1,0 +1,1475 @@
+{
+  "gt_root": "D:\\赛题六训练集\\10GT\\10GT",
+  "type_spec_sha256": "937192fd6a0e2c979997d9b7f383401a997d257e80aac3e6e9f4de02eaefbaa6",
+  "baseline_commit": "8bacedaf6b339118d2f47a79bc61ff2a426d6cf4",
+  "source_hashes_after": {
+    "stage1/__init__.py": "a2f90bc0c5407042c8fb235db1fde17edc2a09746a52ac6e70ae8b16eabb60d2",
+    "stage1/__main__.py": "bada11d3f73cc590b36f9f47239c5fd01437935c3b51a55b8cf6d9d8ad0a169b",
+    "stage1/bigic.py": "a83b0e0e460d7cc5759bcb871cf3508501e8f811db26ced42e0e461adc9ccf55",
+    "stage1/detect.py": "dcd81bb0c4852b9a617081849d30d76d06c48804d050817c241f6ac7a5bc4e50",
+    "stage1/labels.py": "d56de5b6dfcc1a5987e74da022240ce097328467606438784d7ba32e8c2de549",
+    "stage1/llm.py": "d66683c1ae3e01bc5526849a4d64c79d93308fc9ebe5a4dd67a9bc561f6f2770",
+    "stage1/nets.py": "3049489355003bf95ed8de5d319aaae8c8fa9d051f8c8a015edbcaf778efdfd3",
+    "stage1/pin_evidence.py": "3c659880f3676240c6237cdb760337eef7093e23b18c3dbbb31bd402e6f284a5",
+    "stage1/pincol.py": "c9c9704d3d7858941084e8cd4ca3e7dd5e31f1daa371ac450b38a02140d29e4b",
+    "stage1/pins.py": "ad38b58e377736a2a7a4e8a298ec10f36f99e2342864b3cf7a08c4eb7c6ed9de",
+    "stage1/pintrace.py": "8c8e667f325a6faaf41a76ab2268aff6a9dd2eefc2d279b20edea5566615bbbf",
+    "stage1/pipeline.py": "9b507435c94759558983c3c112aa29c0fab45e4c99311994aabe28423e7b63aa",
+    "stage1/reconcile.py": "bfd680da9b29e97adf0c5678ddffad674a55d3a3073adb6f10ed448527f4f79e",
+    "stage1/wires.py": "5dcae1166c37e55bdd35cbe6c903384fc345185aeadf9bb8e8ca1fbd0404e8b9",
+    "stage2/__init__.py": "47230117438d313d85e862cb0282e4393a8901947f25be03e850e251eb25e507",
+    "stage2/assemble.py": "2ac32467a2cca798899b2505f484dd6b9f6f41bcfdac2474e2ef7b8a7b074c19",
+    "stage2/assign.py": "02f2242a71a7371e3a0bdb59d567799cdc24d98970735867036261dfcabc5634",
+    "stage2/expect.py": "90fc618a8f79aea197cceb2576baadd6685e7683392dd1efdbdf7fd3079c3fcf",
+    "stage2/growbox.py": "2bb327df381275ca972b475aa2e94b4516d4c173cf5e23eb216358aa13e8f51a",
+    "stage2/run.py": "35b3de55c366279c749a42f7cdad531759bb3b7742610536f4af6284abbbd0fa",
+    "stage2/structmatch.py": "37d6c826ae411918c3c81fe5d4a0518ff0166773376cb81a05a415b8ee8ade72",
+    "stage2/text.py": "f6524d6dfe949e6d0c1011cc71aee70eae625f9000c758e0b8ca59b76b17e132",
+    "schematic_parser/__init__.py": "abcbf6eabe42d9eb3d2f93b0e7a1fb770ca9f93ec47e249c587e84438d0cd070",
+    "schematic_parser/data.py": "554d00991a1b5e75a9b7596dff32c8cb8ccfce805d44fac0a4eb7ff742d70669",
+    "schematic_parser/evaluate.py": "4cce8d4a8f39e5d2baef5b9478224ff6cbb5fc06989eb128f046539bc969c2f8",
+    "schematic_parser/metrics.py": "c4888ad700d94c39adfb17d59671b931f1c791e52ee4fb4b3fad4dfed358f8bd",
+    "schematic_parser/stamp.py": "d8e89499747a5669f07da533bf340221ace69c39f1e280bce948ecba5f355fc6"
+  },
+  "evidence_boundary": "same frozen geometry and OCR; stage2/assembly replay; local reconstructed scorer",
+  "guard_config": {
+    "frame_normal_offset_limit": 7.1,
+    "same_side_consistency_px": 2.0,
+    "ocr_halo": "max(1, min(3, 0.15 * min(width, height)))",
+    "unconfirmed_side": "neutral",
+    "text_content_filter": false,
+    "tangential_anchor_limit_px": 3.1,
+    "nearest_axis_tolerance": "max(4, 0.35*short_side)",
+    "search_depth": "min(half_symbol_depth, 4*short_side)+axis_tolerance",
+    "incomplete_calibration": "legacy ranking independently per trust phase"
+  },
+  "name_totals": {
+    "strict_5px": {
+      "baseline": {
+        "correct": 66,
+        "wrong_name": 28,
+        "no_candidate": 34,
+        "unnamed": 8
+      },
+      "frame_guard": {
+        "correct": 69,
+        "wrong_name": 25,
+        "no_candidate": 34,
+        "unnamed": 8
+      }
+    },
+    "same_side_axis_5px": {
+      "baseline": {
+        "correct": 81,
+        "wrong_name": 32,
+        "unnamed": 13,
+        "no_candidate": 10
+      },
+      "frame_guard": {
+        "correct": 84,
+        "wrong_name": 29,
+        "unnamed": 13,
+        "no_candidate": 10
+      }
+    }
+  },
+  "transitions": {
+    "strict_5px": {
+      "frame_guard": {
+        "unchanged": 130,
+        "recovered": 3,
+        "changed_without_recovery": 3
+      }
+    },
+    "same_side_axis_5px": {
+      "frame_guard": {
+        "unchanged": 128,
+        "recovered": 3,
+        "changed_without_recovery": 5
+      }
+    }
+  },
+  "scores": {
+    "baseline": {
+      "cases": 10,
+      "mean_score": 54.8198,
+      "component_f1": 0.791879,
+      "pin_f1": 0.433346,
+      "net_hypergraph_f1": 0.554086,
+      "net_line_f1": 0.083679,
+      "pin_counts": {
+        "tp": 46,
+        "fp": 40,
+        "fn": 90
+      }
+    },
+    "frame_guard": {
+      "cases": 10,
+      "mean_score": 54.8662,
+      "component_f1": 0.791879,
+      "pin_f1": 0.438992,
+      "net_hypergraph_f1": 0.551297,
+      "net_line_f1": 0.083961,
+      "pin_counts": {
+        "tp": 46,
+        "fp": 37,
+        "fn": 90
+      }
+    }
+  },
+  "cases": [
+    {
+      "case_id": "1",
+      "scores": {
+        "baseline": {
+          "case_id": "1",
+          "score": 43.489,
+          "component_f1": 0.454545,
+          "pin_f1": 0.510638,
+          "net_hypergraph_f1": 0.480769,
+          "net_line_f1": 0.025974,
+          "counts": {
+            "component": {
+              "tp": 10,
+              "fp": 12,
+              "fn": 12,
+              "precision": 0.454545,
+              "recall": 0.454545,
+              "f1": 0.454545
+            },
+            "pin": {
+              "tp": 12,
+              "fp": 9,
+              "fn": 14,
+              "precision": 0.571429,
+              "recall": 0.461538,
+              "f1": 0.510638
+            },
+            "net_hypergraph": {
+              "tp": 25,
+              "fp": 19,
+              "fn": 35,
+              "precision": 0.568182,
+              "recall": 0.416667,
+              "f1": 0.480769
+            },
+            "net_line": {
+              "tp": 4,
+              "fp": 202,
+              "fn": 98,
+              "precision": 0.019417,
+              "recall": 0.039216,
+              "f1": 0.025974
+            }
+          },
+          "diagnostic": {
+            "component.missing": 8,
+            "component.extra": 8,
+            "component.coord_matched": 8,
+            "component.text_mismatch": 3,
+            "component.bbox_mismatch": 1,
+            "pin.missing": 9,
+            "pin.extra": 4,
+            "pin.position_mismatch": 4,
+            "pin.name_mismatch": 1,
+            "net.pred_pins": 44,
+            "net.gt_pins": 60,
+            "net.pred_count": 9,
+            "net.gt_count": 10,
+            "net.pairs": 9,
+            "keymap.size": 14
+          }
+        },
+        "frame_guard": {
+          "case_id": "1",
+          "score": 43.489,
+          "component_f1": 0.454545,
+          "pin_f1": 0.510638,
+          "net_hypergraph_f1": 0.480769,
+          "net_line_f1": 0.025974,
+          "counts": {
+            "component": {
+              "tp": 10,
+              "fp": 12,
+              "fn": 12,
+              "precision": 0.454545,
+              "recall": 0.454545,
+              "f1": 0.454545
+            },
+            "pin": {
+              "tp": 12,
+              "fp": 9,
+              "fn": 14,
+              "precision": 0.571429,
+              "recall": 0.461538,
+              "f1": 0.510638
+            },
+            "net_hypergraph": {
+              "tp": 25,
+              "fp": 19,
+              "fn": 35,
+              "precision": 0.568182,
+              "recall": 0.416667,
+              "f1": 0.480769
+            },
+            "net_line": {
+              "tp": 4,
+              "fp": 202,
+              "fn": 98,
+              "precision": 0.019417,
+              "recall": 0.039216,
+              "f1": 0.025974
+            }
+          },
+          "diagnostic": {
+            "component.missing": 8,
+            "component.extra": 8,
+            "component.coord_matched": 8,
+            "component.text_mismatch": 3,
+            "component.bbox_mismatch": 1,
+            "pin.missing": 9,
+            "pin.extra": 4,
+            "pin.position_mismatch": 4,
+            "pin.name_mismatch": 1,
+            "net.pred_pins": 44,
+            "net.gt_pins": 60,
+            "net.pred_count": 9,
+            "net.gt_count": 10,
+            "net.pairs": 9,
+            "keymap.size": 14
+          }
+        }
+      }
+    },
+    {
+      "case_id": "2",
+      "scores": {
+        "baseline": {
+          "case_id": "2",
+          "score": 50.2025,
+          "component_f1": 0.785714,
+          "pin_f1": 0.48,
+          "net_hypergraph_f1": 0.40625,
+          "net_line_f1": 0.041237,
+          "counts": {
+            "component": {
+              "tp": 22,
+              "fp": 6,
+              "fn": 6,
+              "precision": 0.785714,
+              "recall": 0.785714,
+              "f1": 0.785714
+            },
+            "pin": {
+              "tp": 6,
+              "fp": 3,
+              "fn": 10,
+              "precision": 0.666667,
+              "recall": 0.375,
+              "f1": 0.48
+            },
+            "net_hypergraph": {
+              "tp": 13,
+              "fp": 3,
+              "fn": 35,
+              "precision": 0.8125,
+              "recall": 0.270833,
+              "f1": 0.40625
+            },
+            "net_line": {
+              "tp": 2,
+              "fp": 55,
+              "fn": 38,
+              "precision": 0.035088,
+              "recall": 0.05,
+              "f1": 0.041237
+            }
+          },
+          "diagnostic": {
+            "component.missing": 2,
+            "component.extra": 2,
+            "component.coord_matched": 16,
+            "component.text_mismatch": 4,
+            "pin.name_mismatch": 3,
+            "pin.missing": 7,
+            "net.pred_pins": 16,
+            "net.gt_pins": 48,
+            "net.pred_count": 14,
+            "net.gt_count": 24,
+            "net.pairs": 14,
+            "keymap.size": 26
+          }
+        },
+        "frame_guard": {
+          "case_id": "2",
+          "score": 50.2025,
+          "component_f1": 0.785714,
+          "pin_f1": 0.48,
+          "net_hypergraph_f1": 0.40625,
+          "net_line_f1": 0.041237,
+          "counts": {
+            "component": {
+              "tp": 22,
+              "fp": 6,
+              "fn": 6,
+              "precision": 0.785714,
+              "recall": 0.785714,
+              "f1": 0.785714
+            },
+            "pin": {
+              "tp": 6,
+              "fp": 3,
+              "fn": 10,
+              "precision": 0.666667,
+              "recall": 0.375,
+              "f1": 0.48
+            },
+            "net_hypergraph": {
+              "tp": 13,
+              "fp": 3,
+              "fn": 35,
+              "precision": 0.8125,
+              "recall": 0.270833,
+              "f1": 0.40625
+            },
+            "net_line": {
+              "tp": 2,
+              "fp": 55,
+              "fn": 38,
+              "precision": 0.035088,
+              "recall": 0.05,
+              "f1": 0.041237
+            }
+          },
+          "diagnostic": {
+            "component.missing": 2,
+            "component.extra": 2,
+            "component.coord_matched": 16,
+            "component.text_mismatch": 4,
+            "pin.name_mismatch": 3,
+            "pin.missing": 7,
+            "net.pred_pins": 16,
+            "net.gt_pins": 48,
+            "net.pred_count": 14,
+            "net.gt_count": 24,
+            "net.pairs": 14,
+            "keymap.size": 26
+          }
+        }
+      }
+    },
+    {
+      "case_id": "3",
+      "scores": {
+        "baseline": {
+          "case_id": "3",
+          "score": 67.1551,
+          "component_f1": 0.884615,
+          "pin_f1": 0.727273,
+          "net_hypergraph_f1": 0.628571,
+          "net_line_f1": 0.043478,
+          "counts": {
+            "component": {
+              "tp": 23,
+              "fp": 3,
+              "fn": 3,
+              "precision": 0.884615,
+              "recall": 0.884615,
+              "f1": 0.884615
+            },
+            "pin": {
+              "tp": 4,
+              "fp": 1,
+              "fn": 2,
+              "precision": 0.8,
+              "recall": 0.666667,
+              "f1": 0.727273
+            },
+            "net_hypergraph": {
+              "tp": 22,
+              "fp": 3,
+              "fn": 23,
+              "precision": 0.88,
+              "recall": 0.488889,
+              "f1": 0.628571
+            },
+            "net_line": {
+              "tp": 3,
+              "fp": 88,
+              "fn": 44,
+              "precision": 0.032967,
+              "recall": 0.06383,
+              "f1": 0.043478
+            }
+          },
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 1,
+            "component.coord_matched": 11,
+            "component.text_mismatch": 2,
+            "pin.missing": 1,
+            "pin.name_mismatch": 1,
+            "net.pred_pins": 25,
+            "net.gt_pins": 45,
+            "net.pred_count": 17,
+            "net.gt_count": 16,
+            "net.pairs": 16,
+            "keymap.size": 25
+          }
+        },
+        "frame_guard": {
+          "case_id": "3",
+          "score": 67.1551,
+          "component_f1": 0.884615,
+          "pin_f1": 0.727273,
+          "net_hypergraph_f1": 0.628571,
+          "net_line_f1": 0.043478,
+          "counts": {
+            "component": {
+              "tp": 23,
+              "fp": 3,
+              "fn": 3,
+              "precision": 0.884615,
+              "recall": 0.884615,
+              "f1": 0.884615
+            },
+            "pin": {
+              "tp": 4,
+              "fp": 1,
+              "fn": 2,
+              "precision": 0.8,
+              "recall": 0.666667,
+              "f1": 0.727273
+            },
+            "net_hypergraph": {
+              "tp": 22,
+              "fp": 3,
+              "fn": 23,
+              "precision": 0.88,
+              "recall": 0.488889,
+              "f1": 0.628571
+            },
+            "net_line": {
+              "tp": 3,
+              "fp": 88,
+              "fn": 44,
+              "precision": 0.032967,
+              "recall": 0.06383,
+              "f1": 0.043478
+            }
+          },
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 1,
+            "component.coord_matched": 11,
+            "component.text_mismatch": 2,
+            "pin.missing": 1,
+            "pin.name_mismatch": 1,
+            "net.pred_pins": 25,
+            "net.gt_pins": 45,
+            "net.pred_count": 17,
+            "net.gt_count": 16,
+            "net.pairs": 16,
+            "keymap.size": 25
+          }
+        }
+      }
+    },
+    {
+      "case_id": "4",
+      "scores": {
+        "baseline": {
+          "case_id": "4",
+          "score": 58.4163,
+          "component_f1": 0.816327,
+          "pin_f1": 0.526316,
+          "net_hypergraph_f1": 0.5625,
+          "net_line_f1": 0.108108,
+          "counts": {
+            "component": {
+              "tp": 20,
+              "fp": 5,
+              "fn": 4,
+              "precision": 0.8,
+              "recall": 0.833333,
+              "f1": 0.816327
+            },
+            "pin": {
+              "tp": 5,
+              "fp": 2,
+              "fn": 7,
+              "precision": 0.714286,
+              "recall": 0.416667,
+              "f1": 0.526316
+            },
+            "net_hypergraph": {
+              "tp": 18,
+              "fp": 3,
+              "fn": 25,
+              "precision": 0.857143,
+              "recall": 0.418605,
+              "f1": 0.5625
+            },
+            "net_line": {
+              "tp": 10,
+              "fp": 115,
+              "fn": 50,
+              "precision": 0.08,
+              "recall": 0.166667,
+              "f1": 0.108108
+            }
+          },
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 2,
+            "component.coord_matched": 11,
+            "component.text_mismatch": 3,
+            "pin.missing": 5,
+            "pin.name_mismatch": 1,
+            "pin.position_mismatch": 1,
+            "net.pred_pins": 21,
+            "net.gt_pins": 43,
+            "net.pred_count": 15,
+            "net.gt_count": 14,
+            "net.pairs": 14,
+            "keymap.size": 23
+          }
+        },
+        "frame_guard": {
+          "case_id": "4",
+          "score": 58.4163,
+          "component_f1": 0.816327,
+          "pin_f1": 0.526316,
+          "net_hypergraph_f1": 0.5625,
+          "net_line_f1": 0.108108,
+          "counts": {
+            "component": {
+              "tp": 20,
+              "fp": 5,
+              "fn": 4,
+              "precision": 0.8,
+              "recall": 0.833333,
+              "f1": 0.816327
+            },
+            "pin": {
+              "tp": 5,
+              "fp": 2,
+              "fn": 7,
+              "precision": 0.714286,
+              "recall": 0.416667,
+              "f1": 0.526316
+            },
+            "net_hypergraph": {
+              "tp": 18,
+              "fp": 3,
+              "fn": 25,
+              "precision": 0.857143,
+              "recall": 0.418605,
+              "f1": 0.5625
+            },
+            "net_line": {
+              "tp": 10,
+              "fp": 115,
+              "fn": 50,
+              "precision": 0.08,
+              "recall": 0.166667,
+              "f1": 0.108108
+            }
+          },
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 2,
+            "component.coord_matched": 11,
+            "component.text_mismatch": 3,
+            "pin.missing": 5,
+            "pin.name_mismatch": 1,
+            "pin.position_mismatch": 1,
+            "net.pred_pins": 21,
+            "net.gt_pins": 43,
+            "net.pred_count": 15,
+            "net.gt_count": 14,
+            "net.pairs": 14,
+            "keymap.size": 23
+          }
+        }
+      }
+    },
+    {
+      "case_id": "5",
+      "scores": {
+        "baseline": {
+          "case_id": "5",
+          "score": 55.8723,
+          "component_f1": 0.846154,
+          "pin_f1": 0.344828,
+          "net_hypergraph_f1": 0.591549,
+          "net_line_f1": 0.116279,
+          "counts": {
+            "component": {
+              "tp": 22,
+              "fp": 4,
+              "fn": 4,
+              "precision": 0.846154,
+              "recall": 0.846154,
+              "f1": 0.846154
+            },
+            "pin": {
+              "tp": 5,
+              "fp": 6,
+              "fn": 13,
+              "precision": 0.454545,
+              "recall": 0.277778,
+              "f1": 0.344828
+            },
+            "net_hypergraph": {
+              "tp": 21,
+              "fp": 3,
+              "fn": 26,
+              "precision": 0.875,
+              "recall": 0.446809,
+              "f1": 0.591549
+            },
+            "net_line": {
+              "tp": 10,
+              "fp": 105,
+              "fn": 47,
+              "precision": 0.086957,
+              "recall": 0.175439,
+              "f1": 0.116279
+            }
+          },
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 1,
+            "component.coord_matched": 15,
+            "component.text_mismatch": 3,
+            "pin.missing": 7,
+            "pin.name_mismatch": 5,
+            "pin.position_mismatch": 1,
+            "net.pred_pins": 24,
+            "net.gt_pins": 47,
+            "net.pred_count": 19,
+            "net.gt_count": 17,
+            "net.pairs": 17,
+            "keymap.size": 25
+          }
+        },
+        "frame_guard": {
+          "case_id": "5",
+          "score": 55.8723,
+          "component_f1": 0.846154,
+          "pin_f1": 0.344828,
+          "net_hypergraph_f1": 0.591549,
+          "net_line_f1": 0.116279,
+          "counts": {
+            "component": {
+              "tp": 22,
+              "fp": 4,
+              "fn": 4,
+              "precision": 0.846154,
+              "recall": 0.846154,
+              "f1": 0.846154
+            },
+            "pin": {
+              "tp": 5,
+              "fp": 6,
+              "fn": 13,
+              "precision": 0.454545,
+              "recall": 0.277778,
+              "f1": 0.344828
+            },
+            "net_hypergraph": {
+              "tp": 21,
+              "fp": 3,
+              "fn": 26,
+              "precision": 0.875,
+              "recall": 0.446809,
+              "f1": 0.591549
+            },
+            "net_line": {
+              "tp": 10,
+              "fp": 105,
+              "fn": 47,
+              "precision": 0.086957,
+              "recall": 0.175439,
+              "f1": 0.116279
+            }
+          },
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 1,
+            "component.coord_matched": 15,
+            "component.text_mismatch": 3,
+            "pin.missing": 7,
+            "pin.name_mismatch": 5,
+            "pin.position_mismatch": 1,
+            "net.pred_pins": 24,
+            "net.gt_pins": 47,
+            "net.pred_count": 19,
+            "net.gt_count": 17,
+            "net.pairs": 17,
+            "keymap.size": 25
+          }
+        }
+      }
+    },
+    {
+      "case_id": "6",
+      "scores": {
+        "baseline": {
+          "case_id": "6",
+          "score": 46.039,
+          "component_f1": 0.710526,
+          "pin_f1": 0.25,
+          "net_hypergraph_f1": 0.505051,
+          "net_line_f1": 0.079646,
+          "counts": {
+            "component": {
+              "tp": 27,
+              "fp": 11,
+              "fn": 11,
+              "precision": 0.710526,
+              "recall": 0.710526,
+              "f1": 0.710526
+            },
+            "pin": {
+              "tp": 3,
+              "fp": 5,
+              "fn": 13,
+              "precision": 0.375,
+              "recall": 0.1875,
+              "f1": 0.25
+            },
+            "net_hypergraph": {
+              "tp": 25,
+              "fp": 6,
+              "fn": 43,
+              "precision": 0.806452,
+              "recall": 0.367647,
+              "f1": 0.505051
+            },
+            "net_line": {
+              "tp": 9,
+              "fp": 131,
+              "fn": 77,
+              "precision": 0.064286,
+              "recall": 0.104651,
+              "f1": 0.079646
+            }
+          },
+          "diagnostic": {
+            "component.missing": 4,
+            "component.extra": 4,
+            "component.coord_matched": 16,
+            "component.text_mismatch": 7,
+            "pin.name_mismatch": 4,
+            "pin.missing": 8,
+            "pin.position_mismatch": 1,
+            "net.pred_pins": 31,
+            "net.gt_pins": 68,
+            "net.pred_count": 19,
+            "net.gt_count": 22,
+            "net.pairs": 19,
+            "keymap.size": 34
+          }
+        },
+        "frame_guard": {
+          "case_id": "6",
+          "score": 45.0843,
+          "component_f1": 0.710526,
+          "pin_f1": 0.26087,
+          "net_hypergraph_f1": 0.469388,
+          "net_line_f1": 0.081818,
+          "counts": {
+            "component": {
+              "tp": 27,
+              "fp": 11,
+              "fn": 11,
+              "precision": 0.710526,
+              "recall": 0.710526,
+              "f1": 0.710526
+            },
+            "pin": {
+              "tp": 3,
+              "fp": 4,
+              "fn": 13,
+              "precision": 0.428571,
+              "recall": 0.1875,
+              "f1": 0.26087
+            },
+            "net_hypergraph": {
+              "tp": 23,
+              "fp": 7,
+              "fn": 45,
+              "precision": 0.766667,
+              "recall": 0.338235,
+              "f1": 0.469388
+            },
+            "net_line": {
+              "tp": 9,
+              "fp": 125,
+              "fn": 77,
+              "precision": 0.067164,
+              "recall": 0.104651,
+              "f1": 0.081818
+            }
+          },
+          "diagnostic": {
+            "component.missing": 4,
+            "component.extra": 4,
+            "component.coord_matched": 16,
+            "component.text_mismatch": 7,
+            "pin.name_mismatch": 3,
+            "pin.missing": 9,
+            "pin.position_mismatch": 1,
+            "net.pred_pins": 30,
+            "net.gt_pins": 68,
+            "net.pred_count": 19,
+            "net.gt_count": 22,
+            "net.pairs": 19,
+            "keymap.size": 34
+          }
+        }
+      }
+    },
+    {
+      "case_id": "7",
+      "scores": {
+        "baseline": {
+          "case_id": "7",
+          "score": 55.8275,
+          "component_f1": 0.875,
+          "pin_f1": 0.363636,
+          "net_hypergraph_f1": 0.567568,
+          "net_line_f1": 0.062176,
+          "counts": {
+            "component": {
+              "tp": 21,
+              "fp": 3,
+              "fn": 3,
+              "precision": 0.875,
+              "recall": 0.875,
+              "f1": 0.875
+            },
+            "pin": {
+              "tp": 2,
+              "fp": 1,
+              "fn": 6,
+              "precision": 0.666667,
+              "recall": 0.25,
+              "f1": 0.363636
+            },
+            "net_hypergraph": {
+              "tp": 21,
+              "fp": 5,
+              "fn": 27,
+              "precision": 0.807692,
+              "recall": 0.4375,
+              "f1": 0.567568
+            },
+            "net_line": {
+              "tp": 6,
+              "fp": 118,
+              "fn": 63,
+              "precision": 0.048387,
+              "recall": 0.086957,
+              "f1": 0.062176
+            }
+          },
+          "diagnostic": {
+            "component.missing": 2,
+            "component.extra": 2,
+            "component.coord_matched": 6,
+            "component.text_mismatch": 1,
+            "pin.missing": 5,
+            "pin.position_mismatch": 1,
+            "net.pred_pins": 26,
+            "net.gt_pins": 48,
+            "net.pred_count": 15,
+            "net.gt_count": 13,
+            "net.pairs": 13,
+            "keymap.size": 22
+          }
+        },
+        "frame_guard": {
+          "case_id": "7",
+          "score": 57.0153,
+          "component_f1": 0.875,
+          "pin_f1": 0.4,
+          "net_hypergraph_f1": 0.575342,
+          "net_line_f1": 0.062827,
+          "counts": {
+            "component": {
+              "tp": 21,
+              "fp": 3,
+              "fn": 3,
+              "precision": 0.875,
+              "recall": 0.875,
+              "f1": 0.875
+            },
+            "pin": {
+              "tp": 2,
+              "fp": 0,
+              "fn": 6,
+              "precision": 1.0,
+              "recall": 0.25,
+              "f1": 0.4
+            },
+            "net_hypergraph": {
+              "tp": 21,
+              "fp": 4,
+              "fn": 27,
+              "precision": 0.84,
+              "recall": 0.4375,
+              "f1": 0.575342
+            },
+            "net_line": {
+              "tp": 6,
+              "fp": 116,
+              "fn": 63,
+              "precision": 0.04918,
+              "recall": 0.086957,
+              "f1": 0.062827
+            }
+          },
+          "diagnostic": {
+            "component.missing": 2,
+            "component.extra": 2,
+            "component.coord_matched": 6,
+            "component.text_mismatch": 1,
+            "pin.missing": 6,
+            "net.pred_pins": 25,
+            "net.gt_pins": 48,
+            "net.pred_count": 14,
+            "net.gt_count": 13,
+            "net.pairs": 13,
+            "keymap.size": 22
+          }
+        }
+      }
+    },
+    {
+      "case_id": "8",
+      "scores": {
+        "baseline": {
+          "case_id": "8",
+          "score": 57.8116,
+          "component_f1": 0.85,
+          "pin_f1": 0.230769,
+          "net_hypergraph_f1": 0.698413,
+          "net_line_f1": 0.20979,
+          "counts": {
+            "component": {
+              "tp": 17,
+              "fp": 3,
+              "fn": 3,
+              "precision": 0.85,
+              "recall": 0.85,
+              "f1": 0.85
+            },
+            "pin": {
+              "tp": 3,
+              "fp": 7,
+              "fn": 13,
+              "precision": 0.3,
+              "recall": 0.1875,
+              "f1": 0.230769
+            },
+            "net_hypergraph": {
+              "tp": 22,
+              "fp": 0,
+              "fn": 19,
+              "precision": 1.0,
+              "recall": 0.536585,
+              "f1": 0.698413
+            },
+            "net_line": {
+              "tp": 15,
+              "fp": 72,
+              "fn": 41,
+              "precision": 0.172414,
+              "recall": 0.267857,
+              "f1": 0.20979
+            }
+          },
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 1,
+            "component.coord_matched": 9,
+            "component.text_mismatch": 2,
+            "pin.missing": 7,
+            "pin.name_mismatch": 5,
+            "pin.position_mismatch": 1,
+            "pin.extra": 1,
+            "net.pred_pins": 22,
+            "net.gt_pins": 41,
+            "net.pred_count": 15,
+            "net.gt_count": 18,
+            "net.pairs": 15,
+            "keymap.size": 19
+          }
+        },
+        "frame_guard": {
+          "case_id": "8",
+          "score": 58.0423,
+          "component_f1": 0.85,
+          "pin_f1": 0.24,
+          "net_hypergraph_f1": 0.698413,
+          "net_line_f1": 0.20979,
+          "counts": {
+            "component": {
+              "tp": 17,
+              "fp": 3,
+              "fn": 3,
+              "precision": 0.85,
+              "recall": 0.85,
+              "f1": 0.85
+            },
+            "pin": {
+              "tp": 3,
+              "fp": 6,
+              "fn": 13,
+              "precision": 0.333333,
+              "recall": 0.1875,
+              "f1": 0.24
+            },
+            "net_hypergraph": {
+              "tp": 22,
+              "fp": 0,
+              "fn": 19,
+              "precision": 1.0,
+              "recall": 0.536585,
+              "f1": 0.698413
+            },
+            "net_line": {
+              "tp": 15,
+              "fp": 72,
+              "fn": 41,
+              "precision": 0.172414,
+              "recall": 0.267857,
+              "f1": 0.20979
+            }
+          },
+          "diagnostic": {
+            "component.missing": 1,
+            "component.extra": 1,
+            "component.coord_matched": 9,
+            "component.text_mismatch": 2,
+            "pin.missing": 8,
+            "pin.name_mismatch": 4,
+            "pin.position_mismatch": 1,
+            "pin.extra": 1,
+            "net.pred_pins": 22,
+            "net.gt_pins": 41,
+            "net.pred_count": 15,
+            "net.gt_count": 18,
+            "net.pairs": 15,
+            "keymap.size": 19
+          }
+        }
+      }
+    },
+    {
+      "case_id": "9",
+      "scores": {
+        "baseline": {
+          "case_id": "9",
+          "score": 62.3791,
+          "component_f1": 0.882353,
+          "pin_f1": 0.6,
+          "net_hypergraph_f1": 0.583333,
+          "net_line_f1": 0.04918,
+          "counts": {
+            "component": {
+              "tp": 15,
+              "fp": 2,
+              "fn": 2,
+              "precision": 0.882353,
+              "recall": 0.882353,
+              "f1": 0.882353
+            },
+            "pin": {
+              "tp": 3,
+              "fp": 1,
+              "fn": 3,
+              "precision": 0.75,
+              "recall": 0.5,
+              "f1": 0.6
+            },
+            "net_hypergraph": {
+              "tp": 14,
+              "fp": 3,
+              "fn": 17,
+              "precision": 0.823529,
+              "recall": 0.451613,
+              "f1": 0.583333
+            },
+            "net_line": {
+              "tp": 3,
+              "fp": 80,
+              "fn": 36,
+              "precision": 0.036145,
+              "recall": 0.076923,
+              "f1": 0.04918
+            }
+          },
+          "diagnostic": {
+            "component.missing": 0,
+            "component.extra": 0,
+            "component.coord_matched": 7,
+            "component.text_mismatch": 2,
+            "pin.missing": 2,
+            "pin.name_mismatch": 1,
+            "net.pred_pins": 17,
+            "net.gt_pins": 31,
+            "net.pred_count": 11,
+            "net.gt_count": 11,
+            "net.pairs": 11,
+            "keymap.size": 17
+          }
+        },
+        "frame_guard": {
+          "case_id": "9",
+          "score": 62.3791,
+          "component_f1": 0.882353,
+          "pin_f1": 0.6,
+          "net_hypergraph_f1": 0.583333,
+          "net_line_f1": 0.04918,
+          "counts": {
+            "component": {
+              "tp": 15,
+              "fp": 2,
+              "fn": 2,
+              "precision": 0.882353,
+              "recall": 0.882353,
+              "f1": 0.882353
+            },
+            "pin": {
+              "tp": 3,
+              "fp": 1,
+              "fn": 3,
+              "precision": 0.75,
+              "recall": 0.5,
+              "f1": 0.6
+            },
+            "net_hypergraph": {
+              "tp": 14,
+              "fp": 3,
+              "fn": 17,
+              "precision": 0.823529,
+              "recall": 0.451613,
+              "f1": 0.583333
+            },
+            "net_line": {
+              "tp": 3,
+              "fp": 80,
+              "fn": 36,
+              "precision": 0.036145,
+              "recall": 0.076923,
+              "f1": 0.04918
+            }
+          },
+          "diagnostic": {
+            "component.missing": 0,
+            "component.extra": 0,
+            "component.coord_matched": 7,
+            "component.text_mismatch": 2,
+            "pin.missing": 2,
+            "pin.name_mismatch": 1,
+            "net.pred_pins": 17,
+            "net.gt_pins": 31,
+            "net.pred_count": 11,
+            "net.gt_count": 11,
+            "net.pairs": 11,
+            "keymap.size": 17
+          }
+        }
+      }
+    },
+    {
+      "case_id": "10",
+      "scores": {
+        "baseline": {
+          "case_id": "10",
+          "score": 51.0058,
+          "component_f1": 0.813559,
+          "pin_f1": 0.3,
+          "net_hypergraph_f1": 0.516854,
+          "net_line_f1": 0.100917,
+          "counts": {
+            "component": {
+              "tp": 24,
+              "fp": 6,
+              "fn": 5,
+              "precision": 0.8,
+              "recall": 0.827586,
+              "f1": 0.813559
+            },
+            "pin": {
+              "tp": 3,
+              "fp": 5,
+              "fn": 9,
+              "precision": 0.375,
+              "recall": 0.25,
+              "f1": 0.3
+            },
+            "net_hypergraph": {
+              "tp": 23,
+              "fp": 10,
+              "fn": 33,
+              "precision": 0.69697,
+              "recall": 0.410714,
+              "f1": 0.516854
+            },
+            "net_line": {
+              "tp": 11,
+              "fp": 124,
+              "fn": 72,
+              "precision": 0.081481,
+              "recall": 0.13253,
+              "f1": 0.100917
+            }
+          },
+          "diagnostic": {
+            "component.missing": 2,
+            "component.extra": 3,
+            "component.coord_matched": 9,
+            "component.text_mismatch": 3,
+            "pin.missing": 6,
+            "pin.name_mismatch": 3,
+            "pin.extra": 2,
+            "net.pred_pins": 33,
+            "net.gt_pins": 56,
+            "net.pred_count": 19,
+            "net.gt_count": 15,
+            "net.pairs": 15,
+            "keymap.size": 27
+          }
+        },
+        "frame_guard": {
+          "case_id": "10",
+          "score": 51.0058,
+          "component_f1": 0.813559,
+          "pin_f1": 0.3,
+          "net_hypergraph_f1": 0.516854,
+          "net_line_f1": 0.100917,
+          "counts": {
+            "component": {
+              "tp": 24,
+              "fp": 6,
+              "fn": 5,
+              "precision": 0.8,
+              "recall": 0.827586,
+              "f1": 0.813559
+            },
+            "pin": {
+              "tp": 3,
+              "fp": 5,
+              "fn": 9,
+              "precision": 0.375,
+              "recall": 0.25,
+              "f1": 0.3
+            },
+            "net_hypergraph": {
+              "tp": 23,
+              "fp": 10,
+              "fn": 33,
+              "precision": 0.69697,
+              "recall": 0.410714,
+              "f1": 0.516854
+            },
+            "net_line": {
+              "tp": 11,
+              "fp": 124,
+              "fn": 72,
+              "precision": 0.081481,
+              "recall": 0.13253,
+              "f1": 0.100917
+            }
+          },
+          "diagnostic": {
+            "component.missing": 2,
+            "component.extra": 3,
+            "component.coord_matched": 9,
+            "component.text_mismatch": 3,
+            "pin.missing": 6,
+            "pin.name_mismatch": 3,
+            "pin.extra": 2,
+            "net.pred_pins": 33,
+            "net.gt_pins": 56,
+            "net.pred_count": 19,
+            "net.gt_count": 15,
+            "net.pairs": 15,
+            "keymap.size": 27
+          }
+        }
+      }
+    }
+  ],
+  "number_changes": [],
+  "recovered_names": [
+    {
+      "component": "U1",
+      "pin": "pin_1",
+      "expected_name": "GND",
+      "gt_point": {
+        "x": 621.0,
+        "y": 800.0
+      },
+      "cid": "c0000",
+      "index": 8,
+      "component_geometry_matched": true,
+      "case_id": "2",
+      "mode": "strict_5px",
+      "arm": "frame_guard",
+      "before": {
+        "text": "15",
+        "conf": 0.8134097499871601,
+        "box": [
+          621.0,
+          303.0,
+          642.0,
+          315.0
+        ]
+      },
+      "after": {
+        "text": "GND",
+        "conf": 0.9929298737363234,
+        "box": [
+          636.0,
+          315.0,
+          666.0,
+          325.0
+        ]
+      },
+      "before_status": "wrong_name",
+      "after_status": "correct",
+      "transition": "recovered"
+    },
+    {
+      "component": "U1",
+      "pin": "pin_1",
+      "expected_name": "VSS",
+      "gt_point": {
+        "x": 398.0,
+        "y": 821.0
+      },
+      "cid": "c0000",
+      "index": 7,
+      "component_geometry_matched": true,
+      "case_id": "4",
+      "mode": "strict_5px",
+      "arm": "frame_guard",
+      "before": {
+        "text": "1K",
+        "conf": 0.5689125068034935,
+        "box": [
+          403.0,
+          197.0,
+          424.0,
+          210.0
+        ]
+      },
+      "after": {
+        "text": "VSS",
+        "conf": 0.9266709436657719,
+        "box": [
+          418.0,
+          209.0,
+          445.0,
+          219.0
+        ]
+      },
+      "before_status": "wrong_name",
+      "after_status": "correct",
+      "transition": "recovered"
+    },
+    {
+      "component": "U2",
+      "pin": "pin_1",
+      "expected_name": "OUT",
+      "gt_point": {
+        "x": 790.0,
+        "y": 892.0
+      },
+      "cid": "c0001",
+      "index": 1,
+      "component_geometry_matched": true,
+      "case_id": "6",
+      "mode": "strict_5px",
+      "arm": "frame_guard",
+      "before": {
+        "text": "81",
+        "conf": 0.6797405301916897,
+        "box": [
+          767.0,
+          206.0,
+          788.0,
+          219.0
+        ]
+      },
+      "after": {
+        "text": "OUT",
+        "conf": 0.7734618231586828,
+        "box": [
+          744.0,
+          218.0,
+          773.0,
+          228.0
+        ]
+      },
+      "before_status": "wrong_name",
+      "after_status": "correct",
+      "transition": "recovered"
+    }
+  ],
+  "restored_previous_experiment_regressions": [
+    {
+      "case_id": "2",
+      "component": "U2",
+      "pin": "pin_1",
+      "gt_name": "GND",
+      "old_experiment": "1",
+      "repaired": "GND"
+    },
+    {
+      "case_id": "2",
+      "component": "U3",
+      "pin": "pin_1",
+      "gt_name": "GND",
+      "old_experiment": "1",
+      "repaired": "GND"
+    },
+    {
+      "case_id": "2",
+      "component": "U4",
+      "pin": "pin_1",
+      "gt_name": "GND",
+      "old_experiment": "1K",
+      "repaired": "GND"
+    },
+    {
+      "case_id": "6",
+      "component": "U4",
+      "pin": "pin_1",
+      "gt_name": "OUT",
+      "old_experiment": "S1",
+      "repaired": "OUT"
+    },
+    {
+      "case_id": "7",
+      "component": "U1",
+      "pin": "pin_2",
+      "gt_name": "IN",
+      "old_experiment": "2kK",
+      "repaired": "IN"
+    }
+  ],
+  "verification": {
+    "unit_and_integration_tests": 150,
+    "all_tests_passed": true,
+    "gt_and_image_hashes_verified": true,
+    "new_gt_root_matches_previous": true,
+    "public200_used_as_accuracy_ground_truth": false
+  }
+}
