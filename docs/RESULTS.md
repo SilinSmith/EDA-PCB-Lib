@@ -3798,6 +3798,82 @@ python -X utf8 tools\eval\stage2_eval.py ..\work\_fast_out_keepu\final_results -
 
 ---
 
+### 5.36 ★ 引脚位置 = 当前最大的单项工程杠杆（上帝键 **+3.6747**）；三条修法全部判负；两条杠杆的修正上界（2026-10-18，goal 第 1 轮）
+
+> 承接 §5.35。§5.35 给的「引脚号 +2.95」「网↔网分组 299 vs 190」两个上界**都是旧读数**，
+> 本轮把两条杠杆重新量到底，并顺带量出梯子 ④ 里真正最大的一块：**引脚位置**。
+
+**一、引脚号读取/检出：交付层只差 12 条**
+
+* `work/tools/dev/_numcover.py`（官方 9 张）：GT box 脚 **120**，管线已有号 **113 = 94.2%**；
+  `work/_pinmiss.py` 按交付产物口径 = **12 条缺号脚**（stage2 中间产物 41 条 ⇒ 融合层 + `FUSION_PIN_LIBSEQ` 已救回 29 条）。
+* 三类机制，**每一类的修法此前都已量过**：
+  1. **名闸门丢**（case 2 `U3` #3、case 4 `U2` #2、case 6 `U2/U4` #1：号读到了、名字没跟过来）
+     ⇒ 放宽 `STAGE2_BOX_PIN_NEED_NAME=3` = **−0.1993**，且库里能补出名/号的分量只有 1/3 ⇒ 死路。
+  2. **槽点缺失/错位**（case 1 #9 最近脚 57.5px、case 10 #1 79.3px）⇒ 属 stage1 引脚落点，四法全判负（§5.33）。
+  3. **真误读**（case 6 SOT-23 竖字 `33/S/X/O`、case 7 `2R` 粘连、case 8 `18`/`26` 错位）⇒ 只有换/重训读器。
+* 失配明细印证瓶颈：`pin.position_mismatch 25` > `pin.missing 12` > `pin.name_mismatch 6` > `pin.extra 3`
+  ⇒ **号不是读不出来，是位置与槽位分配**。可实现上界 = `work/_netadd.py` mode `a` 的 **+1.68**（§5.35 三）。
+
+**二、网↔网分组配对：只丢 15，焊接旋钮已穷尽**
+
+* `python -X utf8 work\tools\diag\_netoracle.py --pred work\_fast_out_trimdef2\runs\stage2 --cases 1,10,2,3,4,5,6,7,8,9`
+  ⇒ `{"gt_mem":487,"gt_phi":108,"oracle_tp":330,"real_tp":315,"pred_mem":337,"pred_net":161,"gt_net":160}`
+  ⇒ **oracle 上限 tp 330 / 实际 315 ⇒ 分组只丢 15**（§5.35 记的「299 vs 190 ⇒ 丢 109」是 VLM 关的旧臂 `_gt10_pb10`，作废）。
+* `work/_netknob_ab.out`（UTF-16LE，63,952 B）六臂**全部 ≤ 基线 78.07**：
+  `STAGE2_EDGE_MERGE=1` **75.56**｜`SYM_MERGE=1` **77.47**｜`EDGE_SNAP=20` **77.31**｜`EDGE_SNAP=6` **75.48**｜
+  `EDGE_JOIN=60` **78.07（中性）**｜`MIN_EDGE_LEN=30` **77.18**（逐案 1 −0.48｜10 −0.07｜2 +0.08｜3 −1.93｜4 −0.14｜5 +0.03｜6 −1.27｜**7 −5.48**｜8 +0.25｜9 +0.11）。⇒ 该子项无免费增益。
+
+**三、★ 引脚位置：上帝键 +3.6747（梯子 ④ 里最大的一块，此前未量）**
+
+* 装置：`work/_prod10/<c>.json` = `work/_fast_out_trimdef2/final_results/<c>_Pred.json` 的 shim；探针 `work/tools/dev/_pinoracle.py`
+  （把预测里 box 元件的脚点整体改写到 GT 脚点），`stage2_eval.py` 重打分：
+  * 基线 **79.2965**（component 0.9819｜pin **0.7452** P 0.7323/R 0.6838 tp93 fp34 fn43｜netH 0.7728｜line 0.4162）；
+  * 位置上帝键（`--pred work\_prod10 --out work\_pinoracle_all`，全集与 `--only-mismatch`（改 27 脚）**同分**）
+    = **82.9712（+3.6747）**，pin F1 **0.8922**（P 0.9291/R 0.8676，tp 118 fp 9 fn 18），component/netH/line **逐位不变**。
+* 根因 = `eda-pcb/stage1/pins.py:55 PIN_OUT_BOX = 12`：我们恒把脚点放在框外 12px，而 GT 的引线长度是
+  **「元件 × 边」常量**，各元件差得很远（`work/_pinbias.py --dump` 逐脚取证）：
+  case 1 `U1` MSP432E401YTPDT 右侧 GT 在框边 +**20**、我 +12 ⇒ 7 条 `d≈8.0`；case 8 `U1` PAW3395DM-T6QU 左侧 GT −**22**、我 −12 ⇒ 9 条 `d≈9.9~14.7`；
+  case 4 `U1` XC6206P332MR GT +6 / case 5 `U1` TPS61240DRVR GT −7 / case 6 `U4` STMPS2141STR GT +6（我们 +12 ⇒ **多出 5~6px**）；
+  case 7 `U1` MP2236CGJ-Z 是切向 29px = 槽位错配。
+  `_pinbias.py` 汇总：官方 10 匹配 118 脚，**out 均 −0.34 / 中位 −0.16 / p10 −7.00 / p90 +3.93，d 均 4.91，≤5px 78.8%**（**双尾，不是平移偏置**）；
+  派生 19 匹配 141 脚，out 均 −14.18、d 均 28.1、≤5px 40.4% ⇒ 该语料另有槽位错配。
+* **三条修法全部判负**（都不翻默认）：
+  1. **按元件名查引线长度表**（`work/_pinlentab.py`）：训练域留一误差「同名+同脚数」= **1.49**（中位 0.00，≤5px 93.2%），看着很强，
+     但**跨域不迁移**——`MSP432E401YTPDT` 训练表 `{L:43, R:16, B:−10.8, T:−20.5}` vs 官方 case 1 实为 L=15/R=20；
+     `PAW3395DM-T6QU` 表 `{R:13, L:11, T:−12, B:−12}` vs 官方 case 8 实为 L=22/R=9（训练域大量 L 为**负值** = GT 脚点落在框内，标注口径不同）
+     ⇒ 官方 10 里 18/21 个元件名列在表内也是白搭。尺寸拟合（`L≈5.5+0.02·min(w,h)`）对官方小件准（6.7 vs 6、7.1 vs 6、7.9 vs 7）、对大 IC 严重低估（12.6 vs 20）。
+  2. **像素估 L**（`work/_leadest.py`，官方 10 的 33 条「元件×边」≥2 脚样本，切向 ±2px 带、`MAXD=46`、墨迹 `0.114B+0.587G+0.299R<170`）：
+     `drop`(coverage≥60% 最远 d) 均 err 13.73｜`min` 16.67｜`p25` 16.39｜`med` 16.73｜`max` 18.15，≤5px 命中 0~6%；
+     **恒 12 = 均 err 3.00、≤5px 87.9%** ⇒ 墨迹外延法远差于常量。`work/_leadprobe.py` 像素取证给出原因：
+     彩色图里「引线色 ≠ 导线色」时引线终点可读（case 8 左边墨迹正好止于 L=22），**灰度图里不行**——
+     case 1（全图 chroma max 9）引线与被挂导线**同灰度同线宽**并一路续画（`-##############|####################---#######`，`|` 处即 L=15）。
+  3. **脚号文字框**（`work/_leadtext.py`，129 条 box 脚全部在 ±14px 内找到文字框）：`|L−a_out|` 中位 6.0 / ≤5px **42.6%**，
+     `|L−a_c|` 中位 7.5，**都差于恒 12 的 83.7%**。
+  4. 顺带否掉「整体或按边把脚点平移 δ」（`work/_pinshift.py` 负 k 扫描）：官方 10 pin F1 `−2→0.7595`、`−1.5→0.7761`、
+     `−1→0.7527`、`−0.5→0.7618`、`0→0.7452`、`+0.5→0.6742` ⇒ **锯齿非单调 = 5px 门的匹配翻转，不是系统性偏置**；
+     派生 19 单调但最优在 −3 以外（0.1704→0.1870）。
+* ⇒ **处置：不翻默认**。`PIN_OUT_BOX=12` 已经是这批渲染里最接近的常量；「+3.67 需要逐符号库知识，
+  交付域既不能从像素、也不能从元件名恢复」记入负结果归档。若日后拿到同款符号库、或官方域内多次出现的部件，可再试「表 + 12 兜底」。
+
+**四、复现**
+
+```bat
+cd eda-pcb
+python -X utf8 ..\work\tools\diag\_netoracle.py --pred ..\work\_fast_out_trimdef2\runs\stage2 --cases 1,10,2,3,4,5,6,7,8,9
+python -X utf8 ..\work\_pinbias.py trimdef2 ..\work\_cases10gt.txt --dump
+python -X utf8 ..\work\_pinlentab.py
+python -X utf8 ..\work\_leadest.py
+python -X utf8 ..\work\_leadprobe.py 1 --width
+python -X utf8 ..\work\_leadtext.py
+python -X utf8 ..\work\_pinshift.py trimdef2 ..\work\_cases10gt.txt -6,-4,-2.5,-2,-1.5,-1,-0.5,0,0.5,1,2
+rem ---- 位置上帝键（+3.6747）----
+python -X utf8 ..\work\tools\dev\_pinoracle.py --pred ..\work\_prod10 --out ..\work\_pinoracle_all --cases 1,10,2,3,4,5,6,7,8,9
+python -X utf8 tools\eval\stage2_eval.py ..\work\_pinoracle_all --quiet
+```
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |
