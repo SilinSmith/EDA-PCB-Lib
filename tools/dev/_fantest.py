@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""case 级扇出（`-case-workers`）的回归测试：坏图 / 看门狗 / 关掉 / 自动 / 护栏。
+"""case 级扇出（`-case-workers`）的回归测试：坏图 / 看门狗 / 关掉 / 自动 / 护栏 / 离线。
 
 用法（仓库根 = `eda-pcb/` 的上一级）：
     python -X utf8 eda-pcb\\tools\\dev\\_fantest.py
 
-五个现场（用户 m42543「判题机同时给全部样例且允许并发」）：
+六个现场（用户 m42543「判题机同时给全部样例且允许并发」）：
   ① 扇出 3 路 + 一张坏图 ⇒ 三张都有产物（坏图是空壳）、`decision_log.summary.n_lanes=3`、
      `n_shell=1`、每 lane 摘要都在；
   ② `EDA_WALL_BUDGET_S=1` ⇒ 三个 lane 全被强杀（`rc=-9`），父进程仍写出 **3 份空壳** +
@@ -13,6 +13,8 @@
   ④ 默认（`-case-workers -1`）在本机（1 张卡）⇒ 也走老路（自动值 = 1）；
   ⑤ 交付护栏（赛题「2 小时」硬约束）：未设时补 `VLM_TIMEOUT=180` / `VLM_BUDGET_S=1800` /
      `EDA_WALL_BUDGET_S=6900`，用户设过则不覆盖，且不影响产物数。
+  ⑥ `-offline` ⇒ 真·零外部调用（`decision_log.config.vlm_client is None` = 父进程从未
+     import `vlm.client`）、打印离线档一行、产物件数不变（§5.41）。
 
 不碰交付产物：全部在 `work\\_fantest\\` 下自建输入/输出。
 """
@@ -148,6 +150,25 @@ def main() -> int:
     _gl = " ".join(l for l in r["log"].splitlines() if "护栏" in l)[:200]
     chk("已设时不覆盖", ("VLM_TIMEOUT=7" in r["log"] and "VLM_BUDGET_S=0" in r["log"]), _gl)
     chk("预算=0 = 不限（不拒绝）", "超预算被拒 0 次" in r["log"] or "外部推理预算" not in r["log"])
+
+    print("=== ⑥ 离线档 -offline（零外部调用，赛题 token 分）===")
+    # `-vlm off` **不等于**离线：色相提示与 ⓪.9 定向重读不归 `-vlm` 管（§5.41 实测
+    # 仍有 19 次调用）。`-offline` 把这两条旁路一起关掉，且**保留**融合层的确定性节点
+    # （先验 + 解，不发请求，值 +0.24）。
+    r = _run(tin, tmp / "out_offline", ["-case-workers", "0", "-offline"])
+    chk("退出码 0", r["rc"] == 0, "rc=%s" % r["rc"])
+    chk("每张都有产物", len(r["preds"]) == n_cases,
+        "%d/%d" % (len(r["preds"]), n_cases))
+    _ol = " ".join(l for l in r["log"].splitlines() if "离线档" in l)[:200]
+    chk("打印离线档", "离线档" in r["log"], _ol)
+    chk("FUSION_LLM=0", "FUSION_LLM=0" in r["log"], _ol)
+    _dl = tmp / "out_offline" / "decision_log.json"
+    _vlm = None
+    try:
+        _vlm = ((json.loads(_dl.read_text(encoding="utf-8")) or {}).get("config") or {}).get("vlm_client")
+    except Exception:                                               # noqa: BLE001
+        _vlm = "?"
+    chk("从未 import vlm.client（真零调用）", _vlm is None, "vlm_client=%s" % _vlm)
 
     print("\n%d 项通过，%d 项失败%s"
           % (len(ok), len(bad), ("：" + ", ".join(bad)) if bad else ""))

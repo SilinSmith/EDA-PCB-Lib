@@ -215,8 +215,18 @@ def main(argv=None) -> int:
     ap.add_argument("-gpu-headroom", "--gpu-headroom", dest="gpu_headroom",
                     type=float, default=0.0,
                     help="改为「给 LLM 留出 N MiB」；优先级高于 -gpu-frac。")
+    ap.add_argument("-offline", "--offline", dest="offline", action="store_true",
+                    help="**零外部调用档**（为赛题 `Score_Token` 排名项与「官方只给纯文本"
+                         "API」两种现实准备）：等价于 `-vlm off -fusion off`，并额外关掉"
+                         "两条「挂在 VLM 上、但不是补强」的旁路 —— `FUSION_ITERATE`"
+                         "（⓪.9 定向往回问引脚名，`fusion/iterate.py:189`）与 "
+                         "`STAGE1_WIRE_COLOUR`（导线色相提示，`stage1/wires.py:537`），"
+                         "以及 `STAGE2_PINROT`（竖直脚重读）。已由环境变量显式设过的值"
+                         "**不覆盖**。官方 10 张实测：0 次调用 / 0 token / 23.1 s / "
+                         "protocol2 70.04（默认档 222 次 / 152 164 token / 118.2 s / 79.66）。")
     a = ap.parse_args(argv)
     _fix_device(a)
+    _apply_offline(a)
     a.platform_budgets = _platform_budgets()
     print("[run] 护栏：%s" % " ".join("%s=%s" % kv for kv in a.platform_budgets.items()),
           flush=True)
@@ -226,6 +236,36 @@ def main(argv=None) -> int:
         return _run_fanout(a)
     except Exception as e:                                          # noqa: BLE001
         return _safety_net(a, e)
+
+
+def _apply_offline(a) -> None:
+    """把 `-offline` 翻译成「真正一次外部调用都不发」的环境组合。
+
+    为什么不能只靠 `-vlm off`：实测（`work\\_tokcost.py`，官方 10 张）`-vlm off` +
+    `FUSION_LLM=0` + `STAGE2_PINROT=0` 仍然发出了 **19 次**调用、9 726 token ——
+    两条旁路不归 `-vlm` 管：
+
+    * `fusion/iterate.py:189`（⓪.9 定向回传：按 pincol 格点窗回问引脚名，`FUSION_ITERATE`）；
+    * `stage1/wires.py:537`（导线色相提示，`STAGE1_WIRE_COLOUR=hint` 默认）。
+
+    这 19 次值 **+1.11** 分（71.15 → 70.04 少的就是它），所以不能无条件砍掉 ——
+    只有显式要「离线档」时才关。已在环境里设过的值不覆盖（便于单独做 A/B）。
+    """
+    if not getattr(a, "offline", False):
+        return
+    a.vlm = "off"
+    # ★ 只关 LLM 轮，**不关融合层**：融合层里的确定性节点（先验 + 解）本身不发请求，
+    #   实测值 +0.24（`zero` 档 70.04 vs `-fusion off` 的 69.80，官方 10 张）。
+    #   `-fusion on`（默认）不覆盖 `FUSION_LLM` ⇒ 这里显式置 0 即可。
+    for k, v in (("FUSION_LLM", "0"), ("FUSION_ITERATE", "0"),
+                 ("STAGE1_WIRE_COLOUR", "dominant"), ("STAGE2_PINROT", "0")):
+        if k not in os.environ:
+            os.environ[k] = v
+    print("[run] 离线档：-vlm off｜FUSION_LLM=%s｜FUSION_ITERATE=%s｜STAGE1_WIRE_COLOUR=%s"
+          "｜STAGE2_PINROT=%s（零外部调用，保留融合层确定性节点）"
+          % (os.environ.get("FUSION_LLM"), os.environ.get("FUSION_ITERATE"),
+             os.environ.get("STAGE1_WIRE_COLOUR"), os.environ.get("STAGE2_PINROT")),
+          flush=True)
 
 
 def _fix_device(a) -> None:
@@ -775,13 +815,19 @@ def _run(a) -> int:
                 # ★ 护栏可见性：预算到点后 `ask()` 会静默降级成纯 CV（产物照出、只是
                 #   没有 VLM 补强），不给一行日志的话没人知道质量为什么掉了。
                 _bs = vlm_client.stats()
-                if _bs["budget_s"] > 0:
-                    _log(fp, "外部推理预算：已用 %.1f/%.1f s｜发出 %d 次｜超预算被拒 %d 次"
-                             "｜失败 %d 次%s"
-                         % (_bs["used_s"], _bs["budget_s"], _bs["calls"], _bs["refused"],
-                            _bs["errors"],
-                            "（⚠️ 已降级成纯 CV：后续调用不再发出）"
-                            if _bs["exhausted"] else ""))
+                _tk = _bs["tokens"]
+                # ★ token 用量必须**永远**打出来（不只是预算到点）：赛题
+                #   `Score_Token` 是排名项（0.05·(m/M)，消耗越少越高），看不到用量就
+                #   没法做「少用外部模型」的取舍。见 `docs/COMPETITION_RULES.md`。
+                _bd = ("预算 %.0f/%.0f s｜超预算被拒 %d 次"
+                       % (_bs["used_s"], _bs["budget_s"], _bs["refused"])
+                       if _bs["budget_s"] > 0 else "预算 0 = 不限")
+                _log(fp, "外部推理：发出 %d 次｜失败 %d 次｜%s"
+                         "｜token 入 %d / 出 %d / 合计 %d%s"
+                     % (_bs["calls"], _bs["errors"], _bd,
+                        _tk["prompt"], _tk["completion"], _tk["total"],
+                        "（⚠️ 已降级成纯 CV：后续调用不再发出）"
+                        if _bs["exhausted"] else ""))
             else:
                 # 2026-07：这里原来是 `elif a.vlm == "on":`，挂在 `if a.vlm != "off"` 的
                 # else 分支里 —— `a.vlm == "on"` 必然满足 `!= "off"`，所以那条警告

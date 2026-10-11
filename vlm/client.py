@@ -63,22 +63,34 @@ _USED = 0.0      # 已花在外部推理上的时间（含失败/重试）
 _CALLS = 0       # 真正发出去的 ask() 次数
 _REFUSED = 0     # 因预算被拒的 ask() 次数
 _ERRORS = 0      # 返回 "ERR:..." 的次数（只作日志用）
+# ★ 外部推理的 **token 用量**（服务端 `usage` 块的累计）。赛题评分里
+#   `FinalScore_Accuracy = 0.95·Score_Accuracy + 0.05·(m/M)·Score_Token` 而
+#   `Score_Token` 是**消耗越少排名越高**（见 `docs/COMPETITION_RULES.md`）——
+#   也就是说「少用外部模型」本身是 5 分制的排名项，所以用量必须可见、可核。
+_TOK_IN = 0      # prompt tokens（含图片编码，图是 token 大户）
+_TOK_OUT = 0     # completion tokens
+_TOK_ALL = 0     # total_tokens（服务端给的，缺则用 in+out 兜）
 
 
 def stats() -> dict:
-    """预算与调用统计（给日志/决策日志用）。"""
+    """预算、token 与调用统计（给日志/决策日志用）。"""
     return {"budget_s": round(BUDGET, 1), "used_s": round(_USED, 1),
             "calls": _CALLS, "refused": _REFUSED, "errors": _ERRORS,
-            "exhausted": budget_exhausted(), "base": BASE, "model": MODEL}
+            "exhausted": budget_exhausted(), "base": BASE, "model": MODEL,
+            "tokens": {"prompt": _TOK_IN, "completion": _TOK_OUT,
+                       "total": _TOK_ALL}}
 
 
 def reset_budget() -> None:
     """清零累计用量与会计数（预算语义由调用方决定：整进程 or 每案例）。"""
-    global _USED, _CALLS, _REFUSED, _ERRORS
+    global _USED, _CALLS, _REFUSED, _ERRORS, _TOK_IN, _TOK_OUT, _TOK_ALL
     _USED = 0.0
     _CALLS = 0
     _REFUSED = 0
     _ERRORS = 0
+    _TOK_IN = 0
+    _TOK_OUT = 0
+    _TOK_ALL = 0
 
 
 def budget_exhausted() -> bool:
@@ -217,7 +229,10 @@ def ask(img_bgr, prompt, model=None, timeout=None, max_tokens=None):
 
     带 `VLM_BUDGET_S` 时另做两件事（默认 0 = 不做，行为与旧版逐字节相同）：
     ① 累计用量已到预算 ⇒ **不发请求**，立刻返回 `("", 0.0)`（记进 `stats()["refused"]`）；
-    ② 单次超时被**剩余预算**夹住（下限 5 s），于是「一次调用卡满」最多只能多吃几秒。
+    ② 单次超时被**剩余预算**夹住（下限 1 s），于是「一次调用卡满」最多只能多吃几秒。
+
+    另：每次响应里的 `usage` 都累进 `stats()["tokens"]` —— 赛题的 `Score_Token` 是
+    **排名项**（`0.05·(m/M)·Score_Token`，消耗越少越高），用量必须可见。
     """
     global _USED, _CALLS, _REFUSED, _ERRORS
     if budget_exhausted():
@@ -234,7 +249,8 @@ def ask(img_bgr, prompt, model=None, timeout=None, max_tokens=None):
             #   后面三次重试还各自按满超时等下去（最坏多等 3 × 超时）。
             left = budget_left()
             eff = base_to if left == float("inf") else min(base_to, max(1.0, left))
-            txt, fin, _usage = _chat_once(img_bgr, prompt, model or MODEL, budget, eff)
+            txt, fin, usage = _chat_once(img_bgr, prompt, model or MODEL, budget, eff)
+            _acc_tokens(usage)
             if txt and fin != "length":
                 return _close(t0, txt)
             last = txt
@@ -245,6 +261,22 @@ def ask(img_bgr, prompt, model=None, timeout=None, max_tokens=None):
     except Exception as e:  # noqa: BLE001
         _ERRORS += 1
         return _close(t0, "ERR:%s" % repr(e)[:80])
+
+
+def _acc_tokens(usage) -> None:
+    """把一次响应的 `usage` 累进 token 计数（缺字段就跳过；端点不给 `usage` 也不报错）。"""
+    global _TOK_IN, _TOK_OUT, _TOK_ALL
+    if not isinstance(usage, dict):
+        return
+    try:
+        pi = int(usage.get("prompt_tokens") or 0)
+        co = int(usage.get("completion_tokens") or 0)
+        tt = int(usage.get("total_tokens") or 0) or (pi + co)
+    except (TypeError, ValueError):
+        return
+    _TOK_IN += pi
+    _TOK_OUT += co
+    _TOK_ALL += tt
 
 
 def _close(t0: float, txt: str):

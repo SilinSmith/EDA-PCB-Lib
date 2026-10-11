@@ -4287,6 +4287,83 @@ python -X utf8 tools\dev\gen_knobs.py --write         :: 435 → 436 个开关�
 
 ---
 
+### 5.41 ★ 外部推理的 **token 成本 × 分数**（赛题 `Score_Token` 是 5 分制**排名**项）：默认档 222 次 / 152 164 token / 79.66；新 `-offline` 档 **0 次 / 0 token / 70.04 / 22.6 s**；★ token 成本 = **调用次数** × ~673，与 `VLM_SCALE`（像素数）**无关**，与 `-vlm-value-batch` **强相关**（2026-10-20，m40034「2 小时跑 50 样例」续）
+
+**一、为什么要量**
+
+`docs/COMPETITION_RULES.md`：`FinalScore_Accuracy = 0.95·Score_Accuracy + 0.05·(m/M)·Score_Token`，
+而 `Score_Token` 是**消耗越少排名越高**的排名项 —— 也就是说「少用外部模型」本身就是分，
+而交付链默认一张图要发二十几次请求。在这之前**全仓库没有任何一处记录 token 用量**，
+所以取舍只能靠猜。本轮先让它可见：
+
+- `eda-pcb/vlm/client.py`：新增 `_acc_tokens()`，把每次响应的 `usage` 累进
+  `stats()["tokens"] = {prompt, completion, total}`（端点不给 `usage` 就静默跳过）；
+- `eda-pcb/submission/run.py`：VLM 段日志**无条件**打印
+  `外部推理：发出 N 次｜失败 E 次｜预算 x/y s｜token 入 a / 出 b / 合计 c`
+  （原来只在预算到点时才打），并落进 `decision_log.json` 的 `config.vlm_client`。
+
+**二、档位实测**（官方 10 张，`submission/run.py`，**串行 `-case-workers 0`** ——
+扇出时每个 lane 是独立子进程，父进程看不到用量；串行时父进程 stats = 整跑总用量）
+
+| 档位 | 怎么开 | 外部调用 | token（入 / 出 / 合计） | 墙钟 | protocol2 |
+|---|---|---|---|---|---|
+| `full`（交付默认） | — | **222** | 149 386 / 2 778 / **152 164** | 118.2 s | **79.66** |
+| `nollm`（融合 LLM 轮关） | `FUSION_LLM=0` | 208 | 132 102 / 2 293 / **134 395** | 103.0 s | 79.30 |
+| `novlm`（VLM 关 + LLM 关 + pinrot 关） | `-vlm off` + 两个 env | 19 | 9 379 / 347 / **9 726** | 36.4 s | 71.15 |
+| ★ `-offline`（新 CLI，真·零调用） | `-offline` | **0** | **0 / 0 / 0** | **22.6 s** | **70.04** |
+| `s2` `VLM_SCALE=2` | env | 222 | 149 316 / 2 787 / 152 103 | 123.2 s | 79.66 |
+| `s1` `VLM_SCALE=1` | env | 222 | 149 310 / 2 779 / 152 089 | 115.5 s | 79.30 |
+| ★ `vb2` `-vlm-value-batch 2` | CLI | **166** | 108 563 / 3 191 / **111 754** | 105.0 s | 79.16 |
+| ★ `vb4` `-vlm-value-batch 4` | CLI | **138** | 99 295 / 3 137 / **102 432** | 103.3 s | 79.30 |
+| `vc3` `-vlm-value-cols 3` | CLI | 222 | 149 386 / 2 778 / 152 164 | 116.6 s | 79.30 |
+
+（`-offline` 臂与手工 env 组合的 `zero` 臂同分 **70.04**，互为交叉验证。）
+
+**三、结论**
+
+1. **VLM 补强 + 融合 LLM 一共值 +9.62 分**（70.04 → 79.66），代价 152 164 token。
+   赛题 token 项**至多 5 分**（`0.05·(m/M)·100`）⇒ 即使「零 token 拿满 100、我们因用
+   token 拿 0」，accuracy 侧仍净赚 ≈ **+4.6**。**不能为了 token 分放弃 VLM。**
+2. **融合 LLM 轮的性价比最低**：+0.36 分 / +17 769 token / +15.2 s（占总量 11.7%）。
+   单看分不值得关；但 50 张折算 ≈ +12.5 min 墙钟，与 §5.40 的 2 小时预算同量级，
+   要压时间/用量时它是第一个候选。
+3. **`-vlm off` 不是真的关**：仍有 **19 次**调用 / 9 726 token，值 **+1.11** 分
+   （71.15 vs 70.04）。这 19 次来自两条不归 `-vlm` 管的旁路：
+   `fusion/iterate.py:189`（⓪.9 定向往回问引脚名，`FUSION_ITERATE`）与
+   `stage1/wires.py:537`（导线色相提示，`STAGE1_WIRE_COLOUR=hint` 默认）。
+   所以新增 CLI **`-offline`**（`submission/run.py`）= `-vlm off` + `FUSION_LLM=0`
+   + `FUSION_ITERATE=0` + `STAGE1_WIRE_COLOUR=dominant` + `STAGE2_PINROT=0`
+   （已设过的不覆盖，便于单变量 A/B）。★ 但**不要用 `-fusion off` 实现离线**：
+   融合层里的确定性节点（先验 + 解）不发请求，实测值 **+0.24**（70.04 vs 69.80）。
+4. **token 的成本不是像素，是调用次数**。交付链 **98% 的 token 在输入侧**
+   （149 386 / 152 164），但把 `VLM_SCALE` 从 4 降到 2、1（图像线性尺寸 ×1/2、×1/4）
+   只把总量从 152 164 变成 152 103 / 152 089（**±0.05%，噪声级**），分数也不动
+   ⇒ 平均**每次调用 ≈ 673 输入 token**，与图大小无关（端点自己会缩放图）。
+5. 调用次数分布（`decision_log.json` 的 `config.vlm_stats`，官方 10 张）：
+   **value 117** / pins 91 / desig 26 / grid 23 / name 21 ⇒ **value 通道占一半**，
+   而 `-vlm-value-batch` 正是「把多个 value 槽位并进一次调用」：
+   **batch 2 ⇒ 调用 −25%、token −26.5%（−0.50 分）；batch 4 ⇒ 调用 −38%、
+   token −32.7%、墙钟 −12.6%（−0.36 分）**。注意我们的跨运行 VLM 采样噪声带是
+   **±0.38 分**（见 §5.39），所以这两条分数差都**贴着噪声底线**，token/调用数的下降
+   则是确定量。`-vlm-value-cols 3` **完全无效**（调用与 token 逐位相同）。
+   ⇒ 默认**不翻**（不动 `VLM_VALUE_BATCH`）；比赛日若要压 token 分/时间，用
+   `-vlm-value-batch 4`，并把它当作「用 ≤0.4 分换 33% token + 12.6% 墙钟」的显式选择。
+
+**四、复现**
+
+```bat
+cd eda-pcb
+python -X utf8 ..\work\_tokcost.py                              :: 全部档位（每档跑完顺手打分）
+python -X utf8 ..\work\_tokcost.py --only full,nollm,novlm,off  :: 四个主档
+python -X utf8 ..\work\_tokcost.py --only vb2,vb4,s1,s2         :: 成本杠杆
+cd ..
+python -X utf8 eda-pcb\submission\run.py -offline -input eda-pcb\yolo_part\"Dataset(waitforpreprocess)"\10GT -output work\_fast_out_off -case-workers 0
+python -X utf8 eda-pcb\tools\dev\_fantest.py                    :: 25 项回归，⑥ 判据 = config.vlm_client is None
+:: 读数：work\_tokcost.json（每档的 calls/tokens/wall_s）与 work\_fast_base\tok_<档>.json（逐案分）
+```
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |
