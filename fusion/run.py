@@ -59,6 +59,7 @@ from fusion import iterate as IT                        # noqa: E402
 from fusion import llm_judge as LJ                     # noqa: E402
 from fusion import modelset as MS                      # noqa: E402
 from fusion import namefix as NS                       # noqa: E402
+from fusion import pinfix as PF                         # noqa: E402
 from fusion import valfix as VF                        # noqa: E402
 from fusion import plausible as PL                     # noqa: E402
 from fusion import priors as PR                        # noqa: E402
@@ -501,6 +502,19 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
         rep["librefine"] = LR.refine(pred, log=log)
     except Exception as exc:                               # noqa: BLE001
         rep["librefine"] = {"err": str(exc)}
+    # ---- ⑩.5 库权威的号/名联修（`FUSION_PIN_LIBFIX`，§5.49）--------------------
+    # `librefine` 只管「库对该号有**唯一**名」，而官方库里一号多名极常见
+    # （`AMS1117-3.3` 的 1 号有 ADJ / ADJ(GND) / GND … 六种写法 ⇒ 它整条放弃），
+    # 且**号本身读错**时它也不适用（`pin_33` / `pin_24` 不在库号集合里）。
+    # 必须放在 ⑪ `ref_prune` **之前**：改脚键会动 `hyperGraph` 里的 `元件.号` 引用，
+    # 得让收尾那一步看到新键（顺序同 `librefine`：`_assemble` 之后才是出门的那一份）。
+    try:
+        rep_pf = PF.fix(pred, log=log)
+    except Exception as exc:                               # noqa: BLE001
+        rep_pf = {"err": str(exc)}
+        if log:
+            log("  [pinfix] 跳过：%s" % exc)
+    rep["pin_libfix"] = {k: v for k, v in rep_pf.items() if k != "rows"}
     # ---- ⑪ 引用收尾：交付文档里不能有悬空引用（`FUSION_REF_PRUNE`，见函数上方长注释）----
     # 必须放在**最后**（`librefine` 之后、写盘之前）：只有这里的 `pred` 才是出门的那一份，
     # 前面 `build_doc` / `weld_nets` / `_merge_nets` 都会重建 `hyperGraph`，
