@@ -3,6 +3,19 @@
 These are role-only additional observations. Missing optional OCR leaves the
 existing pipeline intact. Agreement is never a dictionary or numbering repair.
 """
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 【接口】统一约定（队友分支 13 个模块，2026-10-16 统一；只改签名不改识别逻辑）
+#   读数器   read_xxx(doc, reads, engine, bgr, *, min_conf=0.0, **opts) -> List[dict]
+#   裁片器   xxx_boxes(doc, image, reads=None, **opts)                 -> List[dict]
+#   返回     纯追加：只返回**新增**候选（{"bbox":..., "reads":{role:(text,conf)}}），
+#            绝不修改入参、绝不删除既有读数；关掉开关时下游逐位不变
+#   开关     一律由 `stage2/run.py` 的 `PIN_READERS` 注册表读取，模块自身不读 env
+#   挂载     workflow 节点 ⑦c/⑦d/⑦e/⑦f/⑦g（`tools/flow/graph.json`）
+#   来源     队友分支 `origin/codex/improve-pin-network-parsing`
+#   本模块入口：
+#     read_mono_pin_texts(doc, reads, engine, bgr, *, min_conf, mode, include_names, include_numbers)
+# ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
 import math
@@ -178,8 +191,9 @@ def _guard_recovered_names(doc, reads, output, candidates, bgr, min_conf=0.0):
             rec["reads"] = {}
 
 
-def read_mono_pin_texts(doc, reads, engine, bgr, min_conf=0.0, mode="auto",
-                        include_names=True, include_numbers=True):
+def read_mono_pin_texts(doc, reads, engine, bgr, *, min_conf: float = 0.0,
+                        mode: str = "off", include_names: bool = True,
+                        include_numbers: bool = True):
     """Return role-limited targeted records, including held audit observations.
 
     ``engine`` is accepted for the pipeline interface. PP sees actual complete

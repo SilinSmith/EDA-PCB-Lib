@@ -3,6 +3,19 @@
 Legacy name/number lanes are unchanged. Repairs use connected dark ink and
 current trusted colour contacts only; recognized strings never set a crop.
 """
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 【接口】统一约定（队友分支 13 个模块，2026-10-16 统一；只改签名不改识别逻辑）
+#   读数器   read_xxx(doc, reads, engine, bgr, *, min_conf=0.0, **opts) -> List[dict]
+#   裁片器   xxx_boxes(doc, image, reads=None, **opts)                 -> List[dict]
+#   返回     纯追加：只返回**新增**候选（{"bbox":..., "reads":{role:(text,conf)}}），
+#            绝不修改入参、绝不删除既有读数；关掉开关时下游逐位不变
+#   开关     一律由 `stage2/run.py` 的 `PIN_READERS` 注册表读取，模块自身不读 env
+#   挂载     workflow 节点 ⑦c/⑦d/⑦e/⑦f/⑦g（`tools/flow/graph.json`）
+#   来源     队友分支 `origin/codex/improve-pin-network-parsing`
+#   本模块入口：
+#     number_repair_boxes(doc, image, reads)
+# ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
 import copy
@@ -139,21 +152,21 @@ def _vertical_completion(mask, original, target, peers):
     return completed, expanded, evidence
 
 
-def number_repair_boxes(doc, bgr, reads=None):
+def number_repair_boxes(doc, image, reads=None):
     """Return only number candidates and an independent cleaned gray copy.
 
     Metadata preserves the original geometry/flags as well as every removed
     contact fragment and completion decision. Input documents, OCR records,
     and image pixels are never changed. Unproven clipping stays unresolved.
     """
-    candidates, cleaned = pin_lane_boxes(doc, bgr, reads=reads)
+    candidates, cleaned = pin_lane_boxes(doc, image, reads=reads)
     if cleaned is None:
         return [], None
     cleaned = cleaned.copy()
     observations = list(_observations(doc, include_horizontal=True))
     observed = {(o["component_id"], o["pin_index"]): o for o in observations}
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    chroma = bgr.max(2).astype(np.int16) - bgr.min(2).astype(np.int16)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    chroma = image.max(2).astype(np.int16) - image.min(2).astype(np.int16)
     colour = (chroma >= 50) & (gray < 230)
     near_colour = cv2.dilate(colour.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
     out = []

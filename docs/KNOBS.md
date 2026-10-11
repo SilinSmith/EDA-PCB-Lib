@@ -168,7 +168,7 @@
 
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
-| `CV_UNIFIED` | `"0"` | `stage2/run.py:480` |
+| `CV_UNIFIED` | `"0"` | `stage2/run.py:512` |
 | `FUSION_PIN_LIBSEQ` | `"1"` | `stage2/pinlib.py:105` |
 | `FUSION_PIN_LIBSEQ_FUZZY` | `"0.85"` | `stage2/pinlib.py:108` |
 | `FUSION_PIN_LIBSEQ_MARGIN` | `"0.06"` | `stage2/pinlib.py:109` |

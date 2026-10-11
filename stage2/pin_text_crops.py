@@ -3,6 +3,20 @@
 Geometry always remains in the original image. Recognition padding and 90 degree
 rotation are separate, and none of the windows use expected names or numbers.
 """
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 【接口】统一约定（队友分支 13 个模块，2026-10-16 统一；只改签名不改识别逻辑）
+#   读数器   read_xxx(doc, reads, engine, bgr, *, min_conf=0.0, **opts) -> List[dict]
+#   裁片器   xxx_boxes(doc, image, reads=None, **opts)                 -> List[dict]
+#   返回     纯追加：只返回**新增**候选（{"bbox":..., "reads":{role:(text,conf)}}），
+#            绝不修改入参、绝不删除既有读数；关掉开关时下游逐位不变
+#   开关     一律由 `stage2/run.py` 的 `PIN_READERS` 注册表读取，模块自身不读 env
+#   挂载     workflow 节点 ⑦c/⑦d/⑦e/⑦f/⑦g（`tools/flow/graph.json`）
+#   来源     队友分支 `origin/codex/improve-pin-network-parsing`
+#   本模块入口：
+#     pin_text_boxes(doc, image, reads, *, include_horizontal)
+#     read_pin_texts(doc, reads, engine, bgr, *, include_horizontal)
+# ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
 import math
@@ -114,13 +128,14 @@ def _nearest_glyph(mask, region, anchor, edge, *, number=False, min_ratio=1.10):
     return min(choices, key=lambda v: v[0])[1] if choices else None
 
 
-def pin_text_boxes(doc, image, *, include_horizontal=False):
+def pin_text_boxes(doc, image, reads=None, *, include_horizontal: bool = False):
     """Return original-image ink boxes and a cleaned grayscale image.
 
     By default only vertical pin words are added. ``include_horizontal`` is an
     explicit experiment option. Monochrome pins and evidence which does not
     match the current point always retain the existing path.
     """
+    _ = reads  # 契约参数：裁片器一律 (doc, image, reads=None)，本函数不消费 reads
     if image is None or getattr(image, "ndim", 0) != 3 or image.shape[2] != 3:
         return [], None
     mask, cleaned = _ink(image)
@@ -189,7 +204,8 @@ def _padded_crop(gray, box, padding=3):
     return np.pad(core, padding, constant_values=255)
 
 
-def read_pin_texts(doc, reads, engine, bgr, *, include_horizontal=False):
+def read_pin_texts(doc, reads, engine, bgr, *, min_conf: float = 0.0,
+                   include_horizontal: bool = False):
     """Append role-only reads of whole words, never mutate existing reads.
 
     Both rotations are actually recognized. A component-level orientation

@@ -1,4 +1,17 @@
 """Selective pin text recovery from observed geometry, never expected labels."""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 【接口】统一约定（队友分支 13 个模块，2026-10-16 统一；只改签名不改识别逻辑）
+#   读数器   read_xxx(doc, reads, engine, bgr, *, min_conf=0.0, **opts) -> List[dict]
+#   裁片器   xxx_boxes(doc, image, reads=None, **opts)                 -> List[dict]
+#   返回     纯追加：只返回**新增**候选（{"bbox":..., "reads":{role:(text,conf)}}），
+#            绝不修改入参、绝不删除既有读数；关掉开关时下游逐位不变
+#   开关     一律由 `stage2/run.py` 的 `PIN_READERS` 注册表读取，模块自身不读 env
+#   挂载     workflow 节点 ⑦c/⑦d/⑦e/⑦f/⑦g（`tools/flow/graph.json`）
+#   来源     队友分支 `origin/codex/improve-pin-network-parsing`
+#   本模块入口：
+#     read_pin_lanes(doc, reads, engine, bgr, *, include_names, include_numbers, cleanup, min_conf)
+# ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
 from collections import Counter, defaultdict
@@ -144,8 +157,9 @@ def _direction_votes(reads):
     return votes, per_pin
 
 
-def read_pin_lanes(doc, reads, engine, bgr, *, include_names=True,
-                   include_numbers=True, cleanup="light", min_conf=0.0):
+def read_pin_lanes(doc, reads, engine, bgr, *, include_names: bool = True,
+                   include_numbers: bool = True, cleanup: str = "light",
+                   min_conf: float = 0.0):
     """Append targeted, role-limited reads without altering original candidates.
 
     Both raw and cleaned inputs use the same isolated sampling convention.

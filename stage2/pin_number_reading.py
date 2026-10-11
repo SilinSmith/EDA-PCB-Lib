@@ -3,6 +3,19 @@
 Two fixed white-margin views must agree. No expected label, numbering order,
 dictionary correction or highest-confidence view selection is used.
 """
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 【接口】统一约定（队友分支 13 个模块，2026-10-16 统一；只改签名不改识别逻辑）
+#   读数器   read_xxx(doc, reads, engine, bgr, *, min_conf=0.0, **opts) -> List[dict]
+#   裁片器   xxx_boxes(doc, image, reads=None, **opts)                 -> List[dict]
+#   返回     纯追加：只返回**新增**候选（{"bbox":..., "reads":{role:(text,conf)}}），
+#            绝不修改入参、绝不删除既有读数；关掉开关时下游逐位不变
+#   开关     一律由 `stage2/run.py` 的 `PIN_READERS` 注册表读取，模块自身不读 env
+#   挂载     workflow 节点 ⑦c/⑦d/⑦e/⑦f/⑦g（`tools/flow/graph.json`）
+#   来源     队友分支 `origin/codex/improve-pin-network-parsing`
+#   本模块入口：
+#     read_pin_numbers(doc, reads, engine, bgr, *, min_conf)
+# ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
 import math
@@ -38,7 +51,7 @@ def _agreement(variants, threshold):
     return values[0][0], min(v[1] for v in values)
 
 
-def read_pin_numbers(doc, reads, engine, bgr, *, min_conf=0.0):
+def read_pin_numbers(doc, reads, engine, bgr, *, min_conf: float = 0.0):
     """Add qualified digits; missing optional PP runtime keeps the old path.
 
     ``engine`` is retained for the pipeline's reader interface; this recognizer

@@ -87,6 +87,41 @@ PIN_TRUST_DROP = os.environ.get("STAGE2_PIN_TRUST_DROP", "").strip().lower()
 _TRUST_LEVELS = {"rejected": ("rejected",),
                  "uncertain": ("uncertain",),
                  "rejected+uncertain": ("rejected", "uncertain")}
+# ★ 队友 13 个模块里的「读数器」注册表（`origin/codex/improve-pin-network-parsing`）。
+#   契约见各模块 docstring 顶部的【接口】块，也见 `process()` 里的用法注释。
+#   每项 = (名字, 开关, 模块, 函数, 需要的角色, 额外 kwargs)；
+#   kwargs 的值可以是 `roles -> value` 的函数（按角色决定要不要读名字/号）。
+PIN_READERS = [
+    ("color_number", COLOR_NUMBER_CROP, "color_crops", "read_color_numbers",
+     ("pin_number",), {}),
+    ("pin_text", PIN_TEXT_CROP, "pin_text_crops", "read_pin_texts",
+     ("pin_name", "pin_number"), {}),
+    ("pin_lane", PIN_LANE_CROP, "pin_lane_reading", "read_pin_lanes",
+     ("pin_name", "pin_number"),
+     {"include_names": lambda roles: roles is None or "pin_name" in roles,
+      "include_numbers": lambda roles: roles is None or "pin_number" in roles,
+      "cleanup": PIN_LANE_CLEANUP}),
+    ("pin_number_repair", PIN_NUMBER_REPAIR, "pin_number_reading", "read_pin_numbers",
+     ("pin_number",), {}),
+    ("pin_name_ocr", PIN_NAME_OCR != "off", "pin_name_reading", "read_pin_names",
+     ("pin_name",), {"mode": PIN_NAME_OCR}),
+    ("mono_pin_ocr", MONO_PIN_OCR != "off", "mono_pin_reading", "read_mono_pin_texts",
+     ("pin_name", "pin_number"),
+     {"mode": MONO_PIN_OCR,
+      "include_names": lambda roles: roles is None or "pin_name" in roles,
+      "include_numbers": lambda roles: roles is None or "pin_number" in roles}),
+]
+
+
+def _load_reader(mod: str):
+    """按模块名加载队友读取器（先包相对导入，再退化绝对导入）。"""
+    import importlib
+    try:
+        return importlib.import_module("." + mod, __package__ or "stage2")
+    except Exception:
+        return importlib.import_module("stage2." + mod)
+
+
 
 
 # 这些是「参数」类元件，它们旁边没有长器件名，不参与生长
@@ -348,40 +383,37 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         if _n_trust:
             print("[stage2] 引脚信任闸门（PIN_TRUST_DROP=%s）：放下 %d 个脚"
                   % (PIN_TRUST_DROP, _n_trust))
-    # ★ 队友分支的五个追加式读取器（`docs/引脚与网络提分验证.md`；开关见文件头，
-    #   默认全 off，逐条 A/B 后转正）。它们只往 `reads` 里**加**候选：
-    #   后续 `assign` / `build_doc` 的既有逻辑一字未改 ⇒ 关掉时逐位不变。
+    # ★ 队友分支的追加式读取器 —— **统一注册表**（开关与清单见文件头的 PIN_READERS）。
+    #
+    # 为什么是注册表：这些读取器/裁片器是「可重组的部件」，只有接口一致才能被 workflow
+    # 自由连线（用户 m40034 第 2 项）。契约（13 个模块 docstring 里也都写着）：
+    #     读数器   read_xxx(doc, reads, engine, bgr, *, min_conf=0.0, **opts) -> List[dict]
+    #     裁片器   xxx_boxes(doc, image, reads=None, **opts)                  -> List[dict]
+    #     返回     纯追加：只返回**新增**候选（{"bbox":…, "reads":{role:(text,conf)}}），
+    #              绝不改入参、绝不删既有读数 ⇒ 关掉时下游逐位不变
+    #     开关     只在**这里**读 env（模块自身不读 env）
+    # 关掉或角色不匹配都整项跳过；单项异常只打印，不拖垮其它读取器。
     if do_ocr:
-        if COLOR_NUMBER_CROP and (roles is None or "pin_number" in roles):
-            from .color_crops import read_color_numbers
-            reads = list(reads) + read_color_numbers(doc, reads, engine, bgr)
-        if PIN_TEXT_CROP and (roles is None or any(r in roles for r in ("pin_name", "pin_number"))):
-            from .pin_text_crops import read_pin_texts
-            extra = read_pin_texts(doc, reads, engine, bgr)
-            if roles is not None:
-                extra = [dict(r, reads={k: v for k, v in r["reads"].items() if k in roles})
-                         for r in extra if any(k in roles for k in r["reads"])]
-            reads = list(reads) + extra
-        if PIN_LANE_CROP and (roles is None or any(r in roles for r in ("pin_name", "pin_number"))):
-            from .pin_lane_reading import read_pin_lanes
-            reads = list(reads) + read_pin_lanes(
-                doc, reads, engine, bgr,
-                include_names=roles is None or "pin_name" in roles,
-                include_numbers=roles is None or "pin_number" in roles,
-                cleanup=PIN_LANE_CLEANUP, min_conf=min_conf)
-        if PIN_NUMBER_REPAIR and (roles is None or "pin_number" in roles):
-            from .pin_number_reading import read_pin_numbers
-            reads = list(reads) + read_pin_numbers(doc, reads, engine, bgr, min_conf=min_conf)
-        if PIN_NAME_OCR != "off" and (roles is None or "pin_name" in roles):
-            from .pin_name_reading import read_pin_names
-            reads = list(reads) + read_pin_names(doc, reads, bgr, mode=PIN_NAME_OCR,
-                                                 min_conf=min_conf)
-        if MONO_PIN_OCR != "off" and (roles is None or any(r in roles for r in ("pin_name", "pin_number"))):
-            from .mono_pin_reading import read_mono_pin_texts
-            reads = list(reads) + read_mono_pin_texts(
-                doc, reads, engine, bgr, min_conf=min_conf, mode=MONO_PIN_OCR,
-                include_names=roles is None or "pin_name" in roles,
-                include_numbers=roles is None or "pin_number" in roles)
+        for _name, _on, _mod, _fn, _need, _kw in PIN_READERS:
+            if not _on:
+                continue
+            if roles is not None and not any(_r in roles for _r in _need):
+                continue
+            try:
+                _m = _load_reader(_mod)
+                _args = {k: (v(roles) if callable(v) else v) for k, v in _kw.items()}
+                _extra = list(getattr(_m, _fn)(doc, reads, engine, bgr,
+                                               min_conf=min_conf, **_args))
+            except Exception as e:                     # 单个读取器失败不影响整张图
+                print("[stage2] 读取器 %s 失败：%s" % (_name, e))
+                continue
+            if roles is not None:                      # 只留被请求的角色
+                _extra = [dict(r, reads={k: v for k, v in r.get("reads", {}).items()
+                                         if k in roles})
+                          for r in _extra if any(k in r.get("reads", {}) for k in roles)]
+            if _extra:
+                reads = list(reads) + _extra
+
     t2 = time.time()
 
     for r in reads:

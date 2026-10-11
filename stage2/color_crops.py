@@ -1,4 +1,18 @@
 """Re-read external pin digits without bringing internal markers into crops."""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 【接口】统一约定（队友分支 13 个模块，2026-10-16 统一；只改签名不改识别逻辑）
+#   读数器   read_xxx(doc, reads, engine, bgr, *, min_conf=0.0, **opts) -> List[dict]
+#   裁片器   xxx_boxes(doc, image, reads=None, **opts)                 -> List[dict]
+#   返回     纯追加：只返回**新增**候选（{"bbox":..., "reads":{role:(text,conf)}}），
+#            绝不修改入参、绝不删除既有读数；关掉开关时下游逐位不变
+#   开关     一律由 `stage2/run.py` 的 `PIN_READERS` 注册表读取，模块自身不读 env
+#   挂载     workflow 节点 ⑦c/⑦d/⑦e/⑦f/⑦g（`tools/flow/graph.json`）
+#   来源     队友分支 `origin/codex/improve-pin-network-parsing`
+#   本模块入口：
+#     color_number_boxes(doc, image, reads)
+#     read_color_numbers(doc, reads, engine, bgr, *, min_conf)
+# ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
 import math
@@ -98,13 +112,14 @@ def _clip_external(box, edge, anchor, shape):
     return [x0,y0,x1,y1] if x1-x0>=2 and y1-y0>=3 else None
 
 
-def color_number_boxes(doc, reads, image):
+def color_number_boxes(doc, image, reads=None):
     """Return external, ink-tight windows; existing OCR boxes supply glyph rows.
 
     No GT or expected numbers participate. Every window is constrained by an
     observed color pin and an actual frame side. Only low-chroma dark pixels
     are glyph evidence; blue labels and colored symbol/wire strokes are removed.
     """
+    reads = reads or []  # 契约参数：old/new 调用点都用位置参数传 (doc, image, reads)
     if image is None or image.ndim != 3:
         return [], None
     gray = cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
@@ -217,13 +232,13 @@ def color_number_boxes(doc, reads, image):
     return boxes,cleaned
 
 
-def read_color_numbers(doc, reads, engine, bgr):
+def read_color_numbers(doc, reads, engine, bgr, *, min_conf: float = 0.0):
     """Append role-limited candidates, never rewrite or synthesize a number.
 
     Call the existing recognizer on exact clipped windows: TextEngine.read's
     automatic padding would cross the confirmed frame and reintroduce circles.
     """
-    boxes,gray=color_number_boxes(doc,reads,bgr)
+    boxes,gray=color_number_boxes(doc,bgr,reads)
     if not boxes: return []
     recognizer=engine.recognizer()
     if recognizer is None: return []

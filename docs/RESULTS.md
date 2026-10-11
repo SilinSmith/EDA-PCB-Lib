@@ -3250,6 +3250,48 @@ python -X utf8 work\_evidpow.py --run work\_fast_out_pev0 --cases-file work\_cas
 powershell -ExecutionPolicy Bypass -File work\_cons_ab.ps1
 ```
 
+### 5.29 ★ 队友 13 个模块的**接口统一**（2026-10-16）：签名对齐 + `PIN_READERS` 注册表 + 契约检查器；官方 10 三臂**逐字节零变化**
+
+**背景**：5.28 把队友分支 `codex/improve-pin-network-parsing` 的 13 个模块整文件并入（读音：`stage1/pincolor.py`、`stage1/pin_evidence.py`，读数器/裁片器 11 个），但它们的公开入口签名**互不一致**（`read_color_numbers` 没有 `min_conf`、`read_pin_names` 没有 `engine`、`read_mono_pin_texts` 全是无默认位置参数、`color_number_boxes` 的参数顺序与其余裁片器相反、两个模块的形参叫 `bgr`）。这既是挂载时踩坑的来源（注册表统一传 `min_conf=` 会静默 `TypeError`），也让 workflow 上的节点 ⑦c–⑦g 无法作为**同构零件**复用。本轮只改**签名与文档**，**一行识别逻辑都不改**。
+
+**统一后的契约**（写进 13 个模块 docstring 之后的 `# 【接口】统一约定` 块；脚本 `work/_tm_iface.py` 即规格，`--write` 落到 9 个文件 / 24 处）：
+
+| 种类 | 形状 |
+| --- | --- |
+| 读数器 | `read_xxx(doc, reads, engine, bgr, *, min_conf: float = 0.0, **opts) -> List[dict]` |
+| 裁片器 | `xxx_boxes(doc, image, reads=None, **opts) -> List[dict]`（返回 `(boxes, cleaned)`） |
+| 返回语义 | **纯追加**：只返回新增候选 `{"bbox":..., "reads":{role:(text,conf)}}`，绝不改入参、绝不删既有读数 ⇒ 关掉开关时下游逐位不变 |
+| 开关 | 一律只在 `stage2/run.py` 读 env；**模块自身零 `os.environ/getenv`**（检查器静态校验，实测 13 个模块 0 处） |
+
+签名改造清单（新 → 涉及文件）：`color_number_boxes(doc, image, reads=None)`（原 `(doc, reads, image)`，顺序反了，函数体确实消费 reads ⇒ 补 `reads = reads or []`）、`read_color_numbers(..., *, min_conf)`、`pin_text_boxes(doc, image, reads=None, *, include_horizontal=False)`、`read_pin_texts(..., *, min_conf, include_horizontal)`、`read_pin_lanes(..., *, include_names, include_numbers, cleanup, min_conf)`、`read_pin_numbers(..., *, min_conf)`、`read_pin_names(..., engine, *, mode="auto", min_conf)`、`read_mono_pin_texts(..., *, min_conf, mode, include_names, include_numbers)`、`number_repair_boxes(doc, image, reads=None)`、`extract_color_pins(image, components, *, frame_report=None)`（后两者仅 `bgr`→`image`，含 `stage1/pincolor.py::_colour_masks`）。
+
+**挂载改成注册表**：`stage2/run.py:94` 的 `PIN_READERS = [(名字, 开关, 模块, 函数, 需要的角色, 额外 kwargs), ...]`（6 项：`color_number / pin_text / pin_lane / pin_number_repair / pin_name_ocr / mono_pin_ocr`），`:116 _load_reader(mod)` 用 `importlib` 动态加载，`:386-417` 统一循环：开关关掉或角色不匹配就跳过 → `min_conf` 与 kwargs 统一传 → 按角色后过滤 → `reads = list(reads) + 新增`；**单个读取器抛异常只打印一行并跳过**，不影响其它读取器与主流程。原先七个 ad-hoc `if` 块消失。
+
+**契约检查器**：新增 `tools/dev/pinread_contract.py`（16 个入口：6 读数器 + 5 裁片器 + collect + helper）。`inspect.signature` 校验位置参数与「关键字-only 全带默认 + 必须有 `min_conf`」；用 `_StubEngine`（`recognizer()` 返回 None）真调一次、断言返回 list；AST 解析 `PIN_READERS`（正则会把 `("pin_name","pin_number")` 角色元组误读成一对）；静态校验模块源码不得出现 `os.environ/getenv`。运行 = `python -X utf8 tools/dev/pinread_contract.py` ⇒ **16 个入口：通过 16，失败 0，exit 0**（以后加读取器/改签名必须先过它）。
+它当场抓到两个真 bug：① `read_pin_texts` **漏了 `min_conf`** ⇒ 注册表统一传参会抛 `TypeError`，且被 `try/except` 吞掉变成**静默失效**（已补 `stage2/pin_text_crops.py:207`）；② `build_pin_evidence` 的 `ink` 是必填位置参数（设计如此，检查器原先的 collect 规则误报，已放宽）。
+
+**★ 等价验证（接口统一必须零行为变化）**：装置 `work/_ifx_ab.ps1` + `work/_ifx_cmp.py <A> <B>`（逐文件 SHA1），三臂都官方 10 张 `--no-vlm`：
+
+| 臂 | 配置 | 总分 | 对照参考 | 10 个 `final_results/*.json` |
+| --- | --- | --- | --- | --- |
+| `ifx0` | 全关 | **71.65**（0.8852 / 0.6179 / 0.7345 / 0.3933） | `pev0`、`curB`（改接口前同树） | **逐字节相同**（只有 `run.log` 因时间戳不同） |
+| `ifx1` | 四读数器全开 | **71.65**（逐通道同上） | `tmon`（ad-hoc 挂载时代） | **逐字节相同** |
+| `ifx2` | 四读数器 + `STAGE1_PIN_COLOR=1` | **56.73**（引脚 0.0725） | `pev2` | **逐字节相同** |
+
+⇒ 注册表化 + 签名对齐 + `reads` 纯追加语义**没有动任何数值**；同时确认 `ifx1` 的读数器仍然 **no-op**（原因见 5.28：`_observations` 硬门要求 `source ∈ COLOR_SOURCES`，灰底证据没有 `source`）。
+
+**当前交付口径得分（同轮三臂，`work/_cur_ab.ps1`）**：官方 10 默认（VLM 开）**79.50**（元件 0.9819 / 引脚 0.7633 / 网络 0.7706 / 导线 0.3993；与 10-16 早先 79.14 的差来自 case 7 的 VLM `AGND↔GND` 抽样抖动）；官方 10 `--no-vlm` **71.65**；val 19 `--no-vlm` + 关融合层 LLM **25.86**。
+
+**复现**：
+
+```bat
+cd eda-pcb
+python -X utf8 tools\dev\pinread_contract.py
+python -X utf8 -m stage2.assign & python -X utf8 -m stage2.structmatch & python -X utf8 -m stage2.assemble
+powershell -ExecutionPolicy Bypass -File ..\work\_ifx_ab.ps1
+python -X utf8 ..\work\_ifx_cmp.py ifx1 tmon
+```
+
 ---
 
 ## 6. 归因尺子（怎么把失分拆成可行动项）

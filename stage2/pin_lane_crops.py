@@ -272,7 +272,7 @@ def pin_lane_boxes(doc, image, reads=None):
     observations = list(_observations(doc, include_horizontal=True))
     # Reuse the established colour/fringe mask without the old OCR-number gate.
     # Passing no reads returns the cleaned view while creating no legacy boxes.
-    _, cleaned = color_number_boxes(doc, [], image)
+    _, cleaned = color_number_boxes(doc, image, [])
     mask = cleaned < 190
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     chroma = image.max(2).astype(np.int16) - image.min(2).astype(np.int16)
