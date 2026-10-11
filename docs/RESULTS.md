@@ -3874,6 +3874,90 @@ python -X utf8 tools\eval\stage2_eval.py ..\work\_pinoracle_all --quiet
 
 ---
 
+### 5.37 ★★ 官方判题机报告（第 6 次提交 44.2917）读出的失分全景；引脚位置杠杆的**第二重代价 = 导线通道**（权重 0.10、现 0.081）；引线长度 L 共六条修法全部判负（2026-10-18，goal 第 2 轮）
+
+**一、唯一一份「裁判亲口」读数**
+
+位置 `..\20261009引入\theSixthSubmission_44.29\intermediate_files (5)\`：
+
+| 文件 | 内容 |
+|---|---|
+| `scores.txt` | final_score **44.291703**｜component_f1 0.487847｜pin_f1 0.45821｜connectivity_f1 0.496836｜wire_f1 **0.08118** |
+| `summary.json` | `threshold_px: 5`；权重 component .30 / pin .25 / connectivity .35 / wire **.10**；逐案分数 |
+| `report/submission/20261009T140206Z/<c>.json\|.txt` | 判题机逐案报告（component/pin/wire/connectivity 四段 + protocol + files） |
+| `final_results/<c>_Pred.json` | 我们那次提交的成品（= 判题机 `/pred/<c>/…`） |
+
+判题协议（`1.json` 的 `protocol` 原文）：
+`pin_match: "component key and pin_<number> exact; owner exists in both components; pinname exact; point Euclidean threshold"`｜
+`wire_match: "one-to-one direction-invariant two-point edge matching within Hungarian-matched nets"`｜
+`connectivity_match: "Hungarian one-to-one pin-set soft F1"`｜`"hypergraph references retained as sets and reference issues reported"`。
+判题机的 GT = 我们的 `yolo_part\Dataset(waitforpreprocess)\10GT\<c>\<c>.json`（逐位一致）。
+
+**二、裁判看到的三件事（`work\_judgereport.py` 汇总）**
+
+1. ★★ **引脚号根本不是问题**：`pin_number_accuracy_on_matched = 1.000`（**10/10 案**），脚名 0.789~0.964 才是。
+   错误样例计数：`pin:extra` 144｜`comp:missing` 115｜`comp:extra` 108｜`pin:missing` 94｜
+   `pin:['tip_position']` 22｜`pin:['tip_position','pin_name']` 21｜`pin:['pin_name']` 16｜`comp:attribute_or_position_mismatch` 14；
+   `pin.failed_checks`：**tip_position 43 / pin_name 37**；`tip_distance_px` 共 **293 条**（各案 mean 的均 5.36；case 8 最惨
+   mean 20.42 / p95 100.74 / max 317.10，case 4 最好 1.68/4.10/6.12）。
+   ⇒ §5.35 里「引脚号上界 +2.95」只存在于**我们自己的派生尺子**；交付口径上这一项没有可赢的分，剩下的全是
+   **元件键（missing 115 + extra 108）+ 脚点位置（43）+ 脚名（37）+ 多余的脚（144）**。
+2. 连通性：只有 case 1 的 `unmapped_pred_pin_references = 18`（那次提交保留了 ∅ 引用），其余 9 案为 0；
+   gt/pred 网络数 1:10/17｜2:24/14｜3:16/18｜4:14/14｜5:17/19｜6:22/25｜7:13/18｜8:18/15｜9:11/13｜10:15/18；
+   `pin_pair_f1` 0.000(case2)~0.448(case7)、`soft_tp` 3.988~12.300 ⇒ 主项仍是网络**成员**而不是分组算法（§5.35 的 +15 上界成立）。
+3. ★ **导线 0.081 vs 我们内部 `net_line_f1` 0.416** —— 差距不在几何精度，而在**端点位移**（下一节）。
+
+**三、导线通道为什么只有 0.081：把 §5.36 的引线长度杠杆抬高了一倍**
+
+`work\_wirefit.py`（新探针，把 10 案的 `nets[*].edges` 逐段方向无关地配到 GT，5px 门，只做诊断）：
+
+| case | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 合计 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| GT 段数 | 102 | 40 | 47 | 60 | 57 | 86 | 69 | 56 | 39 | 83 | **639** |
+| 我方段数 | 207 | 49 | 94 | 122 | 94 | 169 | 124 | 85 | 86 | 145 | 1175 |
+| 去重后（≤3px） | 183 | 40 | 72 | 86 | 71 | 127 | 81 | 64 | 69 | 104 | **897** |
+| ≤5px 命中 | 10 | 4 | 3 | 12 | 8 | 17 | 6 | 17 | 4 | 17 | **98** |
+
+- 端点误差直方图（897 段）：≤5px **98**（10.9%）｜5–10px **320**（35.7%）｜10–20px 234（26.1%）｜20–50px 150｜50–200px 91｜>200px 4
+  ⇒ **72.7% 的段「几乎对」，只是端点差 5–20px**。
+- 把 1108 个「近失段（5–20px）」的端点分别投到最近的 GT 端点与最近的 GT 引脚：
+  **GT 端点** ≤8px 640｜8–16px 394｜16–30px 74｜>30px **0**；**GT 引脚** ≤8px 只有 181。
+  ⇒ 我们的段**结构（拓扑、结点数）是对的**，坏的是**结点坐标**：挂在引脚上的那一端，我们摆在「框边+12」，
+  GT 摆在「引线尖端（框边+L）」，误差正好 = |L−12|（case 1 右 8px、case 8 左 10px、case 4 6px）。
+- 例（case 1）：`PRED net_1 (856,733)→(957,733)` vs `GT (843,734)→(944,734)` —— 同长度、同 y、**整段沿轴平移 13px**。
+- 上帝操作验证：把每个端点吸到最近的 GT 引脚（≤30px），≤5px 命中 **98 → 146（+48）** ⇒ 引线尖端确实是导线通道的主因
+  （但吸引脚不够：还有 640 个端点本来就离 GT 端点 ≤8px，说明另一端/结点的口径也在拖）。
+- 处置：**导线权重 0.10**，端点/结点口径对齐后这一项的上限约 0.4~0.5（约 **+3 分**）；加上引脚通道的上帝键
+  **+3.6747** ⇒ 「脚点与结点落在引线尖端」合计约 **+7 分**，是当前唯一的大杠杆（但见四：交付域里取不到 L）。
+
+**四、引线长度 L 不可测：六条修法全部判负（负结果归档）**
+
+| 修法 | 脚本 | 关键读数 | 结论 |
+|---|---|---|---|
+| 按元件名查表（官方池 210 案） | `..\work\_pinlentab2.py` | 池内留一 ≤5px 71.3%；跨集（10GT vs 池）n=33 均 4.95 / ≤5px **57.6%** | 判负：**两套官方标注口径不同**（同名 `MSP432E401YTPDT` 池 case 0041 L=3 而 10GT case 1 L=15/20；`PAW3395DM-T6QU` 池 11/13 vs 10GT 22/9） |
+| 墨迹外延（修正 y 翻转后重测） | `..\work\_leadest2.py` | `c12` 3.00 / ≤5px **87.9%** 仍最优；`e_*` 均 40~47；只用「看得见终点」的脚 `s_*` 均 13.6（中位 err 11.0） | 判负：挂了导线的边没有终点线索（case 1 `U1` 右 7 脚全挂在 GND 母线上） |
+| 脚号文字框取外缘/内缘 | `..\work\_leadtext.py` | `|L−a_out|` 中位 6.0 / ≤5px 42.6%；`c12` 83.7% | 判负 |
+| 边级「墨迹可见终点簇」（≥2 脚 ±2px） | `..\work\_sideest.py` | 17 条边触发，**`fire_ok 0 / fire_bad 9`**（4.0/40.0/36.0 全是文字或导线残端） | 判负：假触发远多于真触发 |
+| 按尺寸/节距回归 | — | `L≈5.5+0.02·min(w,h)` 对小件准（6.7 vs 6）、对大 IC 严重低估（12.6 vs 20） | 判负 |
+| 线宽阶跃（引线 vs 导线线宽不同？） | 临时探针 | case 1 `U1` 右 `w(d)` 恒 3px、case 8 左恒 2px，L 处无阶跃 | 判负：同一渲染里引线与导线同宽同色 |
+
+- 旁证：官方池 `cpntLibrary`（337 键）**只有引脚名/号/电气类型，没有几何**，全工作区没有任何 `.esym` ⇒「用符号文件算引线长度」没有原料；
+  官方池与 10GT 对**同一个符号**给出的脚点偏移能差 3~4 倍（池 67/43 vs 10GT 15/20，盒尺寸同为 352×764）⇒ 引线长度是**渲染源样式**的属性，不是符号属性。
+- 处置：**不翻默认**（`PIN_OUT_BOX=12` 保持不变）。+3.6747（引脚）+ ~+3（导线）是**上帝代价**，交付域里既不能从像素、也不能从名字/尺寸/节距恢复。
+
+**五、复现**
+
+```bat
+cd eda-pcb
+python -X utf8 ..\work\_judgereport.py --errors
+python -X utf8 ..\work\_wirefit.py
+python -X utf8 ..\work\_pinlentab2.py
+python -X utf8 ..\work\_leadest2.py --show
+python -X utf8 ..\work\_sideest.py --arm trimdef2 --cases ..\work\_cases10gt.txt
+```
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |
