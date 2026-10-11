@@ -637,6 +637,13 @@ CRNN 在**真值紧框**上 exact **0.843**、在 `stage1` 紧框上只有 **0.1
 = **47%** 的 GT 位号在读/检测这一环就没有正确读法 —— 这与 §2.3 的位号天花板一致，
 也是为什么位号通道的杠杆在**读**（CRNN/框），不在**排序**。
 
+> ⚠️ **2026-10-15 复核（见 §5.26）**：本节的 `--poolscan` 分桶尺子**高报约 6 倍**——它把
+> 「同一个文字框被多个相邻槽位共享」的情形误判成「偷邻居的号」。官方尺子在同一批官方 10 张
+> 上只报 `component.text_mismatch 2` / `component.extra 2`（元件 F1 0.9819）。上面那条
+> 「价值在归属」的推论也随之被推翻：真正的一对一重分配实装后在官方 10 上是 **0 改动**，
+> 在 val 19 上只有 11 个位号连「候选池里有正确读法」都不满足（184 个绑错里 173 个池子里根本没有）。
+> 本节的分桶数字保留作历史记录，**不要再当行动依据**。
+
 复现：
 ```powershell
 python -X utf8 eda-pcb\tools\diag\adjmeas.py --assigned work\_s2_220mix\_assigned `
@@ -3077,6 +3084,83 @@ python -X utf8 eda-pcb\tools\eval\stage2_eval.py work\_ls6_d2
 python -X utf8 work\_libslot.py --run work\_fast_out_lib21 --cases '1,10,2,3,4,5,6,7,8,9' --mode 0 --out work\_g3_off
 $env:STAGE2_BOX_PIN_NEED_NAME='3'
 python -X utf8 work\_libslot.py --run work\_fast_out_lib21 --cases '1,10,2,3,4,5,6,7,8,9' --mode 0 --out work\_g3_on
+```
+
+---
+
+### 5.26 位号绑定 / 相邻信息：**判负（0 改动）**；`adjmeas --poolscan` 尺子高报 6 倍；val 语料的位号**没印在图上**（2026-10-15）
+
+**起因**。用户 m40034 第③项（高维「本质对齐」+ 相邻信息度量）与 §2.9 的结论
+（「相邻信息的价值在**归属**，应把它当一对一约束」）。上界诱人：把 19 张派生 val 的位号键
+换成「上帝键」，总分 31.6690 → **39.0868（+7.4178）**（元件 +0.0996 / 网络 +0.1184）。
+
+**(1) 先复尺子 ⇒ 发现 §2.9 的 `--poolscan` 分桶不可信（高报约 6 倍）**。
+同一批官方 10 张：`adjmeas --poolscan` 说 `chosen_ok` 127 / 146（87.0%）、`near_not_chosen` 11（7.5%）；
+而**官方尺子**（`stage2_eval.py --json`）同一产物只报 `component.text_mismatch 2`、
+`component.extra 2`、`component.type_mismatch 2`、`component.missing 0`（元件 F1 **0.9819**）。
+· 机制（case 0101 GT `C7`，图帧框心 (760,84)）：`desig_slots` 会**把同一批文字框同时发给多个相邻槽位**
+（`c0010` 与 `c0011` 都含 `C7` 框 `(770,76)-(781,83)`），尺子按「跨槽全局最近候选框 + 严格 `<`」取 min，
+dict 顺序把 GT `C7` 判给了 `c0010`（距 16.14px，其 own = `C6`），而真正拥有它的是 `c0011`
+（同一框 `d = 7.4`，own = `C7` ✓ 本来就选对了）。
+⇒ **`near_not_chosen` 不能当准绳**；真因必须用官方配对 + 本体框来量。
+
+**(2) 真因（新探针 `work\_compmiss.py`：`M.assign_components` + `M.rewrite_keys` 复现官方配对，
+每个 missing 的 GT 元件映到 25px 内我方最近元件）**
+
+| 语料 | GT 元件 | 我方 | missing | extra | 绑错键 | 没检出 |
+|---|---|---|---|---|---|---|
+| 官方 10 | 254 | 256 | **0** | 2 | 0 | 0 |
+| val 19 | 983 | 933 | **269** | 219 | **184（68%）** | 85（32%） |
+
+**(3) ★ 可动性：184 个绑错里只有 11 个「正确读法在池子里」**。
+对每个绑错的 GT 位号，查它是否出现在**任何**槽位的 OCR 候选池里：
+**11 个在** / **173 个（94%）池子里根本没有** ⇒ 一对一重分配最多只能动 11 个键（占 val GT 元件的 1.1%）。
+即瓶颈在**读**，不在**归属**。
+
+**(4) 实装并量（`work\_desigbind.py`）**。一对一（双射）重分配：候选取自 `desig_slots`（同 canon 留代价最小），
+**选中值不在自己候选清单里的槽「冻结」**（VLM/axis 来源），冲突图（并查集）按簇解
+`scipy.optimize.linear_sum_assignment`，代价三档 `-score` / `d` / `d + 100·(1-conf)`，
+只有总代价严格下降才改写（写 `_by="bind:1v1"` + `_bind={was,kind,cost}`），base/fix 两份都过
+`build_doc` 再打分。
+
+| 代价口径 | 官方 10 | val 19 |
+|---|---|---|
+| `--cost score`（逐槽 `score = conf − 0.035·d`） | 簇 12 / **改动 0** / 冻结 1 | 簇 45 / **改动 0** / 冻结 66 |
+| `--cost dist`（纯距离） | 簇 12 / **改动 0** / 冻结 1 | 簇 45 / **改动 3，3 个全改错**（GT 绑定 101/226 → **100/226**） |
+
+★ 为什么「最大权」口径必然 0 改动：`score = conf − 0.035·d`（实测标定：case 0101 候选
+`conf 0.9987 @ d 7.38 → 0.7409`、`conf 0.9995 @ d 45.89 → −0.6063`）**本身就是逐槽最大**，
+而**重号在总权上更划算**（0.74 + 0.29 > 0.74 + (−0.05)）⇒ 最大权和的最优解与现状重合，
+连「两个元件抢同一个号」都修不了。`--cost dist` 在 val 上反而改坏 3 个 ⇒ **判负，不实装、不加开关**。
+
+**(5) ★ 语料取证：val 的 Datasheet 类 case，位号根本没印在图上**。
+目视 `work\_crop26_c2.png`（case 0026 GT `C2`）与 `work\_crop26_c9.png`（GT `C9`）：图上是电容符号 +
+`C_O`、`47 µF`、`330 µF`、`1 kΩ`、`PV_DD`、`LOUT-` 这类**功能性/参数标注**，**没有 `C2`/`C9` 这样的位号**；
+而 GT 用的是网表键（`C2`/`C9`）。元件数量两侧其实持平（case 0026 GT 29 / 我 30；0002 12/12；0117 89/93，
+类型分布也一致）⇒ **检测没丢，丢的是键**；官方口径又要求「先 component key 匹配，再按 pin number 匹配」，
+所以这批 case 的 comp/pin/netH 天花板是**结构性**的（`pin.missing 741` 里相当一部分源于此）。
+
+**(6) 结论与去向**
+1. 位号**归属**不是瓶颈（实装后 0 改动、val 上还改坏 3 个）；§2.9 那条「价值在归属」的推论作废。
+2. 报告里以**官方 10（`10GT/1..10`）**为主尺；`200_train_cases` 的 Datasheet 类读数只当**下界**，
+   不能用来给「位号/引脚/网络」通道的算法下判决。
+3. 想在 val 上拿分只能靠**读**（CRNN/文字检测/文字框关联）与**检测**，不靠排序或重分配。
+4. 顺带修好 `work\tools\diag\_pinchk.py` 的 GT 解析（原来写死 `10GT/<case>/<case>.json`，
+   现在支持 `200_train_cases` / `10_GTcase` 两个 split，`0037-Datasheet` 会退回 4 位数字目录）。
+
+**探针**：`work\_compmiss.py --run <run> --cases <...> [--tol 25] [--show N]`（真因分类 + 池覆盖率）｜
+`work\_desigbind.py --run <run> --cases <...> --cost {score,dist,mix} --out <base> --outfix <fix> [--detail]`｜
+`work\_binddbg.py --run <run> --case <case> --gt <KEY> [--near 60] [--top 6]`（单个 GT 位号的候选池取证）。
+
+```powershell
+# 分桶（尺子本身不可信，只看趋势）
+python -X utf8 eda-pcb\tools\diag\adjmeas.py --assigned work\_fast_out_ls2on\runs\fusion\_assigned `
+    --cases-file work\_cases10gt.txt --radius 60 --poolscan
+# 真因 + 可动性（官方 10 / val 19 各一次）
+python -X utf8 work\_compmiss.py --run work/_fast_out_ls2on --cases '1,10,2,3,4,5,6,7,8,9' --show 0
+python -X utf8 work\_compmiss.py --run work/_fast_out_ls2valon --cases '0037-Datasheet,0002,0011,0023,0026,0027,0029,0047,0050,0064,0101,0117,0121,0127,0151,0163,0166,0176,0190' --show 14
+# 一对一重分配（判负）
+python -X utf8 work\_desigbind.py --run work/_fast_out_ls2on --cases '1,10,2,3,4,5,6,7,8,9' --cost dist --out work\_bind_dist_base --outfix work\_bind_dist_fix --min-gain 0.0
 ```
 
 ---
