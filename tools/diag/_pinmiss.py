@@ -62,6 +62,8 @@ def _dist1(a: str, b: str) -> bool:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pred", required=True, help="文档级产物目录（含 <case>.json）")
+    ap.add_argument("--pred-suffix", default="",
+                    help="产物文件名后缀：交付产物叫 `<case>_Pred.json` 时传 `_Pred`")
     ap.add_argument("--stage1", required=True, help="含 <case>.stage1.json 的目录")
     ap.add_argument("--assigned", default=None,
                     help="含 _assigned/<case>.json 的目录（默认 <pred>/_assigned）")
@@ -85,7 +87,7 @@ def main() -> None:
 
     for c in [x.strip() for x in a.cases.split(",") if x.strip()]:
         gtf = gtroot / c / ("%s.json" % c)
-        pf = predroot / ("%s.json" % c)
+        pf = predroot / ("%s%s.json" % (c, a.pred_suffix))
         sf = s1root / ("%s.stage1.json" % c)
         af = asgroot / ("%s.json" % c)
         if not (gtf.exists() and pf.exists() and sf.exists() and af.exists()):

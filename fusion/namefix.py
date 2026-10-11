@@ -31,8 +31,8 @@
 
 1. 只动 `box/boxic/ic`（型号名只对这类有意义；阻容的 `Name` = 位号，绝不能碰）；
 2. 读出来的串**已经是库键**（精确或归一化命中）⇒ 一个字符都不动；
-3. 归一化 Levenshtein 距离 `d ≤ FUSION_NAME_SNAP_TOL`（默认 2）**且**最优严格优于次优
-   （`d2 - d ≥ 1`）—— 两个库键一样近时宁可不动（`79WM12` 对 `78M12`/`79M12` 就是这种）；
+3. 归一化 Levenshtein 距离 `d ≤ FUSION_NAME_SNAP_TOL`（默认 **4**，见下「阈值实测」）**且**最优严格
+   优于次优（`d2 - d ≥ 1`）—— 两个库键一样近时宁可不动（`79WM12` 对 `78M12`/`79M12` 就是这种）；
 4. 读数归一化长度 ≥ `FUSION_NAME_SNAP_MINLEN`（默认 4，挡住 `SC1L` 这种碎片）；
 5. 只改 `partname.text`，旧文本留在 `partname["_old_text"]` 可查，并往
    `cvparts.hypo.LEDGER` 记一条 `name_snap`（`docs/reports/工程哲学.md` §94：
@@ -61,6 +61,33 @@
   **本步只在"没人读过这个名字"时兜底**，不可能把读对的名字改歪。
 - `box` 名字对错（`work\\_offtext.py`，离线 21 个）：错 20 → **14**、对 1 → **7**；
   `pin_libseq.n_key` 合计 4 → 9、`librefine.n_key` 合计 14 → 40。
+
+## 阈值实测（2026-10-21 转正 `TOL` 2 → **4**；`docs/RESULTS.md` §5.48）
+
+离线档的 9 个错型号名里，**正确名字恰好落在 `d = 3`（2 个）与 `d = 4`（1 个）**上
+（`XC8205P32MR→XC6206P332MR`、`TPSW1240DR→TPS61240DRVR`、`CUTABL05→CJ78L05`），
+`TOL=2` 把它们全挡在门外。扫一遍阈值：
+
+| `FUSION_NAME_SNAP_TOL` | 官方 10 张 | 派生 18 张 |
+| --- | --- | --- |
+| 2（旧默认） | 62.0224 | 13.9056 |
+| 3 | 62.5040 | 14.4782 |
+| **4（现默认）** | **62.9496（+0.9272）** | **14.4782（+0.5726）** |
+| 5 | 62.9496 | 14.4782（与 4 逐位相同 ⇒ 没有更多可吸） |
+
+四通道全升（comp `0.463465→0.474783`、pin `0.719135→0.727852`、conn `0.745525→0.755229`、
+wire `0.404673→0.407676`）；28 张（官方 10 + 派生 18）逐元件比 GT `Name`：对 **126 → 129**、
+「之前对现在错」**0 个**。
+
+**两条"守卫 6"试过、没要**（都写进 §5.48，免得后人重做）：
+
+- 剔掉「1~3 字母 + 1~3 数字」形状的库键：官方 63.0811（+0.13）但派生 14.4655（−0.013），
+  且**这个形状在本库 24 个键里 23 个是真型号**（`AHT21`/`LM334`/`STC11`/`TL431`…），
+  唯一被剔的位号只有 `U1` ⇒ 拿 23 个真型号换 1 个 `U1`，不划算。
+- 只剔「标准位号前缀 + 数字」：把 `sw3526`/`tp4056`/`tp4059`/`tp4058` 一起剔了（都是真型号，
+  `TP4056` 还是最常见的锂电池充电 IC，case 4 的 GT `TP4054-MS` 就近在咫尺）⇒ 两把尺子上
+  读数逐位不变、纯属白拿风险，故**不加守卫**：宁可让 `FuF1K → U1` 这种个别荒谬吸附留在
+  派生集里（它那两个元件本来也是错的），也不缩小真型号的词表。
 """
 from __future__ import annotations
 
@@ -87,7 +114,7 @@ except ImportError:                              # pragma: no cover
 # `os.environ.get` 一律直写：`tools/dev/gen_knobs.py` 的正则只认它 / `envflag.*`，
 # 包一层就会让开关从 `docs/KNOBS.md` 里整条消失（同 `stage2/pinlib.py:93` 的记）。
 ON = env_on("FUSION_NAME_SNAP", "1")
-TOL = int(os.environ.get("FUSION_NAME_SNAP_TOL", "2") or "2")
+TOL = int(os.environ.get("FUSION_NAME_SNAP_TOL", "4") or "4")
 MINLEN = int(os.environ.get("FUSION_NAME_SNAP_MINLEN", "4") or "4")
 BOX = {"box", "boxic", "ic"}
 

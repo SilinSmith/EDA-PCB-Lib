@@ -383,9 +383,9 @@
 | `FUSION_MODEL_SET` | `"1"` | `fusion/modelset.py:85` |
 | `FUSION_MODEL_SET_MARGIN` | `"2"` | `fusion/modelset.py:87` |
 | `FUSION_MODEL_SET_MIN` | `"2"` | `fusion/modelset.py:86` |
-| `FUSION_NAME_SNAP` | `"1"` | `fusion/namefix.py:89` |
-| `FUSION_NAME_SNAP_MINLEN` | `"4"` | `fusion/namefix.py:91` |
-| `FUSION_NAME_SNAP_TOL` | `"2"` | `fusion/namefix.py:90` |
+| `FUSION_NAME_SNAP` | `"1"` | `fusion/namefix.py:116` |
+| `FUSION_NAME_SNAP_MINLEN` | `"4"` | `fusion/namefix.py:118` |
+| `FUSION_NAME_SNAP_TOL` | `"4"` | `fusion/namefix.py:117` |
 | `FUSION_OPEN_FREEFORM` | `"1"` | `fusion/solve.py:71` |
 | `FUSION_OPEN_FREEFORM_MAX` | `"8"` | `fusion/solve.py:60` |
 | `FUSION_OPEN_MARGIN` | `"0.10"` | `fusion/solve.py:47` |
