@@ -58,6 +58,7 @@ from fusion import doc as DC                           # noqa: E402
 from fusion import iterate as IT                        # noqa: E402
 from fusion import llm_judge as LJ                     # noqa: E402
 from fusion import namefix as NS                       # noqa: E402
+from fusion import valfix as VF                        # noqa: E402
 from fusion import plausible as PL                     # noqa: E402
 from fusion import priors as PR                        # noqa: E402
 from fusion import rescan as RS                        # noqa: E402
@@ -292,6 +293,18 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
         rep_ns = {"on": bool(NS.ON), "err": str(exc)}
         if log:
             log("  [name_snap] 跳过：%s" % exc)
+    # ---- ⓪.94 元件「值」的类型内规范化（`FUSION_VALUE_FIX`，默认 0=关）----
+    # 与 ⓪.93 同理，**必须在建池之前**（`value` 那条 claim 的候选值也是从这里抄的）。
+    # 只做两条物理约束内的机械规则：电感/电容的单位家族互斥（`l` 只能亨、`c` 只能法）、
+    # 以及数字尾零规范化（`3.30uH`→`3.3uH`）。见 `fusion/valfix.py`。
+    rep_vf = {}
+    try:
+        if VF.ON:
+            rep_vf = VF.fix_assigned(assigned, doc, log=log)
+    except Exception as exc:                               # noqa: BLE001
+        rep_vf = {"on": bool(VF.ON), "err": str(exc)}
+        if log:
+            log("  [value_fix] 跳过：%s" % exc)
     assigned0 = json.loads(json.dumps(assigned))       # `pool.apply()` 会就地改它
     # ★ 引脚索引 `k` → 文档键 `pin_<号>`：`build_doc` 的产物，`stage2.run` 落到
     # 旁路文件 `<case>.pinindex.json`。**没有它就无法把引脚裁决写回文档** ——
@@ -438,6 +451,8 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
     rep["iterate"] = {k: v for k, v in rep_it.items() if k != "rows"}
     # ---- ⓪.93 IC 型号名吸附的读数（真正的改动在建池之前就做完了，见 `run_case` 顶部）----
     rep["name_snap"] = {k: v for k, v in rep_ns.items() if k != "rows"}
+    # ---- ⓪.94 值规范化（同上：真正的改动在建池之前）----
+    rep["value_fix"] = {k: v for k, v in rep_vf.items() if k != "rows"}
     # ---- ⓪.95 槽位级「库给多值、图给顺序」回填（`FUSION_PIN_LIBSEQ`，默认 1=开；
     #          `stage2/pinlib.py:105` 是唯一权威：0=关 / 1=只在组内读数可疑时补纠（默认档，
     #          2026-10-15 转正）/ 2=只要脚数相等就整组按库顺序重写）--
