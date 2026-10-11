@@ -510,6 +510,153 @@ def snap_edge_ends(nets: Dict[str, dict], radius: float = None,
     return moved
 
 
+# ★★ 边的「结点切分 + 去重」后处理（`STAGE2_EDGE_SPLIT` / `STAGE2_EDGE_DEDUP`）。
+#
+# 病（官方尺 `net_line_f1` 逐边对读，`work\tools\diag\_linecmp.py --case 1`，
+# `pred net_5 <-> gt net_9`：GT 40 边 / 我方 46 边 / tp 12）：
+#   ① **跨结点合并**：GT 的边就是**源图的导线段** —— 每条竖抽头处都断开
+#      （y=1088 那条横线被切成 x=76/194/312/430/577/725/842/944 共 7 段，
+#      x=843 的竖母线被每个分支切成 29~30px 的 13 段）；我方 `merge_collinear`
+#      把共线段并成一条 873px / 500.9px / 266.1px 的长边 ⇒ 两端点都对不上任何
+#      GT 边（到最近 GT 边 372/236/118）。
+#   ② **重复边**：同一条墨迹发两遍（`(949,940.5)-(842,941)` 与 `(949,940.5)-(842,939)`），
+#      多出来的那些是纯 fp。
+#   ③ 端点系统性过冲 ~5px（我方跟到渲染墨迹末端，GT 是源图连接点）—— 本条**不修**。
+#
+# 药：**只动 `nets[*]["edges"]`**（不动 `hyperGraph`/引脚 ⇒ 元件/引脚/netH 三个通道
+# 逐位不变），先**去重**（共线孪生边不能当切点，否则互相乱切），再**在切点处切开**：
+# 切点 = 同一条网里另一条边的端点，落在本线段**严格内部**（`--tol-in` 内，两端各留 2%），
+# 且该邻居与本段**不近似共线**（|cos| ≤ `STAGE2_EDGE_SPLIT_COL`）。
+#
+# 读数（官方 10 张，纯后处理同一份 `_Pred.json` 再打分，`work\tools\diag\_linesplit.py`）：
+#   基线 net_line **0.3567**（tp 270 / fp 598 / fn 369）总分 79.0781
+#   只去重 0.3638（tp 270 / fp 558）79.1497
+#   只切分 0.3781（tp 311 / fp 651 / fn 328）**79.2922**
+#   切分+去重 **0.3862**（tp 311 / fp 610 / fn 328）**79.3735**（+0.2954）
+#   参数扫描：`tol-in` 2.0 → 0.3843｜6.0 → 0.3854（3.0 最好）·`dedup-tol` 1.0 → 0.3843
+#   （2.0 最好）·`col-tol` 0.80 与 0.90 逐位相同（去重后已无共线孪生）。
+#   **反例（别重试）**：再加「把 1~3px 缝隙的共线链桥接成长边」→ 79.2014（tp 311→283，
+#   GT 自己就带着这些接缝，桥接反而把能配上的碎边弄丢）。
+#   **顺带**：GT 边的 fn 几乎全在「已配对的网」里（639 条里只有 4 条来自没配上的网）⇒
+#   这一路只该修边几何，别去动网络分组（分组是 netH 的事）。
+EDGE_SPLIT = float(os.environ.get("STAGE2_EDGE_SPLIT", "3.0"))    # 切点容差 px，0 = 关
+EDGE_SPLIT_COL = float(os.environ.get("STAGE2_EDGE_SPLIT_COL", "0.90"))  # 共线邻居不算切点
+EDGE_DEDUP = float(os.environ.get("STAGE2_EDGE_DEDUP", "2.0"))    # 去重容差 px，0 = 关
+
+
+def _seg_ends(seg):
+    """一条边的 (首点, 尾点) 坐标元组；不合法返回 None。"""
+    if not isinstance(seg, (list, tuple)) or len(seg) < 2:
+        return None
+    a, b = seg[0], seg[-1]
+    try:
+        return ((float(a["x"]), float(a["y"])), (float(b["x"]), float(b["y"])))
+    except (TypeError, KeyError, ValueError):
+        return None
+
+
+def _pt_close(p, q, tol: float) -> bool:
+    return abs(p[0] - q[0]) <= tol and abs(p[1] - q[1]) <= tol
+
+
+def _cut_point(p, a, b, tol: float):
+    """`p` 是否落在 `a-b` 的严格内部（两端各留 2%），且离直线 ≤ tol。"""
+    if _pt_close(p, a, tol * 2) or _pt_close(p, b, tol * 2):
+        return False
+    vx, vy = b[0] - a[0], b[1] - a[1]
+    L2 = vx * vx + vy * vy
+    if L2 <= 1e-9:
+        return False
+    t = ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / L2
+    if not (0.02 < t < 0.98):
+        return False
+    return abs(a[0] + t * vx - p[0]) <= tol and abs(a[1] + t * vy - p[1]) <= tol
+
+
+def split_dedup_edges(nets: Dict[str, dict], split_tol: float = None,
+                      dedup_tol: float = None,
+                      col_tol: float = None) -> Dict[str, int]:
+    """就地做「去重 + 结点切分」（见上面长注释），返回 {dup, split, added} 计数。"""
+    split_tol = EDGE_SPLIT if split_tol is None else split_tol
+    dedup_tol = EDGE_DEDUP if dedup_tol is None else dedup_tol
+    col_tol = EDGE_SPLIT_COL if col_tol is None else col_tol
+    st = {"dup": 0, "split": 0, "added": 0}
+    for rec in nets.values():
+        edges = rec.get("edges") or {}
+        segs = []                      # [(a, b, 原值)]
+        for _k, _v in edges.items():
+            e = _seg_ends(_v)
+            if e is not None:
+                segs.append((e[0], e[1], _v))
+        if not segs:
+            continue
+        st0 = (st["dup"], st["split"])
+        # —— ① 去重：两端点（正反皆算）都与已保留的某条重合就丢
+        kept: List[tuple] = []
+        if dedup_tol > 0:
+            for (a, b, _v) in segs:
+                dup = False
+                for (c, d, _w) in kept:
+                    if (_pt_close(a, c, dedup_tol) and _pt_close(b, d, dedup_tol)) or \
+                       (_pt_close(a, d, dedup_tol) and _pt_close(b, c, dedup_tol)):
+                        dup = True
+                        break
+                if dup:
+                    st["dup"] += 1
+                else:
+                    kept.append((a, b, _v))
+        else:
+            kept = list(segs)
+        # —— ② 切分：邻居端点落在本段内部且不共线 ⇒ 在此切开
+        out: List[tuple] = []          # [(a, b, 原值|None)]
+        if split_tol > 0:
+            taps = []
+            for (a, b, _v) in kept:
+                n = math.hypot(b[0] - a[0], b[1] - a[1]) or 1.0
+                u = ((b[0] - a[0]) / n, (b[1] - a[1]) / n)
+                taps.append((a, u))
+                taps.append((b, u))
+            for (a, b, _v) in kept:
+                vx, vy = b[0] - a[0], b[1] - a[1]
+                n = math.hypot(vx, vy) or 1.0
+                ux, uy = vx / n, vy / n
+                cuts = []
+                for (p, u) in taps:
+                    if abs(ux * u[0] + uy * u[1]) > col_tol:
+                        continue        # 共线孪生邻居，不是结点
+                    if _cut_point(p, a, b, split_tol):
+                        cuts.append(p)
+                if not cuts:
+                    out.append((a, b, _v))
+                    continue
+                cuts.sort(key=lambda p: (p[0] - a[0]) * vx + (p[1] - a[1]) * vy)
+                chain = [a]
+                for p in cuts:
+                    if math.hypot(p[0] - chain[-1][0], p[1] - chain[-1][1]) > split_tol:
+                        chain.append(p)
+                chain.append(b)
+                if len(chain) < 3:
+                    out.append((a, b, _v))
+                    continue
+                st["split"] += 1
+                st["added"] += len(chain) - 2
+                for i in range(len(chain) - 1):
+                    out.append((chain[i], chain[i + 1], None))
+        else:
+            out = list(kept)
+        if st["dup"] == st0[0] and st["split"] == st0[1] and len(out) == len(segs):
+            continue                   # 这一条网没动过 ⇒ 原值原样留着
+        _new = {}
+        for i, (p0, p1, _v) in enumerate(out, 1):
+            if _v is not None:
+                _new["edge_%d" % i] = _v
+            else:
+                _new["edge_%d" % i] = [{"x": round(p0[0], 2), "y": round(p0[1], 2)},
+                                       {"x": round(p1[0], 2), "y": round(p1[1], 2)}]
+        rec["edges"] = _new
+    return st
+
+
 def merge_collinear(runs: List[list], join_tol: float = None,
                     ang_tol: float = None) -> List[list]:
     """把若干两点线段按「端点相接 + 方向共线」焊成尽量长的两点线段。
@@ -1334,6 +1481,11 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 continue
             _kept["net_%d" % (len(_kept) + 1)] = _v
         out_nets = _kept
+    if EDGE_SPLIT > 0 or EDGE_DEDUP > 0:
+        # ★ 边的「去重 + 结点切分」（`STAGE2_EDGE_SPLIT` / `STAGE2_EDGE_DEDUP`，见长注释）。
+        # 必须放在**全部合并/焊接之后**：这时每条网里的边才齐，切点才找得全。
+        # 只动 `edges`（首尾两点），`hyperGraph`/引脚一律不碰 ⇒ 元件/引脚/netH 通道逐位不变。
+        split_dedup_edges(out_nets)
     _pidx: Dict[str, Dict[str, str]] = {}
     for (_c, _k), _pk in pin_pk.items():
         _pidx.setdefault(_c, {})[str(_k)] = _pk
