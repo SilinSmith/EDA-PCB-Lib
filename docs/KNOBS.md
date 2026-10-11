@@ -6,7 +6,7 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **435** 个开关。
+共 **436** 个开关。
 
 ## 目录
 
@@ -14,7 +14,7 @@
 - [stage2](#stage2)（131）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（116）
-- [vlm](#vlm)（12）
+- [vlm](#vlm)（13）
 - [textrec](#textrec)（13）
 - [cvparts](#cvparts)（10）
 - [pipeline](#pipeline)（11）
@@ -438,18 +438,19 @@
 
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
-| `LLM_API_KEY` | `""` | `vlm/client.py:33` |
-| `LLM_BASE_URL` | `"http://127.0.0.1:1234/v1"` | `vlm/client.py:32` |
-| `LLM_MODEL` | `"qwen3.5-9b"` | `vlm/client.py:34` |
-| `VLM_MAX_TOKENS` | `"2048"` | `vlm/client.py:36` |
+| `LLM_API_KEY` | `""` | `vlm/client.py:52` |
+| `LLM_BASE_URL` | `"http://127.0.0.1:1234/v1"` | `vlm/client.py:51` |
+| `LLM_MODEL` | `"qwen3.5-9b"` | `vlm/client.py:53` |
+| `VLM_BUDGET_S` | `"0"` | `vlm/client.py:60` |
+| `VLM_MAX_TOKENS` | `"2048"` | `vlm/client.py:55` |
 | `VLM_PIN_CHANNEL` | `"0"` | `vlm/enrich.py:819` |
 | `VLM_PIN_COLS` | `"4"` | `vlm/enrich.py:828` |
 | `VLM_PIN_MERGE` | `"0"` | `vlm/enrich.py:785` |
 | `VLM_PIN_PER` | `"8"` | `vlm/enrich.py:827` |
 | `VLM_PIN_REBUILD` | `"1"` | `vlm/enrich.py:793` |
-| `VLM_REASONING` | `"none"` | `vlm/client.py:37` |
-| `VLM_SCALE` | `"4"` | `vlm/client.py:35` |
-| `VLM_TIMEOUT` | `"600"` | `vlm/client.py:38` |
+| `VLM_REASONING` | `"none"` | `vlm/client.py:56` |
+| `VLM_SCALE` | `"4"` | `vlm/client.py:54` |
+| `VLM_TIMEOUT` | `"600"` | `vlm/client.py:57` |
 
 <a id="textrec"></a>
 
@@ -512,9 +513,9 @@
 
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
-| `EDA_CASE_WORKERS` | `""` | `submission/run.py:293` |
-| `EDA_WALL_BUDGET_S` | `"0"` | `submission/run.py:442` |
-| `FUSION_LLM` | `"1"` *(3 处)* | `submission/run.py:783` |
+| `EDA_CASE_WORKERS` | `""` | `submission/run.py:330` |
+| `EDA_WALL_BUDGET_S` | `"0"` | `submission/run.py:479` |
+| `FUSION_LLM` | `"1"` *(3 处)* | `submission/run.py:830` |
 
 <a id="schematic_parser"></a>
 

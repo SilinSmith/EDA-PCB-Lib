@@ -18,7 +18,26 @@
 
 环境变量：`LLM_BASE_URL`（默认 `http://127.0.0.1:1234/v1`）、`LLM_API_KEY`、
 `LLM_MODEL`（默认 `qwen3.5-9b`）、`VLM_SCALE`（默认 4）、`VLM_MAX_TOKENS`（默认 2048）、
-`VLM_REASONING`（默认 `none`，置空字符串关掉这一项）。
+`VLM_REASONING`（默认 `none`，置空字符串关掉这一项）、`VLM_TIMEOUT`（默认 600 秒/次）、
+`VLM_BUDGET_S`（默认 0 = 不限：**本进程**累计外部推理时间的上限，见 `ask()`）。
+
+★ 为什么要有 `VLM_BUDGET_S`（2026-10 加，为赛题「全部案例 < 2 小时」兜底）：
+没有它时，**单次 `ask()` 的耗时没有上界**，最坏 `4 × VLM_TIMEOUT`（旧默认 600 ⇒
+**2400 s = 40 min**）—— 那条路是「端点每次都**答得出来**、但正文空或被 `length` 截断」，
+于是四次重试串起来等；黑洞端点（TCP 连得上但永不回包）便宜一点，但也要**整整一个
+超时**才抛错返回。`wires.py` 的注释里记过这个黑洞（`0003` 单张 315.73 s）。交付口径下
+一个 lane 要跑好几张图，若端点被限流/排队，每张图几十次调用能把「2 小时」整段吃掉，
+而被判题机按墙钟硬杀时**没落进 `final_results/` 的案例是双罚**（分子少它、`m/M` 再折一次）。
+所以这里给了两级保护，都只在设了 `VLM_BUDGET_S` 时生效（默认 0 ⇒ 与旧行为逐字节相同）：
+
+1. **累计预算**：本进程花在外部推理上的时间（含失败的调用）超过 `VLM_BUDGET_S` 之后，
+   `ask()` 立刻返回 `("", 0.0)` 而**不发请求** —— 优雅降级成「只有 CV 的那条链」，
+   产物照出、只是少了 VLM 的补强；
+2. **剩余预算夹住单次超时**：`eff = min(调用方超时, max(1 s, 剩余预算))`（每次重试重算），
+   于是「一次调用卡满」最多只多吃掉一点点，不会出现 40 分钟的黑洞。
+
+统计用 `stats()` 读（`used_s / calls / refused / errors / budget_s`），
+`reset_budget()` 可清零（跑多案例时由调用方按需要决定「预算是整进程还是每案例」）。
 """
 from __future__ import annotations
 
@@ -36,6 +55,41 @@ SCALE = int(os.environ.get("VLM_SCALE", "4"))
 MAXTOK = int(os.environ.get("VLM_MAX_TOKENS", "2048"))
 REASONING = os.environ.get("VLM_REASONING", "none")
 TIMEOUT = float(os.environ.get("VLM_TIMEOUT", "600"))
+# ★ 本进程累计外部推理时间上限（秒）；0 = 不限（默认，与旧行为逐字节相同）。
+#   交付入口 `submission/run.py` 在**用户没设**的时候会给它一个默认值，见那里的注释。
+BUDGET = float(os.environ.get("VLM_BUDGET_S", "0") or 0)
+
+_USED = 0.0      # 已花在外部推理上的时间（含失败/重试）
+_CALLS = 0       # 真正发出去的 ask() 次数
+_REFUSED = 0     # 因预算被拒的 ask() 次数
+_ERRORS = 0      # 返回 "ERR:..." 的次数（只作日志用）
+
+
+def stats() -> dict:
+    """预算与调用统计（给日志/决策日志用）。"""
+    return {"budget_s": round(BUDGET, 1), "used_s": round(_USED, 1),
+            "calls": _CALLS, "refused": _REFUSED, "errors": _ERRORS,
+            "exhausted": budget_exhausted(), "base": BASE, "model": MODEL}
+
+
+def reset_budget() -> None:
+    """清零累计用量与会计数（预算语义由调用方决定：整进程 or 每案例）。"""
+    global _USED, _CALLS, _REFUSED, _ERRORS
+    _USED = 0.0
+    _CALLS = 0
+    _REFUSED = 0
+    _ERRORS = 0
+
+
+def budget_exhausted() -> bool:
+    return BUDGET > 0 and _USED >= BUDGET
+
+
+def budget_left() -> float:
+    """剩余预算（秒）；`BUDGET=0` 时返回 `float("inf")` = 不限。"""
+    if BUDGET <= 0:
+        return float("inf")
+    return max(0.0, BUDGET - _USED)
 
 
 def available() -> bool:
@@ -159,20 +213,43 @@ def _chat_once(img_bgr, prompt, model, max_tokens, timeout):
 
 
 def ask(img_bgr, prompt, model=None, timeout=None, max_tokens=None):
-    """思维链兜底：正文空或 `finish_reason=="length"` 就把预算翻倍重试（上限 16384）。"""
+    """思维链兜底：正文空或 `finish_reason=="length"` 就把预算翻倍重试（上限 16384）。
+
+    带 `VLM_BUDGET_S` 时另做两件事（默认 0 = 不做，行为与旧版逐字节相同）：
+    ① 累计用量已到预算 ⇒ **不发请求**，立刻返回 `("", 0.0)`（记进 `stats()["refused"]`）；
+    ② 单次超时被**剩余预算**夹住（下限 5 s），于是「一次调用卡满」最多只能多吃几秒。
+    """
+    global _USED, _CALLS, _REFUSED, _ERRORS
+    if budget_exhausted():
+        _REFUSED += 1
+        return "", 0.0
     budget = int(max_tokens or MAXTOK)
     t0 = time.time()
     last = ""
+    base_to = float(timeout or TIMEOUT)
+    _CALLS += 1
     try:
         for _ in range(4):
-            txt, fin, _usage = _chat_once(img_bgr, prompt, model or MODEL, budget,
-                                          timeout or TIMEOUT)
+            # ★ 剩余预算**每次重试都重算**：否则第一次调用就把预算吃光之后，
+            #   后面三次重试还各自按满超时等下去（最坏多等 3 × 超时）。
+            left = budget_left()
+            eff = base_to if left == float("inf") else min(base_to, max(1.0, left))
+            txt, fin, _usage = _chat_once(img_bgr, prompt, model or MODEL, budget, eff)
             if txt and fin != "length":
-                return txt, round(time.time() - t0, 1)
+                return _close(t0, txt)
             last = txt
-            if budget >= 16384:
+            if budget >= 16384 or budget_exhausted():
                 break
             budget = min(16384, budget * 2)
-        return last, round(time.time() - t0, 1)
+        return _close(t0, last)
     except Exception as e:  # noqa: BLE001
-        return "ERR:%s" % repr(e)[:80], round(time.time() - t0, 1)
+        _ERRORS += 1
+        return _close(t0, "ERR:%s" % repr(e)[:80])
+
+
+def _close(t0: float, txt: str):
+    """收口：把这次耗时累进 `_USED`，返回 `(文本, 秒)`（与旧版 ask 的返回值同形）。"""
+    global _USED
+    dt = time.time() - t0
+    _USED += dt
+    return txt, round(dt, 1)

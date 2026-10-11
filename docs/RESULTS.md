@@ -4211,6 +4211,82 @@ python -X utf8 ..\work\_refscan.py --dir ..\work\_fast_out_pinunval\final_result
 
 ---
 
+### 5.40 ★ 交付护栏：外部推理的时间预算（黑洞端点单张 106 s → 12 s 且产物照出；护栏没触发时官方 10 张逐字节相同）（2026-10-20，m40034「2 小时跑 50 样例」）
+
+**一、为什么**
+
+`docs/COMPETITION_RULES.md`：全部案例评测总时长 **< 2 小时**，超时未完成不得分；而
+`FinalScore_Accuracy = 0.95·Score_Accuracy + 0.05·(m/M)·Score_Token` ⇒ **未完成案例双罚**
+（分子少它一次、`m/M` 再折一次）。⇒ 「交不出 JSON」比「交一份差的 JSON」贵得多，
+交付脚本必须**保证每张图都有非零产物**。
+
+交付链的外部推理（VLM 补强 + 融合层 LLM）**都汇聚到一个函数**：
+`vlm/client.py:161 ask()`（`fusion/llm_judge.py:285 _client_ask()` 就是 `VC.ask` 的转发）。
+它有两个无上界的地方：
+
+1. 单次超时 `VLM_TIMEOUT` 默认 **600 s**（`vlm/client.py:57`）；
+2. **没有任何全局聚合预算** —— 一张图会发很多次请求（VLM 补强 + judge/audit/rescan/iterate），
+   每次都可能吃满超时。黑洞端点（TCP 连得上、永不回包）下单张图会顶穿 2 小时。
+   `stage2/wires.py` 里已记过一次实测（`0003` 单张 315.73 s）。
+
+> 更正一条我之前的错算：黑洞端点只花**一个**超时（异常直接跳出 `ask()` 的 4 次重试循环），
+> **不是** 4×。4× 那条路是「端点答得出来、但正文为空 / 被 `length` 截断」。
+
+**二、三处改动**
+
+| # | 位置 | 改动 |
+|---|---|---|
+| ① | `vlm/client.py:60` | 新开关 **`VLM_BUDGET_S`**（默认 `"0"` = 不限）+ `stats()`/`reset_budget()`/`budget_exhausted()`/`budget_left()`。预算耗尽后 `ask()` **不再发请求**（`refused += 1`，返回 `("", 0.0)`）⇒ 优雅降级成纯 CV，而不是抛异常（异常会毁掉整张图） |
+| ② | `vlm/client.py` `ask()` | 每次重试的**有效超时 = `min(调用方超时, 剩余预算)`**（下界 1 s）⇒ 单次调用也被预算夹住；累计用时进 `stats()["used_s"]` |
+| ③ | `submission/run.py` | 交付入口在**没被环境变量覆盖**时补三个默认：`VLM_TIMEOUT 600→180`、`VLM_BUDGET_S=1800`（每 lane 30 min）、`EDA_WALL_BUDGET_S=6900`（115 min，留 5 min 收尾）；生效值打进 `run.log`、`decision_log.json` 的 `config.platform_budgets` 与 `config.vlm_client`（后者用 `sys.modules.get("vlm.client")`，父进程没跑过就是 `null`，不凭空 import 造「零用量」假象） |
+
+取向：**预算内优雅降级**（少用 VLM，仍然出图）**+ 预算外空壳兜底**（`EDA_WALL_BUDGET_S`
+强杀 lane、父进程 `_write_shell` 补三键）。两层都不改变「非零产物」这个不变量。
+
+**三、演练读数**（`work/_platguard.py`；本机 1 卡，黑洞 = accept-and-never-reply）
+
+| 臂 | 配置 | 墙钟 | 产物 | 外部推理实测 |
+|---|---|---|---|---|
+| `unit_guard` | 黑洞 + `VLM_TIMEOUT=2` + `VLM_BUDGET_S=6` | **6.2 s** | — | 每次耗时 `[2,2,2,0,0]`、used **6.0/6.0**、calls 3、**refused 2** |
+| `unit_unguard` | 同上但预算 0 | 10.2 s | — | `[2,2,2,2,2]`、used 10.1/0、calls 5、refused 0 |
+| `e2e_guard` | 官方 1 张、`-vlm on`、黑洞、超时 2 s、预算 12 s | **19.8 s** | **1/1** | used 12.0/12.0、calls 1、**refused 8**、exhausted True |
+| `e2e_unguard` | 同上但预算 0 | 114.1 s | 1/1 | used **106.3**/0、calls 9 |
+| `dead` | `LLM_BASE_URL=http://127.0.0.1:9/v1`（秒拒）、`-vlm auto`、2 张 | 32.1 s | 2/2 | used 20.4/1800、calls 10、errors 10 |
+| `cv_guard` | 官方 10 张、`-vlm off`、`FUSION_LLM=0` | 42.9 s | 10/10 | used 15.4/1800、calls 19、refused 0 |
+| `cv_old` | 同上、护栏全关（600/0/0） | 35.5 s | 10/10 | used 8.2/0、calls 19、refused 0 |
+| `fanout` | 官方 10 张、4 lane、`EDA_WALL_BUDGET_S=1200` | 20.7 s | 10/10、空壳 0 | — |
+| `watchdog` | 4 lane、`EDA_WALL_BUDGET_S=1` | 6.2 s | **10/10（全是空壳）** | 4 个 lane 全 `rc=-9` |
+
+★ 两条关键对照：
+
+- **同一张图、同一个超时：黑洞下 106.3 s（无护栏）vs 12.0 s（预算 12 s）**，两者都 rc 0 且都出产物。
+  按交付默认 180 s 超时，无护栏的黑洞单张 ≈ 9×180 = **27 min**。
+- **护栏开/关的 10 张产物逐字节相同 = True（10/10）**，且两臂 `refused` 都是 0 ⇒ 只要没触发，护栏是 no-op。
+
+> `-vlm off` 的臂里仍有 19 次**真实**外部调用：`submission/run.py:604-607` 在「VLM 引脚通道不会跑」
+> 时会自动设 `STAGE2_PINROT=1`（竖直脚旋转重读走同一个端点）。这正好说明护栏覆盖的是**所有**外部推理，
+> 而不只是 VLM 补强那一段。
+
+**四、判据**
+
+1. 不触发 = no-op：官方 10 张护栏开/关**逐字节相同**（上表）。
+2. 触发 = 在预算处**截断**：`unit_guard` used 6.0/6.0 s、第 4/5 次调用 0 s 返回并计 `refused`。
+3. 触发后**照出产物**：`e2e_guard` 1/1、`watchdog` 10/10（空壳）、`dead` 2/2。
+4. `FUSION_LLM` 默认**不翻**（仍是 `1`，owner m25661 的决定）：本轮只给它加时间上限。
+5. 回归：`eda-pcb/tools/dev/_fantest.py` 新增第 ⑤ 组 4 项（默认值补齐 / 不改产物数 / 已设时不覆盖 / 预算 0 = 不限），20 项全过。
+
+**五、复现**
+
+```bat
+cd eda-pcb
+python -X utf8 ..\work\_platguard.py                  :: 九条臂全跑（含黑洞单元与端到端）
+python -X utf8 ..\work\_platguard.py --only unit_guard,unit_unguard
+python -X utf8 tools\dev\_fantest.py                  :: 20 项（① 扇出 ② 看门狗 ③ 串行 ④ 自动 ⑤ 交付护栏）
+python -X utf8 tools\dev\gen_knobs.py --write         :: 435 → 436 个开关（新增 VLM_BUDGET_S）
+```
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |

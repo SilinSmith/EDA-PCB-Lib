@@ -217,6 +217,9 @@ def main(argv=None) -> int:
                     help="改为「给 LLM 留出 N MiB」；优先级高于 -gpu-frac。")
     a = ap.parse_args(argv)
     _fix_device(a)
+    a.platform_budgets = _platform_budgets()
+    print("[run] 护栏：%s" % " ".join("%s=%s" % kv for kv in a.platform_budgets.items()),
+          flush=True)
     try:
         # ★ case 级扇出（用户 m42543）：`_run_fanout` 在扇出数 <= 1 时**原样**调
         #   `_run(a)`，所以单卡机器/小批量的行为与以前逐位一致。
@@ -247,6 +250,40 @@ def _fix_device(a) -> None:
               "回退 CPU（否则 YOLO 会对每张图抛 ValueError，整批 0 产物）"
               % (a.device,), flush=True)
         a.device = "cpu"
+
+
+# ======================================================================
+# 交付护栏：外部推理（VLM / LLM）的时间预算（用户 m40034「2 小时跑 50 样例」）
+# ======================================================================
+# 赛题硬约束（`docs/COMPETITION_RULES.md`）：**全部案例评测总时长 < 2 小时**，而且
+# **未完成的案例双罚**（分子少它、`m/M` 再折一次）⇒ 「超时被杀」比「产出差」贵得多。
+# 实测：交付口径 26.6 s/张（官方图）~ 3.7 min/张（派生大图），50 张串行顶穿预算 ⇒
+# 平时靠 `-case-workers` 扇出（每个 lane 一个独立进程、独占一张卡）摊薄。
+# 但扇出**摊不掉**「外部端点被限流 / 挂死」这种病：`vlm/client.ask()` 在没有护栏时
+# **单次耗时没有上界** —— 黑洞端点（连得上、不回包）要等满 `VLM_TIMEOUT` 才抛错返回，
+# 而「答得出来但正文空 / 被 length 截断」那条路会把 4 次重试串起来（旧默认 600 s ⇒
+# 最坏 **2400 s = 40 min** 一次调用）；一个 lane 几张图就能把 2 小时整段吃掉，
+# 而官方判题机是按墙钟硬杀的 —— 那时候没落进 `final_results/` 的案例全是双罚。
+# 所以这里补三个**只在用户没设时**才生效的默认值，量级取「正常跑根本不会触发」：
+#   · `VLM_TIMEOUT=180`：本机实测单次调用 0.2~9 s（VLM 段整张图 16.3 s）⇒ 180 s 宽裕；
+#   · `VLM_BUDGET_S=1800`：**本进程**累计外部推理时间上限（`vlm/client.py` 实现：
+#     到点后 `ask()` 直接返回空串降级成纯 CV，且单次超时会被剩余预算夹住）；
+#   · `EDA_WALL_BUDGET_S=6900`（115 min）：父进程看门狗，到点强杀剩余 lane 并对没产出
+#     的图**补空壳** —— 空壳只丢准确度分，不会触发 `m/M` 双罚。
+# 想复现「没有护栏」的旧行为：`VLM_TIMEOUT=600 VLM_BUDGET_S=0 EDA_WALL_BUDGET_S=0`。
+_PLATFORM_DEFAULTS = (
+    ("VLM_TIMEOUT", "180"),
+    ("VLM_BUDGET_S", "1800"),
+    ("EDA_WALL_BUDGET_S", "6900"),
+)
+
+
+def _platform_budgets() -> dict:
+    """补上没设过的护栏默认值，返回**实际生效**的三元组（进决策日志）。"""
+    for k, v in _PLATFORM_DEFAULTS:
+        if not str(os.environ.get(k, "") or "").strip():
+            os.environ[k] = v
+    return {k: os.environ.get(k, "") for k, _ in _PLATFORM_DEFAULTS}
 
 
 # ======================================================================
@@ -735,6 +772,16 @@ def _run(a) -> int:
                 if vlm_stats.get("n_failed"):
                     _log(fp, "⚠️ 有 %d 张案例的 VLM 补强失败、产物是**未补强的原样拷贝**"
                              "（导出阶段发现不了，只能靠这一行）" % vlm_stats["n_failed"])
+                # ★ 护栏可见性：预算到点后 `ask()` 会静默降级成纯 CV（产物照出、只是
+                #   没有 VLM 补强），不给一行日志的话没人知道质量为什么掉了。
+                _bs = vlm_client.stats()
+                if _bs["budget_s"] > 0:
+                    _log(fp, "外部推理预算：已用 %.1f/%.1f s｜发出 %d 次｜超预算被拒 %d 次"
+                             "｜失败 %d 次%s"
+                         % (_bs["used_s"], _bs["budget_s"], _bs["calls"], _bs["refused"],
+                            _bs["errors"],
+                            "（⚠️ 已降级成纯 CV：后续调用不再发出）"
+                            if _bs["exhausted"] else ""))
             else:
                 # 2026-07：这里原来是 `elif a.vlm == "on":`，挂在 `if a.vlm != "off"` 的
                 # else 分支里 —— `a.vlm == "on"` 必然满足 `!= "off"`，所以那条警告
@@ -1019,12 +1066,19 @@ def _write_decision(out_dir: Path, summary: dict, cases_log: list,
             "vlm": a.vlm, "vlm_workers": a.vlm_workers, "vlm_margin": a.vlm_margin,
             "vlm_desig_fallback": a.vlm_desig_fallback,
             "vlm_stats": getattr(a, "vlm_stats", None),
+            # ★ 交付护栏的实际生效值 + 外部推理的真实用量（超预算 ⇒ `refused>0`）。
+            #   只读**本进程已经 import 过**的 `vlm.client`：父进程（扇出）没跑过 VLM，
+            #   这里如实报 `None`，不去凭空 import 一个「零用量」的模块骗自己。
+            "platform_budgets": getattr(a, "platform_budgets", None),
+            "vlm_client": (lambda m: m.stats() if m is not None else None)(
+                sys.modules.get("vlm.client")),
         },
         "env": {k: os.environ.get(k, "") for k in
                 ("LLM_MODEL", "LLM_BASE_URL", "NVIDIA_VISIBLE_DEVICES",
                  "STAGE2_BOTH_TOL", "STAGE2_DROP_UNKEYED", "STAGE2_NET_DROP_UNKEYED",
                  "STAGE2_PIN_DROP_UNKEYED", "STAGE2_PIN_DROP_LAUNDERED",
-                 "FUSION_REF_PRUNE")},
+                 "FUSION_REF_PRUNE", "VLM_TIMEOUT", "VLM_BUDGET_S",
+                 "EDA_WALL_BUDGET_S", "EDA_CASE_WORKERS")},
         "assets": assets.describe(),
         "summary": summary,
         "cases": cases_log,
