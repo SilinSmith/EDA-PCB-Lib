@@ -380,9 +380,9 @@
 | `FUSION_MAX_OPEN` | `"24"` | `fusion/solve.py:49` |
 | `FUSION_MERGE_PIN_MIN` | `"8"` | `fusion/run.py:247` |
 | `FUSION_MIN_NET_PINS` | `"2"` | `fusion/plausible.py:57` |
-| `FUSION_MODEL_SET` | `"0"` | `fusion/modelset.py:67` |
-| `FUSION_MODEL_SET_MARGIN` | `"1"` | `fusion/modelset.py:69` |
-| `FUSION_MODEL_SET_MIN` | `"2"` | `fusion/modelset.py:68` |
+| `FUSION_MODEL_SET` | `"1"` | `fusion/modelset.py:85` |
+| `FUSION_MODEL_SET_MARGIN` | `"2"` | `fusion/modelset.py:87` |
+| `FUSION_MODEL_SET_MIN` | `"2"` | `fusion/modelset.py:86` |
 | `FUSION_NAME_SNAP` | `"1"` | `fusion/namefix.py:89` |
 | `FUSION_NAME_SNAP_MINLEN` | `"4"` | `fusion/namefix.py:91` |
 | `FUSION_NAME_SNAP_TOL` | `"2"` | `fusion/namefix.py:90` |

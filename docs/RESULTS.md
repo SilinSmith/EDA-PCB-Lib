@@ -4382,11 +4382,13 @@ python -X utf8 tools\dev\gen_knobs.py --write         :: 435 → 436 个开关�
 | 默认 | — | 152 164 | 79.66 | 本地开发、对比基准 |
 | 精简 | `-lean` | **93 181（−39%）** | 79.84 | 官方平台能连外部 VLM 时的推荐档 |
 | 极限省 | `-lean -vlm-value off` | **45 428（−70%）** | 79.45 | token 排名权重吃紧时 |
-| 离线 | `-offline` | **0** | 70.04 → **72.00** | 无网络 / 官方只给纯文本 API 时的兜底 |
+| 离线 | `-offline` | **0** | 70.04 → **73.37** | 无网络 / 官方只给纯文本 API 时的兜底 |
 
 （离线档 70.04 → 72.00 是 §5.43 的「IC 型号名吸附到官方符号库闭词表」转正后的读数；
 官方 10 张 `official` 尺同步 59.1761 → **60.2329（+1.0568）**，派生 18 张 13.7885 → 13.9056。
-再叠 §5.44 的「值规范化」⇒ 官方尺 **60.9822**（+0.7493，protocol2 仍 72.00，派生 18 张逐位不变）。）
+再叠 §5.44 的「值规范化」⇒ 官方尺 **60.9822**（+0.7493，protocol2 仍 72.00，派生 18 张逐位不变）；
+再叠 §5.45 的「引脚名集合反推型号名」⇒ protocol2 **73.37（+1.37）**、官方尺 **62.0224**
+（+1.0402，派生 18 张 13.9056 → **14.6526**）。）
 
 50 张折算：默认 ≈760 K token / ≈10 min 墙钟；精简 ≈466 K / ≈8 min；极限 ≈227 K / ≈5 min；
 离线 0 token / ≈2 min —— **四个档都远在「2 小时」预算内**，所以时间不是选档依据，token 才是。
@@ -4619,6 +4621,7 @@ python -X utf8 work\_tokcost.py --only off,offs,full,fullsnap,nname,nnsnap,lean,
 |---|---|---|---|---|
 | `-offline`（含 ⓪.93） | 60.2329 | 72.00 | 13.9056 | — |
 | `-offline` + 值规范 | **60.9822（+0.7493）** | 72.00 | 13.9056（逐位相同） | 官方 6 / 派生 10 |
+| `-offline` + 型号名反推（§5.45，MARGIN=2） | **62.0224（+1.0402）** | **73.37（+1.37）** | **14.6526（+0.7470）** | 官方 2 / 派生详见 §5.45 |
 | 默认档（VLM 开） | 65.5141 | 79.66 | — | — |
 | 默认档 + 值规范 | 65.5257（+0.0116，噪声内） | 79.30（噪声内） | — | 导出 `value` **0 条不同** |
 
@@ -4645,7 +4648,7 @@ python -X utf8 work\_offval.py --arms tok_dvoffsnap,tok_dvoffvf  :: 派生 19 �
 
 ---
 
-## §5.45 离线档的 IC 型号名：用「引脚名集合」反推库键（官方 10 张 +1.04~1.08，**默认暂未翻**，2026-10-20）
+## §5.45 离线档的 IC 型号名：用「引脚名集合」反推库键（官方 10 张 **+1.0402** / 派生 18 张 **+0.7470**，2026-10-21 转正默认 1 + MARGIN 2）
 
 **一、病** —— §5.43 的 Levenshtein 吸附只能救编辑距离 ≤2 的近失串，救不了**另一类错**：
 CRNN 把框内的**引脚功能名**当成了型号名（离线档 `1 U1 = VREFA+`、`8 U1 = NRESET`、
@@ -4658,14 +4661,14 @@ CRNN 把框内的**引脚功能名**当成了型号名（离线档 `1 U1 = VREFA
 `MP2236CGJ-Z` 的 case 7 U1）、`库无此号` 1、`规则A可救(号)` 1。对照默认档（13 缺）：
 `桩里既无名也无号 8` / `库无此号 2` / `库不可用 2` / `规则A可救 1`。
 
-**二、药** —— `eda-pcb/fusion/modelset.py`（`FUSION_MODEL_SET`，**默认 0 = 关，待确认后翻**）
+**二、药** —— `eda-pcb/fusion/modelset.py`（`FUSION_MODEL_SET`，**默认 1 = 开**，2026-10-21 转正）
 
 库（`eda-pcb/data/BoxICLibrary_200cases.json`，360 键）每个键带整张符号的引脚表 ⇒ **元件框里
 读到的引脚名集合就是指纹**：`{GND, GNDA, VBAT, VDDC}` 这种组合在 360 个键里几乎唯一。
 打分 = 名命中数（纯数字名丢掉，它们在库里遍地都是）+ 号命中数；守卫与 `namefix` 同形：
 ① 只动 `box/boxic/ic`；② 已经**是库键**（`norm` 命中）⇒ 一个字符都不动；
 ③ 名命中 `sn ≥ FUSION_MODEL_SET_MIN`（默认 2）**且** `sn - sn₂ ≥ FUSION_MODEL_SET_MARGIN`
-（默认 1；**要求名严格占优**，号只当旁证）；④ 只改 `partname.text`，旧值留 `_old_text`，
+（默认 **2**；**要求名严格占优**，号只当旁证）；④ 只改 `partname.text`，旧值留 `_old_text`，
 `LEDGER` 记 `model_set`（含命中数与次优键，便于复核）。落位 **⓪.92**，在建池之前
 （`CL.from_stage2` 之前），理由同 §5.43 的落位教训。
 
@@ -4690,14 +4693,31 @@ case8 **+3.8855**、case10 **−3.7246**，其余六张逐位不变。`tok_offms
 = (case1 +6.5166 + case8 +3.8855) / 10 ⇒ **它的收益全部来自两颗「唯一且正确」的元件**；
 case5/6/7/10 那些裕度只有 1 的（3 正确 3 错误）净贡献仅 **+0.04**。
 
-**五、为什么倾向 MARGIN=2（明天翻默认的前提）** —— VLM 档的安全性只在 MARGIN=2 下成立：
+**五、为什么倾向 MARGIN=2（转正前提）** —— VLM 档的安全性只在 MARGIN=2 下成立：
 对已存档的 `_assigned` 干跑，MARGIN=1 时 VLM 档仍会动 3 颗（case 6 ×2、case 7 ×1，都是
 「把错名换成另一个错名」）；**MARGIN=2 时 `tok_full` / `tok_lean` 命中 0、`-offline` 命中 2
 （case 1 / case 8）** ⇒ 用 0.04 分换「VLM 各档结构性零影响」。
-**派生 19 张压力集的 A/B 尚未收（作业在跑，读数落 `work\_ms_dv.log`、臂 `tok_dvms2`）**
-⇒ 按纪律**默认仍为 0**；明天读数为正再翻 1（并把 `FUSION_MODEL_SET_MARGIN` 默认 1 → 2 一起翻）。
 
-**六、复现**
+**六、派生 18 张压力集的 A/B（2026-10-21 收；`work\_ms_dv.log`，臂 `tok_dvms2`／基线
+`tok_dvoffvf`）** —— 派生集**也是正收益，而且比官方尺更大**：
+
+| 臂 | comp | pin | conn | wire | 总分 |
+|---|---|---|---|---|---|
+| `tok_dvoffvf`（基线） | 0.079347 | 0.179517 | 0.190990 | 0.035264 | 13.9056 |
+| **`tok_dvms2`**（`MODEL_SET=1`，MARGIN=2） | **0.090093** | **0.193022** | **0.193203** | **0.036212** | **14.6526（+0.7470）** |
+
+四通道全升（comp +0.0107 / pin +0.0135 / conn +0.0022 / wire +0.0009）⇒ 按纪律
+（官方 10 张为正 **且** 派生 19 张不为负）**翻默认**：
+
+- `eda-pcb/fusion/modelset.py`：`ON = env_on("FUSION_MODEL_SET", "1")`（原 `"0"`）；
+  `MARGIN = int(os.environ.get("FUSION_MODEL_SET_MARGIN", "2"))`（原 `"1"`）。
+- 验收：不带任何环境变量的 `-offline` 跑官方 10 张须逐位等于 `tok_offms2`
+  （官方 **62.0224**、protocol2 **73.37**（+1.37）、tp 元件 233 / 引脚 74 / 网络 118 / 导线 311）；
+  `tok_dvoff*` 派生臂须逐位等于 `tok_dvms2`（14.6526）。
+- 至此离线档三步累加：**59.1761 → 60.2329（§5.43 名字）→ 60.9822（§5.44 值）→ 62.0224
+  （§5.45 型号名反推）= +2.8463**（protocol2 70.04 → 72.00 → **73.37**），且全程 **0 次 LLM/VLM 调用**。
+
+**七、复现**
 
 ```bat
 cd ..
@@ -4706,7 +4726,9 @@ python -X utf8 work\_pinlib2.py --arms tok_offvf                 :: 缺的脚「
 python -X utf8 work\_modelset.py --arms tok_offvf                :: 名集合指纹的可行性（唯一性）
 python -X utf8 work\_off10.py --arms tok_offvf,tok_offms1,tok_offms2
 cd eda-pcb
-set FUSION_MODEL_SET=1 && set FUSION_MODEL_SET_MARGIN=2 && python -X utf8 tools\eval\fast.py --cases 1,2,3,4,5,6,7,8,9,10 --extra=-offline --out tok_offms2
+python -X utf8 tools\eval\fast.py --cases 1,2,3,4,5,6,7,8,9,10 --extra=-offline --out tok_defms   :: 不带环境变量（默认已翻）
+cd ..
+python -X utf8 work\_offval.py --arms tok_dvoffvf,tok_dvms2                    :: 派生 18 张 A/B
 ```
 
 ---

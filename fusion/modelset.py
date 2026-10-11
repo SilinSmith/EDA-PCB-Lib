@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""用**读到的引脚名集合**去官方符号库反推 IC 型号名（`FUSION_MODEL_SET`，默认 0=关，A/B 用）。
+"""用**读到的引脚名集合**去官方符号库反推 IC 型号名（`FUSION_MODEL_SET`，默认 **1** = 开；`0` 关，A/B 用）。
 
 ## 病：名字读歪 ⇒ 库整条路线作废，而且救不回来（不只是「近失串」）
 
@@ -36,10 +36,23 @@
 1. 只动 `box/boxic/ic`；
 2. 读出来的串**已经是库键**（精确或归一化命中）⇒ 一个字符都不动（读对的不可能被改歪）；
 3. 名命中数 `sn ≥ FUSION_MODEL_SET_MIN`（默认 2），且 `sn_best - sn_second ≥ FUSION_MODEL_SET_MARGIN`
-   （默认 1）—— **要求名严格占优**，号只当并列时的旁证（不作为单独动手理由）；
+   （默认 **2**）—— **要求名严格占优**，号只当并列时的旁证（不作为单独动手理由）；
 4. 纯数字的「名」（`1`/`2`/`3`）不进指纹 —— 库键里遍地都是，没有信息量；
 5. 只改 `partname.text`，旧值留 `partname["_old_text"]`，`cvparts.hypo.LEDGER` 记
    `model_set`（含旧名/新名/命中数与次优键，便于复核）。
+
+## 实测（A/B，2026-10-21 转正默认 1 + MARGIN 2；`docs/RESULTS.md` §5.45）
+
+| 臂 | 官方 10 张（`official` 尺） | 派生 18 张 | VLM 档命中 |
+| --- | --- | --- | --- |
+| 关（基线） | 60.9822 | 13.9056 | — |
+| MARGIN=1 | 62.0627（+1.0805） | — | `tok_full`/`tok_lean` 各 **3** 颗 |
+| **MARGIN=2（转正）** | **62.0224（+1.0402）** | **14.6526（+0.7470）** | `tok_full`/`tok_lean` **0** 颗 |
+
+- 生效的只有「名命中数严格占优 ≥2」的元件：离线官方 10 张里是 `1 U1 VREFA+ → MSP432E401YTPDT`
+  （+6.5166）与 `8 U1 NRESET → PAW3395DM-T6QU`（+3.8855），两把尺子都为正。
+- MARGIN=1 多出来的 case 5/6/7/10 四颗是「3 正确 3 错误」的赌博，净贡献只有 +0.04 分；
+  而 MARGIN=2 让 VLM 档**结构性**不动手（那两档的型号名本来就被 VLM 读对、已是库键）。
 """
 from __future__ import annotations
 
@@ -64,9 +77,14 @@ except ImportError:                              # pragma: no cover
     from stage2 import libpins as LB             # type: ignore
 
 # `os.environ.get` 一律直写：`tools/dev/gen_knobs.py` 的正则只认它 / `envflag.*`。
-ON = env_on("FUSION_MODEL_SET", "0")
+# ★ 2026-10-21 转正（默认 0 → 1）读数：官方 10 张 60.9822 → **62.0224（+1.0402）**、
+#   派生 18 张 13.9056 → **14.6526（+0.7470）**（两把尺子都为正）。
+# ★ `MARGIN` 默认同时 1 → **2**：MARGIN=1 在官方 10 张上多 +0.04，但 VLM 档（`tok_full`/
+#   `tok_lean`）会动 3 颗「把错名换成另一个错名」的元件；MARGIN=2 时那两档命中 **0**（实测），
+#   只留 case 1 / case 8 两颗唯一且正确的大件 ⇒ 用 0.04 分换「VLM 各档结构性零影响」。
+ON = env_on("FUSION_MODEL_SET", "1")
 MIN = int(os.environ.get("FUSION_MODEL_SET_MIN", "2") or "2")
-MARGIN = int(os.environ.get("FUSION_MODEL_SET_MARGIN", "1") or "1")
+MARGIN = int(os.environ.get("FUSION_MODEL_SET_MARGIN", "2") or "2")
 BOX = {"box", "boxic", "ic"}
 
 _IDX: Optional[Dict[str, dict]] = None
