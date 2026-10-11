@@ -3684,8 +3684,10 @@ python -X utf8 ..\work\tools\dev\_linegap.py --dir ..\work\_fast_out_defconfirm 
   只增大 |P| 拉低 Dice。**同一批产物在旧折叠口径上是 −4.42（符号反转）** ⇒ 口径选错会把结论带反。
 * 配套：`NET_DROP_PWRONLY=1`(:343) 丢「只有电源符号的孤网」（+1.4383）、`STAGE2_SYM_MERGE=0`(:360，默认关)
   合并电源符号净亏 −0.104。
-* ⇒ **交付口径下网络失分不在「成员表」而在网↔网的一对一配对**（`_netoracle.py` 上界：全部引脚引用求交
-  tp 上限 299 / 实际 190 ⇒ 109 个 tp 丢在分组，pred 304 条网 vs GT 160 条）。
+* ⇒ 旧读数是「网络失分不在成员表而在网↔网配对」（本条当时引的是 VLM 关的旧臂 `_gt10_pb10`：
+  `_netoracle.py` 上界 tp 299 / 实际 190 ⇒ 丢 109）。**⚠️ 已被 §5.35 取代**：当前交付臂 `_fast_out_trimdef2`
+  上 `_netoracle.py` = `oracle_tp 330 / real_tp 315`、`pred_net 161 / gt_net 160` ⇒ **分组只丢 15**，
+  网络通道剩下的缺口是 108 条 ∅ 电源/地引用（不可赢或赌口径）+ 11 条缺号脚。
 
 **四、复现**
 
@@ -3696,6 +3698,77 @@ python -X utf8 ..\work\_wiretrim.py defconfirm ..\work\_cases10gt.txt 0,2,3,4,5,
 powershell -NoProfile -ExecutionPolicy Bypass -File ..\work\_trim_ab.ps1          &rem 四臂 A/B（约 20 min）
 python -X utf8 ..\work\tools\dev\_netmiss.py --run ..\work\_fast_out_defconfirm --cases 1,10,2,3,4,5,6,7,8,9 --net-pin-collapse 1
 python -X utf8 ..\work\_pincolscan.py 1,10,2,3,4,5,6,7,8,9                          &rem 引脚落点第四条修法（判负）
+```
+
+---
+
+### 5.35 ★ 梯子 ⑤ 那 7.56 分拆开了：其中 5.33 是「不可赢的 ∅ 电源/地引用」；引脚号与网↔网配对两条杠杆的收口（2026-10-17，用户 m58441「都解决掉」）
+
+**一、梯子 ⑤ = +7.56 的成分**（`work/_netadd.py` 本轮新增 mode 字母 `u`（补 ∅ 成员）与 `--collapse`；
+在**最终产物**上按类别补 GT 成员后重打分，官方 10、臂 `_fast_out_trimdef2`、协议 2 软 Dice）
+
+| mode | 做了什么 | 非折叠尺 | 折叠尺（`collapse_nonbox=1`） |
+|---|---|---|---|
+| `n` | 基线（no-op） | **79.2965**（net 0.7728） | **79.3847**（0.7756） |
+| `u` | 只补 **108** 条 ∅ 引用 | **84.6281（+5.33）** net 0.9251 | **84.7229（+5.34）** net 0.9282 |
+| `a` | 补 **11** 只缺号脚 + 11 条引用 | 80.9778（+1.68） | 81.6406（+2.26） |
+| `t` | 补 **17** 条错位引用 | 80.1744（+0.88） | 79.6442（+0.26） |
+| `au` | a + u | 86.2090（+6.91） | 86.8140（+7.43） |
+| `atu` | a + t + u | **87.0136（+7.72）** | 87.0418（+7.66） |
+
+⇒ **5.33（∅ 引用）+ 1.68（缺号脚）+ 0.88（错位引用）= 7.89 ≈ 梯子 ⑤ 的 7.56**（§5.33 的梯子）。
+§5.34 记的「⑤ 的 7.56 与我方 oracle 1.68 之间还差 6 分、要在网↔网配对里找」**不存在**：那 6 分
+就是 ∅ 电源/地引用，不是配对。同一轮 `work/tools/diag/_netoracle.py --pred ..\work\_fast_out_trimdef2\runs\stage2`
+（当前交付臂）给出 **`oracle_tp 330 / real_tp 315`、`pred_net 161 / gt_net 160`** ⇒ **分组只丢 15**
+（§5.34 引用的「上限 299 / 实际 190 ⇒ 丢 109」是 VLM 关的旧臂 `_gt10_pb10` 上的读数，**已被本行取代**）。
+
+**二、∅ 引用是「赌口径」，不是 bug —— 当前最大的单点口径风险**
+
+* 官方复刻 `eda-pcb/schematic_parser/official.py:267 net_members(doc, collapse_nonbox=True)`、
+  `:415 score_case(..., collapse_nonbox=True)` ⇒ **默认折叠**（非 box 元件的脚号折成 `*`）：
+  坐标匹配把我们的 `p113` 改写成 GT 的 `∅113` 之后，`(∅113,*)` 与 GT 逐位相等 ⇒ 有 tp。
+* 同一对读数的历史记录在 `eda-pcb/stage2/assemble.py`：`:325` 非折叠标定尺 `=0` **73.4368** →
+  `=1` **76.2000（+2.76）**；`:331` **折叠口径** `=0` **80.8191** → `=1` 76.2669 ⇒ **折叠尺下保留引用 +4.55**。
+* 线上判题机的证据是反向的：`docs/reports/官方评测机_第5次提交归因.md:63-79` 的官方 `error_examples` 里
+  8 个 GT `∅NNN` **全记 `missing`**、我们的 `pNNN` **全记 `extra`**（其中 3 个 `v` 只差 0.1~1.2px）⇒
+  **线上不做坐标匹配**，此时把 ∅ 引用写进 hyperGraph 就是纯 FP（标定尺的 +2.76 正是这个机制）。
+* ⇒ 现状（元件保留 `STAGE2_DROP_UNKEYED=0`、引用与脚剪掉 `NET_DROP_UNKEYED=1` / `PIN_DROP_UNKEYED=1`）
+  是**对线上判题机正确的下注**。若确认新判题机按书面口径实现（评测 Q5「Vcc/gnd 是 ∅，直接是坐标匹配」
+  + 「非 box 的 pinnumber 不计分」，两问官方都在 2026-10 的问答里答过），只需 `STAGE2_NET_DROP_UNKEYED=0`
+  （配套 `STAGE2_NET_DROP_PWRONLY=0` 需重测）即值 **+4.5 ~ +5.3**。**翻与不翻差约 4.5 分，改前必须先拿到
+  新一份官方报告复核 `∅NNN` 是否 coordinate-matched。** 回退路径：一个环境变量。
+
+**三、引脚号杠杆收口**（`work/_pinmiss.py --final`：交付层官方 10 只剩 **12** 条缺号；stage2 中间产物 41 条
+⇒ 融合层 / `FUSION_PIN_LIBSEQ` 救回 29 条）
+
+| 类别 | 例（GT 号 / 名） | 证据 | 状态 |
+|---|---|---|---|
+| (a) 号读到、名缺 ⇒ 被 `STAGE2_BOX_PIN_NEED_NAME=2` 丢掉 | case 2 `U3` #3 `SCL`（slot 4 号 `3` 无名）、case 4 `U2` #2 `VOUT`（slot 7 号 `2` 无名）、case 6 `U2`/`U4` #1（名 `OUT` 无号） | `_slotdbg.py`：`python -X utf8 ..\work\_slotdbg.py 2 --run ..\work\_fast_out_trimdef2 --comp U3` | **已量过判负**：放宽该闸门（`=3`）**−0.1993**；库能补名 **1** 条 / 补号 **3** 条（`_gateceiling.py` 723 槽） |
+| (b) 槽点根本缺失/错位 | case 1 `U1` #9 `VREFA+`（最近我方 57.5px）、case 10 `U2` #1 `Vout`（79.3px）、case 4 `U2` #1 `GND` | `_pinmiss.py --final` 的逐条取证表 | 属 stage1 脚点，**引脚落点四法全判负**（扫墨 / 吸附同排导线端点 / 沿 bbox 中心外推 / 颜色跳变） |
+| (c) 真误读 | case 6 `U1`（SOT-23 竖字 `33`/`S`/`X`/`O`）、case 7 `U1` #2（`2R` 粘连）、case 8 `U1` #16（`18`/`26` 错位；号框 29px 宽 = 2 字却只读出 1 字） | `_pincmp2.py` / `_slotdbg.py` | 要换/重训读器（`textrec`），本轮不动 |
+
+覆盖率基线（同一批）：`_numcover.py`（官方 9）**120 个 GT box 脚已有号 113 = 94.2%**；
+`_pinled.py trimdef` = tp 94 / fp 32 / fn 42、**F1 0.7176**，detail = 位置 24 > 缺 13 > 名 5 > 多余 3
+⇒ 引脚通道剩下的失分**主体是「位置」而不是「号读不出来」**。
+
+**四、网↔网配对收口**
+
+* 分组只丢 15（见一）；焊接类旋钮已穷尽（`eda-pcb/stage2/assemble.py:443-450`）：带宽放到 20px 官方
+  **−2.35/张**、`NET_WELD_MIN=10` 只有 +0.86/张（6px 是 +1.49）、去掉 `NET_WELD_COS` val −0.38/张。
+* 「碎片合并」的真上界 = `_netadd.py` mode `m`（把成员 ⊆ GT 且交集 ≥1 的预测网并起来）**80.1870（+0.89）**，
+  与 mode `t`（+0.88）同量级；但现有焊接条件抓不到它（条件一松，相邻引脚/大连接器的平行线就被并成一个网
+  ⇒ 上表那三个反例）。⇒ 该子项**已到可实现的边界**。
+* 因此网络通道剩下的缺口 = **108 条 ∅（不可赢或赌口径，见二）+ 11 条缺号脚（属三）**，没有第三块。
+
+**五、复现**
+
+```bat
+cd eda-pcb
+python -X utf8 ..\work\_netadd.py --run ..\work\_fast_out_trimdef2 --cases 1,10,2,3,4,5,6,7,8,9 --mode n,u,a,t,au,atu
+python -X utf8 ..\work\_netadd.py --run ..\work\_fast_out_trimdef2 --cases 1,10,2,3,4,5,6,7,8,9 --collapse --mode n,u,a,t,au,atu
+python -X utf8 ..\work\tools\diag\_netoracle.py --pred ..\work\_fast_out_trimdef2\runs\stage2 --cases 1,10,2,3,4,5,6,7,8,9
+python -X utf8 ..\work\_pinmiss.py --run ..\work\_fast_out_trimdef2 --cases 1,10,2,3,4,5,6,7,8,9 --final --device cpu
+python -X utf8 ..\work\tools\dev\_numcover.py --dir ..\work\_prod10 --stage1 ..\work\_fast_out_trimdef2\runs\stage1 --assigned ..\work\_fast_out_trimdef2\runs\stage2\_assigned --cases-file ..\work\_cases9.txt --device cpu
 ```
 
 ---
