@@ -3722,21 +3722,40 @@ python -X utf8 ..\work\_pincolscan.py 1,10,2,3,4,5,6,7,8,9                      
 （当前交付臂）给出 **`oracle_tp 330 / real_tp 315`、`pred_net 161 / gt_net 160`** ⇒ **分组只丢 15**
 （§5.34 引用的「上限 299 / 实际 190 ⇒ 丢 109」是 VLM 关的旧臂 `_gt10_pb10` 上的读数，**已被本行取代**）。
 
-**二、∅ 引用是「赌口径」，不是 bug —— 当前最大的单点口径风险**
+**二、∅ 引用是「赌口径」—— 四臂实测：翻与不翻差 7.5 分（当前最大的单点口径风险）**
 
-* 官方复刻 `eda-pcb/schematic_parser/official.py:267 net_members(doc, collapse_nonbox=True)`、
-  `:415 score_case(..., collapse_nonbox=True)` ⇒ **默认折叠**（非 box 元件的脚号折成 `*`）：
-  坐标匹配把我们的 `p113` 改写成 GT 的 `∅113` 之后，`(∅113,*)` 与 GT 逐位相等 ⇒ 有 tp。
-* 同一对读数的历史记录在 `eda-pcb/stage2/assemble.py`：`:325` 非折叠标定尺 `=0` **73.4368** →
-  `=1` **76.2000（+2.76）**；`:331` **折叠口径** `=0` **80.8191** → `=1` 76.2669 ⇒ **折叠尺下保留引用 +4.55**。
-* 线上判题机的证据是反向的：`docs/reports/官方评测机_第5次提交归因.md:63-79` 的官方 `error_examples` 里
-  8 个 GT `∅NNN` **全记 `missing`**、我们的 `pNNN` **全记 `extra`**（其中 3 个 `v` 只差 0.1~1.2px）⇒
-  **线上不做坐标匹配**，此时把 ∅ 引用写进 hyperGraph 就是纯 FP（标定尺的 +2.76 正是这个机制）。
-* ⇒ 现状（元件保留 `STAGE2_DROP_UNKEYED=0`、引用与脚剪掉 `NET_DROP_UNKEYED=1` / `PIN_DROP_UNKEYED=1`）
-  是**对线上判题机正确的下注**。若确认新判题机按书面口径实现（评测 Q5「Vcc/gnd 是 ∅，直接是坐标匹配」
-  + 「非 box 的 pinnumber 不计分」，两问官方都在 2026-10 的问答里答过），只需 `STAGE2_NET_DROP_UNKEYED=0`
-  （配套 `STAGE2_NET_DROP_PWRONLY=0` 需重测）即值 **+4.5 ~ +5.3**。**翻与不翻差约 4.5 分，改前必须先拿到
-  新一份官方报告复核 `∅NNN` 是否 coordinate-matched。** 回退路径：一个环境变量。
+元件键的坐标匹配已经不成问题（业主 2026-10-14 确认新判题机按书面口径 ⇒ `STAGE2_DROP_UNKEYED` 默认 `0`，
+见 §5.20；`docs/reports/官方评测机_第5次提交归因.md:63-79` 里「GT `∅NNN` 全记 `missing`」那条证据属**旧判题机**）。
+真正没定的是**连通性通道里 non-box 元件的引脚号折不折算**。用**同一批真实产物**、同一打分器
+（`tools/eval/stage2_eval.py`，`--net-collapse` 切换）四臂全打：
+
+| 臂（管线 env） | 字面比 refs（今天的交付尺 `protocol2`） | 折叠 refs（`net_pin_collapse_nonbox=True`） |
+|---|---|---|
+| 剪掉 ∅ 引用（今天默认 `STAGE2_NET_DROP_UNKEYED=1` + `PIN_DROP_UNKEYED=1`） | **79.2965**（netH 0.7728） | 79.3847（netH 0.7756） |
+| 保留 ∅ 引用（两个都 `=0`，端到端 VLM 重跑 117 s） | **76.2174**（netH **0.6855**，tp 110 / fp 56 / fn 49） | **83.8524**（netH **0.9031**，tp 147 / fp 19 / fn 12） |
+
+⇒ **若新判题机折算非 box 引脚号：保留 = +4.47（79.38 → 83.85，netH +0.1275）；
+若字面比：−3.08（netH −0.0873）**。breakeven 概率 = 3.08 /（3.08 + 4.47）= **41%**。
+（注：元件/引脚通道在四臂里**逐位不变**（comp 0.9819 / pin 0.7452、`pin.extra 3`，因为 `pin_box_only=True`），
+所以这 7.5 分完全落在 `net_hypergraph` 上。）
+
+证据两侧：
+
+* 支持「折算」：`docs/QA_2025.txt:85-86`（评测 Q2）官方答「**非 box 类型元器件 pin name, pin number
+  不参与评分**」；这是一条**书面规则**，而业主 2026-10-14 确认新判题机**按书面口径**
+  （`docs/RESULTS.md:2559-2563`）。同一规则在旧判题机上被违反（它把非 box 引脚全算进 `pin_f1`，
+  `docs/RESULTS.md:2507`），而连通性通道的「字面比」与那次违反是**同一个设计的两个面**。
+  （原文问句确实只点了 `pinF1`，但官方答句没限定通道 —— 这条印证是间接的。）
+* 支持「字面比」：`docs/QA_2025.txt:80/83` —— 我们问「把 GT 的 `∅200.198` 写成 `GND_1.1` 或其他形式
+  都算对吗」，官方只答「**建议跟赛题统一**」，没给「怎么写都算对」的口子；`docs/QA_2025.txt:98-99`（Q6）
+  也只说「GND 的序号名字不影响评分」。加上 `schematic_parser/metrics.py:122-127` 记的**真实产物标定**：
+  case 1/7/2/3 的 `soft_tp`/`f1` 只在「字面 refs」下**逐位复现**（折算后 netH 差 0.033/张）——
+  那是我们**唯一一次能观测到的真判题机**。
+
+处置（推荐 = **不盲翻**）：拿一次提交当探针 —— 把 `STAGE2_NET_DROP_UNKEYED=0`
+（+ `STAGE2_PIN_DROP_UNKEYED=0`）的产物交上去，读新报告里 `connectivity` 的 `soft_tp`/tp 数：
+若比现在高一大截 ⇒ 判题机折算，保留；若明显塌 ⇒ 立刻回退（只需一个环境变量）。
+**拿到新报告之前维持默认（剪）**；若更愿意按「新判题机按书面口径」这条押注，翻过去就是上面的 +4.47。
 
 **三、引脚号杠杆收口**（`work/_pinmiss.py --final`：交付层官方 10 只剩 **12** 条缺号；stage2 中间产物 41 条
 ⇒ 融合层 / `FUSION_PIN_LIBSEQ` 救回 29 条）
@@ -3769,6 +3788,12 @@ python -X utf8 ..\work\_netadd.py --run ..\work\_fast_out_trimdef2 --cases 1,10,
 python -X utf8 ..\work\tools\diag\_netoracle.py --pred ..\work\_fast_out_trimdef2\runs\stage2 --cases 1,10,2,3,4,5,6,7,8,9
 python -X utf8 ..\work\_pinmiss.py --run ..\work\_fast_out_trimdef2 --cases 1,10,2,3,4,5,6,7,8,9 --final --device cpu
 python -X utf8 ..\work\tools\dev\_numcover.py --dir ..\work\_prod10 --stage1 ..\work\_fast_out_trimdef2\runs\stage1 --assigned ..\work\_fast_out_trimdef2\runs\stage2\_assigned --cases-file ..\work\_cases9.txt --device cpu
+rem ---- 二 的四臂表：保留 ∅ 引用那两臂 ----
+set STAGE2_NET_DROP_UNKEYED=0
+set STAGE2_PIN_DROP_UNKEYED=0
+python -X utf8 tools\eval\fast.py --cases 1,10,2,3,4,5,6,7,8,9 --out keepu --save keepu
+python -X utf8 tools\eval\stage2_eval.py ..\work\_fast_out_trimdef2\final_results --net-collapse
+python -X utf8 tools\eval\stage2_eval.py ..\work\_fast_out_keepu\final_results --net-collapse
 ```
 
 ---
