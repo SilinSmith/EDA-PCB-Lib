@@ -128,22 +128,22 @@
 | `STAGE1_PIN_STUB_RATIO` | `"0.6"` | `stage1/pins.py:141` |
 | `STAGE1_PIN_STUB_TEXT` | `"1"` | `stage1/pins.py:189` |
 | `STAGE1_PIN_STUB_TEXT_PAD` | `"0.0"` | `stage1/pins.py:191` |
-| `STAGE1_SPLIT_JUNCTIONS` | `"1"` | `stage1/wires.py:869` |
-| `STAGE1_SPLIT_TOL` | `"1.5"` | `stage1/wires.py:871` |
+| `STAGE1_SPLIT_JUNCTIONS` | `"1"` | `stage1/wires.py:872` |
+| `STAGE1_SPLIT_TOL` | `"1.5"` | `stage1/wires.py:874` |
 | `STAGE1_TEXT_BRIDGE` | `"0"` | `stage1/labels.py:110` |
 | `STAGE1_TEXT_BRIDGE_PAD` | `"3.0"` | `stage1/labels.py:111` |
-| `STAGE1_WIRE_BRIDGE` | `"0"` | `stage1/wires.py:845` |
-| `STAGE1_WIRE_BRIDGE_ANGLE` | `"30"` | `stage1/wires.py:850` |
-| `STAGE1_WIRE_BRIDGE_DE` | `"22"` | `stage1/wires.py:852` |
-| `STAGE1_WIRE_BRIDGE_FRAC` | `"0.9"` | `stage1/wires.py:849` |
-| `STAGE1_WIRE_BRIDGE_INK` | `"0.5"` | `stage1/wires.py:851` |
-| `STAGE1_WIRE_BRIDGE_MIN_SIDE` | `"24"` | `stage1/wires.py:853` |
-| `STAGE1_WIRE_BRIDGE_NEAR` | `"8"` | `stage1/wires.py:848` |
-| `STAGE1_WIRE_BRIDGE_THICK` | `"9"` | `stage1/wires.py:854` |
-| `STAGE1_WIRE_CLOSE_THIN` | `"0"` | `stage1/wires.py:620` |
-| `STAGE1_WIRE_COLOUR` | `"hint"` | `stage1/wires.py:513` |
+| `STAGE1_WIRE_BRIDGE` | `"0"` | `stage1/wires.py:848` |
+| `STAGE1_WIRE_BRIDGE_ANGLE` | `"30"` | `stage1/wires.py:853` |
+| `STAGE1_WIRE_BRIDGE_DE` | `"22"` | `stage1/wires.py:855` |
+| `STAGE1_WIRE_BRIDGE_FRAC` | `"0.9"` | `stage1/wires.py:852` |
+| `STAGE1_WIRE_BRIDGE_INK` | `"0.5"` | `stage1/wires.py:854` |
+| `STAGE1_WIRE_BRIDGE_MIN_SIDE` | `"24"` | `stage1/wires.py:856` |
+| `STAGE1_WIRE_BRIDGE_NEAR` | `"8"` | `stage1/wires.py:851` |
+| `STAGE1_WIRE_BRIDGE_THICK` | `"9"` | `stage1/wires.py:857` |
+| `STAGE1_WIRE_CLOSE_THIN` | `"0"` | `stage1/wires.py:623` |
+| `STAGE1_WIRE_COLOUR` | `"confirm"` | `stage1/wires.py:515` |
 | `STAGE1_WIRE_COS` | `"-0.75"` | `stage1/labels.py:144` |
-| `STAGE1_WIRE_DILATE` | `"0"` | `stage1/wires.py:633` |
+| `STAGE1_WIRE_DILATE` | `"0"` | `stage1/wires.py:636` |
 | `STAGE1_WIRE_EXT` | `"8.0"` | `stage1/labels.py:95` |
 | `STAGE1_WIRE_EXT_NEAREST` | `"0"` | `stage1/labels.py:97` |
 | `STAGE1_WIRE_EXT_PERP` | `"2.0"` | `stage1/labels.py:96` |
@@ -152,12 +152,12 @@
 | `STAGE1_WIRE_HUE_TIMEOUT` | `"30"` | `stage1/wires.py:470` |
 | `STAGE1_WIRE_INK` | `"1"` | `stage1/labels.py:147` |
 | `STAGE1_WIRE_INK_FRAC` | `"0.5"` | `stage1/labels.py:148` |
-| `STAGE1_WIRE_INK_MODE` | `""` | `stage1/wires.py:629` |
+| `STAGE1_WIRE_INK_MODE` | `""` | `stage1/wires.py:632` |
 | `STAGE1_WIRE_OVER` | `"12"` | `stage1/labels.py:205` |
 | `STAGE1_WIRE_OVER_COS` | `"0.9"` | `stage1/labels.py:212` |
 | `STAGE1_WIRE_OVER_CROSS` | `"0"` | `stage1/labels.py:211` |
 | `STAGE1_WIRE_PERP` | `"1.5"` | `stage1/labels.py:143` |
-| `STAGE1_WIRE_THIN_W` | `""` | `stage1/wires.py:617` |
+| `STAGE1_WIRE_THIN_W` | `""` | `stage1/wires.py:620` |
 | `STAGE1_WIRE_TOL` | `"1.5"` | `stage1/labels.py:94` |
 | `STAGE1_WIRE_WELD` | `"16.0"` | `stage1/labels.py:142` |
 | `VLM_TIMEOUT` | `"600"` | `stage1/wires.py:467` |
@@ -328,7 +328,7 @@
 | `FUSION_BASE` | `"ours"` | `fusion/run.py:131` |
 | `FUSION_BOXSCAN` | `"0"` | `fusion/claims.py:151` |
 | `FUSION_BOX_PIN_PRIOR` | `"0"` | `fusion/priors.py:135` |
-| `FUSION_CASES` | `""` | `fusion/run.py:401` |
+| `FUSION_CASES` | `""` | `fusion/run.py:403` |
 | `FUSION_CONV_EXACT` | `"1"` | `fusion/run.py:93` |
 | `FUSION_CROPFIX` | `"1"` | `fusion/cropfix.py:61` |
 | `FUSION_CROPFIX_LADDER` | `"0.5,1.0,2.0,4.0"` | `fusion/cropfix.py:54` |
@@ -426,7 +426,7 @@
 | `FUSION_VLM_PIN_NUM` | `"1"` | `fusion/claims.py:82` |
 | `FUSION_VLM_PIN_SCORE` | `"1.15"` | `fusion/claims.py:74` |
 | `FUSION_VLM_SCORE` | `"1.15"` | `fusion/claims.py:71` |
-| `FUSION_WORKERS` | `"1"` | `fusion/run.py:423` |
+| `FUSION_WORKERS` | `"1"` | `fusion/run.py:425` |
 | `VLM_TIMEOUT` | `"600"` *(3 处)* | `fusion/audit.py:75` |
 
 <a id="vlm"></a>
@@ -493,14 +493,14 @@
 |---|---|---|
 | `EDA_PCB_REPO` | — | `pipeline/config.py:23` |
 | `EDA_ROOT` | — | `pipeline/config.py:25` |
-| `STAGE1_WIRE_COLOUR` | `"hint"` | `pipeline/pskel.py:272` |
-| `STAGE1_WIRE_DEBUG` | — | `pipeline/pskel.py:338` |
-| `STAGE1_WIRE_EDGE` | `"0"` | `pipeline/pskel.py:515` |
-| `STAGE1_WIRE_EDGE_MIN` | `"10.0"` | `pipeline/pskel.py:586` |
-| `STAGE1_WIRE_EDGE_NEAR` | `"2"` | `pipeline/pskel.py:599` |
-| `STAGE1_WIRE_EDGE_REL` | `"0.55"` | `pipeline/pskel.py:582` |
-| `STAGE1_WIRE_UNCONF` | `"veto"` | `pipeline/pskel.py:552` |
-| `STAGE1_WIRE_UNCONF_NEAR` | `"3"` | `pipeline/pskel.py:566` |
+| `STAGE1_WIRE_COLOUR` | `"confirm"` | `pipeline/pskel.py:307` |
+| `STAGE1_WIRE_DEBUG` | — *(2 处)* | `pipeline/pskel.py:330` |
+| `STAGE1_WIRE_EDGE` | `"0"` | `pipeline/pskel.py:567` |
+| `STAGE1_WIRE_EDGE_MIN` | `"10.0"` | `pipeline/pskel.py:638` |
+| `STAGE1_WIRE_EDGE_NEAR` | `"2"` | `pipeline/pskel.py:651` |
+| `STAGE1_WIRE_EDGE_REL` | `"0.55"` | `pipeline/pskel.py:634` |
+| `STAGE1_WIRE_UNCONF` | `"veto"` | `pipeline/pskel.py:604` |
+| `STAGE1_WIRE_UNCONF_NEAR` | `"3"` | `pipeline/pskel.py:618` |
 | `WINDIR` | `r'C:\Windows'` | `pipeline/pglyph.py:30` |
 
 <a id="submission"></a>

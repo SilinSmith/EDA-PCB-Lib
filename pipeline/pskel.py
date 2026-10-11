@@ -239,18 +239,54 @@ def thin_stroke_mask(bgr: np.ndarray, ink: np.ndarray, max_half_width: float = 1
     return (thin.astype(np.uint8) * 255), dt
 
 
+def _palette_estimate(bgr: np.ndarray, ink: np.ndarray):
+    """`pipeline/palette.py` 的懒加载入口（唯一颜色接口）；不可用时退化成「无彩」。"""
+    try:
+        from . import palette as _pal                 # 作为 package 导入
+    except Exception:                                 # noqa: BLE001
+        try:
+            from pipeline import palette as _pal      # 作为顶层模块导入
+        except Exception:                             # noqa: BLE001
+            return {"has_chroma": False, "palette": []}
+    try:
+        return _pal.estimate(bgr, ink=(ink > 0))
+    except Exception:                                 # noqa: BLE001
+        return {"has_chroma": False, "palette": []}
+
+
+def _hue_in_palette(h0: float, buckets, tol: float) -> bool:
+    """调色板里有没有一串占比达标的色桶落在这个色相 ±tol 内。"""
+    for b in buckets or []:
+        d = abs(float(b.get("hue", 0.0)) - h0)
+        d = min(d, 180.0 - d)
+        if d <= tol:
+            return True
+    return False
+
+
 def wire_colour_mask(bgr: np.ndarray, ink: np.ndarray, hue_tol: float = 42.0):
     """Pixels whose hue matches the dominant ink hue (the wire colour), or ``None``.
 
     ``None`` means "no usable chroma" (greyscale datasheet) -- the caller then keeps the
     stroke-width route only.
 
-    模式由环境变量 ``STAGE1_WIRE_COLOUR`` 控制（**默认 ``hint``**）：
+    模式由环境变量 ``STAGE1_WIRE_COLOUR`` 控制（**默认 ``confirm``**）：
 
-    * ``hint``（默认）—— 由 `stage1/wires.py` 在提线前先问模型一次「这张图的导线是什么
+    * ``hint`` —— 由 `stage1/wires.py` 在提线前先问模型一次「这张图的导线是什么
       颜色」（灰度图零成本跳过），把色相写进模块级 ``HINT_HUE``；**只在主色相是红系
       （``h0 < 25`` 或 ``h0 > 155`` = 图框/符号色）时才采纳**，否则维持 ``dominant``。
       19 张快测：24.87 vs ``dominant`` 24.81，导线 F1 0.0146→0.0201、导线 tp 29→52。
+    * ``confirm`` / ``hint_confirm``（**默认**；用户 m56804/m56805：「颜色不是确定信息」）——
+      **颜色假设必须在本图调色板里得到证实，否则这条颜色证据作废（返回 ``None`` ⇒ 一个
+      像素都不删）**。判据来自 `pipeline/palette.py`（唯一颜色入口）：主色相必须落在
+      调色板某个占比 ≥2% 的色桶 ±``hue_tol`` 内。要点是**失败方向是「不删」而不是
+      「删光」**：旧 ``hint`` 路径在模型答错色相时仍会按那个色相过滤，主色相恰是图框色时
+      整张图的导线会被抹掉（``dominant`` 在 case ``0001`` 上留过 6px 绿的历史事故）。
+      **为什么翻成默认（2026-10-17 实测）**：`work/_cf_ab.ps1` 官方 10 张上 `confirm` 与
+      `hint` **逐字节完全相同**（11 个文件里只有 `run.log` 不同，总分都是 79.14；
+      四个尺子 protocol2/protocol/harness/judge 也全等），而派生 val 19 上 `confirm`
+      **30.96 vs hint 30.83（+0.13）** ⇒ 更严的门在官方口径上零代价、在派生语料上还略赚，
+      同时把「答错色相就删光」这个失败方向彻底关掉。
     * ``h<N>`` —— 实验用：强制指定导线色相（如 ``h55``）。
     * ``dominant``（旧默认）—— 取 ink 里**像素数最多**的那个色相，只留 ±``hue_tol``。
       **这个假设在多色原理图上会翻车**：KiCad 导出的图里图框与元件符号是暗红
@@ -265,12 +301,14 @@ def wire_colour_mask(bgr: np.ndarray, ink: np.ndarray, hue_tol: float = 42.0):
       **实测失效**：它给 ``0001`` 选的还是红 h35（图框内的分隔线比导线更长更多）。
     * ``off`` —— 直接不做颜色过滤。
     """
-    # 默认 `hint`：由 `stage1/wires.py` 先问一次模型「这张图的导线是什么颜色」（灰度图会
-    # 零成本跳过）。19 张快测实测 `hint` 24.87 > `dominant` 24.81，导线 F1 0.0146→0.0201、
-    # 导线 tp 29→52、导线爆 0 从 9 张降到 8 张，官方 10GT(9) 40.13→40.14 不动。
-    # 模型答不出来 / 主色相不是红系时都会自动退回 `dominant`，所以是安全默认。
-    mode = os.environ.get("STAGE1_WIRE_COLOUR", "hint").strip().lower()
+    # 默认 `confirm`（2026-10-17 起）：仍然问一次模型「这张图的导线是什么颜色」，但**那个色相
+    # 必须在本图调色板（`pipeline/palette.py`）里被证实**，否则整条颜色证据作废、一个像素都不删。
+    # 取证：官方 10 张 `confirm` 与旧默认 `hint` 逐字节相同（79.14），派生 val 19 上 30.96 vs 30.83。
+    mode = os.environ.get("STAGE1_WIRE_COLOUR", "confirm").strip().lower()
     hint_want = None
+    confirm = mode in ("confirm", "hint_confirm", "hint+confirm", "verify")
+    if confirm:
+        mode = "hint"
     if mode == "hint":
         # `know` 节点：`stage1/wires.py` 先问一次模型「这张图的导线是什么颜色」，写进 `HINT_HUE`。
         # **只在「主色相是红系（图框/符号色）」时才有资格改写** —— 主色相本来就是绿系
@@ -279,6 +317,20 @@ def wire_colour_mask(bgr: np.ndarray, ink: np.ndarray, hue_tol: float = 42.0):
         mode = "dominant"
     if mode in ("off", "none", "0", "false"):
         return None
+    if confirm:
+        # ★ 用户 m56804/m56805「颜色并不是确定信息」：颜色只是一条**需要被证实的证据**。
+        #   本图调色板（`pipeline/palette.py`，唯一颜色入口）里找不到这个色相 ⇒ 假设作废，
+        #   返回 None = **不做任何颜色过滤**（宁可少删，不可删错）。
+        pal = _palette_estimate(bgr, ink)
+        if not pal.get("has_chroma"):
+            return None
+        if hint_want is None:
+            return None
+        if not _hue_in_palette(float(hint_want), pal["palette"], hue_tol):
+            if os.environ.get("STAGE1_WIRE_DEBUG"):
+                print("  [wire] confirm: hint=%s 未在调色板中证实 %s -> 不做颜色过滤"
+                      % (hint_want, [b_["hue"] for b_ in pal["palette"][:4]]), flush=True)
+            return None
     ch = chroma(bgr)
     v = (ink > 0)
     if mode in ("rel", "chroma_rel"):

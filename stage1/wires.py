@@ -501,7 +501,9 @@ def _hue_small(bgr: np.ndarray) -> np.ndarray:
 
 
 def _hint_wire_hue(bgr: np.ndarray) -> None:
-    """`STAGE1_WIRE_COLOUR=hint` 时问一次模型，把色相写进 `pipeline.pskel.HINT_HUE`。
+    """`STAGE1_WIRE_COLOUR=confirm`（默认）或 `hint` 时问一次模型，把色相写进
+    `pipeline.pskel.HINT_HUE`；两者的区别在末端的掩膜（`confirm` 要求该色相在本图调色板
+    里被证实，否则不删任何像素），发问这一步完全一样。
 
     ★ 2026-10-08 两处加固（都是为了「2 小时 / 50 张」的时间预算）：
     ① 发出去的是 `_hue_small(bgr)`（最大边 1024），不是整图；
@@ -510,7 +512,8 @@ def _hint_wire_hue(bgr: np.ndarray) -> None:
        端点没起来时，220 张图不该每张都去等一次超时。
     `_HUE_STAT["skipped"]` 记熔断后跳过的张数，便于事后确认「是省了时间还是丢了几张的提示」。
     """
-    if os.environ.get("STAGE1_WIRE_COLOUR", "hint").strip().lower() != "hint":
+    if os.environ.get("STAGE1_WIRE_COLOUR", "confirm").strip().lower() not in (
+            "hint", "confirm", "hint_confirm", "hint+confirm", "verify"):
         return
     if _HUE_FAIL["off"]:
         _HINT_STAT["skipped"] = int(_HINT_STAT.get("skipped", 0)) + 1

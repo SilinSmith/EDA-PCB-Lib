@@ -335,7 +335,9 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
         if log:
             log("  [iterate] 跳过：%s" % exc)
     rep["iterate"] = {k: v for k, v in rep_it.items() if k != "rows"}
-    # ---- ⓪.95 槽位级「库给多值、图给顺序」回填（`FUSION_PIN_LIBSEQ`，默认 0=关）--
+    # ---- ⓪.95 槽位级「库给多值、图给顺序」回填（`FUSION_PIN_LIBSEQ`，默认 1=开；
+    #          `stage2/pinlib.py:105` 是唯一权威：0=关 / 1=只在组内读数可疑时补纠（默认档，
+    #          2026-10-15 转正）/ 2=只要脚数相等就整组按库顺序重写）--
     # 病：CRNN 把 `114/113/115` 的**前导 1 吃掉**、`48/87/68` 读成 `46/67/66`、
     # `90` 读成 `S0`；而 `BOX_PIN_DROP_UNREAD`（默认开，`stage2/assemble.py:1141`）
     # 会把「没读到合法号」的桩**整条丢掉** ⇒ 这些脚不是「名不对」，是**根本没进
