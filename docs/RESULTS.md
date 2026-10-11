@@ -3545,6 +3545,75 @@ python -X utf8 ..\work\_crnnscale.py                              &rem CRNN 裁�
 
 ---
 
+### 5.33 ★ 阶段-天花板梯子（回答「丢分在哪一步」）+ 引脚落点三条修法全部判负（2026-10-17，用户 m57955）
+
+用户要求：横坐标 = 阶段，纵坐标 = 截至该阶段的**理论最大得分**，用来定位丢分。工具 = `work/_ceiling.py`
+（用法 `python -X utf8 ..\work\_ceiling.py --set both --json ..\work\_ceiling.json --chart ..\work\_ceiling.png`，
+`--collapse 1` 走官方 QA 口径），图 = `work\_ceiling.png`（双面板：柱=累计天花板，折线=本级增量）。
+
+**一、梯子读数（每级 = 把该通道换成 GT 后的重打分）**
+
+| 阶段 | 官方 10（`defconfirm`） | 本级丢分 | 派生 19（`cfv`） | 本级丢分 |
+|---|---|---|---|---|
+| ① 检测（现状） | **79.14** | — | **30.96** | — |
+| ② 位号绑定全对 | 79.14 | **+0.00** | 38.66 | +7.70 |
+| ③ 元件槽位全对 | 79.57 | +0.43 | 42.36 | +3.71 |
+| ④ 引脚号/名/位置全对 | 85.94 | **+6.37** | 60.36 | +18.00 |
+| ⑤ 网络拓扑全对 | 93.52 | **+7.58** | 78.59 | +18.22 |
+| ⑥ 导线几何全对 | 99.89 | **+6.37** | 92.14 | +13.56 |
+
+* ② 的 `+0.00` 是**口径事实**：`evaluate_case` 内部已用 `assign_components` 的 keymap 改写键，所以「按评分器自己的
+  keymap 改写」是恒等操作。真正的绑定 oracle 必须**只按几何对位**配对（`bind_keymap`，匈牙利 + `coord_gate=40`
+  + 类型罚 1e4），这才与 `tools/dev/_keyoracle_v.py` 的 +7.42 同口径 ⇒ **位号绑定在交付口径上值 0**（官方 10 的
+  普通键本来就配上），只在派生语料域值 +7.7。
+* 用官方 QA 口径（`--collapse 1`，非 box 元件脚号折通配，见 `schematic_parser/official.py:267` 默认 True）重跑：
+  官方 10 基线 79.14 → **79.21**、⑤ 增量 +7.58 → +7.51，结构完全不变；派生 19 基线 30.96 → 32.21（差值来自折叠）。
+* 结论：**交付口径最大三块 = 引脚 6.37 / 网络 7.58 / 导线 6.37**；派生语料还多一块检测缺口（92.14 的天花板意味着
+  7.86 分在检测阶段就没了）。
+
+**二、引脚位置（交付口径第一大单一原因）——三条修法全部判负**
+
+`work/_pinled.py`（精确 tp/fp/fn，protocol2 尺）官方 10 合计 **tp=93 fp=34 fn=43 P=0.7323 R=0.6838 F1=0.7072**，
+detail = `{pin.position_mismatch: 25, pin.missing: 12, pin.name_mismatch: 6, pin.extra: 3}`；136 个 GT box 脚里
+ok 93 / **pos_far 25** / absent 12 / name_diff 6（`work/_pinfar.py` 逐脚摊开）。三条离线修法全部判负：
+
+1. **沿脚轴从框边扫墨量引线尖端**（`tools/dev/_leadtip.py`）：136 脚平均 |GT−量出| = **30.54**（扫到上限），因为
+   引线与导线共线；我方恒 `框边±12`（`STAGE1_PIN_OUT_BOX=12.0`）反而平均 |GT−12| = **4.00**。
+2. **向外吸附同排导线端点**（`tools/dev/_icsnap.py --eval`）：现状 F1 0.5680 → 吸附 0.2560。
+3. **「符号引线色 → 导线色」的颜色跳变处**（`work/_pinpaint.py` / `_pinmap.py` / `_pincol_out.py`）：case 8 `U1`
+   左列确实是「暗红引线 976..995（20px）→ 绿导线停在 975」，GT 点 x=973 就差 2px；但 `_pinmap.py` 显示
+   **case 7 `U1`（GT 13 / 引线 18px）、case 9 `U2`（GT 9 / 红段 41px）、case 5 `U1`（GT 9 / 红段 38px）的 GT 点
+   都落在引线内部**，图像上没有任何可测信号标出它。把量距单位修对（`L = 我方离框边距离 + d`，首版把 d 误当
+   从框边量、重复扣了 12px ⇒ 假读数 0.5019）后重跑：**F1 0.7072 → 0.1977**（逐案 c2 0.9677→0、c10 0.8696→0.087）。
+   ⇒ 默认 `12` 保持，`docs/KNOBS.md` 不动。
+
+**三、并网成员的 125 条缺口归因（`work/_netgap.py`）**
+
+官方 10：GT 网成员 487 / 我方命中 362 / 缺 125。分类：
+
+| 分类 | 条数 | 说明 |
+|---|---|---|
+| `pin_pos_ok_num_diff` | **64** | 我方有脚、脚点离 GT ≤5px，**只是脚号不同**（v 40 / gnd 18 / led 4 / r 1 / box 1） |
+| `pin_pos_far` | **61** | 脚点也远（gnd 41 / v 9 / **box 11** / 其它） |
+
+第一类**不是真缺口**：GT 里电源/地符号的脚号是内部计数器（如 `∅202.202`、`∅121.119`），而官方 QA 明确
+「非 box 的 pinnumber 不计分」（`official.py:267-271`）⇒ 折成 `∅202.*` 后本来就能配上。第二类里的 box 11 条
+与 ②a 的 `pin.missing` 同源。⇒ **网络通道的失分不在「成员表」而在网↔网的一对一配对**；⑤ 的 +7.51 是「拓扑
+全对」的上界，不是成员表的上界。
+
+**四、复现**
+
+```bat
+cd eda-pcb
+python -X utf8 ..\work\_ceiling.py --set both --json ..\work\_ceiling.json --chart ..\work\_ceiling.png
+python -X utf8 ..\work\_ceiling.py --set official --collapse 1     &rem 官方 QA 口径（非 box 脚号折通配）
+python -X utf8 ..\work\_pinled.py defconfirm ..\work\_cases10gt.txt &rem 逐案 tp/fp/fn + 失败原因
+python -X utf8 ..\work\_pinmap.py 7 945 336 1015 350               &rem 引脚邻域颜色字符图（人眼判几何）
+python -X utf8 ..\work\_netgap.py defconfirm ..\work\_cases10gt.txt &rem 网成员缺口分类
+```
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |
