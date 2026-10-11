@@ -170,6 +170,13 @@ def main() -> int:
         _vlm = "?"
     chk("从未 import vlm.client（真零调用）", _vlm is None, "vlm_client=%s" % _vlm)
 
+    r = _run(tin, tmp / "out_lean", ["-case-workers", "0", "-lean"])
+    chk("精简档退出码 0", r["rc"] == 0, "rc=%s" % r["rc"])
+    chk("精简档产物数不变", len(r["preds"]) == n_cases,
+        "%d/%d" % (len(r["preds"]), n_cases))
+    _ll = " ".join(l for l in r["log"].splitlines() if "精简档" in l)[:200]
+    chk("打印精简档且 value-batch 4", "精简档" in r["log"] and "value-batch 4" in r["log"], _ll)
+
     print("\n%d 项通过，%d 项失败%s"
           % (len(ok), len(bad), ("：" + ", ".join(bad)) if bad else ""))
     return 1 if bad else 0

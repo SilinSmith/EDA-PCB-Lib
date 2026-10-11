@@ -513,12 +513,12 @@
 
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
-| `EDA_CASE_WORKERS` | `""` | `submission/run.py:370` |
-| `EDA_WALL_BUDGET_S` | `"0"` | `submission/run.py:519` |
-| `FUSION_ITERATE` | — | `submission/run.py:266` |
-| `FUSION_LLM` | — *(4 处)* | `submission/run.py:266` |
-| `STAGE1_WIRE_COLOUR` | — | `submission/run.py:267` |
-| `STAGE2_PINROT` | — | `submission/run.py:267` |
+| `EDA_CASE_WORKERS` | `""` | `submission/run.py:404` |
+| `EDA_WALL_BUDGET_S` | `"0"` | `submission/run.py:553` |
+| `FUSION_ITERATE` | — | `submission/run.py:300` |
+| `FUSION_LLM` | — *(4 处)* | `submission/run.py:300` |
+| `STAGE1_WIRE_COLOUR` | — | `submission/run.py:301` |
+| `STAGE2_PINROT` | — | `submission/run.py:301` |
 
 <a id="schematic_parser"></a>
 

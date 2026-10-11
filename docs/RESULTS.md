@@ -4349,13 +4349,62 @@ python -X utf8 tools\dev\gen_knobs.py --write         :: 435 → 436 个开关�
    ⇒ 默认**不翻**（不动 `VLM_VALUE_BATCH`）；比赛日若要压 token 分/时间，用
    `-vlm-value-batch 4`，并把它当作「用 ≤0.4 分换 33% token + 12.6% 墙钟」的显式选择。
 
-**四、复现**
+**四、逐通道 ROI（关掉一个通道：省多少 token、掉多少分）**
+
+官方 10 张，`submission/run.py`，protocol2，同一次运行的分数与诊断：
+
+| 关掉/改动的通道 | 外部调用 | token | 墙钟 | protocol2 | 关键诊断变化 |
+|---|---|---|---|---|---|
+| 无（默认 `full`） | 222 | 152 164 | 118.2 s | 79.66 | — |
+| `-vlm-name off` | 201 | 139 764 | 109.9 s | **72.79（−6.87）** | 元件位号/名文本 ⇒ 最贵的通道 |
+| `-vlm-pin off` | 199 | 142 913 | 107.8 s | **79.84（+0.18）** | `pin.missing` 12 vs 13、`pin.extra` 2 vs 3 |
+| `-vlm-value off` | 105 | **54 679（−64%）** | 74.9 s | **78.91（−0.75）** | `component.text_mismatch` **2 → 5** |
+| `-vlm-value-batch 4` | 138 | 102 432（−33%） | 103.3 s | 79.30（−0.36） | `text_mismatch` **2（不变）** |
+| 合并 `-lean`（pin off + value batch 4） | **115** | **93 181（−39%）** | 94.9 s | **79.84（+0.18）** | 与默认同级 |
+| 合并 `-lean -vlm-value off` | **82** | **45 428（−70%）** | **62.6 s** | **79.45（−0.21）** | `text_mismatch` 2 → 5 |
+
+★ `vlm_stats` 里的「pins 91」是**填了几个槽位**、不是发了几次请求：`-vlm-pin off` 把
+`pins` 与 `grid_calls` 一起清零却只省 **23** 次调用；值通道的 **117** 次才是次数意义上的大头。
+
+1. **name 通道单次收益最高**：21 次调用 / 12 400 token 换来 **+6.87 分**（≈0.33 分/次）
+   ⇒ 绝对不能在比赛时关掉它。
+2. **value 通道 117 次 / 97 485 token（占 64%）只换 +0.75 分**（3 个元件「值」文本）
+   ⇒ 要么关、要么 `-vlm-value-batch 4`（拼图不伤文本：`text_mismatch` 仍是 2）。
+3. **pin/网格通道 23 次调用换 ≈0 分**：`-vlm-pin off` 实测 **+0.18**，逐项诊断不劣
+   ⇒ 本地脚号/脚名（`textrec` + `BoxICLibrary` 先验 + `STAGE2_PINROT`）已经读对，
+   VLM 那一档是冗余；这与判题机报告 `pin_number_accuracy_on_matched = 1.000` 互证。
+   （历史 help 文本里的「+2.88」是**本地引脚能力补齐之前**的读数，已被本轮覆盖。）
+
+**五、档位建议（比赛日三档 + 兜底）**
+
+| 档 | 命令 | token / 10 张 | protocol2 | 何时用 |
+|---|---|---|---|---|
+| 默认 | — | 152 164 | 79.66 | 本地开发、对比基准 |
+| 精简 | `-lean` | **93 181（−39%）** | 79.84 | 官方平台能连外部 VLM 时的推荐档 |
+| 极限省 | `-lean -vlm-value off` | **45 428（−70%）** | 79.45 | token 排名权重吃紧时 |
+| 离线 | `-offline` | **0** | 70.04 | 无网络 / 官方只给纯文本 API 时的兜底 |
+
+50 张折算：默认 ≈760 K token / ≈10 min 墙钟；精简 ≈466 K / ≈8 min；极限 ≈227 K / ≈5 min；
+离线 0 token / ≈2 min —— **四个档都远在「2 小时」预算内**，所以时间不是选档依据，token 才是。
+
+⚠️ 上表所有分数差都来自**单次运行**，而跨运行 VLM 采样噪声带是 **±0.38**（§5.39）
+⇒ 只有 name 通道的 **−6.87** 与离线档的 **−9.62** 是显著差；`-lean` 的 +0.18 与
+`-vlm-value off` 的 −0.75 都在噪声量级内，**但调用数与 token 的下降是确定量**。
+
+逐项诊断佐证（离线 vs 默认，官方 10 张合计 254 元件 / 487 脚）：
+`component.text_mismatch` 2 → **25**、`component.missing` 0 → 4、`component.extra` 2 → 6、
+`pin.missing` 13 → **41**、`pin.name_mismatch` 5 → **20**、`pin.extra` 3 → 6
+（`pin.position_mismatch` 反而 24 → 13）⇒ **纯 CV 档的缺口集中在「文本读出」**
+（位号/值/脚名），不是几何；这也是下一轮本地能力该投的方向。
+
+**六、复现**
 
 ```bat
 cd eda-pcb
 python -X utf8 ..\work\_tokcost.py                              :: 全部档位（每档跑完顺手打分）
 python -X utf8 ..\work\_tokcost.py --only full,nollm,novlm,off  :: 四个主档
-python -X utf8 ..\work\_tokcost.py --only vb2,vb4,s1,s2         :: 成本杠杆
+python -X utf8 ..\work\_tokcost.py --only nval,npin,nname       :: 逐通道 ROI（关一个通道）
+python -X utf8 ..\work\_tokcost.py --only lean,lean4,vb2,vb4    :: 精简档与批处理
 cd ..
 python -X utf8 eda-pcb\submission\run.py -offline -input eda-pcb\yolo_part\"Dataset(waitforpreprocess)"\10GT -output work\_fast_out_off -case-workers 0
 python -X utf8 eda-pcb\tools\dev\_fantest.py                    :: 25 项回归，⑥ 判据 = config.vlm_client is None

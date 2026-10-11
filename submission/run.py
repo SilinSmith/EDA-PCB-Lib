@@ -215,17 +215,26 @@ def main(argv=None) -> int:
     ap.add_argument("-gpu-headroom", "--gpu-headroom", dest="gpu_headroom",
                     type=float, default=0.0,
                     help="改为「给 LLM 留出 N MiB」；优先级高于 -gpu-frac。")
+    ap.add_argument("-lean", "--lean", dest="lean", action="store_true",
+                    help="**精简档**（为赛题 `Score_Token` 排名项）：`-vlm-pin off` + "
+                         "`-vlm-value-batch 4`。官方 10 张实测（`work\\_tokcost.py`，"
+                         "protocol2）：默认 222 次 / 152 164 token / 118.2 s / 79.66 "
+                         "→ 精简 **115 次 / 93 181 token（−39%）/ 94.9 s / 79.84**，"
+                         "且逐项诊断与默认**同级**（component.text_mismatch 2 = 2）。"
+                         "再加 `-vlm-value off` 更狠：**82 次 / 45 428 token（−70%）/"
+                         "62.6 s / 79.45**（−0.21，落在跨运行 VLM 噪声带 ±0.38 内，"
+                         "代价是 component.text_mismatch 2→5）。")
     ap.add_argument("-offline", "--offline", dest="offline", action="store_true",
                     help="**零外部调用档**（为赛题 `Score_Token` 排名项与「官方只给纯文本"
-                         "API」两种现实准备）：等价于 `-vlm off -fusion off`，并额外关掉"
-                         "两条「挂在 VLM 上、但不是补强」的旁路 —— `FUSION_ITERATE`"
-                         "（⓪.9 定向往回问引脚名，`fusion/iterate.py:189`）与 "
-                         "`STAGE1_WIRE_COLOUR`（导线色相提示，`stage1/wires.py:537`），"
-                         "以及 `STAGE2_PINROT`（竖直脚重读）。已由环境变量显式设过的值"
-                         "**不覆盖**。官方 10 张实测：0 次调用 / 0 token / 23.1 s / "
-                         "protocol2 70.04（默认档 222 次 / 152 164 token / 118.2 s / 79.66）。")
+                         "API」两种现实准备）：`-vlm off` + `FUSION_LLM=0` + "
+                         "`FUSION_ITERATE=0` + `STAGE1_WIRE_COLOUR=dominant` + "
+                         "`STAGE2_PINROT=0`（**保留**融合层的确定性节点，不发请求，"
+                         "值 +0.24），已由环境变量显式设过的值**不覆盖**。"
+                         "官方 10 张实测：0 次调用 / 0 token / 22.6 s / protocol2 70.04"
+                         "（默认档 222 次 / 152 164 token / 118.2 s / 79.66）。")
     a = ap.parse_args(argv)
     _fix_device(a)
+    _apply_lean(a)
     _apply_offline(a)
     a.platform_budgets = _platform_budgets()
     print("[run] 护栏：%s" % " ".join("%s=%s" % kv for kv in a.platform_budgets.items()),
@@ -236,6 +245,31 @@ def main(argv=None) -> int:
         return _run_fanout(a)
     except Exception as e:                                          # noqa: BLE001
         return _safety_net(a, e)
+
+
+def _apply_lean(a) -> None:
+    """把 `-lean` 翻译成「省 token 但分量不掉」的通道组合。
+
+    依据（`work\\_tokcost.py`，官方 10 张，protocol2，逐通道隔离 A/B）：
+      · `-vlm-pin off`（关引脚/网格通道，省 23 次调用）：**+0.18 分**（79.84 vs 79.66），
+        逐项诊断不劣（pin.missing 12 vs 13）⇒ 脚号/脚名本地（textrec + `BoxICLibrary`
+        先验 + `STAGE2_PINROT`）已经读对，VLM 那一档是冗余。这与判题机报告
+        `pin_number_accuracy_on_matched = 1.000`（§5.37）互证。
+      · `-vlm-value-batch 4`（值通道 4 格拼一图，省 104 次调用）：**−0.36 分**
+        （79.30 vs 79.66，落在 ±0.38 的跨运行噪声带内），`component.text_mismatch`
+        与默认一致（2 = 2）⇒ 拼图没有伤到值文本。
+    两者合并实测 **115 次 / 93 181 token / 94.9 s / 79.84**。
+    """
+    if not getattr(a, "lean", False):
+        return
+    a.vlm_pin = "off"
+    try:
+        if int(getattr(a, "vlm_value_batch", 1) or 1) < 4:
+            a.vlm_value_batch = 4
+    except (TypeError, ValueError):
+        a.vlm_value_batch = 4
+    print("[run] 精简档：-vlm-pin off｜-vlm-value-batch %s（官方 10 张：115 次 / "
+          "93 181 token / 79.84，与默认档同级）" % a.vlm_value_batch, flush=True)
 
 
 def _apply_offline(a) -> None:
