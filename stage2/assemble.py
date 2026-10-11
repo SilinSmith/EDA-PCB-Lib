@@ -1756,8 +1756,11 @@ def _selftest() -> int:
     fails = []
 
     def chk(cond, msg):
+        chk.n += 1
         if not cond:
             fails.append(msg)
+
+    chk.n = 0
 
     st1 = {
         "image": {"w": 200, "h": 100},
@@ -1794,13 +1797,48 @@ def _selftest() -> int:
     chk(doc["pins"]["R1"]["pin_1"]["point"]["y"] == 25.0, "y 翻转: %r"
         % (doc["pins"]["R1"]["pin_1"]["point"],))
     chk(doc["pins"]["U1"]["pin_1"]["pinname"] == "VDD", "引脚名")
-    chk(doc["pins"]["U1"]["pin_2"]["pinname"] == "2", "缺名回退引脚号")
+    # ★ 夹具这一根是「号没读到、名也没有」的 box 桩。**默认口径会把它丢掉**，两条闸门
+    #   各自独立：① `STAGE2_BOX_PIN_DROP_UNREAD=mixed`（这颗 IC 有别的脚读到了号 ——
+    #   `case 1 U1` 那批 `pin.missing` 就是这条丢的）；② 迟到闸门
+    #   `STAGE2_BOX_PIN_NEED_NAME=2`（没有名字、库也补不出名字）。把两条都关掉，它才按
+    #   「位置号当号、号当名」出现 —— 那是 2026-10 前的老口径，旧断言写的就是那个。
+    _drop_box = BOX_PIN_DROP_UNREAD or BOX_PIN_NEED_NAME
+    chk(("pin_2" in doc["pins"]["U1"]) == (not _drop_box),
+        "缺号/缺名 box 桩的闸门口径（DROP_UNREAD=%r MIXED_ONLY=%r NEED_NAME=%r LATE=%r）"
+        % (BOX_PIN_DROP_UNREAD, BOX_PIN_DROP_MIXED_ONLY, BOX_PIN_NEED_NAME,
+           BOX_PIN_NEED_NAME_LATE))
+    if not _drop_box:
+        chk(doc["pins"]["U1"]["pin_2"]["pinname"] == "2", "缺名回退引脚号")
     n1 = doc["nets"]["net_1"]
     chk(set(n1["hyperGraph"].strip("()").split(",")) == {"R1.1", "U1.1"},
         "hyperGraph: %r" % (n1["hyperGraph"],))
     chk(len(n1["edges"]) == 2, "net_1 边数: %d" % len(n1["edges"]))
-    chk(n1["edges"]["edge_1"][0] == {"x": 8.0, "y": 25.0}, "边坐标: %r"
-        % (n1["edges"]["edge_1"][0],))
+    # ★ 引脚点是**盖章**出来的（`bbox ± 桩长`：R1 左 10-10=0、右 30+10=40 —— 两脚件的
+    #   10px 正是源图约定，见 RESULTS §5.18 的 220 case 统计），`STAGE2_EDGE_SNAP`
+    #   （默认 10）再把边端点吸到**本网自己的引脚点**上 ⇒ 边首点 = 那个盖章点。
+    _e0 = n1["edges"]["edge_1"][0]
+    _want = (doc["pins"]["R1"]["pin_1"]["point"] if EDGE_SNAP > 0
+             else {"x": 8.0, "y": 25.0})
+    chk(_e0 == _want, "边首点: %r（期望 %r，EDGE_SNAP=%r）" % (_e0, _want, EDGE_SNAP))
+
+    # ★ 边的「去重 + 结点切分」（`STAGE2_EDGE_SPLIT` / `STAGE2_EDGE_DEDUP`）：
+    #   一条横母线 + 一条垂直抽头（切点）+ 一条反向重复边 ⇒ 去重 1、切分 1、得 3 条边。
+    #   `EDGE_SPLIT_COL` 保证共线孪生邻居不当切点（夹具里没有共线邻居）。
+    _t = {"net_1": {"edges": {
+        "edge_1": [{"x": 0.0, "y": 50.0}, {"x": 100.0, "y": 50.0}],
+        "edge_2": [{"x": 40.0, "y": 50.0}, {"x": 40.0, "y": 80.0}],
+        "edge_3": [{"x": 100.0, "y": 50.0}, {"x": 0.0, "y": 50.0}],
+    }}}
+    _st = split_dedup_edges(_t)
+    if EDGE_SPLIT > 0 or EDGE_DEDUP > 0:
+        chk(_st["dup"] == 1, "边去重计数: %r" % (_st,))
+        chk(_st["split"] == 1, "结点切分计数: %r" % (_st,))
+        _pts = sorted((e[0]["x"], e[0]["y"], e[1]["x"], e[1]["y"])
+                      for e in _t["net_1"]["edges"].values())
+        chk(_pts == [(0.0, 50.0, 40.0, 50.0), (40.0, 50.0, 40.0, 80.0),
+                     (40.0, 50.0, 100.0, 50.0)], "切分后的边集合: %r" % (_pts,))
+        chk(all(len(e) == 2 for e in _t["net_1"]["edges"].values()),
+            "切出来的每条边只留两个点")
 
     # 网络标签合并：两条 net 贴同名标签 -> 并成一条
     merged = merge_by_label({
@@ -1814,7 +1852,7 @@ def _selftest() -> int:
     big = [v for v in merged.values() if len(v["pins"]) == 2]
     chk(len(big) == 1, "合并后应有一条双引脚网络")
 
-    print("自检 %d 项：%s" % (12, "全部通过" if not fails else "失败"))
+    print("自检 %d 项：%s" % (chk.n, "全部通过" if not fails else "失败"))
     for f in fails:
         print("  FAIL", f)
     return 1 if fails else 0
