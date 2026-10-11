@@ -4382,7 +4382,10 @@ python -X utf8 tools\dev\gen_knobs.py --write         :: 435 → 436 个开关�
 | 默认 | — | 152 164 | 79.66 | 本地开发、对比基准 |
 | 精简 | `-lean` | **93 181（−39%）** | 79.84 | 官方平台能连外部 VLM 时的推荐档 |
 | 极限省 | `-lean -vlm-value off` | **45 428（−70%）** | 79.45 | token 排名权重吃紧时 |
-| 离线 | `-offline` | **0** | 70.04 | 无网络 / 官方只给纯文本 API 时的兜底 |
+| 离线 | `-offline` | **0** | 70.04 → **71.28** | 无网络 / 官方只给纯文本 API 时的兜底 |
+
+（离线档 70.04 → 71.28 是 §5.43 的「IC 型号名吸附到官方符号库闭词表」转正后的读数；
+官方 10 张 `official` 尺同步 59.1761 → **60.2329（+1.0568）**，派生 18 张 13.7885 → 13.9056。）
 
 50 张折算：默认 ≈760 K token / ≈10 min 墙钟；精简 ≈466 K / ≈8 min；极限 ≈227 K / ≈5 min；
 离线 0 token / ≈2 min —— **四个档都远在「2 小时」预算内**，所以时间不是选档依据，token 才是。
@@ -4470,6 +4473,110 @@ python -X utf8 work\_boxpin2.py                    :: 判题机 vs all/box/nonam
 python -X utf8 work\_nonboxfail.py                 :: 非 box 失败按类型/种类归因
 cd eda-pcb
 set OFFICIAL_PIN_BOX_ONLY=1 && python -X utf8 tools\eval\fast.py --score-only --out tok_full --engine official
+```
+
+---
+
+## §5.43 离线档的 IC 型号名：吸附到官方符号库闭词表（+1.0568，2026-10-20 转正）
+
+**一、病** —— §5.41 第 ④ 条说「纯 CV 档的缺口集中在**文本读出**」，本条就是其中最大的一块。
+
+`-offline` 档 box 的 `Name` 是**没经过 VLM 校准的 CRNN 原文**
+（`stage2/assemble.py:1334` `pn = (info.get("partname") or {}).get("text")`；带 VLM 时才由
+`vlm/enrich.py:407 read_name` + `:683 cv_["Name"] = val` 修）。官方 10 张 21 个 box 里
+**只有 1 个**名字读对（`work\_offtext.py`），其余是**近失串**：
+
+| 案例 | GT | 离线档读成 | 病型 |
+|---|---|---|---|
+| 1 U1 | `MSP432E401YTPDT` | `VREFA+` | 把**框内的引脚功能名**当型号 |
+| 2 U1 | `HS96L03W2C03` | `HSWL03W2C03` | 形近（O/0、W/9） |
+| 2 U2 | `HS96L03W2C03` | `HSW6L03M2C03` | 形近 |
+| 3 U1 | `SY8113BADC` | `SY1813BADC` | 数字位置换 |
+| 5 U1 | `TPS61240DRVR` | `TRSW1240DRVR` | 形近 + 串位 |
+| 9 U2 | `MT2492` | `MT2452` | 一位错 |
+| 10 U1 | `EG1192L` | `EG1152` | 一位错 |
+
+**后果不止名字那一项分**：两条**库驱动**通道都以型号名为键 ——
+`stage2/pinlib.repair_slots`（`fusion/run.py` ⓪.95，库给号、图给序）与
+`fusion/librefine`（⑩，`(型号, 号) → 库名`）—— 型号歪一个字符，整条库路线就是 0：
+
+| 档 | `pin_libseq.n_key`（10 张合计） | `librefine.n_key`（合计） |
+|---|---|---|
+| 默认档 `tok_full` | 19 | 113 |
+| 离线档 `tok_off` | **4**（8/10 张为 0） | **14**（8/10 张为 0） |
+
+**二、药** —— `eda-pcb/fusion/namefix.py`（`FUSION_NAME_SNAP`，**默认 1**）
+
+官方符号库 `eda-pcb/data/BoxICLibrary_200cases.json` 是一张**闭词表**（360 键；官方 10 张的
+14 个不同型号名里 **12 个就在库里**，不在库的只有 `MP2236CGJ-Z`、`STMPS2141STR`，且它们
+到最近库键的距离 > 3 ⇒ 吸附不会把它们改歪）。于是把读出来的串**吸附**回库键：
+
+1. 只动 `box/boxic/ic`（阻容的 `Name` = 位号，绝不能碰）；
+2. 已经是库键（精确或归一化命中）⇒ 一个字符都不动；
+3. 归一化 Levenshtein `d ≤ FUSION_NAME_SNAP_TOL`（默认 2）**且**最优严格优于次优（裕度 ≥1）
+   —— 两个库键一样近时宁可不动；
+4. 读数长度 ≥ `FUSION_NAME_SNAP_MINLEN`（默认 4，挡住 `SC1L` 这种碎片）；
+5. 只改 `partname.text`，旧值留 `partname["_old_text"]`，并向 `cvparts.hypo.LEDGER` 记一条
+   `name_snap`（留痕，不静默丢）。
+
+**三、★ 落位：必须吸在假设池之前**
+
+第一版把它插在 `rep["iterate"]` 之后、`PB.repair_slots` 之前 —— 库通道确实活了
+（`pin_libseq` 0→1 等），但**导出的 `Name` 一个字没变**（case 2 U1 仍是 `HSWL03W2C03`），
+只 +0.3336。根因：`CL.from_stage2`（`fusion/run.py:300`）在吸附**之前**就把
+`comp.<cid>.partname` 的候选值从 `assigned` 抄进假设池，而 `_assemble` 最后调的
+`DC.apply`（`fusion/doc.py:195-222`）又把 claim 的旧值写回 `build_doc` 的 `Name`。
+⇒ 修正为放在 `run_case` 里 `assigned = _load(...)` 之后、`assigned0` deepcopy **之前**，
+让 假设池 / 底稿 / claim 三处看到同一份吸附后的文本：
+
+| 落位 | 官方 10 张 |
+|---|---|
+| 错落位（池之后）⇒ 只活库通道 | **+0.3336**（`pin_libseq`/`librefine` 活了，导出 `Name` 一个字没变） |
+| 正确落位（池之前） | 59.1761 → **60.2329（+1.0568）** |
+
+可加性验算：纯名字重放（`work\_namesnap.py --arms tok_off --tol 2`）= **+0.7232**，
+库通道复活 = **+0.3336**，两者相加 = +1.0568 ✓ ⇒ 两个效应**独立可加**。
+
+**四、读数（2026-10-20，A/B 同代码同数据）**
+
+| 臂 | 官方 10 张（`official` 尺） | protocol2 | 派生 18 张 | 调用 / token |
+|---|---|---|---|---|
+| `-offline` | 59.1761 | 70.04 | 13.7885 | 0 / 0 |
+| `-offline` + 吸附 | **60.2329（+1.0568）** | **71.28（+1.24）** | **13.9056（+0.1171）** | 0 / 0 |
+| 默认档（VLM 开） | 65.5141 | 79.66 | — | 222 / 152 164 |
+| 默认档 + 吸附 | 65.5257（+0.0116，噪声内） | 79.30（−0.36，噪声内） | — | 222 / 152 164 |
+| `-vlm-name off` | 61.0941 | 72.79 | — | 201 / 139 764 |
+| `-vlm-name off` + 吸附 | **61.0941（逐位相同）** | 72.79 | — | 201 / 139 764 |
+| `-lean` | 64.4768 | 79.84 | — | 115 / 93 181 |
+| `-lean` + 吸附 | **64.4768（逐位相同）** | — | — | 115 / 93 181 |
+
+逐案（离线档）**无一处回退**：case2 +1.7438、case3 +1.1538、case5 +1.7711、case9 +3.8825、
+case10 +2.0170。导出的 6 个名字修好并逐条核对：
+`HSWL03W2C03→HS96L03W2C03`、`HSW6L03M2C03→HS96L03W2C03`、`SY1813BADC→SY8113BADC`、
+`TRSW1240DRVR→TPS61240DRVR`、`MT2452→MT2492`、`EG1152→EG1192L`（唯一 MISS 是
+`SC1L→STC11`，GT 是 `HS96L03W2C03`，编辑距离 ≥6 不可达，且**基线本来也是错的**）。
+`box` 名字对错：**错 20 → 14、对 1 → 7**；`pin_libseq.n_key` 4 → 9、`librefine.n_key` 14 → 40。
+
+**五、为什么默认翻 1 是**零风险**（不是「影响很小」）**
+
+VLM 的 `partname` claim 一旦存在就压过本步 —— 三条独立证据：
+`-vlm-name off` 与 `-lean` 两臂开关前后**四个通道逐位相等**（61.0941 / 64.4768 与各自基线
+完全一致）；`tok_full` 与 `tok_fullsnap` 导出的 **21 个 box `Name` 逐条相同且全对**。
+⇒ 本步只在「**没人读过这个名字**」（离线/纯 CV 档）时兜底，不可能把读对的名字改歪。
+
+**验收（默认翻 1 之后、**不带任何环境变量**）**：`fast.py --extra=-offline --out tok_defsnap`
+⇒ `comp 0.428942 / pin 0.713357 / conn 0.729086 / wire 0.401268 / 60.2329`，与显式
+`FUSION_NAME_SNAP=1` 的 `tok_offs` **四项 + 总分逐位相等**。
+
+**六、复现**
+
+```bat
+cd ..
+python -X utf8 work\_offtext.py --arms tok_off,tok_offs      :: 元件文字逐项对账（box 比 Name）
+python -X utf8 work\_namesnap.py --arms tok_off --tol 2      :: 纯名字通道重放（+0.7232）
+python -X utf8 work\_off10.py --arms tok_off,tok_offs        :: 官方 10 张·判题机口径
+python -X utf8 work\_offval.py --arms tok_dvoff,tok_dvoffsnap :: 派生 19 张压力集
+python -X utf8 work\_tokcost.py --only off,offs,full,fullsnap,nname,nnsnap,lean,leansnap
 ```
 
 ---

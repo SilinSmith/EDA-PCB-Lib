@@ -57,6 +57,7 @@ from fusion import cropfix as CF                       # noqa: E402
 from fusion import doc as DC                           # noqa: E402
 from fusion import iterate as IT                        # noqa: E402
 from fusion import llm_judge as LJ                     # noqa: E402
+from fusion import namefix as NS                       # noqa: E402
 from fusion import plausible as PL                     # noqa: E402
 from fusion import priors as PR                        # noqa: E402
 from fusion import rescan as RS                        # noqa: E402
@@ -275,6 +276,22 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
                                               str(RUN_DIR / "stage2" / "_assigned")))
     doc = _load(s1d / ("%s.stage1.json" % case))
     assigned = _load(asd / ("%s.json" % case))
+    # ---- ⓪.93 IC 型号名吸附到官方符号库闭词表（`FUSION_NAME_SNAP`，默认 0=关）----
+    # ★ 位置很关键：**必须在 `CL.from_stage2` 建池之前**（下面几行）。第一版把它放在
+    #   `rep["iterate"]` 之后，结果只修好了库通道（`pin_libseq`/`librefine`），**导出的
+    #   `Name` 一个字没变** —— 因为 `comp.<cid>.partname` 这条 claim 的候选值是在
+    #   `claims.from_stage2(pool)` 里从 `assigned` 抄的，`DC.apply` 最后又拿 claim 把
+    #   `build_doc` 写好的 `Name` 覆盖回去了（离线档实测：pin_libseq 0→1 但 comp 与
+    #   `Name` 逐字不变）。提前到建池之前，池里的候选值就是吸附后的库键。
+    # 病与药、以及「只动 box / 已是库键不动 / 距离与裕度双守卫」见 `fusion/namefix.py`。
+    rep_ns = {}
+    try:
+        if NS.ON:
+            rep_ns = NS.snap_assigned(assigned, doc, log=log)
+    except Exception as exc:                               # noqa: BLE001
+        rep_ns = {"on": bool(NS.ON), "err": str(exc)}
+        if log:
+            log("  [name_snap] 跳过：%s" % exc)
     assigned0 = json.loads(json.dumps(assigned))       # `pool.apply()` 会就地改它
     # ★ 引脚索引 `k` → 文档键 `pin_<号>`：`build_doc` 的产物，`stage2.run` 落到
     # 旁路文件 `<case>.pinindex.json`。**没有它就无法把引脚裁决写回文档** ——
@@ -419,6 +436,8 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
         if log:
             log("  [iterate] 跳过：%s" % exc)
     rep["iterate"] = {k: v for k, v in rep_it.items() if k != "rows"}
+    # ---- ⓪.93 IC 型号名吸附的读数（真正的改动在建池之前就做完了，见 `run_case` 顶部）----
+    rep["name_snap"] = {k: v for k, v in rep_ns.items() if k != "rows"}
     # ---- ⓪.95 槽位级「库给多值、图给顺序」回填（`FUSION_PIN_LIBSEQ`，默认 1=开；
     #          `stage2/pinlib.py:105` 是唯一权威：0=关 / 1=只在组内读数可疑时补纠（默认档，
     #          2026-10-15 转正）/ 2=只要脚数相等就整组按库顺序重写）--
