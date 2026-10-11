@@ -4645,6 +4645,72 @@ python -X utf8 work\_offval.py --arms tok_dvoffsnap,tok_dvoffvf  :: 派生 19 �
 
 ---
 
+## §5.45 离线档的 IC 型号名：用「引脚名集合」反推库键（官方 10 张 +1.04~1.08，**默认暂未翻**，2026-10-20）
+
+**一、病** —— §5.43 的 Levenshtein 吸附只能救编辑距离 ≤2 的近失串，救不了**另一类错**：
+CRNN 把框内的**引脚功能名**当成了型号名（离线档 `1 U1 = VREFA+`、`8 U1 = NRESET`、
+`5 U2 = TPSW1240DR`），这些串到最近库键的距离 ≥3。代价最大的恰恰是它们。
+
+归因（`python -X utf8 work\_pinlib2.py --arms tok_offvf`，读 `_assigned` 的引脚桩 + 库规则 A/B 的
+可救性）：离线档官方 10 张缺的 **38 根 box 引脚**里 —— **`★只差型号名` 18 根**（名读到了、
+号没读到，库里明明有那个号，规则 A 能补）、`桩里既无名也无号` 12 根（图上压根没读出来，
+库也救不了）、`库不可用` 6 根（型号根本不在库里：`STMPS2141STR` 的 case 6 U2/U4、
+`MP2236CGJ-Z` 的 case 7 U1）、`库无此号` 1、`规则A可救(号)` 1。对照默认档（13 缺）：
+`桩里既无名也无号 8` / `库无此号 2` / `库不可用 2` / `规则A可救 1`。
+
+**二、药** —— `eda-pcb/fusion/modelset.py`（`FUSION_MODEL_SET`，**默认 0 = 关，待确认后翻**）
+
+库（`eda-pcb/data/BoxICLibrary_200cases.json`，360 键）每个键带整张符号的引脚表 ⇒ **元件框里
+读到的引脚名集合就是指纹**：`{GND, GNDA, VBAT, VDDC}` 这种组合在 360 个键里几乎唯一。
+打分 = 名命中数（纯数字名丢掉，它们在库里遍地都是）+ 号命中数；守卫与 `namefix` 同形：
+① 只动 `box/boxic/ic`；② 已经**是库键**（`norm` 命中）⇒ 一个字符都不动；
+③ 名命中 `sn ≥ FUSION_MODEL_SET_MIN`（默认 2）**且** `sn - sn₂ ≥ FUSION_MODEL_SET_MARGIN`
+（默认 1；**要求名严格占优**，号只当旁证）；④ 只改 `partname.text`，旧值留 `_old_text`，
+`LEDGER` 记 `model_set`（含命中数与次优键，便于复核）。落位 **⓪.92**，在建池之前
+（`CL.from_stage2` 之前），理由同 §5.43 的落位教训。
+
+**三、可行性干跑**（`python -X utf8 work\_modelset.py --arms tok_offvf`）：`名字已是库键 9` /
+**`★最优=GT（唯一）3`** / `★最优=GT（与次优打平）1` / `最优≠GT 5`。唯一且正确的三例：
+`1 U1 VREFA+ → MSP432E401YTPDT`（名 5 / 号 17，次优 STM32F103C8T6 3/8）、
+`5 U2 TPSW1240DR → TPS61240DRVR`（6/6 vs TPS61089RNRR 5/6）、
+`8 U1 NRESET → PAW3395DM-T6QU`（9/11 vs 2.4GHz 4/14）。打平被拒（正确行为）：
+`5 U3 VOUTAD`（AMS1117-3.3 与 AMS1117-5.0 都是 2 名/4 号）、`2 U4 HSWLO3W2C`（BH1750 与
+HS96L03W2C03 都是 4 名/3 号）。
+
+**四、A/B（官方 10 张，`official` 尺；读数落 `work\_ms_off10.log`）**
+
+| 臂 | 配置 | comp | pin | conn | wire | 总分 |
+|---|---|---|---|---|---|---|
+| `tok_offms0` | 关（= 基线 `tok_offvf`） | 0.453920 | 0.713357 | 0.729086 | 0.401268 | 60.9822 |
+| `tok_offms1` | `MODEL_SET=1`，MARGIN=1（6 命中） | 0.463921 | 0.712069 | 0.750523 | 0.407500 | **62.0627（+1.0805）** |
+| `tok_offms2` | `MODEL_SET=1`，**MARGIN=2**（2 命中） | 0.463465 | 0.719135 | 0.745525 | 0.404673 | **62.0224（+1.0402）** |
+
+逐案（ms1 − 基线）：case1 **+6.5166**、case5 +3.5134、case6 **−2.8251**、case7 +3.4391、
+case8 **+3.8855**、case10 **−3.7246**，其余六张逐位不变。`tok_offms2` 的 +1.0402 恰好
+= (case1 +6.5166 + case8 +3.8855) / 10 ⇒ **它的收益全部来自两颗「唯一且正确」的元件**；
+case5/6/7/10 那些裕度只有 1 的（3 正确 3 错误）净贡献仅 **+0.04**。
+
+**五、为什么倾向 MARGIN=2（明天翻默认的前提）** —— VLM 档的安全性只在 MARGIN=2 下成立：
+对已存档的 `_assigned` 干跑，MARGIN=1 时 VLM 档仍会动 3 颗（case 6 ×2、case 7 ×1，都是
+「把错名换成另一个错名」）；**MARGIN=2 时 `tok_full` / `tok_lean` 命中 0、`-offline` 命中 2
+（case 1 / case 8）** ⇒ 用 0.04 分换「VLM 各档结构性零影响」。
+**派生 19 张压力集的 A/B 尚未收（作业在跑，读数落 `work\_ms_dv.log`、臂 `tok_dvms2`）**
+⇒ 按纪律**默认仍为 0**；明天读数为正再翻 1（并把 `FUSION_MODEL_SET_MARGIN` 默认 1 → 2 一起翻）。
+
+**六、复现**
+
+```bat
+cd ..
+python -X utf8 work\_pintext.py --arms tok_full,tok_offvf        :: 引脚失分按机制归因
+python -X utf8 work\_pinlib2.py --arms tok_offvf                 :: 缺的脚「库能不能救」三问
+python -X utf8 work\_modelset.py --arms tok_offvf                :: 名集合指纹的可行性（唯一性）
+python -X utf8 work\_off10.py --arms tok_offvf,tok_offms1,tok_offms2
+cd eda-pcb
+set FUSION_MODEL_SET=1 && set FUSION_MODEL_SET_MARGIN=2 && python -X utf8 tools\eval\fast.py --cases 1,2,3,4,5,6,7,8,9,10 --extra=-offline --out tok_offms2
+```
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |

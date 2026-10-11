@@ -57,6 +57,7 @@ from fusion import cropfix as CF                       # noqa: E402
 from fusion import doc as DC                           # noqa: E402
 from fusion import iterate as IT                        # noqa: E402
 from fusion import llm_judge as LJ                     # noqa: E402
+from fusion import modelset as MS                      # noqa: E402
 from fusion import namefix as NS                       # noqa: E402
 from fusion import valfix as VF                        # noqa: E402
 from fusion import plausible as PL                     # noqa: E402
@@ -277,6 +278,19 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
                                               str(RUN_DIR / "stage2" / "_assigned")))
     doc = _load(s1d / ("%s.stage1.json" % case))
     assigned = _load(asd / ("%s.json" % case))
+    # ---- ⓪.92 型号名「用引脚名集合反推」（`FUSION_MODEL_SET`，默认 0=关）----
+    # 比 ⓪.93 更狠的一步：`namefix` 只能救编辑距离 ≤2 的近失串，救不了「把框内引脚功能名
+    # 当型号」这类（`VREFA+` / `NRESET` / `TPSW1240DR`）。这里拿元件框里**读到的引脚名
+    # 集合**当指纹去库里找唯一最优的键（离线 10 张缺的 38 根 box 引脚里 18 根「只差型号名」）。
+    # 同样必须在建池之前，理由见下一段。病/药/守卫见 `fusion/modelset.py`。
+    rep_ms = {}
+    try:
+        if MS.ON:
+            rep_ms = MS.snap_assigned(assigned, doc, log=log)
+    except Exception as exc:                               # noqa: BLE001
+        rep_ms = {"on": bool(MS.ON), "err": str(exc)}
+        if log:
+            log("  [model_set] 跳过：%s" % exc)
     # ---- ⓪.93 IC 型号名吸附到官方符号库闭词表（`FUSION_NAME_SNAP`，默认 0=关）----
     # ★ 位置很关键：**必须在 `CL.from_stage2` 建池之前**（下面几行）。第一版把它放在
     #   `rep["iterate"]` 之后，结果只修好了库通道（`pin_libseq`/`librefine`），**导出的
@@ -449,6 +463,8 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
         if log:
             log("  [iterate] 跳过：%s" % exc)
     rep["iterate"] = {k: v for k, v in rep_it.items() if k != "rows"}
+    # ---- ⓪.92 型号名「引脚名集合反推」的读数（改动在建池之前，见 `run_case` 顶部）----
+    rep["model_set"] = {k: v for k, v in rep_ms.items() if k != "rows"}
     # ---- ⓪.93 IC 型号名吸附的读数（真正的改动在建池之前就做完了，见 `run_case` 顶部）----
     rep["name_snap"] = {k: v for k, v in rep_ns.items() if k != "rows"}
     # ---- ⓪.94 值规范化（同上：真正的改动在建池之前）----
