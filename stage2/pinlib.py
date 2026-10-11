@@ -25,6 +25,13 @@
 号的升序**。GT 实测（`work\\_liborder.py`，官方 10 张）：box 元件的 **94 个同名组里
 88 个（93.6%）** 能逐脚复现 GT。
 
+库键命中还要补一档**前缀**（`_key_for`）：图上常印**带封装后缀的完整订货号**，库里
+只有基型号 —— case 7 的 `U1` 印 `MP2236CGJ-Z`、库键 `MP2236`，`libpins.key_for` 的
+模糊档阈值 0.85 而 difflib 比值只有 `2·6/(12+6) = 0.667` ⇒ 三档（精确/归一/模糊）全
+落空。前缀档要求库键归一化后**长度 ≥ 4**、是读数的**前缀**、且**唯一**命中。
+★ 只在本模块用：动共享的 `libpins.key_for` 会连带改 `stage2/librefine.py` 的改名行为，
+那是另一条已转正的通道，必须自带 A/B。
+
 ## 为什么在融合层而不是阶段二
 
 阶段二 `assign()` 跑在 **VLM 之前**（`submission/run.py` 顺序：阶段一/二 → 阶段三 →
@@ -45,7 +52,9 @@ VLM 补强 → 融合层），那时 `partname` 还没被 VLM 修好 —— `--n
   2. **组外占用拒绝**：候选号若已被**同元件别的槽**读走，整组放弃。实战踩点：
      `case 10 U1 EG1192L` 的 `VB` 组库里是 `6`，而图上 `VR` 那根已经读到 `6` ⇒
      老写法把 `VB` 也改成 `6`，两根脚撞号 ⇒ `build_doc` 少一根脚（引脚数 9 → 8）。
-  3. **撞号终检**：写入后整颗元件的号集合若仍有重复，**整颗放弃**（`blocked`）。
+  3. **撞号终检**：写入后**新出现**的撞号 ⇒ 整颗放弃（`blocked`）。注意只算「修出来
+     的新撞号」：`case 7 U1 MP2236CGJ-Z` 读数本身就带两个 `4`、两个 `8`（图上印重 /
+     读重），而它的修法（`EN` 8→6）恰恰是**减少**撞号，一刀切会误杀。
 
 分配规则：待填槽位（读数不在集合里）按 y 升序，依次领走剩下的候选号（候选升序）。
 此外 **`MODE=1` 时若组内没有可疑读数就不动手**。写入时**就地改文本、保留原有
@@ -170,6 +179,35 @@ def _resolve_name(n: str, byname: dict):
     if best_k and best_r >= FUZZY and (best_r - second_r) >= FUZZY_MARGIN:
         return best_k
     return None
+
+
+def _key_for(ctx, pname: str) -> Optional[str]:
+    """型号名 → 库键：`libpins` 的三档（精确 / 归一 / 模糊）**+ 一档前缀**。
+
+    图上印的常常是**带封装后缀**的完整订货号，而库里只有基型号 —— case 7 的 `U1` 是
+    `MP2236CGJ-Z`，库键是 `MP2236`：difflib 比值 `2·6/(12+6) = 0.667` 低于模糊档的
+    0.85 ⇒ 三档全落空。前缀档要求：库键归一化后**长度 ≥ 4**、是读数的**前缀**、且
+    **唯一**命中（多个命中一律放弃）。
+
+    ★ 这一档只在本模块用（不动 `libpins.key_for`）：动共享的 `key_for` 会连带改
+    `stage2/librefine.py` 的改名行为，那是另一条已转正的通道，必须自带 A/B。
+    """
+    if not pname:
+        return None
+    try:
+        k = ctx.key_for(pname)
+    except Exception:                                       # noqa: BLE001
+        k = None
+    if k:
+        return k
+    nt = _libpins.norm(pname)
+    if len(nt) < 4:
+        return None
+    hits = [kk for kk in maps()
+            if len(_libpins.norm(kk)) >= 4 and nt.startswith(_libpins.norm(kk))]
+    if len(hits) != 1:
+        return None
+    return hits[0]
 
 
 def _num_of(pin_key: str) -> str:
@@ -409,7 +447,7 @@ def repair_slots(assigned: dict, ctx=None, mode: Optional[int] = None,
         if not pname:
             continue
         try:
-            key = ctx.key_for(pname)
+            key = _key_for(ctx, pname)
         except Exception:                               # noqa: BLE001
             key = None
         if not key:
@@ -418,6 +456,11 @@ def repair_slots(assigned: dict, ctx=None, mode: Optional[int] = None,
         if not mp:
             continue
         st["n_key"] += 1
+        try:
+            if ctx.key_for(pname) != key:
+                st["n_key_prefix"] = st.get("n_key_prefix", 0) + 1
+        except Exception:                               # noqa: BLE001
+            pass
         byname, canon = mp["byname"], mp["canon"]
         idxs = sorted(pins.keys(), key=lambda x: (len(str(x)), str(x)))
         # ---- ① 按脚名归一 → 库名 分组（只有**读到名字**的槽位进组）------------
@@ -501,14 +544,22 @@ def repair_slots(assigned: dict, ctx=None, mode: Optional[int] = None,
                 named.append((i, num, canon.get(hits[0]) or hits[0]))
         if not plan and not named:
             continue
-        # ---- ③ 撞号终检：写完之后这颗元件的号集合里不许有重复（有就整颗放弃）----
+        # ---- ③ 撞号终检：只拒绝「**修出新撞号**」，不动本来就撞着的那些 --------
+        #    case 7 的 `MP2236CGJ-Z` 读数本身就带两个 `4`、两个 `8`（图上印重 / 读重）；
+        #    要修的 `EN` 8→6 恰恰是**减少**撞号。一刀切「有重复就整颗放弃」会把这类
+        #    「本来就病着、修完更好」的元件误杀。
         _new = dict((i, _slot_text(pins[i], "number")) for i in idxs)
         for i, _old, n, _ln in plan:
             _new[i] = n
-        _vals = [v for v in _new.values() if v]
-        if len(set(_vals)) != len(_vals):
-            dup = sorted(v for v in set(_vals) if _vals.count(v) > 1)
-            st["blocked"].append({"cid": cid, "grp": "*", "dup": dup})
+        _before = [v for v in (_slot_text(pins[i], "number") for i in idxs) if v]
+        _after = [v for v in _new.values() if v]
+
+        def _dups(vs):
+            return set(v for v in set(vs) if vs.count(v) > 1)
+
+        _bad = sorted(_dups(_after) - _dups(_before))
+        if _bad:
+            st["blocked"].append({"cid": cid, "grp": "*", "dup": _bad})
             continue
         # ---- ③ 写入（只写 `number`/`name` 两个字段，绝不增删槽位）-------------
         # ★ 就地改文本、**保留原有的 `box`/`conf`/`d`**：下游（`priors` / `solve` /
@@ -577,8 +628,11 @@ def _selftest() -> int:
     }
 
     class _Ctx:
+        """**只做精确命中**的假 ctx：这样 `_key_for` 的前缀档才会被真正走到。"""
+
         def key_for(self, s):
-            return "FAKE1" if str(s).strip().upper().startswith("FAKE") else None
+            t = str(s).strip().upper()
+            return t if t in _MAPS else None
 
     _ctx = lambda: _Ctx()                                   # type: ignore
     bad: List[str] = []
@@ -677,6 +731,13 @@ def _selftest() -> int:
     chk(_slot_text(a5["comps"]["b0"]["pins"]["0"], "number") == "8"
         and _slot_text(a5["comps"]["b0"]["pins"]["0"], "name") == "VDDA",
         "模糊名组未纠名补号：%s" % a5["comps"]["b0"]["pins"]["0"])
+    # ⑫ 库键前缀档：带封装后缀的读数（`MP2236CGJ-Z` vs 库键 `MP2236`）也要命中，
+    #    无命中/多命中则放弃。
+    chk(_key_for(_ctx(), "FAKE1CGJ-Z") == "FAKE1", "前缀档未命中：%s"
+        % _key_for(_ctx(), "FAKE1CGJ-Z"))
+    chk(_key_for(_ctx(), "FAKE1") == "FAKE1", "精确档被前缀档抢走")
+    chk(_key_for(_ctx(), "ZZZZ9999") is None, "前缀档误命中")
+    chk(_key_for(_ctx(), "FAK") is None, "过短的读数不该进前缀档")
     _MAPS, _ctx = saved_maps, saved_ctx
     print("自检 %d 项：%s" % (n[0], "全部通过" if not bad else "失败"))
     for b in bad:
