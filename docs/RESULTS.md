@@ -3165,6 +3165,61 @@ python -X utf8 work\_desigbind.py --run work/_fast_out_ls2on --cases '1,10,2,3,4
 
 ---
 
+### 5.27 ★ 地网「本质模式」守卫（`STAGE2_RAIL_SPLIT=1`，默认开）：官方 10 张**逐位不变** —— 用户 m02404 的结构性结案（2026-10-16）
+
+**起因**：用户提出「一张图里的 gnd 不是一个形状，是好几款（GND / AGND / PGND / DGND），
+先按本质不同的模式分开，最后折叠回 `gnd`」。要回答的是：我们到底有没有把不同本质的地网并成一条。
+
+**语料事实（判分层面几乎没有可赢空间）**：扫 210 个 GT 文件（`10GT` + `200_train_cases` 的
+`*target*`）的网名，含地家族 token 的只有 **46 个文件（全在 `200_train_cases`，`10GT` 零命中）**，
+token 计数 **`GND` 52 / `VSS` 2 / `PGND` 2 / `AGND` 0 / `DGND` 0**；官方类型表
+（`10GT/type_list.md`）只有**一个** `gnd` 类。⇒ 拆分本身在给定语料上不改分，价值在**防错**。
+
+**读码（我们其实早就分开了）**：`stage2/assemble.py:1671 attach_orphan_rails(nets, pins)` 挂轨引脚
+用的是**精确同名小写判据**（`nm = str((pr or {}).get("pinname") or "").strip().lower()`），
+`RAIL_NAMES`（`:1548-1551`）里 `gnd/gnda/agnd/dgnd/pgnd/vss/vssa` 各自独立 ⇒ 同名匹配这一层
+GND 与 AGND 从来不混。全流程**唯一类型无关的几何合并**是 `weld_nets`（`:1628`）——
+它只看距离/共线/是否穿文字框或元件框。⇒ 风险路径只有这一条。
+
+**药**：`rail_mode(name) -> ("gnd", letter) | None`（去非字母→找 `gnd`/`vss` 核心→取核心前/后一位
+字母：`GND`→`("gnd","")`、`AGND`/`VSSA`→`("gnd","a")`、`PGND`→`("gnd","p")`、`VCC`→`None`）；
+`_net_rail_modes(rec, pins)` 对该网 `hyperGraph` 里每个引用取引脚名的模式集合；焊接配对循环里
+**两侧模式集合都非空且不相交就拒焊**（任一侧空集 = 不设限，例如普通信号网）。每次拒焊写一条
+`no_delete` 账本事件（`kind="merge"`，`by="stage2.assemble.weld_nets"`，理由含两个模式集合），
+并打一行 `[assemble] 地模式守卫（RAIL_SPLIT）：拒绝焊接 N 处不同本质模式的地网`。
+用户要的「输出折叠回 `gnd`」本来即成立 —— 类型表只有一个 `gnd`。
+
+**取证（守卫生效但当前语料不触发）**：新探针 `work\_railchk.py <case>` 打印真实文档里每条网的
+地模式：case 1 → 10 条网、1 条含地模式且模式为 `('', 'a')`（**一条网里同时有 GND 与 GNDA 脚**，
+GT 同此，属合法同网，不该拆）；case 5 → 2 条 `('',)`；case 10 → 2 条 `('',)`；case 7 → 1 条 `('a',)`
+（`MP2236` 的 AGND）。⇒ 提取器看得见真实变体，而「模式不相交的焊接候选」语料里是 **0 对**。
+
+**读数（默认开、零回归）**：
+
+| 装置 | 结果 |
+|---|---|
+| 自检 6 环境 | 默认 **23 项** / `STAGE2_RAIL_SPLIT=0` 22 项 / `_EDGE_DEDUP2=0` 21 项 / `_EDGE_SPLIT=0`+`_EDGE_DEDUP=0` 17 项 / 两个 box 引脚闸门关 24 项 / `_EDGE_SNAP=0` 23 项，全部 exit 0；默认跑时夹具打印两行「拒绝焊接 1 处」（GND/AGND、AGND/DGND）✓ |
+| 离线等价 `work\_raileq.py`（`build_doc` 前后 sha1） | 官方 10 + val 19 **每 case 摘要逐位相同**，`blocked=0`（`STAGE2_RAIL_SPLIT` 0↔1） |
+| 在线 A/B `work\_rail_ab.ps1`（作业 `pwsh-349`） | 官方 10：`railoff` = `railon` = **79.14**，逐案表**逐字节相同**（四通道 0.9819 / 0.7452 / 0.7728 / 0.4008）；val 19：30.78 → 30.83（**+0.05，臂不干净** —— VLM 名字抽样抖动，以此前声明的离线等价为准） |
+
+**结论**：保留默认 **1**。它是「正确的防御 + 零风险」，不是分数来源；m02404 的结构性回答 =
+「同名匹配层早已分开；几何焊接层现在也拒焊不同本质的地网；输出仍折叠成 `gnd`」。
+**已判负、别再试**：把共享同名轨引脚的网络整块并起来（`attach_orphan_rails` 的旧方案，
+`10GT` 50.11 → 49.34、netH 0.4064 → 0.3839、tp 148 → 139）。
+
+```powershell
+# 守卫生效性（真实文档里每条网的地模式）
+python -X utf8 work\_railchk.py 1 ; python -X utf8 work\_railchk.py 5
+# 离线等价（两个开关值下 build_doc 的 sha1）
+python -X utf8 work\_raileq.py official ; python -X utf8 work\_raileq.py val
+# 在线 A/B（官方 10 + val 19）
+powershell -ExecutionPolicy Bypass -File work\_rail_ab.ps1
+# 自检四/六环境
+python -X utf8 stage2\assemble.py
+```
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |

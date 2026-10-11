@@ -1515,7 +1515,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         snap_edge_ends(out_nets, EDGE_SNAP, EDGE_SNAP_ANG)
     if NET_WELD > 0:
         # ★ 跨网焊接（默认关）必须在**吸附之后**：离线实验就是在吸附后的最终文档上量的。
-        out_nets = weld_nets(out_nets, components, stage1.get("texts") or (), H)
+        out_nets = weld_nets(out_nets, components, stage1.get("texts") or (), H, pins)
     if NET_DROP_PWRONLY:
         # ★ 「整条网只有电源/地符号」的孤立网：GT 里不存在这种网（每个电源符号都挂在
         # 一条有真实元件的网络上），所以它只可能是 FP。**必须放在全部合并之后**——
@@ -1550,6 +1550,52 @@ RAIL_NAMES = frozenset((
     "vcc", "vdd", "vddd", "vdda", "vddio", "3v3", "5v", "12v",
     "vbat", "vbus", "vin", "vout"))
 RAIL_ATTACH = env_on("STAGE2_RAIL_ATTACH", "1")
+# ★ 「地分模式」守卫（`STAGE2_RAIL_SPLIT`，默认开）：owner m23945/m02404 的要求是
+# **内部按本质模式把 GND 家族拆开跑，输出时再折叠回 `gnd`**（交付 JSON 的 type 一个
+# 字节都不改）。这里落地的是拆分后的**唯一一条会改变结构**的判据：跨网焊接
+# （`weld_nets`）不得把「本质模式不相交」的两条地网焊成一条 —— 例如 `GND` 与
+# `AGND`、`AGND` 与 `DGND`。依据：官方数据集里 `gnd` 只有**一个** type（`10GT/type_list.md`），
+# 变体只能从**引脚名/标签**看出来；而 `attach_orphan_rails` 本来就是「同名才挂」
+# （精确按 `pinname` 匹配），所以真正会混淆两个变体的只剩几何焊接这一条路。
+# 语料事实（2026-10-15，210 个 GT 文件里的网名）：`GND` 52 次、`VSS` 2 次、`PGND` 2 次，
+# **`AGND`/`DGND` 0 次** ⇒ 本守卫在我们的语料上是**中性**的（A/B 逐位相同，见 RESULTS §5.27），
+# 它的价值只在「测试集真出现变体时不并网」。模式字母：`a` 模拟 / `d` 数字 / `p` 功率 / `e` 大地。
+RAIL_SPLIT = env_on("STAGE2_RAIL_SPLIT", "1")
+_RAIL_CORES = ("gnd", "vss")
+_RAIL_LETTERS = "adpe"
+_N_RAIL_BLOCK = [0]
+
+
+def rail_mode(name) -> tuple:
+    """轨名的 `(家族, 本质模式)`；非地家族返回 `None`。
+
+    `rail_mode("GND") == ("gnd", "")`、`rail_mode("AGND") == ("gnd", "a")`、
+    `rail_mode("VSSA") == ("gnd", "a")`、`rail_mode("VCC") is None`。
+    ★ 这个模式**只进内部判据与账本**，绝不写进交付文档（type 仍折叠为 `gnd`）。
+    """
+    t = re.sub(r"[^a-z]", "", str(name or "").lower())
+    if not t:
+        return None
+    for core in _RAIL_CORES:
+        i = t.find(core)
+        if i < 0:
+            continue
+        pre, suf = t[:i], t[i + len(core):]
+        letter = (pre[-1:] if pre else "") or (suf[:1] if suf else "")
+        return ("gnd", letter if letter in _RAIL_LETTERS else "")
+    return None
+
+
+def _net_rail_modes(rec: dict, pins: Dict[str, dict]) -> set:
+    """一条网的「地模式」集合（从它的引脚名推）。空集 = 这条网没有地家族引脚。"""
+    if not pins:
+        return set()
+    out = set()
+    for comp, num in _hg_refs((rec or {}).get("hyperGraph", "")):
+        m = rail_mode(_pinname(pins, comp, num))
+        if m:
+            out.add(m[1])
+    return out
 
 
 def _net_seg_pairs(net: dict) -> List[tuple]:
@@ -1580,11 +1626,15 @@ def _bridge_hits(a, b, boxes, pad: float) -> bool:
 
 
 def weld_nets(nets: Dict[str, dict], components: Dict[str, dict],
-              texts: Sequence = (), H: float = 0.0) -> Dict[str, dict]:
+              texts: Sequence = (), H: float = 0.0,
+              pins: Dict[str, dict] = None) -> Dict[str, dict]:
     """★ 跨网焊接（`STAGE2_NET_WELD`）：把「端点相距 6~16px、连线穿文字框、不穿元件框、
     且两段不平行同向」的两条网络并成一条。完整依据与逐条件读数见 `NET_WELD` 的长注释。
 
     只动网络结构（`_refs`/`edges` 取并集），不碰任何引脚取值 ⇒ 引脚/元件通道逐位不变。
+
+    `pins`（可选）只服务 `STAGE2_RAIL_SPLIT` 地模式守卫：给了它才会在焊接前比两条网的
+    「地模式集合」，避免把 `GND` 与 `AGND` 这类**本质不同的地**焊成一条（见 `rail_mode`）。
     """
     if NET_WELD <= 0 or len(nets) < 2:
         return nets
@@ -1604,6 +1654,7 @@ def weld_nets(nets: Dict[str, dict], components: Dict[str, dict],
         if b and len(b) == 4:
             cboxes.append((float(b[0]), float(b[1]), float(b[2]), float(b[3])))
     gap, gmin = NET_WELD, NET_WELD_MIN
+    _nblock0 = _N_RAIL_BLOCK[0]
     parent: Dict[str, str] = {k: k for k in nets}
 
     def find(x):
@@ -1639,6 +1690,26 @@ def weld_nets(nets: Dict[str, dict], components: Dict[str, dict],
             cos = (da[0] * db[0] + da[1] * db[1]) / (na * nb)
             if cos > NET_WELD_COS:
                 continue
+            # ★ 地模式守卫（`STAGE2_RAIL_SPLIT`，默认开）：两条网各自的「地模式集合」都非空、
+            # 且**不相交** ⇒ 它们是本质不同的地（`{}`↔`{a}` 的 GND vs AGND、`{a}`↔`{d}` 的
+            # AGND vs DGND），**拒绝焊接**。集合相交（如 `{a,d}` 与 `{a}`）或有一侧无地家族
+            # 引脚（空集）⇒ 不设限，保持原有行为。只做否决、不改任何取值 ⇒ 关掉开关时逐位相同。
+            if RAIL_SPLIT and pins:
+                _ma = _net_rail_modes(nets[ka], pins)
+                _mb = _net_rail_modes(nets[kb], pins)
+                if _ma and _mb and not (_ma & _mb):
+                    _N_RAIL_BLOCK[0] += 1
+                    # 「不删除只削弱」的账本口径（工程哲学 §94：merge/split 必须留事件）：
+                    # 这次**没有发生**的合并要记一笔，下游才有机会复核。
+                    try:
+                        from cvparts.hypo import LEDGER as _LG
+                        _LG.record("merge", "weld:%s+%s" % (ka, kb), before=[ka, kb],
+                                   reason="地模式不相交 %r vs %r，拒绝焊接"
+                                          % (sorted(_ma), sorted(_mb)),
+                                   by="stage2.assemble.weld_nets")
+                    except Exception:
+                        pass
+                    continue
             if not _bridge_hits(ua, ub, tboxes, NET_WELD_TPAD):
                 continue
             if _bridge_hits(ua, ub, cboxes, 0.0):
@@ -1647,6 +1718,9 @@ def weld_nets(nets: Dict[str, dict], components: Dict[str, dict],
             if ra != rb:
                 parent[rb] = ra
                 n_join += 1
+    if _N_RAIL_BLOCK[0] > _nblock0:
+        print("[assemble] 地模式守卫（RAIL_SPLIT）：拒绝焊接 %d 处不同本质模式的地网"
+              % (_N_RAIL_BLOCK[0] - _nblock0,))
     if not n_join:
         return nets
     groups: Dict[str, List[str]] = {}
@@ -1911,6 +1985,36 @@ def _selftest() -> int:
                        for e in _t2["net_1"]["edges"].values())
         chk(_pts2 == [(0.0, 50.0, 100.0, 50.0), (100.0, 50.0, 100.0, 80.0),
                       (100.0, 50.0, 140.0, 50.0)], "再去重后的边集合: %r" % (_pts2,))
+
+    # ★ 地模式守卫（`STAGE2_RAIL_SPLIT`）：两条**反向共线**、端点相距 10px 的地网，中间跨一条
+    #   文字框 —— 这正是 `weld_nets` 会焊的那一形态。两侧引脚名同为 `GND` ⇒ 应并成 1 条；
+    #   一边 `GND` 一边 `AGND` ⇒ **本质不同的地**，必须拒焊、仍是 2 条。模式由引脚名推，
+    #   输出里不留任何字段（`type` 仍折叠回 `gnd`）。
+    def _railfix(na, nb):
+        _n = {
+            "net_1": {"hyperGraph": "(U1.1)", "_refs": [["U1", "1"]], "pins": [],
+                      "edges": {"edge_1": [{"x": 0.0, "y": 0.0}, {"x": 50.0, "y": 0.0}]}},
+            "net_2": {"hyperGraph": "(U2.1)", "_refs": [["U2", "1"]], "pins": [],
+                      "edges": {"edge_1": [{"x": 60.0, "y": 0.0}, {"x": 110.0, "y": 0.0}]}},
+        }
+        _p = {"U1": {"pin_1": {"pinname": na}}, "U2": {"pin_1": {"pinname": nb}}}
+        _t = [{"bbox_img": [48.0, 95.0, 62.0, 105.0], "text": nb}]
+        return weld_nets(_n, {}, _t, 100.0, _p)
+
+    chk(rail_mode("AGND") == ("gnd", "a") and rail_mode("GND") == ("gnd", "")
+        and rail_mode("VSSA") == ("gnd", "a") and rail_mode("PGND") == ("gnd", "p")
+        and rail_mode("VCC") is None and rail_mode("") is None, "rail_mode 映射")
+    if NET_WELD > 0:
+        chk(len(_railfix("GND", "GND")) == 1, "同模式地网应焊成 1 条")
+        _rg = _railfix("GND", "AGND")
+        _ra = _railfix("AGND", "DGND")
+        _rv = _railfix("GND", "VCC")
+        if RAIL_SPLIT:
+            chk(len(_rg) == 2, "GND 与 AGND 不得焊接（RAIL_SPLIT=1）: %r" % (list(_rg),))
+            chk(len(_ra) == 2, "AGND 与 DGND 不得焊接（RAIL_SPLIT=1）: %r" % (list(_ra),))
+        else:
+            chk(len(_rg) == 1, "RAIL_SPLIT=0 时应恢复焊接: %r" % (list(_rg),))
+        chk(len(_rv) == 1, "非地家族一侧（VCC）不设限: %r" % (list(_rv),))
 
     # 网络标签合并：两条 net 贴同名标签 -> 并成一条
     merged = merge_by_label({
