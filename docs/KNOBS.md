@@ -6,7 +6,7 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **439** 个开关。
+共 **440** 个开关。
 
 ## 目录
 
@@ -19,7 +19,7 @@
 - [cvparts](#cvparts)（10）
 - [pipeline](#pipeline)（11）
 - [submission](#submission)（6）
-- [schematic_parser](#schematic_parser)（3）
+- [schematic_parser](#schematic_parser)（4）
 
 <a id="stage1"></a>
 
@@ -188,7 +188,7 @@
 | `STAGE2_CONFORM_TYPE_PEN` | `"0.85"` | `stage2/assign.py:551` |
 | `STAGE2_CPNT_LIB` | `""` | `stage2/libpins.py:90` |
 | `STAGE2_DBG_CID` | — | `stage2/assign.py:220` |
-| `STAGE2_DBG_PINS` | — *(4 处)* | `stage2/assemble.py:1394` |
+| `STAGE2_DBG_PINS` | — *(4 处)* | `stage2/assemble.py:1420` |
 | `STAGE2_DEMOTE_HARD` | `"0.05"` | `stage2/structmatch.py:36` |
 | `STAGE2_DESIG_MAXW` | `"6.0"` | `stage2/assign.py:342` |
 | `STAGE2_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:76` |
@@ -285,9 +285,9 @@
 | `STAGE2_PIN_TRUST_DROP` | `""` | `stage2/run.py:94` |
 | `STAGE2_PREFIX` | `"strict"` | `stage2/assign.py:156` |
 | `STAGE2_PREFIX_SKEL` | `"0"` | `stage2/assign.py:166` |
-| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1687` |
-| `STAGE2_RAIL_SPLIT` | `"1"` | `stage2/assemble.py:1698` |
-| `STAGE2_STAMP_ONE_SIDE` | `"1"` | `stage2/assemble.py:908` |
+| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1713` |
+| `STAGE2_RAIL_SPLIT` | `"1"` | `stage2/assemble.py:1724` |
+| `STAGE2_STAMP_ONE_SIDE` | `"1"` | `stage2/assemble.py:934` |
 | `STAGE2_STEAL` | `"80"` | `stage2/assign.py:398` |
 | `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:385` |
 | `STAGE2_TIGHT_ROLES` | `"pin_number,pin_name"` | `stage2/text.py:129` |
@@ -528,4 +528,5 @@
 |---|---|---|
 | `OFFICIAL_BBOX_PX` | `"5.0"` | `schematic_parser/official.py:79` |
 | `OFFICIAL_COLLAPSE` | `"0"` | `schematic_parser/official.py:90` |
+| `OFFICIAL_PIN_BOX_ONLY` | `"0"` | `schematic_parser/official.py:105` |
 | `OFFICIAL_PIN_PX` | `"5.0"` | `schematic_parser/official.py:83` |

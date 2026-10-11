@@ -897,7 +897,33 @@ PIN_STAMP_ON = env_on("STAGE2_PIN_STAMP", "1")
 # `20261009引入/.../report/submission/*/1.json` 的 protocol 段），贴章路径原来把号码
 # 直接当脚名写 ⇒ 每个 d/led 的两脚各吃一次 `pin_name` 失分（10GT 共 8 个）。
 PIN_NAME_ALIAS = {("d", "1"): "K", ("d", "2"): "A",
-                  ("led", "1"): "K", ("led", "2"): "A"}
+                  ("led", "1"): "K", ("led", "2"): "A",
+                  # ★ 2026-10 全池普查（`python -X utf8 work\_nonboxnum.py`，
+                  # 域 = `10GT` + `10_GTcase` + `200_train_cases`）：这几个非 box 类型
+                  # 的「脚号→脚名」在官方数据里是**确定性的**（不是随机 `P_##`），
+                  # 而且是**名≠号**，所以我们按位置发的 1/2/3 全都会吃 `pin_name`：
+                  #   crystal_2pin 44/44 = 1→X1, 2→X2
+                  #   crystal_3pin  6/6  = 1→INPUT, 2→GND, 3→OUTPUT
+                  #   crystal_4pin  8/8  = 1→OSC1, 2→OSC2, 3→GND, 4→GND
+                  #   bjt (n=3)    45/45 = 1→B, 2→E, 3→C（另有 5 个 n=2 的随机 `P_##`）
+                  #   amp_3pin     10/10 = 1→IN+, 2→IN-, 3→OUT
+                  #   amp_5pin     11/11 = 1→IN+, 2→IN-, 3→OUT, 4→VCC, 5→VEE
+                  # 而 `gnd`/`v`/`switch`/`other`/`mosfet`/`buzzer`/`battary`/`dc`/
+                  # `esd`/`ant`/`net_*`/`m3螺丝` 的号与名都是**随机生成**的
+                  # （`pin_119→P_20` 这种）⇒ 那些类型无表可查、只能靠键匹配。
+                  # 这张表**只可能把失败变成功**（(类型,号) 对上才会查表；猜错的号本来
+                  # 就配不上），所以是零风险的补丁；官方 10 张里没有这些类型，产物逐字节不变。
+                  ("crystal_2pin", "1"): "X1", ("crystal_2pin", "2"): "X2",
+                  ("crystal_3pin", "1"): "INPUT", ("crystal_3pin", "2"): "GND",
+                  ("crystal_3pin", "3"): "OUTPUT",
+                  ("crystal_4pin", "1"): "OSC1", ("crystal_4pin", "2"): "OSC2",
+                  ("crystal_4pin", "3"): "GND", ("crystal_4pin", "4"): "GND",
+                  ("bjt", "1"): "B", ("bjt", "2"): "E", ("bjt", "3"): "C",
+                  ("amp_3pin", "1"): "IN+", ("amp_3pin", "2"): "IN-",
+                  ("amp_3pin", "3"): "OUT",
+                  ("amp_5pin", "1"): "IN+", ("amp_5pin", "2"): "IN-",
+                  ("amp_5pin", "3"): "OUT", ("amp_5pin", "4"): "VCC",
+                  ("amp_5pin", "5"): "VEE"}
 # ★★ 每一侧只保留「沿轴投影绝对值最大」的候选（最贴轴的那个），旁侧幻影脚不发号。
 # 2026-10 实测（`work/tools/dev/_stampchk.py`，官方 10 张）：旧逻辑按候选顺序贪心
 # 发号，`pts` 的 `side=[F,F,T,F]` 会变成 `[2,1,2,1]` —— **两个真脚都拿到 `2`**、

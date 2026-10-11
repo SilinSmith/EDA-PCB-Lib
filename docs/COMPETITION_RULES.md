@@ -117,6 +117,71 @@ FinalScore               = FinalScore_Accuracy + FinalScore_Data   # Data ≤ 10
   ⇒ 保留 `--net-literal` 开关，官方评测器一发布立刻重打（见 `docs\RESULTS.md` §0、`docs\DIAGNOSTICS.md` 纪律 7）。
 - 指南说评测代码「会随代码一起提供」，目前仍未发布；我们的 `schematic_parser\metrics.py` 是**按文字规范 + Q&A 反推**的实现。
 
+## 4.1 非 box 引脚计分口径：官方 Q&A 说「不计分」，**实测判题机却计分**（2026-10-20 更新）
+
+### 官方 Q&A 原话（`赛题助理-张松涛`，用户 m60332 转述，末尾让「更改一下」）
+
+1. 非 box 的 **r/l/c** 类按 **左1右2 / 下1上2** 编号，**d/led** 类按 **阴极为1 / 阳极为2** 编号；
+   并请补充「其他类型的默认编号规则」到 `type_list.md`。
+2. 电源/地这类特殊元件（`∅NNN`）在 GT 里的 pin number 是 `119/115/111/202` 这种**随意编号** ⇒
+   答：**编号是随机生成的，不参与评分**。
+3. 非 box 元件的 pin number / pin name 该用什么规则？是否只有 box(IC) 参与 pinF1？
+   ⇒ 答：**「非box的pinname pinnumber不参与评分。更改一下」**。
+
+### 各类型「脚号→脚名」约定实测（`python -X utf8 work\_nonboxnum.py`，全池普查）
+
+域 = `10GT` + `10_GTcase` + `200_train_cases`（脚本按类型统计实例数 / `n=` 分布 / `名=号 vs 名≠号` /
+脚1 相对脚2 的方向 / 每个 `号→名` 的计数）。**确定性**约定（可用，名≠号 ⇒ 我们按位置发的 `1/2/3` 会吃 `pin_name`）：
+
+| 类型 | 实例 | 号→名（命中率） | 几何规则 |
+| --- | --- | --- | --- |
+| `r` `c` `l` `fuse` `testpoint` `pin` | 1626 / 1668 / 115 / 20 / 43 / 175 | `1→"1"`、`2→"2"`（= 号，100%） | 横放左1右2；竖放**下1上2**（`c` 竖 1287 / 横 342，`l` 横 88 / 竖 27） |
+| `d` `led` | 201 / 186 | `1→K`、`2→A`（100%） | **任意**（4 个方向都出现 ⇒ 由符号朝向决定，几何推不出） |
+| `crystal_2pin` | 44 | `1→X1`、`2→X2`（44/44） | 下1上2（25）/ 左1右2（19） |
+| `crystal_3pin` | 6 | `1→INPUT`、`2→GND`、`3→OUTPUT`（6/6） | — |
+| `crystal_4pin` | 8 | `1→OSC1`、`2→OSC2`、`3→GND`、`4→GND`（8/8） | — |
+| `bjt` | 51 | `1→B`、`2→E`、`3→C`（45/45，n=3） | 另有 5 个 n=2 的实例是随机 `P_##` |
+| `amp_3pin` / `amp_5pin` | 10 / 11 | `1→IN+`、`2→IN-`、`3→OUT`（+`4→VCC`、`5→VEE`）（全中） | — |
+| `gnd` `v` `switch` `other` `mosfet` `buzzer` `battary` `dc` `esd` `ant` `net_*` `m3螺丝` … | 2229 / 1152 / 159 / 69 / … | **随机**（`pin_119→P_20` 这种） | 无 |
+
+⇒ 落点：`stage2/assemble.py` 的 `PIN_NAME_ALIAS`（默认表）已按上表补全
+（`d/led` 原本就有；本次补 `crystal_2pin/3pin/4pin`、`bjt`、`amp_3pin/5pin`）。
+这张表**只可能把失败变成功**（只有 `(类型, 号)` 已经对上时才会查表），且**官方 10 张里没有这些类型**
+⇒ 对现有 A/B 是逐字节空操作。
+
+> `type_list.md` 是**官方数据文件**（`eda-pcb\yolo_part\Dataset(waitforpreprocess)\10GT\type_list.md`，
+> 31 行类型表），不由我们覆盖；本表就是它的补充说明。
+
+### ★ 但实测：2026-10-09 那次判题机**把非 box 引脚算进了 pin F1**
+
+`python -X utf8 work\_boxpin2.py`（pred = `20261009引入/theSixthSubmission_44.29/scoring_result (5)/final_results`，
+GT = `10GT`，判题机真值读 `report/submission/20261009T140206Z/<c>.json` 的 `pin.f1`）：
+
+| 口径 | case 1（tp/fp/fn） | 10 案 tp/fp/fn 与判题机逐案相等？ |
+| --- | --- | --- |
+| 判题机报告 | **23 / 50 / 37** | — |
+| `all`（所有元件都算 = 现有 `official.pin_f1`） | **23 / 50 / 37** | **是（10/10 案完全相等）** |
+| `box`（只算 box/boxic/ic） | 11 / 10 / 15 | 否（10 案全不相等） |
+| `noname`（非 box 不比脚名） | 23 / 50 / 37（case 1），但 case 4/7/10 与判题机**不等** | 否 |
+
+⇒ **文档口径（Q2）与那次判题机的实现口径不一致**：判题机既算了非 box 引脚，也比了它们的 `pinname`。
+`work/_nonboxfail.py` 同时给出这 401 个非 box 失败的分布：`gnd` 193 / `v` 138（**键与号都是随机 ⇒ 不可赢**）、
+`c` 35 / `r` 17（多为「GT 有我们没有」）、`d` 12 / `led` 6（**全是「我们写 `1/2`、GT 要 `K/A`」**，
+这一档已由 `PIN_NAME_ALIAS` 修掉）。
+
+**我们的对策（两把尺子都留着）**：
+`eda-pcb/schematic_parser/official.py` 新增开关 **`OFFICIAL_PIN_BOX_ONLY`**（默认 `0` = 复刻实测判题机；
+`1` = 按 Q&A 文档口径只算 box）。同一份产物在官方 10 张上的实测差：
+
+| 臂 | `all`（默认） | `box_only=1` | 差 |
+| --- | --- | --- | --- |
+| `work/_fast_out_tok_full`（现行默认档） | 65.5141（pin 0.748985） | 65.8711（pin 0.763266） | **+0.3570** |
+| `work/_fast_out_trimdef2`（2026-10-09 那代的离线臂） | 61.7856（pin 0.596239） | 65.5089（pin 0.745170） | **+3.7233** |
+
+⇒ 现行管线里剩下的非 box 引脚（`gnd`/`v` 的引脚已被 `STAGE2_PIN_DROP_UNKEYED=1` 摘掉）净值略负，
+所以**万一判题机被改回按文档实现，我们是小幅受益的**；反之若维持实测实现，我们也不吃亏（`r/c/l` 的
+同名号引脚仍是白赚的 tp）。结论：**不改输出**，只把两把尺子都备好，把力气花在 box 引脚上。
+
 ## 5. 本地已有的官方资产（含一处没用起来的）
 
 | 资产 | 位置 | 状态 |
@@ -132,8 +197,9 @@ FinalScore               = FinalScore_Accuracy + FinalScore_Data   # Data ≤ 10
 **同一 `number` 可能对应多种 `name`（`VOUT`/`Out`/`Output`），条目数可能远大于物理引脚数**（多符号实例的聚合）。
 
 **两份库的关系（2026-10-14 定）**：`BoxICLibrary_200cases.json` 是 200 训练案例里 **box/IC 那一档**的符号库
-（360 键），`cpntLibrary.json` 是全类型混合库（337 键）。因为官方 `pin_f1` **只考 box 元件**
-（`schematic_parser/metrics.py:437-475`），所以默认取 box/IC 库；`stage2/libpins.py:lib_path()` 的
+（360 键），`cpntLibrary.json` 是全类型混合库（337 键）。因为官方 `pin_f1` 按**文档口径**只考 box 元件
+（`schematic_parser/metrics.py:437-475` 的 `pin_box_only=True`；★ 但实测 2026-10-09 的判题机把非 box 也算，
+见 §4.1），所以默认取 box/IC 库；`stage2/libpins.py:lib_path()` 的
 顺序是 `STAGE2_BOXIC_LIB` → `STAGE2_CPNT_LIB` → 包内 BoxIC → 包内 cpnt → 本机 `work\data\` → `赛题资料\`，
 **BoxIC 缺席时自动退到 cpnt**（只带旧库的镜像也还是开着的）。两库合并（BoxIC 优先 + cpnt 补 192 个缺键）
 **无额外收益**（官方 9 张逐字节相同、派生 220 张 −0.003）⇒ 不做合并，按优先级取第一个存在的文件。

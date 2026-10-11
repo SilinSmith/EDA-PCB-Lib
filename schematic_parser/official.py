@@ -88,6 +88,21 @@ PIN_PX = float(os.environ.get("OFFICIAL_PIN_PX", "5.0"))
 # 连 `connectivity.diagnostics.matched_net_pairs`（case 1 的 7 对）都与报告逐对一致。
 # 要复现旧的折叠口径：`$env:OFFICIAL_COLLAPSE='1'`。
 COLLAPSE_NONBOX = os.environ.get("OFFICIAL_COLLAPSE", "0") not in ("0", "false", "False", "", "no")
+# ★ 引脚是否**只统计 box 元件**（官方 Q&A「评测 Q2」+ 2026-10 复述的字面口径：
+# 「非 box 类型元器件 pin name, pin number 不参与评分」）。
+#
+# 但 **2026-10-09 那次真实判题机的逐案 `pin.f1` 是「全部引脚」口径**，实测对账
+# （`python -X utf8 work\_boxpin2.py`，pred = `scoring_result (5)\final_results`，
+#  GT = `10GT`，判题机真值读 `report/submission/20261009T140206Z/<c>.json` 的
+#  `pin.f1`）：
+#     case 1 判题机 tp 23 / fp 50 / fn 37  ==  all 口径 tp 23 / fp 50 / fn 37
+#     case 1 若只算 box          tp 11 / fp 10 / fn 15   ← 任一条都对不上
+#     10 案：`all` 的 tp/fp/fn **逐案完全相等**；只算 box 的全不相等。
+# ⇒ **文档口径（Q2）与那次判题机的实现口径不一致**（我们已在官方页面收到该 Q&A
+#   的复述，见 `docs/COMPETITION_RULES.md` 的「非 box 引脚计分口径」一节）。
+# 本开关默认 `0` = 复刻**实测到的判题机**（我们所有 A/B 的基准）；
+# 置 `1` = 按 Q2 文档口径评分（预演「判题机被改回按文档实现」那一版）。
+PIN_BOX_ONLY = os.environ.get("OFFICIAL_PIN_BOX_ONLY", "0") not in ("0", "false", "False", "", "no")
 WEIGHTS = {'component': 0.30, 'pin': 0.25, 'connectivity': 0.35, 'wire': 0.10}
 
 # `hyperGraph` 里的成员引用：`U1.101` / `C151.2` / `∅208.206`
@@ -238,16 +253,29 @@ def _pins_of(doc: dict) -> Dict[str, Dict[str, dict]]:
     return out
 
 
-def pin_f1(gt: dict, pred: dict) -> F1:
-    """（元件键，pin_<号>）精确 + pinname 精确 + 尖端点 5px 内。"""
+def pin_f1(gt: dict, pred: dict, box_only: bool = False) -> F1:
+    """（元件键，pin_<号>）精确 + pinname 精确 + 尖端点 5px 内。
+
+    `box_only=False`（默认，= 实测判题机）：全部元件的引脚都进分子分母。
+    `box_only=True`（= 官方 Q&A「评测 Q2」的文档口径）：只看 GT 里 `type` 为
+    `box/boxic/ic` 的元件，其余元件的引脚**既不算 tp 也不吃 fp/fn**。
+    两种口径的实测差见文件头第 8 条。
+    """
     gp, pp = _pins_of(gt), _pins_of(pred)
+    keep: Optional[Set[str]] = None
+    if box_only:
+        keep = {k for k, v in (gt.get('components') or {}).items()
+                if _s((v or {}).get('type')) in BOX_TYPES}
     res = F1()
-    n_pred_pins = sum(len(v) for v in pp.values())
-    n_gt_pins = sum(len(v) for v in gp.values())
+    n_pred_pins = 0
+    n_gt_pins = 0
     bad: List[dict] = []
     for key, pins in pp.items():
+        if keep is not None and key not in keep:
+            continue
         gpins = gp.get(key) or {}
         for pid, prec in pins.items():
+            n_pred_pins += 1
             grec = gpins.get(pid)
             if grec is None:
                 bad.append({'pin_id': [key, pid], 'component_id': key, 'error': 'extra'})
@@ -265,7 +293,10 @@ def pin_f1(gt: dict, pred: dict) -> F1:
             else:
                 res.tp += 1
     for key, pins in gp.items():
+        if keep is not None and key not in keep:
+            continue
         for pid in pins:
+            n_gt_pins += 1
             if pid not in (pp.get(key) or {}):
                 res.fn += 1
                 bad.append({'pin_id': [key, pid], 'component_id': key, 'error': 'missing'})
@@ -273,6 +304,7 @@ def pin_f1(gt: dict, pred: dict) -> F1:
     res.fn = float(n_gt_pins) - res.tp
     res.detail['n_pred_pins'] = n_pred_pins
     res.detail['n_gt_pins'] = n_gt_pins
+    res.detail['box_only'] = box_only
     res.detail['examples'] = bad[:30]
     res.detail['n_examples'] = len(bad)
     return res
@@ -430,9 +462,10 @@ def wire_f1(gt: dict, pred: dict, pairs: Sequence[Tuple[str, str]]) -> F1:
 
 def evaluate_case(gt_doc: dict, pred_doc: dict, case_id: str = '',
                   collapse_nonbox: bool = COLLAPSE_NONBOX,
-                  net_mode: str = 'f1') -> CaseScore:
+                  net_mode: str = 'f1',
+                  pin_box_only: bool = PIN_BOX_ONLY) -> CaseScore:
     comp = component_f1(gt_doc, pred_doc)
-    pin = pin_f1(gt_doc, pred_doc)
+    pin = pin_f1(gt_doc, pred_doc, pin_box_only)
     conn, pairs = connectivity_f1(gt_doc, pred_doc, collapse_nonbox, net_mode)
     wire = wire_f1(gt_doc, pred_doc, pairs)
     return CaseScore(case_id=case_id, component=comp, pin=pin, connectivity=conn,

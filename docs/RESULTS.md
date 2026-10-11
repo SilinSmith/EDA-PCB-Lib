@@ -4413,6 +4413,67 @@ python -X utf8 eda-pcb\tools\dev\_fantest.py                    :: 25 项回归�
 
 ---
 
+## §5.42 非 box 引脚：官方 Q&A 说「不计分」，**实测判题机却在计分**（2026-10-20）
+
+**一、起因**：用户 m60332 转述官方 Q&A（`赛题助理-张松涛`）三条，末尾「更改一下」——
+① 非 box 的 r/l/c 按 **左1右2 / 下1上2**、d/led 按 **阴极为1 / 阳极为2** 编号（并请补全 `type_list.md`）；
+② 电源/地（`∅NNN`）的 GT 脚号是**随机生成的、不参与评分**；
+③ 非 box 的 pinname/pinnumber **不参与评分**。
+
+**二、各类型「号→名」约定全池实测**（`python -X utf8 work\_nonboxnum.py`；
+域 = `10GT` + `10_GTcase` + `200_train_cases`）：确定性表（名≠号 ⇒ 我们按位置发 `1/2/3` 会吃 `pin_name`）
+= `d/led` 201/186 例 `1→K,2→A`（100%）、`crystal_2pin` 44 例 `1→X1,2→X2`、
+`crystal_3pin` 6 例 `1→INPUT,2→GND,3→OUTPUT`、`crystal_4pin` 8 例 `1→OSC1,2→OSC2,3→GND,4→GND`、
+`bjt` 45 例 `1→B,2→E,3→C`、`amp_3pin` 10 例 / `amp_5pin` 11 例 `1→IN+,2→IN-,3→OUT(,4→VCC,5→VEE)`；
+名=号 = `r/c/l/fuse/testpoint/pin`（`1→"1"`，横放左1右2、竖放下1上2：c 竖 1287 / 横 342）；
+**随机不可赢** = `gnd`(2229)/`v`(1152)/`switch`/`other`/`mosfet`/`buzzer`/`battary`/`dc`/`esd`/`ant`/`net_*`/`m3螺丝`。
+⇒ 已把确定性表补进 `stage2/assemble.py` 的 `PIN_NAME_ALIAS`（新增 16 条；只可能把失败变成功，
+且官方 10 张里没有这些类型 ⇒ 对现有产物是**逐字节空操作**）。
+
+**三、★ 判题机实测对账**（`python -X utf8 work\_boxpin2.py`；pred = 2026-10-09 那次提交的
+`scoring_result (5)/final_results`，判题机真值读 `report/submission/20261009T140206Z/<c>.json` 的 `pin.f1`）：
+
+| 口径 | case 1 tp/fp/fn/f1 | 与判题机逐案（tp/fp/fn）全等？ |
+|---|---|---|
+| 判题机报告 | **23 / 50 / 37 / 0.345865** | — |
+| `all`（所有元件都算 = 现有 `official.pin_f1`） | **23 / 50 / 37 / 0.345865** | **是（10/10 案完全相等）** |
+| `box`（只算 `box/boxic/ic`） | 11 / 10 / 15 / 0.468085 | 否（10 案全不相等） |
+| `noname`（非 box 不比脚名） | 23 / 50 / 37（case 1），case 4/7/10 不同 | 否 |
+
+⇒ **Q&A 的文档口径（只算 box）与 2026-10-09 判题机的实现口径不一致**：那次判题机既算了非 box 引脚
+（10 案 tp/fp/fn 与我们「全算」的实现**逐案完全相等**），也比了它们的 `pinname`。
+
+**四、非 box 失败的分布**（`python -X utf8 work\_nonboxfail.py`，同一份提交，共 401 条）：
+`gnd` 193 + `v` 138（**键与脚号都是随机 ⇒ 结构上不可赢**）、`c` 35 + `r` 17（多为「GT 有我们没有」，
+少量 5.7~10.8px 的点差）、`d` 12 + `led` 6（**全是「我们写 `1/2`、GT 要 `K/A`」**，已由 `PIN_NAME_ALIAS` 覆盖）。
+每种失败都附了「名 vs 名」与点距样例。
+
+**五、两把尺子都留着**：`schematic_parser/official.py` 新增 `OFFICIAL_PIN_BOX_ONLY`（默认 `0` =
+复刻实测判题机；`1` = 按 Q&A 文档口径只算 box）。同一份产物在官方 10 张上的实测差：
+
+| 臂 | `all`（默认） | `box_only=1` | 差 |
+|---|---|---|---|
+| `work/_fast_out_tok_full`（现行默认档） | **65.5141**（pin 0.748985） | **65.8711**（pin 0.763266） | **+0.3570** |
+| `work/_fast_out_trimdef2`（2026-10-09 那代离线臂） | 61.7856（pin 0.596239） | 65.5089（pin 0.745170） | **+3.7233** |
+
+**六、结论与落点**：现行管线里 `gnd`/`v` 的引脚已被 `STAGE2_PIN_DROP_UNKEYED=1` 摘掉，剩下的非 box
+引脚（r/c/l/d/led 的图章脚）净值略负 ⇒ **万一判题机被改回按文档实现，我们是小幅受益；维持实测实现
+也不吃亏**（r/c/l 的同名号脚仍是白赚的 tp）。所以**不改输出**，只把两把尺子备好，力气花在 box 引脚上
+（下一主线：纯 CV 档的**文本读出**缺口，见 §5.41 第 ④ 条）。
+
+**七、复现**
+
+```bat
+cd ..
+python -X utf8 work\_nonboxnum.py --type "d,led,crystal_2pin,crystal_3pin,crystal_4pin,bjt,amp_3pin,amp_5pin"
+python -X utf8 work\_boxpin2.py                    :: 判题机 vs all/box/noname（含 tp/fp/fn 逐案对账）
+python -X utf8 work\_nonboxfail.py                 :: 非 box 失败按类型/种类归因
+cd eda-pcb
+set OFFICIAL_PIN_BOX_ONLY=1 && python -X utf8 tools\eval\fast.py --score-only --out tok_full --engine official
+```
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |
