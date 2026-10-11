@@ -2,8 +2,8 @@
 
 The frame anchor and same-side physical rows define the search cells. OCR text
 does not define a crop, and no numbering order or name dictionary is consulted.
-Unlike colour cleanup, this path never erases black pixels: an external number
-cell stops at the observed upper edge of the actual pin stroke.
+The source image stays unchanged. Recognition copies may exclude measured long
+wire pixels and their raster fringes; ambiguous glyph/line contact stays held.
 """
 from __future__ import annotations
 
@@ -82,8 +82,8 @@ def _stroke_top(mask, observation):
 
     Only a short normal probe between the current point and frame is tested.
     A dense continuous run through this probe must include the anchor row.
-    The result clips the search cell; no pixels, including numeral 1's bars,
-    are deleted or reconstructed.
+    The result sets the search cell. Later cleanup needs independent measured
+    line evidence, and never reconstructs a numeral or a missing stroke.
     """
     point, anchor, edge = (observation[k] for k in ("point_img", "anchor_img", "edge"))
     length = abs(point[0] - anchor[0])
@@ -98,7 +98,35 @@ def _stroke_top(mask, observation):
     runs = _groups(dense, 0)
     matches = [(a, b) for a, b in runs if y0 + a - 1 <= anchor[1] <= y0 + b + 1]
     if len(matches) != 1:
-        return None
+        # A port triangle or clock marker can occupy the near-frame probe.
+        # Try a straight segment immediately beyond the measured point, then
+        # require its CURRENT ink to connect to the current frame-side ink.
+        sign = -1 if edge == "left" else 1
+        bounds = sorted((point[0] + sign * 3, point[0] + sign * 9))
+        other = _clip([bounds[0], point[1] - 4, bounds[1], point[1] + 5], mask.shape)
+        if other is None:
+            return None
+        xa, ya, xb, yb = other
+        occupancy = np.mean(mask[ya:yb, xa:xb], axis=1)
+        possible = [(ya + a, ya + b) for a, b in _groups(occupancy >= .85, 0)
+                    if ya + a - 1 <= point[1] <= ya + b + 1 and b - a <= 6]
+        if len(possible) != 1:
+            return None
+        top, bottom = possible[0]
+        connection = _clip([min(xa, anchor[0] - 2), min(top, anchor[1]) - 6,
+                            max(xb, anchor[0] + 2), max(bottom, anchor[1]) + 6], mask.shape)
+        cx0, cy0, cx1, cy1 = connection
+        _, labels = cv2.connectedComponents(mask[cy0:cy1, cx0:cx1].astype(np.uint8), 8)
+        seeds = set(np.unique(labels[top-cy0:bottom-cy0, xa-cx0:xb-cx0]).tolist()) - {0}
+        frame_x = min(cx1 - 1, max(cx0, int(round(anchor[0]))))
+        near_frame = set(np.unique(labels[max(0, int(anchor[1])-3-cy0):min(cy1-cy0, int(anchor[1])+4-cy0),
+                                             frame_x-cx0]).tolist()) - {0}
+        if not seeds.intersection(near_frame):
+            return None
+        return {"probe": other, "stroke_top": top, "stroke_bottom": bottom,
+                "row_occupancy": occupancy.tolist(),
+                "method": "outer_measured_stroke_with_current_frame_connectivity",
+                "connection_region": connection}
     a, b = matches[0]
     if b - a > 6:
         return None
@@ -131,17 +159,118 @@ def _regions(observation, peers, mask):
         y0 = row - min(44.0, pitch * .98)
         if above:
             y0 = max(y0, max(above) + 4)
-        # The near-frame line can have sparse raster fringe one pixel higher
-        # farther along the wire. Exclude that conservative fringe row from
-        # the cell, without applying a morphology filter to digit pixels.
-        stroke["upper_fringe_guard_pixels"] = 1
-        outside = ([anchor[0] - depth, y0, anchor[0] - 2, stroke["stroke_top"] - 1]
+        # Keep the last numeral row. Raster fringes are audited from actual
+        # long wire runs below, instead of deleting a fixed pixel from 1/4/6.
+        stroke["upper_fringe_guard_pixels"] = 0
+        outside = ([anchor[0] - depth, y0, anchor[0] - 2, stroke["stroke_top"]]
                    if edge == "left" else
-                   [anchor[0] + 2, y0, anchor[0] + depth, stroke["stroke_top"] - 1])
+                   [anchor[0] + 2, y0, anchor[0] + depth, stroke["stroke_top"]])
     return _clip(inside, mask.shape), _clip(outside, mask.shape) if outside else None, pitch, stroke
 
 
-def _complete_group(mask, region, observation, role, pitch):
+def _text_row_region(mask, region, anchor, role, pitch):
+    """Separate adjacent text rows without dropping detached caps or bars."""
+    if region is None:
+        return None, {}
+    x0, y0, x1, y1 = region
+    all_spans = [(y0 + a, y0 + b) for a, b in _groups(mask[y0:y1, x0:x1].any(1), 1)]
+    spans = [(a, b) for a, b in all_spans if b - a >= 3]
+    if len(spans) <= 1:
+        return region, {}
+    if role == "pin_name":
+        a, b = min(spans, key=lambda span: abs((span[0] + span[1]) / 2 - anchor[1]))
+    else:
+        a, b = min(spans, key=lambda span: abs(anchor[1] - span[1]))
+    selected = [a, b]
+    gap = (max(3, min(18, int(pitch * .52))) if role == "pin_number"
+           else max(3, min(12, int(pitch * .28))))
+    words = _groups(mask[a:b, x0:x1].any(0), gap)
+    kept, ambiguous = [], []
+    if words:
+        # The far side's independent name row can be taller or carry a bar.
+        # Only small ink overlapping this actual nearest-side word belongs to
+        # this glyph integrity audit.
+        lo, hi = min(words, key=lambda word: min(abs(x0 + word[0] - anchor[0]),
+                                                abs(x0 + word[1] - anchor[0])))
+        for top, bottom in all_spans:
+            if (top, bottom) == (a, b) or bottom - top > max(3, .35 * (b - a)):
+                continue
+            # A disconnected numeral cap, overbar or underscore may share no
+            # connected component with its body. Horizontal overlap and actual
+            # white-gap distance retain nearby small ink without naming it.
+            if not np.any(mask[top:bottom, x0 + lo:x0 + hi]):
+                continue
+            distance = max(a - bottom, top - b, 0)
+            if distance <= max(4, .65 * (b - a)):
+                selected[0], selected[1] = min(selected[0], top), max(selected[1], bottom)
+                kept.append([top, bottom])
+            else:
+                ambiguous.append([top, bottom])
+    return [x0, max(y0, selected[0] - 1), x1, min(y1, selected[1] + 1)], {
+        "selected_ink_row": [a, b], "retained_detached_small_ink_rows": kept,
+        "ambiguous_detached_small_ink_rows": ambiguous}
+
+
+def _known_external_lines(mask, region, observation, pitch, stroke, light_mask=None):
+    """Identify measured long wires, rather than treating narrow ink as noise.
+
+    A vertical wire must continue through the complete number window and have
+    observed length at least 1.8 physical pitches, extend beyond its complete
+    cell, and connect to the current attached pin stroke. Raster fringes must
+    show the same long continuation; narrow ink alone is never line evidence.
+    """
+    known = np.zeros(mask.shape, dtype=bool)
+    if region is None:
+        return known, []
+    x0, y0, x1, y1 = region
+    context_top, context_bottom = max(0, int(y0 - 2 * pitch)), min(mask.shape[0], int(y1 + 2 * pitch))
+    evidence = []
+    light = mask if light_mask is None else light_mask
+    probe_x = int((stroke["probe"][0] + stroke["probe"][2] - 1) / 2)
+    core_columns = []
+    for x in range(max(0, x0 - 1), min(mask.shape[1], x1 + 1)):
+        for a, b in _groups(mask[context_top:context_bottom, x], 1):
+            a, b = a + context_top, b + context_top
+            extended = a <= y0 - .5 * pitch or b >= y1 + .5 * pitch
+            # A long isolated "1" is not a wire. The current measured stroke
+            # must meet this line, without an inferred electrical connection.
+            left, right = min(x, probe_x), max(x, probe_x) + 1
+            top, bottom = max(0, stroke["stroke_top"] - 1), min(mask.shape[0], stroke["stroke_bottom"] + 1)
+            _, labels = cv2.connectedComponents(mask[top:bottom, left:right].astype(np.uint8), connectivity=8)
+            source = set(np.unique(labels[:, x-left]).tolist()) - {0}
+            target = set(np.unique(labels[:, probe_x-left]).tolist()) - {0}
+            attachment = bool(source.intersection(target))
+            if b - a >= max(20, 1.8 * pitch) and a <= y0 and b >= y1 and extended and attachment:
+                known[a:b, x] |= mask[a:b, x]
+                core_columns.append((x, a, b))
+                evidence.append({"axis": "vertical", "column": x, "span": [a, b],
+                                 "minimum_length_pixels": max(20, 1.8 * pitch)})
+    for x, a, b in core_columns:
+        for fringe in range(max(0, x - 1), min(mask.shape[1], x + 2)):
+            # Whole-cell continuation keeps a neighboring disconnected glyph
+            # cap or serif from being erased as a line's antialiasing fringe.
+            runs = _groups(light[a:b, fringe], 1)
+            for top, bottom in runs:
+                top, bottom = top + a, bottom + a
+                if top <= y0 and bottom >= y1 and bottom - top >= max(20, 1.8 * pitch):
+                    known[top:bottom, fringe] |= light[top:bottom, fringe]
+                    evidence.append({"axis": "vertical_raster_fringe", "column": fringe,
+                                     "span": [top, bottom], "measured_core_column": x})
+    anchor = observation["anchor_img"]
+    xa, xb = min(x0, int(anchor[0])), max(x1, int(anchor[0]) + 1)
+    for row in range(max(0, stroke["stroke_top"] - 1), min(mask.shape[0], stroke["stroke_bottom"] + 1)):
+        # A pale fringe is eligible only inside the observed stroke band plus
+        # one raster row, with a continuous run through the measured probe.
+        for a, b in _groups(light[row, xa:xb], 1):
+            a, b = a + xa, b + xa
+            if a <= probe_x < b and b - a >= max(8, .60 * pitch):
+                known[row, a:b] |= light[row, a:b]
+                evidence.append({"axis": "horizontal", "row": row, "span": [a, b],
+                                 "measured_probe_column": probe_x})
+    return known, evidence
+
+
+def _complete_group(mask, region, observation, role, pitch, known_lines=None, original_mask=None):
     """Select the closest separated full word, retaining every small stroke."""
     if region is None:
         return None
@@ -172,6 +301,7 @@ def _complete_group(mask, region, observation, role, pitch):
     connected = []
     # A full component reaching the ownership edge remains unresolved only if
     # original ink actually continues across it. Do not guess missing letters.
+    original = mask if original_mask is None else original_mask
     for side, touched in enumerate(touch):
         if not touched:
             continue
@@ -183,7 +313,7 @@ def _complete_group(mask, region, observation, role, pitch):
                 # Connected components use 8-connectivity. A slanted stroke
                 # can leave the ownership cell diagonally, so same-row-only
                 # comparison incorrectly declares a clipped glyph complete.
-                if any(np.any(mask[np.clip(active + delta, 0, mask.shape[0] - 1), column])
+                if any(np.any(original[np.clip(active + delta, 0, mask.shape[0] - 1), column])
                        for delta in (-1, 0, 1)):
                     connected.append(side)
         else:
@@ -191,15 +321,23 @@ def _complete_group(mask, region, observation, role, pitch):
             border = y0 if side == 1 else y1 - 1
             if 0 <= row < mask.shape[0]:
                 active = np.flatnonzero(mask[border, glyph[0]:glyph[2]]) + glyph[0]
-                if any(np.any(mask[row, np.clip(active + delta, 0, mask.shape[1] - 1)])
+                if any(np.any(original[row, np.clip(active + delta, 0, mask.shape[1] - 1)])
                        for delta in (-1, 0, 1)):
                     connected.append(side)
-    # If a numeral meets its wire, separating the connected lower ink would
-    # be speculative. Record it and hold rather than erasing a bar from a 1.
+    contact = False
+    if known_lines is not None:
+        xa, ya, xb, yb = max(0, glyph[0]-1), max(0, glyph[1]-1), min(mask.shape[1], glyph[2]+1), min(mask.shape[0], glyph[3]+1)
+        retained = np.zeros((yb-ya, xb-xa), np.uint8)
+        retained[glyph[1]-ya:glyph[3]-ya, glyph[0]-xa:glyph[2]-xa] = mask[glyph[1]:glyph[3], glyph[0]:glyph[2]]
+        adjacent = cv2.dilate(retained, np.ones((3, 3), np.uint8)) > 0
+        contact = bool(np.any(adjacent & known_lines[ya:yb, xa:xb] & original[ya:yb, xa:xb]))
+    # If a numeral meets a measured wire, erasing their connected lower ink is
+    # speculative. Raw source pixels, rather than cleaned pixels, audit this.
     count, _, stats, _ = cv2.connectedComponentsWithStats(
         mask[glyph[1]:glyph[3], glyph[0]:glyph[2]].astype(np.uint8), 8)
     return glyph, {"method": "complete_original_ink_group_inside_physical_row_cell",
-                   "integrity_unresolved": bool(connected),
+                   "integrity_unresolved": bool(connected) or contact,
+                   "removed_line_touches_retained_glyph": contact,
                    "connected_ink_beyond_region_sides": connected,
                    "boundary_touch_sides": [i for i, v in enumerate(touch) if v],
                    "glyph_pixels": int(mask[glyph[1]:glyph[3], glyph[0]:glyph[2]].sum()),
@@ -221,6 +359,7 @@ def mono_pin_boxes(doc, image, reads=None):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     chroma = image.max(2).astype(np.int16) - image.min(2).astype(np.int16)
     mask = (gray < 190) & (chroma < 30)
+    light_mask = (gray < 245) & (chroma < 30)
     observations, output = list(mono_observations(doc)), []
     for ob in observations:
         peers = [p for p in observations if p["component_id"] == ob["component_id"] and p["edge"] == ob["edge"]]
@@ -230,10 +369,34 @@ def mono_pin_boxes(doc, image, reads=None):
             # claimed attached stroke is absent from the supplied image.
             continue
         for role, region in (("pin_name", inside), ("pin_number", outside)):
-            complete = _complete_group(mask, region, ob, role, pitch)
+            known, line_evidence = (None, [])
+            local_mask = mask
+            if role == "pin_number" and region is not None:
+                known, line_evidence = _known_external_lines(mask, region, ob, pitch, stroke, light_mask)
+                local_mask = mask & ~known
+            full_region = list(region) if region is not None else None
+            region, row_evidence = _text_row_region(local_mask, region, ob["anchor_img"], role, pitch)
+            complete = _complete_group(local_mask, region, ob, role, pitch, known_lines=known, original_mask=mask)
             if complete is None:
                 continue
             glyph, integrity = complete
+            excluded = []
+            if known is not None:
+                yy, xx = np.nonzero(known[glyph[1]:glyph[3], glyph[0]:glyph[2]])
+                excluded = [[glyph[0] + int(x), glyph[1] + int(y)] for y, x in zip(yy, xx)]
+            integrity["known_line_exclusions"] = excluded
+            integrity["measured_line_evidence"] = line_evidence
+            integrity["black_pixels_removed"] = len(excluded)
+            integrity["physical_search_region"] = full_region
+            integrity["text_row_selection"] = row_evidence
+            if row_evidence.get("ambiguous_detached_small_ink_rows"):
+                integrity["integrity_unresolved"] = True
+                integrity["unresolved_reason"] = "detached_small_ink_cannot_be_assigned_without_guessing"
+            if known is not None and full_region is not None:
+                a, b, c, d = full_region
+                yy, xx = np.nonzero(known[b:d, a:c])
+                integrity["excluded_region_pixel_count"] = len(xx)
+                integrity["excluded_region_ink_bbox"] = ([a + int(xx.min()), b + int(yy.min()), a + int(xx.max()) + 1, b + int(yy.max()) + 1] if len(xx) else None)
             if np.any((chroma[glyph[1]:glyph[3], glyph[0]:glyph[2]] >= 50)
                       & (gray[glyph[1]:glyph[3], glyph[0]:glyph[2]] < 230)):
                 integrity["integrity_unresolved"] = True

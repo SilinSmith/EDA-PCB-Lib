@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -66,6 +67,7 @@ BIGIC_ON = env_on("STAGE1_BIGIC", "1")
 #     枚举后 5px 命中  63/64   （L 32 个 pitch 9.99、R 31 个 pitch 9.96）
 PINC_ON = env_on("STAGE1_PINC", "1")
 PIN_COLOR_ON = env_on("STAGE1_PIN_COLOR", "1")
+MONO_FRAME_PINS_ON = env_on("STAGE1_MONO_FRAME_PINS", "1")
 
 # Direction and body-crossing checks are opt-in until a held-out end-to-end
 # comparison confirms they help for the detector's boxes and this drawing style.
@@ -143,6 +145,81 @@ def overlay_color_evidence(evidence, overlays):
             old = [{} for _ in recs]
         result[cid] = [dict(r) if r is not None else dict(prior)
                        for prior, r in zip(old, recs)]
+    return result
+
+
+def apply_mono_frame_pins(components, pins, bgr, ink, texts,
+                         pin_synth, color_overlays, pin_connected):
+    """Recover measured black stroke rows before assigning network indices.
+
+    Old indices are immutable. Colored sides are protected, and estimated
+    black endpoints use the tight synthetic-pin network radius. The audit is
+    diagnostic only; it never claims to measure a black pin/wire boundary.
+    """
+    skipped = {}
+    for cid, records in color_overlays.items():
+        sides = set()
+        for rec in records:
+            if rec and rec.get("frame_confirmed") is True:
+                sides.add(rec["edge"])
+                sides.update(rec.get("confirmed_edges") or [])
+        if sides:
+            skipped[cid] = sides
+    # Pass copies so a recovery failure cannot corrupt existing geometry.
+    original = copy.deepcopy(pins)
+    recovered, index_map, audit = evidence_mod.recover_frame_pins(
+        components, original, bgr, ink=ink, texts=texts, skip_sides=skipped)
+    if set(recovered) != set(pins):
+        raise ValueError("mono recovery changed the component index set")
+    for cid, old in pins.items():
+        points = recovered[cid]
+        if (len(points) < len(old)
+                or index_map.get(cid) != {i: i for i in range(len(old))}
+                or any(len(p) != 2 or not all(math.isfinite(float(v)) for v in p)
+                       for p in points)):
+            raise ValueError("mono recovery changed old pin indices or returned invalid points")
+        records = color_overlays.get(cid) or []
+        if any(rec is not None and tuple(points[i]) != tuple(old[i])
+               for i, rec in enumerate(records)):
+            raise ValueError("mono recovery altered a measured color contact")
+    synth = {cid: list(flags) for cid, flags in pin_synth.items()}
+    overlays = {cid: list(records) for cid, records in color_overlays.items()}
+    connected = {cid: list(flags) for cid, flags in pin_connected.items()}
+    for cid, log in audit.items():
+        changes = (log.get("added") or []) + (log.get("calibrated") or [])
+        if not changes:
+            continue
+        count = len(recovered[cid])
+        flags = synth.get(cid, [])
+        flags += [0] * (count - len(flags))
+        for rec in changes:
+            flags[rec["index"]] = 1
+        synth[cid] = flags
+        if cid in overlays:
+            overlays[cid] += [None] * (count - len(overlays[cid]))
+        if cid in connected:
+            connected[cid] += [None] * (count - len(connected[cid]))
+        log["old_index_map"] = index_map[cid]
+    return recovered, synth, overlays, connected, audit
+
+
+def overlay_mono_evidence(evidence, audit, pins):
+    """Retain the exact measured stroke row instead of searching neighbours again."""
+    result = copy.deepcopy(evidence)
+    for cid, log in audit.items():
+        records = result.get(cid) or [{} for _ in pins.get(cid, [])]
+        if len(records) != len(pins.get(cid, [])):
+            raise ValueError("mono evidence does not align with final pin indices")
+        for change in (log.get("added") or []) + (log.get("calibrated") or []):
+            index = change["index"]
+            measured = copy.deepcopy(change["evidence"])
+            if (not 0 <= index < len(records)
+                    or math.dist(measured["point_img"], pins[cid][index]) > 1e-4
+                    or measured.get("trust") != "trusted"):
+                raise ValueError("mono evidence is stale or lacks a measured stroke")
+            measured["estimated_endpoint"] = True
+            records[index] = measured
+        result[cid] = records
     return result
 
 
@@ -349,6 +426,7 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
     pincol_cols, pincol_stat, pin_synth = {}, {}, {}
     pin_evidence = {}
     color_overlays, pin_connected, pin_color = {}, {}, {}
+    pin_mono = {}
     # ★★ 「不丢弃」的**留痕**通道（owner 哲学：证据不能被悄悄抹掉）。
     #   `build_nets` 会把「够不着任何导线而被硬截断的引脚」写进 `orphans`、
     #   把「软判据区间内勉强挂上的引脚」写进 `weak`。历史行为是 `if g < 0: continue`
@@ -386,6 +464,14 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                 except Exception as e:
                     traceback.print_exc()
                     errs.append(f"pin_color: {type(e).__name__}: {e}")
+            if MONO_FRAME_PINS_ON:
+                try:
+                    comp_pins, pin_synth, color_overlays, pin_connected, pin_mono = apply_mono_frame_pins(
+                        comps, comp_pins, bgr, _ink, texts,
+                        pin_synth, color_overlays, pin_connected)
+                except Exception as e:
+                    traceback.print_exc()
+                    errs.append(f"pin_mono: {type(e).__name__}: {e}")
             # ★ 把**墨迹掩膜**传给网络装配：`_weld_unions` 用它判断两个端点之间的
             # 直线上是否真的有墨。结点圆点造成的断口是**画出来的**（圆点本身就是墨），
             # 而「把不相干的两条线凑近」的假配对连线必然穿过空白。
@@ -418,6 +504,11 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
             traceback.print_exc()
             errs.append(f"pin_evidence: {type(e).__name__}: {e}")
             pin_evidence = {}
+        try:
+            pin_evidence = overlay_mono_evidence(pin_evidence, pin_mono, comp_pins)
+        except Exception as e:
+            traceback.print_exc()
+            errs.append(f"pin_mono_evidence: {type(e).__name__}: {e}")
         pin_evidence = overlay_color_evidence(pin_evidence, color_overlays)
 
     tm = dict(tm)
@@ -435,6 +526,7 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                  for cid, pl in comp_pins.items()},
         "pin_evidence": pin_evidence,
         "pin_color": pin_color,
+        "pin_mono": pin_mono,
         "nets": nets,
         # ★ 引脚接线的「留痕」：`orphans` = 够不着导线而被截断的引脚（历史上直接消失）、
         #   `weak` = 软判据区间内勉强挂上的引脚（带 `d`，下游可降权）。**不参与评分**，

@@ -208,6 +208,9 @@ def read_mono_pin_texts(doc, reads, engine, bgr, min_conf=0.0, mode="auto",
         role = candidate["role"]
         x0, y0, x1, y1 = candidate["bbox"]
         glyph = gray[y0:y1, x0:x1].copy()
+        for x, y in (candidate.get("cleanup_evidence") or {}).get("known_line_exclusions", []):
+            if x0 <= x < x1 and y0 <= y < y1:
+                glyph[y - y0, x - x0] = 255
         views, held = [], None
         if "glyph_integrity_unresolved" in candidate["flags"]:
             held = "glyph_integrity_unresolved"

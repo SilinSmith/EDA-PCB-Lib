@@ -66,8 +66,8 @@ DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "0")
 # 只有 0.272，344 个键命中的 box 元件里 GT 4064 个引脚我们只对 1046 个（0.257）。
 #
 # 新行为（=1，默认）逐引脚采信：某个号是 1..999 的整数、且没跟同一颗 IC 里别的
-# 采信号撞，就用它；否则用位置号补，并避开已经用掉的号。**严格弱于全对**（全对时
-# 两者输出相同），但把「71 对 1 错」从「全错」救回「71 对」。
+# 采信号撞，就用它。未读/无效/重复落选的号默认不发布，也不进入网络引用。
+# 内部位置号回退仅供下述显式 legacy 模式使用，不是默认输出的真实编号。
 BOX_PIN_PARTIAL = env_on("STAGE2_BOX_PIN_PARTIAL", "1")
 BOX_PIN_DUPLICATE_BEST = env_on("STAGE2_BOX_PIN_DUPLICATE_BEST", "1")
 
@@ -81,21 +81,20 @@ BOX_PIN_DUPLICATE_BEST = env_on("STAGE2_BOX_PIN_DUPLICATE_BEST", "1")
 # 10GT 的 `pin.extra` = 69（占我们交出的 188 个引脚的三分之一），`pin.missing` 只有 17。
 #
 # 取值：
-#   * `0`/`off`    = 老行为（位置号补满）；
-#   * `1`/`all`    = 一律丢；
-#   * `mixed`（**默认**）= **只在「这颗 IC 至少读懂了一个号」时才丢**。一个都没读懂的
-#     那些，位置号 `1..N` 本身是个有用的先验（多数 IC 真是 1..N），丢了会伤召回。
-#   * `cap`        = **上限版**：发明出来的号只要 **≤ 这颗 IC 真正读到过的最大号** 就留，
-#     超过就丢。既砍掉「12 脚封装硬补到 12 个号」这种洪水，又保留「读到 {1,2,3,5,7} 时
-#     把 4、6 补出来」这种**填洞**（洞里的号猜中和 GT 撞上的机会不小）。
+#   * `1`/`all`（**默认**）= 一律不发布没读到的 IC 号；全无读数也不补 1..N。
+#   * `0`/`off`    = 显式 legacy 行为（位置号补满）；
+#   * `mixed`      = 显式 legacy 行为：只有至少读懂一个号时才丢未知号，
+#     全无读数时仍按位置补 1..N。这种兼容模式会猜号，不能作为默认真实读数。
+#   * `cap`        = 显式 legacy 上限行为：允许猜出不超过最大已读号的缺号。
+#     仅为旧实验/调用保留，不能把补出的缺号视为图上识别的编号。
 #
-# A/B（`python work\tools\eval\fast.py --no-vlm …`）：
+# 历史 A/B（旧默认 mixed，不能代替当前新数据验证）：
 #   10GT(9)：老 44.70(pin 0.1881/netH 0.4746) → `1` **47.67**(pin **0.2720**/netH **0.4971**)
 #            → `mixed` **47.67**（与 `1` 逐位相同）
 #   19 张  ：老 26.46(pin 0.0935) → `1` **28.31**(pin **0.1320**) → `mixed` **28.31**（同 `1`）
 #   220 张 ：老 25.0109(pin 0.0619/netH 0.2078) → `1` 25.0035(pin 0.0657/netH 0.2048)
 #            → **`mixed` 25.0117**(pin 0.0649/netH 0.2059) ⇒ 只有 `mixed` 端到端不降。
-_DROP_MODE = os.environ.get("STAGE2_BOX_PIN_DROP_UNREAD", "mixed").strip().lower()
+_DROP_MODE = os.environ.get("STAGE2_BOX_PIN_DROP_UNREAD", "all").strip().lower()
 BOX_PIN_DROP_UNREAD = _DROP_MODE not in ("", "0", "false", "off", "none")
 BOX_PIN_DROP_MIXED_ONLY = _DROP_MODE in ("mixed", "mix", "partial")
 BOX_PIN_DROP_CAP = _DROP_MODE in ("cap", "max", "ceiling")
@@ -787,8 +786,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             # ★ `STAGE2_BOX_PIN_DROP_UNREAD`：把「没读出号、靠位置补出来的」引脚桩
             # **既不写进引脚表、也不进网络**。它只可能变成 `pin.extra`（纯 fp），
             # 而且会把假引脚塞进网络（10GT 实测 netH 0.4746 → 0.4971）。
-            # 取值 `1`/`all` = 一律丢；`mixed` = **只在「这颗 IC 至少读懂了一个号」
-            # 时才丢**（一个都没读懂的那些，位置号 1..N 本身是个有用的先验）。
+            # 默认 `1`/`all` 一律丢，包括全无读数的 IC。`mixed` 是显式 legacy
+            # 兼容：至少读懂一个号时才丢，全无读数仍补位置号；默认不采用它。
             if (not r.get("kept", True)) and BOX_PIN_DROP_UNREAD \
                     and (not BOX_PIN_DROP_MIXED_ONLY or _anykept):
                 continue

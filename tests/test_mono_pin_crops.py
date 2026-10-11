@@ -103,6 +103,112 @@ class MonoPinCropTests(unittest.TestCase):
         self.assertIn(3, number["cleanup_evidence"]["connected_ink_beyond_region_sides"])
         self.assertEqual(number["cleanup_evidence"]["black_pixels_removed"], 0)
 
+    def test_detached_digit_cap_is_retained_with_its_complete_body(self):
+        doc, image = fixture()
+        image[25:28, 55:60] = 0
+        image[32:46, 58:60] = 0
+        boxes, gray = mono_pin_boxes(doc, image)
+        number = self.get(boxes, "pin_number")
+        self.assertEqual(number["bbox"], [55, 25, 60, 46])
+        self.assertFalse(number["flags"])
+        self.assertEqual(number["cleanup_evidence"]["glyph_component_count"], 2)
+        np.testing.assert_array_equal(gray[25:28, 55:60], image[25:28, 55:60, 0])
+
+    def test_detached_name_overbar_and_underscore_stay_in_source_crop(self):
+        for small_row in (35, 62):
+            with self.subTest(small_row=small_row):
+                doc, image = fixture(rows=(50,))
+                image[43:57, 90:107] = 0
+                image[small_row:small_row+1, 91:106] = 0
+                # A second independent full text row must not cause the small
+                # semantic bar to vanish when the nearest body row is chosen.
+                image[65:70, 90:107] = 0
+                boxes, gray = mono_pin_boxes(doc, image)
+                name = self.get(boxes, "pin_name")
+                self.assertLessEqual(name["bbox"][1], small_row)
+                self.assertGreater(name["bbox"][3], small_row)
+                self.assertEqual(name["cleanup_evidence"]["black_pixels_removed"], 0)
+                np.testing.assert_array_equal(gray[small_row:small_row+1, 91:106], image[small_row:small_row+1, 91:106, 0])
+
+    def test_far_detached_small_name_symbol_cannot_be_silently_discarded(self):
+        doc, image = fixture(rows=(60,))
+        image[53:67, 90:107] = 0
+        image[41:42, 91:106] = 0
+        image[45:48, 90:107] = 0
+        boxes, _ = mono_pin_boxes(doc, image)
+        name = self.get(boxes, "pin_name")
+        self.assertIn("glyph_integrity_unresolved", name["flags"])
+        self.assertTrue(name["cleanup_evidence"]["text_row_selection"]["ambiguous_detached_small_ink_rows"])
+
+    def test_vertical_wire_and_raster_fringe_are_measured_beyond_the_cell(self):
+        doc, image = fixture()
+        image[31:46, 58:60] = 0
+        image[12:80, 28:29] = 0
+        image[12:80, 29:30] = 210
+        cv2.line(image, (28, 50), (80, 50), (0, 0, 0), 1)
+        before = image.copy()
+        boxes, gray = mono_pin_boxes(doc, image)
+        number = self.get(boxes, "pin_number")
+        self.assertEqual(number["bbox"], [58, 31, 60, 46])
+        self.assertFalse(number["flags"])
+        cleanup = number["cleanup_evidence"]
+        self.assertGreater(cleanup["excluded_region_pixel_count"], 0)
+        self.assertLess(cleanup["excluded_region_ink_bbox"][0], number["bbox"][0])
+        self.assertIn("vertical_raster_fringe", [line["axis"] for line in cleanup["measured_line_evidence"]])
+        np.testing.assert_array_equal(image, before)
+        np.testing.assert_array_equal(gray, cv2.cvtColor(image, cv2.COLOR_BGR2GRAY))
+
+    def test_tall_isolated_one_is_not_removed_as_an_unattached_wire(self):
+        doc, image = fixture(rows=(50, 60))
+        image[15:46, 58:60] = 0
+        image[15:17, 55:60] = 0
+        boxes, _ = mono_pin_boxes(doc, image)
+        number = self.get(boxes, "pin_number")
+        self.assertEqual(number["cleanup_evidence"]["black_pixels_removed"], 0)
+        self.assertFalse(any(line["axis"] == "vertical" for line in number["cleanup_evidence"]["measured_line_evidence"]))
+        self.assertIn("glyph_integrity_unresolved", number["flags"])
+
+    def test_removed_wire_cannot_hide_a_leading_digit_cap_attached_to_it(self):
+        doc, image = fixture()
+        image[12:80, 28:30] = 0
+        cv2.line(image, (28, 50), (80, 50), (0, 0, 0), 1)
+        image[31:46, 29:31] = 0
+        image[31:33, 28:34] = 0
+        image[31:46, 44:49] = 0
+        image[31:46, 58:63] = 0
+        boxes, _ = mono_pin_boxes(doc, image)
+        number = self.get(boxes, "pin_number")
+        self.assertIn("glyph_integrity_unresolved", number["flags"])
+        self.assertTrue(number["cleanup_evidence"]["removed_line_touches_retained_glyph"])
+        self.assertGreater(number["cleanup_evidence"]["excluded_region_pixel_count"], 0)
+
+    def test_small_cap_on_measured_stub_side_is_not_erased_as_a_marker(self):
+        doc, image = fixture()
+        image[1:110, 70:71] = 0
+        image[31:34, 68:74] = 0
+        image[31:46, 55:60] = 0
+        boxes, _ = mono_pin_boxes(doc, image)
+        number = self.get(boxes, "pin_number")
+        self.assertIn("glyph_integrity_unresolved", number["flags"])
+        self.assertTrue(number["cleanup_evidence"]["removed_line_touches_retained_glyph"])
+        # The lateral cap pixels remain observed glyph ink. Sharing a line
+        # cannot prove that they are a port marker rather than part of a 1.
+        self.assertGreaterEqual(number["bbox"][2], 74)
+        self.assertFalse(any(x in (68, 73) and y == 31 for x, y in number["cleanup_evidence"]["known_line_exclusions"]))
+
+    def test_separate_neighbor_word_row_and_far_side_symbols_do_not_pollute_target(self):
+        doc, image = fixture(rows=(50,))
+        image[32:40, 90:110] = 0
+        image[43:57, 90:110] = 0
+        # A small symbol on the opposite side shares a raster row but never
+        # belongs to the nearest left-side word's integrity audit.
+        image[30:31, 160:175] = 0
+        image[43:57, 160:175] = 0
+        boxes, _ = mono_pin_boxes(doc, image)
+        name = self.get(boxes, "pin_name")
+        self.assertEqual(name["bbox"], [90, 43, 110, 57])
+        self.assertFalse(name["flags"])
+
     def test_same_row_opposite_names_do_not_merge(self):
         doc, image = fixture(edges=("left", "right"))
         image[43:57, 90:107] = 0

@@ -1,12 +1,17 @@
 """Conservative image evidence for the final, merged IC pin candidates.
 
-This module ranks candidates; it never moves or removes an output pin. A short
+The evidence builder ranks candidates; it never moves or removes an output pin. A short
 unconnected pin is valid. OCR boxes are soft evidence, not an erasure mask: they
 often include a real pin number or a wire crossing through text.
+
+The separate recovery function can add measured monochrome stroke rows or
+calibrate an existing candidate inside its own stroke band. It retains every
+old index and does not infer an electrical endpoint from monochrome ink.
 """
 from __future__ import annotations
 
 import math
+import copy
 from typing import Dict, Sequence
 
 import numpy as np
@@ -189,7 +194,7 @@ def _external_text_band(point, frame_coord, edge, text_boxes, ink):
     return None, False
 
 
-def _one_pin(ink, point, box, frames, text_boxes, text_mask):
+def _one_pin(ink, point, box, frames, text_boxes, text_mask, *, search_radius=3):
     edge = _candidate_edge(point, box)
     normal = _NORMALS[edge]
     vertical = edge in (1, 3)
@@ -198,7 +203,7 @@ def _one_pin(ink, point, box, frames, text_boxes, text_mask):
     paths = []
     # The merged candidate may sit at the centre of several pixels/number ink.
     # Search at most 3px along its own side; never migrate to another pin row.
-    for offset in range(-3, 4):
+    for offset in range(-search_radius, search_radius + 1):
         anchor = ((frame_coord, tangent + offset) if vertical
                   else (tangent + offset, frame_coord))
         path = _probe_path(ink, anchor, normal, text_mask)
@@ -273,3 +278,243 @@ def build_pin_evidence(components: Sequence[dict], comp_pins: Dict[str, list],
         result[cid] = [_one_pin(mask, point, box, frames, boxes, text_mask)
                        for point in comp_pins[cid]]
     return result
+
+
+def _black_ink(bgr, ink=None):
+    """Use original, low-chroma pixels even if a caller's ink includes color."""
+    pixels = np.asarray(bgr)
+    if pixels.ndim != 3 or pixels.shape[2] != 3:
+        raise ValueError("frame recovery requires the original BGR image")
+    if (not np.issubdtype(pixels.dtype, np.number)
+            or (np.issubdtype(pixels.dtype, np.inexact) and not np.isfinite(pixels).all())
+            or np.any(pixels < 0) or np.any(pixels > 255)):
+        raise ValueError("frame recovery requires finite image pixels")
+    # Keep large schematic images at their original 8-bit storage. Casting the
+    # entire BGR image to float64 costs eight times its memory unnecessarily.
+    chroma = pixels.max(axis=2).astype(np.float32) - pixels.min(axis=2)
+    gray = pixels[:, :, 0].astype(np.float32) * np.float32(0.114)
+    gray += pixels[:, :, 1] * np.float32(0.587)
+    gray += pixels[:, :, 2] * np.float32(0.299)
+    if ink is None:
+        supplied = gray < 170
+    else:
+        supplied = np.asarray(ink, dtype=bool)
+        if supplied.shape != pixels.shape[:2]:
+            raise ValueError("frame recovery ink must have the image's (H, W) shape")
+    return supplied & (gray < 170) & (chroma < 30), (gray < 230) & (chroma >= 30)
+
+
+def _text_mask(shape, boxes):
+    mask = np.zeros(shape, dtype=bool)
+    h, w = shape
+    for x0, y0, x1, y1 in boxes:
+        xa, ya = max(0, int(math.ceil(x0))), max(0, int(math.ceil(y0)))
+        xb, yb = min(w, int(math.floor(x1)) + 1), min(h, int(math.floor(y1)) + 1)
+        if xb > xa and yb > ya:
+            mask[ya:yb, xa:xb] = True
+    return mask
+
+
+def _normal_row(ink, edge, normal_coord, tangents):
+    h, w = ink.shape
+    vertical = edge in (1, 3)
+    limit = w if vertical else h
+    if not 0 <= normal_coord < limit:
+        return np.zeros(len(tangents), dtype=bool)
+    return (ink[tangents, normal_coord] if vertical
+            else ink[normal_coord, tangents])
+
+
+def _frame_stroke_bands(ink, box, edge, frame):
+    """Find thin, uninterrupted strokes beginning at a measured frame edge.
+
+    This scans actual raster rows, rather than clustering line detector points.
+    A blank row splits bands regardless of their spacing. Requiring six pixels
+    *past the outer frame thickness* prevents the frame itself from qualifying.
+    Detached glyph shafts and scan gaps are deliberately not recovery evidence.
+    """
+    coord, confirmed, coverage = frame
+    if not confirmed:
+        return []
+    vertical = edge in (1, 3)
+    lo, hi = (box[1], box[3]) if vertical else (box[0], box[2])
+    # Corner continuations are not pins. This is geometric trimming, not a
+    # learned pitch or an assumed pin grid.
+    trim = max(3.0, min(8.0, (hi - lo) * 0.04))
+    tangents = np.arange(int(math.ceil(lo + trim)), int(math.floor(hi - trim)) + 1)
+    limit = ink.shape[0] if vertical else ink.shape[1]
+    tangents = tangents[(tangents >= 0) & (tangents < limit)]
+    if len(tangents) < 8:
+        return []
+    sign = int(_NORMALS[edge][0] if vertical else _NORMALS[edge][1])
+    center = int(math.floor(coord + 0.5))
+    outer = center
+    # The calibrated center can lie inside a thick frame. Only the long side
+    # itself (coverage >= .65) may extend this boundary, never an individual pin.
+    for depth in range(1, 5):
+        next_coord = center + sign * depth
+        if np.mean(_normal_row(ink, edge, next_coord, tangents)) < 0.65:
+            break
+        outer = next_coord
+    paths = np.stack([_normal_row(ink, edge, outer + sign * depth, tangents)
+                      for depth in range(1, 7)], axis=1)
+    attached = np.all(paths, axis=1)
+    changes = np.diff(np.r_[False, attached, False].astype(np.int8))
+    starts, ends = np.flatnonzero(changes == 1), np.flatnonzero(changes == -1)
+    bands = []
+    for start, end in zip(starts, ends):
+        band = tangents[start:end]
+        # A broad paragraph or parallel outside bar is not a thin normal line.
+        if not 1 <= len(band) <= 7:
+            continue
+        tangent = float((band[0] + band[-1]) / 2.0)
+        anchor = [coord, tangent] if vertical else [tangent, coord]
+        bands.append(dict(edge=_EDGES[edge], edge_index=edge,
+                          tangent_band=[int(band[0]), int(band[-1])],
+                          tangent_center=tangent, anchor_img=anchor,
+                          frame_outer_img=float(outer), frame_coverage=float(coverage),
+                          continuous_outward_pixels=6, stroke_width=int(len(band))))
+    return bands
+
+
+def recover_frame_pins(components: Sequence[dict], comp_pins: Dict[str, list],
+                       bgr: np.ndarray, *, ink=None, texts=None,
+                       skip_sides=None, out_dist=12.0):
+    """Return (pins, old-index mapping, audit) from measured black frame strokes.
+
+    ``skip_sides`` maps component ids to side names; those sides are never
+    scanned or calibrated. Old points and indices are retained. New points are
+    appended, and only a unique old candidate within 3px of the same measured
+    stroke can be calibrated. ``out_dist`` is an endpoint *estimate*, not proof
+    of a monochrome pin/wire boundary. No text, number, pitch, or GT prior is
+    used to create a row. Every mutation has its original pixel measurements.
+    """
+    if not math.isfinite(float(out_dist)) or float(out_dist) <= 0:
+        raise ValueError("frame recovery out_dist must be finite and positive")
+    out_dist = float(out_dist)
+    mask, colored = _black_ink(bgr, ink)
+    boxes = _text_boxes(texts)
+    text_mask = _text_mask(mask.shape, boxes)
+    output = copy.deepcopy(comp_pins)
+    index_map = {cid: {i: i for i in range(len(points))}
+                 for cid, points in comp_pins.items()}
+    audit = {}
+    skip_sides = skip_sides or {}
+    h, w = mask.shape
+    for component in components:
+        ctype = str(component.get("type") or "").lower()
+        if ctype not in {"box", "bigic"}:
+            continue
+        cid, raw_box = component.get("id"), component.get("bbox_img")
+        if cid not in output or raw_box is None:
+            continue
+        try:
+            box = tuple(float(v) for v in raw_box)
+        except (TypeError, ValueError):
+            continue
+        if (len(box) != 4 or not all(math.isfinite(v) for v in box)
+                or box[2] - box[0] < 12 or box[3] - box[1] < 12
+                or box[0] < 0 or box[1] < 0 or box[2] >= w or box[3] >= h):
+            continue
+        skipped = set(skip_sides.get(cid) or ())
+        frames = [_frame_edge(mask, box, edge) for edge in range(4)]
+        log = dict(added=[], calibrated=[], held=[], skipped_sides=sorted(skipped, key=str),
+                   endpoint_estimate_pixels=out_dist, old_count=len(comp_pins[cid]))
+        audit[cid] = log
+        # The CV fallback proposes any large closed rectangle, including
+        # document tables. Normal attached lines alone cannot establish that
+        # this rectangle is an IC. Preserve its existing flow, but do not
+        # expand a shape-only hypothesis without semantic confirmation.
+        if component.get("source") == "cv:bigic":
+            log["held"].append(dict(reason="shape_only_component_without_semantic_confirmation",
+                                    component_source="cv:bigic"))
+            log["new_count"] = len(output[cid])
+            continue
+        claimed_old = set()
+        previous_evidence = []
+        for old in comp_pins[cid]:
+            try:
+                valid = len(old) == 2 and all(math.isfinite(float(v)) for v in old)
+                previous_evidence.append(_one_pin(mask, old, box, frames, boxes, text_mask)
+                                         if valid else None)
+            except (TypeError, ValueError):
+                previous_evidence.append(None)
+        for edge, name in enumerate(_EDGES):
+            if name in skipped or edge in skipped:
+                continue
+            vertical = edge in (1, 3)
+            for band in _frame_stroke_bands(mask, box, edge, frames[edge]):
+                ax, ay = band["anchor_img"]
+                nx, ny = _NORMALS[edge]
+                point = [round(ax + nx * out_dist, 1), round(ay + ny * out_dist, 1)]
+                # Unlike a noisy old candidate, a measured row must prove its
+                # own stroke. Searching +/-3 here can borrow a neighboring pin
+                # and accidentally promote a touching glyph shaft.
+                evidence = _one_pin(mask, point, box, frames, boxes, text_mask,
+                                    search_radius=0)
+                details = dict(band, evidence=evidence, point_img=point,
+                               estimated_endpoint=True)
+                if evidence["trust"] != "trusted":
+                    log["held"].append(dict(details, reason="recovery_stroke_not_trusted"))
+                    continue
+                near, exact = [], []
+                for i, old in enumerate(comp_pins[cid]):
+                    try:
+                        if (len(old) != 2 or not all(math.isfinite(float(v)) for v in old)
+                                or _candidate_edge(old, box) != edge):
+                            continue
+                        old_tangent = float(old[1] if vertical else old[0])
+                        old_normal = float(old[0] if vertical else old[1])
+                    except (TypeError, ValueError):
+                        continue
+                    # A point on the frame or inside the IC is not an outside
+                    # endpoint candidate and must not be migrated to a pin.
+                    if (old_normal - frames[edge][0]) * (nx if vertical else ny) < 1:
+                        continue
+                    lo, hi = band["tangent_band"]
+                    if lo - 0.6 <= old_tangent <= hi + 0.6:
+                        exact.append(i)
+                    if (lo - 3 <= old_tangent <= hi + 3
+                            and abs(old_normal - point[0 if vertical else 1]) <= 7):
+                        near.append(i)
+                # Multiple old candidates near one physical row are ambiguous.
+                # Keep their identities instead of moving or merging them.
+                if len(near) > 1:
+                    log["held"].append(dict(details, reason="multiple_old_candidates_on_stroke",
+                                            old_indices=near))
+                    continue
+                if near:
+                    index = near[0]
+                    old = comp_pins[cid][index]
+                    if (previous_evidence[index] is None
+                            or previous_evidence[index]["trust"] != "trusted"):
+                        log["held"].append(dict(details, reason="old_candidate_not_trusted",
+                                                old_indices=[index],
+                                                previous_evidence=previous_evidence[index]))
+                        continue
+                    px, py = (int(math.floor(float(v) + 0.5)) for v in old)
+                    # Never alter an existing colored contact, even if a caller
+                    # omitted a side from its color ledger.
+                    local_color = colored[max(0, py - 2):min(h, py + 3),
+                                          max(0, px - 2):min(w, px + 3)]
+                    if np.any(local_color) or index in claimed_old:
+                        log["held"].append(dict(details, reason="protected_existing_candidate",
+                                                old_indices=[index]))
+                        continue
+                    claimed_old.add(index)
+                    if max(abs(float(old[k]) - point[k]) for k in (0, 1)) > 0.05:
+                        output[cid][index] = point
+                        log["calibrated"].append(dict(details, index=index,
+                                                       previous_point_img=list(old)))
+                    continue
+                if exact:
+                    # A spatially valid old point with a different normal
+                    # estimate already represents this row; do not duplicate it.
+                    log["held"].append(dict(details, reason="row_already_represented",
+                                            old_indices=exact))
+                    continue
+                index = len(output[cid])
+                output[cid].append(point)
+                log["added"].append(dict(details, index=index))
+        log["new_count"] = len(output[cid])
+    return output, index_map, audit
