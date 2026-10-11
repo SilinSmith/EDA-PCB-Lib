@@ -62,6 +62,7 @@ from fusion import rescan as RS                        # noqa: E402
 from fusion import solve as SV                         # noqa: E402
 from stage2.assemble import build_doc                  # noqa: E402
 from stage2 import librefine as LR                      # noqa: E402
+from stage2 import pinlib as PB                         # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]      # `fusion/run.py` -> `eda-pcb/` -> 仓库根
 RUN_DIR = Path(os.environ.get("FUSION_RUN_DIR",
@@ -334,6 +335,26 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
         if log:
             log("  [iterate] 跳过：%s" % exc)
     rep["iterate"] = {k: v for k, v in rep_it.items() if k != "rows"}
+    # ---- ⓪.95 槽位级「库给多值、图给顺序」回填（`FUSION_PIN_LIBSEQ`，默认 0=关）--
+    # 病：CRNN 把 `114/113/115` 的**前导 1 吃掉**、`48/87/68` 读成 `46/67/66`、
+    # `90` 读成 `S0`；而 `BOX_PIN_DROP_UNREAD`（默认开，`stage2/assemble.py:1141`）
+    # 会把「没读到合法号」的桩**整条丢掉** ⇒ 这些脚不是「名不对」，是**根本没进
+    # 文档**；`libpins.complete_pins` 只做「名→唯一号」，`VDD`(14)/`GND`(6)/
+    # `VDDC`(2) 一律放弃（`:1106-1129`）。
+    # 药：官方库里同名脚的**号是升序**，图上同名脚**自上而下**也是升序（官方 10 张
+    # 94 个同名组 88 个逐脚复现 GT = 93.6%，`work\_liborder.py`）⇒ 拿库的号集合 +
+    # 槽位 y 序，把「读数不在集合里」的槽补上/纠正。三道守卫（乱序 / 组外占用 /
+    # 撞号终检）在 `stage2/pinlib.py` 顶部有记。
+    # ★ 必须赶在 `_assemble` **之前**：`build_doc` 才是丢桩的那一步。
+    rep_pb = {}
+    try:
+        rep_pb = PB.repair_slots(assigned, log=log)
+    except Exception as exc:                               # noqa: BLE001
+        rep_pb = {"err": str(exc)}
+        if log:
+            log("  [pinlib] 跳过：%s" % exc)
+    rep["pin_libseq"] = {k: v for k, v in rep_pb.items()
+                         if k not in ("rows", "skip", "blocked")}
     pred = _assemble(doc, assigned, case, vlm_doc, sol, assigned0,
                      pin_index=pin_index)
     # ---- ⑩ 库名回填：用官方库按 `(型号, 号) → 库名` 校准已 emit 的引脚名 --------
