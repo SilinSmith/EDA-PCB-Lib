@@ -708,6 +708,168 @@ EDGE_OVERLAP = float(os.environ.get("STAGE2_EDGE_OVERLAP", "10"))         # 近�
 EDGE_OVERLAP_OFF = float(os.environ.get("STAGE2_EDGE_OVERLAP_OFF", "4.0"))  # 端点到对方直线容差 px
 EDGE_OVERLAP_MIN = float(os.environ.get("STAGE2_EDGE_OVERLAP_MIN", "0.35"))  # 投影重叠比例下限
 
+# ★★ 自由端外推（`STAGE2_EDGE_EXT_FREE`，默认 8 px，0 = 关）。
+#
+# 病（`work\_linesample.py`，官方 10）：303 条未配上的 GT 边里 **209 条是「截断」**，
+#   再拆短端邻居：**引脚 95 / 什么都没有 114**。那 114 条的短端 5px 内既无引脚也无同网他边
+#   ⇒ `extend_edge_ends` 的「必须落到同网他边 3px 内」闸门恰好把它们全挡在外面，
+#   而 GT 的端点就在几像素之外（墨迹还在，只是骨架在那里断了）。
+# 药：**只对自由端**（附近 `pin_r` 内无本网引脚、`edge_r` 内无同网他边）沿自身轴直接外推 `radius` px。
+#   引脚旁的端点**不动**（那里线本来就该停在引脚上）；只动 `edges` 首尾两点 ⇒ 三通道逐位不变。
+# 读数（官方 10，`work\_edgelab.py` 纯后处理，基线 80.04 / 导线 0.4137）：
+#   `extfree:8,free` 单独 **80.17**（0.4264）；与 `ext:20;overlap:10,4,0.35` 叠加（**extfree 必须最先**）
+#   **80.46（导线 0.4556）**；顺序反过来（`ext;overlap;extfree`）只剩 80.17 —— 外推会把已对齐的端点再推过头。
+#   半径扫描（叠加后）：6 → 80.43、**8 → 80.46**、10 → 80.39、15 → 80.19、20 → 79.96、30 → 79.78。
+#   无闸门版（`extfree:5,all`，1789 个端点）**77.90**（导线 0.1991）⇒ 自由端这道闸是全部收益的来源。
+# ★ **未采纳（默认 0）**：真实管线端到端量下来它是「官方 10 +0.21、val18 −0.2（30.01 → 29.79）、
+#   离线 golden10 −0.34（0.1044 → 0.0711）」——盲推会越过真端点在派生池上净亏，
+#   而这些收益已被下面的**证据外推**（`STAGE2_EDGE_EXT_ANY`）以更小的跨池代价拿走。
+EDGE_EXT_FREE = float(os.environ.get("STAGE2_EDGE_EXT_FREE", "0"))          # 自由端外推 px，0 = 关（未采纳）
+EDGE_EXT_FREE_PIN = float(os.environ.get("STAGE2_EDGE_EXT_FREE_PIN", "5.0"))   # 引脚这么近就不算自由端
+EDGE_EXT_FREE_EDGE = float(os.environ.get("STAGE2_EDGE_EXT_FREE_EDGE", "3.0"))  # 同网他边这么近就不算自由端
+
+
+def extend_free_ends(nets: Dict[str, dict], pins: Dict[str, dict], radius: float = None,
+                     pin_r: float = None, edge_r: float = None) -> int:
+    """自由端沿自身轴向外推 `radius` px（引脚旁 / 贴着同网他边的端点不动）；返回改动端点数。"""
+    radius = EDGE_EXT_FREE if radius is None else radius
+    pin_r = EDGE_EXT_FREE_PIN if pin_r is None else pin_r
+    edge_r = EDGE_EXT_FREE_EDGE if edge_r is None else edge_r
+    if radius <= 0:
+        return 0
+    moved = 0
+    for rec in nets.values():
+        edges = rec.get("edges") or {}
+        segs = [(k, _seg_ends(v)) for k, v in edges.items()]
+        segs = [(k, e) for k, e in segs if e is not None]
+        if not segs:
+            continue
+        pp: List[Tuple[float, float]] = []
+        for c, pn in _hg_refs(rec.get("hyperGraph", "")):
+            _p = ((pins.get(c) or {}).get("pin_%s" % pn) or {}).get("point")
+            if isinstance(_p, dict) and "x" in _p and "y" in _p:
+                pp.append((float(_p["x"]), float(_p["y"])))
+        for k, ends in segs:
+            (ax, ay), (bx, by) = ends
+            dx, dy = bx - ax, by - ay
+            L = math.hypot(dx, dy)
+            if L < 1e-6:
+                continue
+            ux, uy = dx / L, dy / L
+            seg = edges[k]
+            for idx, (px, py), s in ((0, (ax, ay), -1.0), (-1, (bx, by), 1.0)):
+                if pp and min(math.hypot(px - qx, py - qy) for qx, qy in pp) <= pin_r:
+                    continue
+                if _pt_seg_dist(px, py, segs, skip=k) <= edge_r:
+                    continue
+                seg[idx]["x"] = round(px + s * ux * radius, 2)
+                seg[idx]["y"] = round(py + s * uy * radius, 2)
+                moved += 1
+    return moved
+
+
+# ★★ 证据外推：跨网 / 引脚（`STAGE2_EDGE_EXT_ANY`，默认 25 px，0 = 关）。
+#
+# 病：`extend_edge_ends` 的闸门只认**同网**他边 ⇒ 截断的 114 条「短端什么都没有」里，
+#   凡是在**别网**的边或引脚附近的那部分（交叉点、汇合点、引脚根部）都被漏掉了。
+# 药：逐 px 外推，落点只要贴到**全图任何一条边**（本边除外）或**任何一个引脚点** ≤ `HIT` 就生效。
+#   只动 `edges` 首尾两点 ⇒ 元件/引脚/netH 三通道逐位不变。
+# 读数（官方 10，`work\_edgelab.py` 纯后处理，基线 80.04 / 导线 0.4137，与 `ext:20;overlap:10,4,0.35` 叠加）：
+#   `extany:20,3` → 80.54（0.4632）；半径/容差细扫：`24,2` **80.73（0.4824）**、`25,2` 80.72（0.4808）、
+#   `26,2` 80.72、`22,3` 80.70、`25,1.5` 80.67、`30,2` 80.64、`25,2.5` 80.65、`18,2` 80.52；
+#   关掉引脚（`25,2,1,0`）80.31、只要边（`25,2,0,1`）80.46 ⇒ **引脚证据值 +0.26、边证据值 +0.18，两者叠加 +0.44**。
+# 跨池（纯后处理，220 张 `d220known` 臂；**只有这条仪器是确定性的** —— 端到端派生池有 ±0.3 的 LLM 噪声）：
+#   `10GT` 76.21 → **76.90**（导线 0.4077 → 0.4764）｜`golden10` 33.72 → **33.56**（导线 −0.0155）｜
+#   派生 196 张 27.42 → 27.40｜`jlc` 99 张 32.37 → **32.38**；拆开看：只要引脚 `10GT` 76.37 / `golden10` 33.63、
+#   只要边 `10GT` 76.30 / `golden10` **33.73（+0.01）** ⇒ 代价集中在「引脚那半 × golden10」。
+# 端到端（真实管线，`-lean`，`STAGE2_EDGE_EXT_FREE=0` 对照）：官方 10 **80.31 → 80.73**（导线 0.4402 → 0.4821，
+#   comp/pin/netH 逐位不变）；golden10 35.98 → 36.42（其中 netH 的 0.3164 → 0.3316 属 LLM 噪声，只有导线是真变化）；
+#   val18 29.99 → 29.91（±0.2 噪声内）。
+EDGE_EXT_ANY = float(os.environ.get("STAGE2_EDGE_EXT_ANY", "25"))       # 证据外推上限 px，0 = 关
+EDGE_EXT_ANY_HIT = float(os.environ.get("STAGE2_EDGE_EXT_ANY_HIT", "2.0"))  # 落点要贴到几何这么多 px 内
+
+
+def extend_ends_to_evidence(nets: Dict[str, dict], pins: Dict[str, dict], radius: float = None,
+                            hit: float = None) -> int:
+    """端点沿自身轴外推，落点贴到**任何边**（本边除外）或**任何引脚点** ≤ `hit` 才生效；返回改动端点数。"""
+    radius = EDGE_EXT_ANY if radius is None else radius
+    hit = EDGE_EXT_ANY_HIT if hit is None else hit
+    if radius <= 0:
+        return 0
+    allsegs: List[Tuple[str, str, tuple]] = []
+    for nk, rec in nets.items():
+        for k, v in (rec.get("edges") or {}).items():
+            e = _seg_ends(v)
+            if e is not None:
+                allsegs.append((nk, k, e))
+    ppt: List[Tuple[float, float]] = []
+    for _c, _pn in (pins or {}).items():
+        for _pv in (_pn or {}).values():
+            _p = (_pv or {}).get("point")
+            if isinstance(_p, dict) and "x" in _p and "y" in _p:
+                ppt.append((float(_p["x"]), float(_p["y"])))
+    moved = 0
+    for nk, rec in nets.items():
+        edges = rec.get("edges") or {}
+        segs = [(k, _seg_ends(v)) for k, v in edges.items()]
+        segs = [(k, e) for k, e in segs if e is not None]
+        for k, ends in segs:
+            (ax, ay), (bx, by) = ends
+            dx, dy = bx - ax, by - ay
+            L = math.hypot(dx, dy)
+            if L < 1e-6:
+                continue
+            ux, uy = dx / L, dy / L
+            seg = edges[k]
+            for idx, (px, py), s in ((0, (ax, ay), -1.0), (-1, (bx, by), 1.0)):
+                for step in range(1, int(radius) + 1):
+                    qx, qy = px + s * ux * step, py + s * uy * step
+                    ok = False
+                    for nk2, k2, e2 in allsegs:
+                        if nk2 == nk and k2 == k:
+                            continue
+                        (cx, cy), (ex_, ey) = e2
+                        vx, vy = ex_ - cx, ey - cy
+                        L2 = vx * vx + vy * vy
+                        if L2 <= 1e-9:
+                            d = math.hypot(qx - cx, qy - cy)
+                        else:
+                            t = max(0.0, min(1.0, ((qx - cx) * vx + (qy - cy) * vy) / L2))
+                            d = math.hypot(qx - (cx + t * vx), qy - (cy + t * vy))
+                        if d <= hit:
+                            ok = True
+                            break
+                    if not ok:
+                        for qx2, qy2 in ppt:
+                            if math.hypot(qx - qx2, qy - qy2) <= hit:
+                                ok = True
+                                break
+                    if ok:
+                        seg[idx]["x"] = round(qx, 2)
+                        seg[idx]["y"] = round(qy, 2)
+                        moved += 1
+                        break
+    return moved
+
+
+def _pt_seg_dist(px: float, py: float, segs: List[Tuple[str, tuple]], skip: str = "") -> float:
+    """点到本网其它边的最短距离（`skip` 那条不算）。"""
+    best = float("inf")
+    for k2, e2 in segs:
+        if k2 == skip:
+            continue
+        (cx, cy), (ex_, ey) = e2
+        vx, vy = ex_ - cx, ey - cy
+        L2 = vx * vx + vy * vy
+        if L2 <= 1e-9:
+            d = math.hypot(px - cx, py - cy)
+        else:
+            t = max(0.0, min(1.0, ((px - cx) * vx + (py - cy) * vy) / L2))
+            d = math.hypot(px - (cx + t * vx), py - (cy + t * vy))
+        if d < best:
+            best = d
+    return best
+
 
 def extend_edge_ends(nets: Dict[str, dict], radius: float = None,
                      hit: float = None) -> int:
@@ -1932,6 +2094,13 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # ★ 自由端回缩（`STAGE2_EDGE_TRIM`，默认 3.0 px，见长注释）：必须在切分/去重
         #   **之后**跑 —— 结点是在切分那一步才定下来的，先回缩会把结点也拉动。
         trim_free_ends(out_nets)
+    if EDGE_EXT_FREE > 0:
+        # ★ 自由端外推（`STAGE2_EDGE_EXT_FREE`）：必须跑在 `extend_edge_ends` **之前** ——
+        #   离线实验里顺序反过来（ext;overlap;extfree）会把已对齐的端点再推过头，收益从 +0.42 掉到 +0.13。
+        extend_free_ends(out_nets, pins)
+    if EDGE_EXT_ANY > 0:
+        # ★ 证据外推（`STAGE2_EDGE_EXT_ANY`）：在「同网他边」外推之前跑，先用全图几何把端点拉到交叉/汇合/引脚根。
+        extend_ends_to_evidence(out_nets, pins)
     if EDGE_EXT > 0:
         # ★ 端点外推（`STAGE2_EDGE_EXT`）：回缩之后跑（先治过冲，再补不足）。
         extend_edge_ends(out_nets)
