@@ -3,8 +3,9 @@
 """赛题容器入口：`/submission/agent_system -input /input -output /output`
 
 官方镜像说明（`edarace-agent-base:ubuntu24`）要求「把 `/submission/agent_system`
-替换为你自己的 agent 实现，保留同一组 CLI 参数与输出契约」。这个脚本就干两件事：
-把自己所在目录与包根塞进 `sys.path`，然后把参数原样交给 `run.main()`。
+替换为你自己的 agent 实现，保留同一组 CLI 参数与输出契约」。这个脚本干三件事：
+把自己所在目录与包根塞进 `sys.path`、把**比赛日档位**（`EDA_TIER_ARGS`，默认
+`-lean`）接到平台给的参数后面、然后把参数交给 `run.main()`。
 
 刻意保持**极薄**：所有逻辑在 `run.py` 里，这样本机可以用
 `python eda-pcb\\submission\\run.py -input ... -output ...` 跑一模一样的代码。
@@ -27,5 +28,47 @@ except ImportError:                               # 包布局不同时兜底
     spec.loader.exec_module(_mod)
     main = _mod.main
 
+# ---------------------------------------------------------------------------
+# ★★★ 比赛日档位钉在**交付入口**这一层（用户裁决 2026-10-12，`docs/RESULTS.md` §5.51）
+#
+# 平台只会按 `/submission/agent_system -input <dir> -output <dir>` 调我们
+# （`packaging/run.sh` 也是原样转交），**不会**给我们任何档位开关 ⇒ 「比赛日档位」
+# 不写在交付入口里就等于不存在。
+#
+# 默认 `-lean`（= `-vlm-pin off` + `-vlm-value-batch 4`）。依据（官方 10 张，同代码复测
+# 见 §5.50）：protocol2 79.84 vs 默认 79.66、判题机复刻尺 65.61 vs 65.67 —— 都在
+# ±0.38 跨运行噪声带内，而 token 93 181 vs 152 164（**−39%**）、墙钟 94.9 s vs 118.2 s。
+# 平台侧还有一个 **1200 s 硬杀容器**（§5.46 判题机原文），省下来的时间就是安全边际；
+# 配合 `EDA_PUBLISH_S`（默认 15 s）的增量发布，即使被硬杀也留得下已跑完的图（§5.47）。
+#
+# 换档 = 改 `EDA_TIER_ARGS`（**整体替换**默认档位参数，不是追加）：
+#     EDA_TIER_ARGS=""                                → `run.py` 原生默认（完整档）
+#     EDA_TIER_ARGS="-vlm-pin on -vlm-value-batch 1"  → 同上，显式写法
+#     EDA_TIER_ARGS="-lean -vlm-value off"            → 极限省档（82 次 / 45 428 token）
+#     EDA_TIER_ARGS="-offline"                        → 0 次外部调用的兜底档
+# 这个变量同时被写进 `decision_log.json`（`run.py` 的 env 白名单），判题机回传里可查。
+# ⚠️ 不要为了「跑一次完整档」去改这里 —— 本机评测走 `tools/eval/fast.py`（它直接调
+#     `submission/run.py`），所以那里的「默认档」读数不受这一层影响。
+# ---------------------------------------------------------------------------
+TIER_ARGS = os.environ.get("EDA_TIER_ARGS", "-lean")
+
+
+def _tier_argv(argv):
+    """把比赛日档位参数接到平台给的参数后面（`EDA_TIER_ARGS` 覆盖默认 `-lean`）。"""
+    args = list(argv)
+    tier = (TIER_ARGS or "").split()
+    # ★ 把**生效值**写回环境：`run.py` 的决策日志会登记 `EDA_TIER_ARGS`，而平台/判题机
+    #   回传里只有 `decision_log.json` 可查 —— 变量没设时登记成空串就看不出这一轮是哪档
+    #   （扇出的 lane 子进程也继承这个值，日志同源）。
+    os.environ["EDA_TIER_ARGS"] = TIER_ARGS or ""
+    if tier:
+        print("[agent_system] 比赛日档位 %s（EDA_TIER_ARGS=%r）"
+              % (" ".join(tier), TIER_ARGS), flush=True)
+    else:
+        print("[agent_system] 比赛日档位 = run.py 原生默认（EDA_TIER_ARGS 为空）",
+              flush=True)
+    return args + tier
+
+
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    raise SystemExit(main(_tier_argv(sys.argv[1:])))

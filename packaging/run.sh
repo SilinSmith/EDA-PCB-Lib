@@ -33,6 +33,11 @@ if [ -n "${LLM_API_KEY:-}" ]; then echo "LLM_API_KEY       = set"; else echo "LL
 if [ -n "${DASHSCOPE_API_KEY:-}" ]; then echo "DASHSCOPE_API_KEY = set"; else echo "DASHSCOPE_API_KEY = <unset>"; fi
 echo "NVIDIA_VISIBLE_DEVICES = ${NVIDIA_VISIBLE_DEVICES:-<unset>}"
 echo "python3 = $(command -v python3)"
+# 比赛日档位（`docs/RESULTS.md` §5.51）：平台不给我们档位开关，所以档位钉在
+# `agent_system` 里（`EDA_TIER_ARGS`，默认 `-lean`）。这里只把它**打出来**，
+# 免得判题机日志里看不出这一轮跑的是哪个档；改档就改这个变量（或改 Dockerfile）。
+echo "EDA_TIER_ARGS (档位) = ${EDA_TIER_ARGS:-<unset，用 agent_system 的默认 -lean>}"
+echo "EDA_PUBLISH_S (增量发布) = ${EDA_PUBLISH_S:-<unset，默认 15>}"
 echo "input files:"; ls -1 "$INPUT_DIR" | head -20
 
 # ---------------------------------------------------------------------------

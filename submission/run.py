@@ -1211,6 +1211,13 @@ def _write_decision(out_dir: Path, summary: dict, cases_log: list,
             "llm_max_slots": a.llm_max_slots,
             "vlm": a.vlm, "vlm_workers": a.vlm_workers, "vlm_margin": a.vlm_margin,
             "vlm_desig_fallback": a.vlm_desig_fallback,
+            # ★ 生效档位的**逐项**明细（§5.51）：平台回传里只有这个文件，而
+            #   `vlm_stats` 看不出「引脚通道关没关」（关掉时它同样报 grid_calls=0）；
+            #   把 `_apply_lean` / `_apply_offline` 之后的实际值写下来，事后能复盘档位。
+            "vlm_pin": a.vlm_pin, "vlm_pin_name": a.vlm_pin_name,
+            "vlm_name": a.vlm_name, "vlm_value": a.vlm_value,
+            "vlm_value_batch": a.vlm_value_batch,
+            "fusion": a.fusion,
             "vlm_stats": getattr(a, "vlm_stats", None),
             # ★ 交付护栏的实际生效值 + 外部推理的真实用量（超预算 ⇒ `refused>0`）。
             #   只读**本进程已经 import 过**的 `vlm.client`：父进程（扇出）没跑过 VLM，
@@ -1231,7 +1238,11 @@ def _write_decision(out_dir: Path, summary: dict, cases_log: list,
                  "FUSION_PIN_LIBFIX", "FUSION_PIN_LIBFIX_RATIO",
                  "FUSION_PIN_LIBFIX_MARGIN",
                  "VLM_TIMEOUT", "VLM_BUDGET_S",
-                 "EDA_WALL_BUDGET_S", "EDA_CASE_WORKERS")},
+                 # ★ 比赛日档位：由交付入口 `submission/agent_system` 读进参数
+                 #   （`docs/RESULTS.md` §5.51），这里只登记它，便于判题机回传里
+                 #   直接看出那一轮跑的是哪个档。
+                 "EDA_TIER_ARGS",
+                 "EDA_WALL_BUDGET_S", "EDA_CASE_WORKERS", "EDA_PUBLISH_S")},
         "assets": assets.describe(),
         "summary": summary,
         "cases": cases_log,

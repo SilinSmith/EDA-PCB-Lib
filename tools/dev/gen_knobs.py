@@ -33,9 +33,15 @@ def scan() -> "collections.OrderedDict[str, list]":
     out = collections.OrderedDict()
     for pkg in PKGS:
         rows = {}
-        for p in sorted((ROOT / pkg).rglob("*.py")):
-            if "__pycache__" in p.parts:
-                continue
+        files = [p for p in sorted((ROOT / pkg).rglob("*.py"))
+                 if "__pycache__" not in p.parts]
+        # ★ 交付入口 `submission/agent_system` 是**没有 .py 后缀**的可执行脚本，
+        #   而它读的 `EDA_TIER_ARGS`（比赛日档位，§5.51）是真开关 ⇒ 单独点名收进来，
+        #   否则「有个决定档位的变量」这件事在 KNOBS.md 里查不到。
+        extra = ROOT / pkg / "agent_system"
+        if extra.is_file():
+            files.append(extra)
+        for p in files:
             src = p.read_text(encoding="utf-8", errors="ignore")
             for m in PAT.finditer(src):
                 line = src[:m.start()].count("\n") + 1

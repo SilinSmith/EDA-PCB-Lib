@@ -4375,12 +4375,14 @@ python -X utf8 tools\dev\gen_knobs.py --write         :: 435 → 436 个开关�
    VLM 那一档是冗余；这与判题机报告 `pin_number_accuracy_on_matched = 1.000` 互证。
    （历史 help 文本里的「+2.88」是**本地引脚能力补齐之前**的读数，已被本轮覆盖。）
 
-**五、档位建议（比赛日三档 + 兜底）**
+**五、档位建议（比赛日三档 + 兜底）** —— ★ **已定稿：交付默认 = 精简档**（用户裁决
+2026-10-12，实现与验收见 **§5.51**：档位钉在交付入口 `submission/agent_system` 的
+`EDA_TIER_ARGS` 上，默认 `-lean`；无参数跑交付入口与 `-lean` 臂逐位相同）。
 
 | 档 | 命令 | token / 10 张 | 复刻尺 | protocol2 | 何时用 |
 |---|---|---|---|---|---|
-| 默认 | — | 152 164 | 65.67 | 79.66 | 本地开发、对比基准 |
-| 精简 | `-lean` | **93 181（−39%）** | 65.61 | 79.84 | 官方平台能连外部 VLM 时的推荐档 |
+| 默认 | — | 152 164 | 65.67 | 79.66 | 本地开发、对比基准（**不再是交付默认**） |
+| 精简 | `-lean` | **93 181（−39%）** | 65.61 | 79.84 | ★ **比赛日交付默认**（`EDA_TIER_ARGS` 的默认值） |
 | 极限省 | `-lean -vlm-value off` | **45 428（−70%）** | 64.48 | 79.45 | token 排名权重吃紧时 |
 | 离线 | `-offline` | **0** | 63.09 | 70.04 → **75.75** | 无网络 / 官方只给纯文本 API 时的兜底 |
 
@@ -4782,7 +4784,9 @@ python -X utf8 work\_offval.py --arms tok_dvoffvf,tok_dvms2                    :
 3. **平台分与本地尺子的关系**：44.29 对应的是**更早的代码状态**，不能与今天的 79.66/75.75
    直接比；本地复刻尺只用于**相对比较与回归**，绝对分以平台回传为准。
 
-**对比赛日档位的含义**：视觉可用 ⇒ 首选 `-lean`（token −39%、分数不降）；
+**对比赛日档位的含义**：视觉可用 ⇒ 首选 `-lean`（token −39%、分数不降）——
+★ 这条已由用户裁决采纳并**落地成交付默认档**（`submission/agent_system` 的
+`EDA_TIER_ARGS=-lean`，无参数跑交付入口与 `-lean` 臂逐位相同，见 **§5.51**）；
 token 排名吃紧或调用配额受限 ⇒ `-lean -vlm-value off`（−70%）；
 端点不可用/超时风险高 ⇒ `-offline`（0 调用，复刻尺 63.09 / 协议尺 75.75；§5.49 后
 与默认档的差距从 −9.62 压到 **−3.91**（协议尺，默认 79.66）/ **−2.58**（复刻尺，默认 65.67），
@@ -5044,7 +5048,8 @@ cd eda-pcb; python -X utf8 -m fusion.pinfix
 
 **四、档位结论（更新 `§5.41` 五的判据）**：默认档与精简档在噪声带内同级
 （复刻尺 65.67 vs 65.61、协议尺 79.66 vs 79.84），而精简档 token **−39%** 是确定量
-⇒ 比赛日**首选 `-lean`** 的结论不变；极限省比精简低 1.14（复刻尺）/ 0.39（协议尺），
+⇒ 比赛日**首选 `-lean`** 的结论不变（该建议已由用户裁决采纳，落地成「交付默认档」＝
+入口 `submission/agent_system` 的 `EDA_TIER_ARGS=-lean`，见 **§5.51**）；极限省比精简低 1.14（复刻尺）/ 0.39（协议尺），
 只在 token 排名权重吃紧时用；离线档 75.75，与默认档的差距 **−3.91（协议尺）/ −2.58（复刻尺）**
 （对比机制上线前的 −9.62）。
 
@@ -5059,6 +5064,97 @@ python -X utf8 work\_pinfix_run.py --arms tok_lean4,tok_lean --show 40
 python -X utf8 work\_off10.py --arms tok_full,tok_full_fx,tok_full2,tok_lean4,tok_lean,tok_libfx0
 python -X utf8 eda-pcb\tools\eval\fast.py --score-only --engine protocol2 --out tok_lean4 --cases 1,2,3,4,5,6,7,8,9,10
 ```
+
+---
+
+## §5.51 比赛日档位定稿：**交付默认 = 精简档**（`EDA_TIER_ARGS`，2026-10-12 用户裁决）
+
+**一、决定**：比赛日主档 = `-lean`（`-vlm-pin off` + `-vlm-value-batch 4`）。
+依据是 §5.50 的同代码四档复测：精简档与完整档在全部分项上同级
+（复刻尺 65.6143 vs 65.6745、协议尺 79.84 vs 79.66，差 0.06 / −0.18，都在跨运行
+噪声带 ±0.38 内），而 token 93 181 vs 152 164（**−39%**）、墙钟 94.9 s vs 118.2 s。
+平台侧还有一个 **1200 s 硬杀容器**（§5.46 判题机原文 `[Ingestion] Timeout: 1200 seconds`）
+⇒ 省下的时间就是安全边际，配合 §5.47 的增量发布（`EDA_PUBLISH_S` 默认 15 s），
+即使被硬杀也留得下已跑完的图。
+
+**二、为什么钉在交付入口这一层**：平台只按
+`/submission/agent_system -input <dir> -output <dir>` 调我们（`packaging/run.sh` 原样转交），
+**不会给任何档位开关** ⇒ 档位不写在交付入口里就等于不存在。改动：
+
+* `eda-pcb/submission/agent_system`：新增唯一默认值来源
+  `TIER_ARGS = os.environ.get("EDA_TIER_ARGS", "-lean")` 与 `_tier_argv()`——把档位参数
+  接在平台参数之后并打印一行；同时把**生效值写回** `os.environ["EDA_TIER_ARGS"]`
+  （判题机回传里只有 `decision_log.json` 可查，变量未设时登记空串 = 看不出档位）。
+* `eda-pcb/submission/run.py`：**原生默认保持完整档不变**。本机评测走
+  `tools/eval/fast.py`，它直接调 `submission/run.py`（不经过交付入口这一层）
+  ⇒ §5.50 那张表与本文件其他读数的含义一字不变。
+* `eda-pcb/packaging/run.sh`：把 `EDA_TIER_ARGS` / `EDA_PUBLISH_S` 打进判题机日志
+  （否则事后翻日志看不出那一轮是哪个档）。
+
+**三、读数（**无参数**跑交付入口，官方 10 张）**：
+
+| 入口 / 臂 | 参数 | 墙钟 | VLM 调用 / token | 复刻尺 | protocol2 |
+|---|---|---:|---|---:|---:|
+| `agent_system`（第 1 次） | 无（`EDA_TIER_ARGS` 默认） | 101.6 s | 115 / 93 181 | **65.6143** | **79.84** |
+| `agent_system`（第 2 次） | 无 | 98.1 s | 115 / 93 181 | **65.6143** | **79.84** |
+| `-lean` 臂（§5.50 `tok_lean4`） | `-lean` | 94.9 s | 115 / 93 181 | 65.6143 | 79.84 |
+| 完整档（§5.50 `tok_full2`） | — | 141.1 s | 222 / 152 164 | 65.6745 | 79.66 |
+
+两次无参数运行与 `-lean` 臂**逐位相同**：`work/_off10.py --arms tok_lean4,tier1,tier2`
+打印 `Δ = +0.0000`（comp 0.522323 / pin 0.751394 / conn 0.771571 / wire 0.415472；
+tp 元件 250 / 引脚 95 / 网络 124 / 导线 323），协议尺三次同为 79.84
+（`fast.py --score-only --engine protocol2`）。⇒ 「比赛日干什么」现在由代码本身断言，
+不再依赖有人记得在命令行补 `-lean`。
+
+**四、验收：`decision_log.json` 能看出档位**（这条以前看不出来）：
+
+| 字段 | 改前（`work/_tierout1`） | 改后（`work/_tierout2`） |
+|---|---|---|
+| `env.EDA_TIER_ARGS` | `""`（变量没设 ⇒ 看不出档） | **`-lean`** |
+| `config.vlm_pin` | 缺 | **`off`** |
+| `config.vlm_value_batch` | 缺 | **`4`** |
+
+`config` 另补 `vlm_pin_name / vlm_name / vlm_value / fusion`；`env` 白名单另补
+`EDA_PUBLISH_S`。为什么要逐项记：`vlm_stats` 看不出引脚通道关没关——关掉时它同样报
+`grid_calls=0`（`work/_tierout2/runs/...` 与 §5.46 的官方回传一致），只有 `config` 里的
+`vlm_pin` 能区分「关掉」与「开了但没命中」。
+
+**五、换档：一个环境变量，不用改代码**
+
+| `EDA_TIER_ARGS` | 效果（官方 10 张） | 何时用 |
+|---|---|---|
+| `-lean`（**默认**） | 交付默认档：115 次 / 93 181 / 复刻尺 65.61 / 协议尺 79.84 | 网络与视觉端点在线的正常比赛日 |
+| `""`（空串） | `run.py` 原生默认 = 完整档：222 次 / 152 164 / 65.67 / 79.66 | 复现 §5.50 的「默认档」读数 |
+| `-vlm-pin on -vlm-value-batch 1` | 同上一行，显式写法 | 不想依赖空串语义 |
+| `-lean -vlm-value off` | 极限省档：82 次 / 45 428（−70%）/ 64.48 / 79.45 | token 排名权重吃紧 |
+| `-offline` | 0 次外部调用：协议尺 75.75 | 端点挂了 / 被限流 / 只给纯文本端点 |
+
+改法：镜像里 `ENV EDA_TIER_ARGS=…`（`packaging/Dockerfile`），或在 `run.sh` 里 export；
+两者都会随交付包一起走，且 `run.sh` 现在会把它打进判题机日志。
+
+**六、开关与工具**：`docs/KNOBS.md` 现在 **452 个**开关（+1：`EDA_TIER_ARGS`
+`submission/agent_system:53`）。为了让这条能被查出来，`tools/dev/gen_knobs.py` 的扫描
+从「只扫 `*.py`」扩到「**额外点名交付入口 `submission/agent_system`**」——它是没有
+`.py` 后缀的可执行脚本，按老规则这个决定档位的变量会整条从开关总表里消失。
+
+**七、复现**
+
+```powershell
+# ① 无参数跑交付入口（= 比赛日档位），官方 10 张
+python -X utf8 eda-pcb\submission\agent_system -input work\_pubtest_in -output work\_tierout2
+# ② 与 -lean 臂逐位对比（应打印 Δ = +0.0000）
+python -X utf8 work\_off10.py --arms tok_lean4,tier1,tier2
+python -X utf8 eda-pcb\tools\eval\fast.py --score-only --engine protocol2 --out tier2 --cases 1,2,3,4,5,6,7,8,9,10
+# ③ 看档位有没有记进决策日志（应打印 -lean off 4）
+python -c "import json;d=json.load(open('work/_tierout2/decision_log.json',encoding='utf-8'));print(d['env']['EDA_TIER_ARGS'],d['config']['vlm_pin'],d['config']['vlm_value_batch'])"
+# ④ 换档（示例：完整档 / 离线兜底档）
+$env:EDA_TIER_ARGS='';  python -X utf8 eda-pcb\submission\agent_system -input work\_pubtest_in -output work\_tierout_full
+$env:EDA_TIER_ARGS='-offline'; python -X utf8 eda-pcb\submission\agent_system -input work\_pubtest_in -output work\_tierout_off
+```
+
+注：输入目录 `work\_pubtest_in`（`1..10.png`，从 `work\_fast_in` 拷官方 10 张）与臂目录
+`work\_fast_out_tier1` / `work\_fast_out_tier2` 都在仓库外的 `work/`；`tier1`/`tier2`
+只是把 `work\_tieroutN\final_results` + `runs` 拷成 `_off10.py` 认识的臂布局。
 
 ---
 

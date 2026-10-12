@@ -63,6 +63,18 @@ FinalScore               = FinalScore_Accuracy + FinalScore_Data   # Data ≤ 10
 >   的 `*_Pred.json` 只补缺不覆盖地拷进输出目录（拷贝前先验一次 JSON）。硬杀 A/B：第 11 s 杀
 >   进程树，开 = 9/10 已交付、关 = 0/10；完整跑完两边都是 10/10（14.4 s / 17.6 s）。
 >   `EDA_PUBLISH_S=0` 退回旧行为。
+> - **比赛日档位已定稿（2026-10-12 用户裁决，§5.51）**：交付默认 = **精简档 `-lean`**
+>   （`-vlm-pin off` + `-vlm-value-batch 4`）。档位钉在交付入口 `submission/agent_system` 的
+>   **`EDA_TIER_ARGS`（默认 `-lean`）**，因为平台只按 `agent_system -input/-output` 调我们、
+>   不传任何档位开关；`submission/run.py` 的原生默认仍是完整档（评测脚本 `tools/eval/fast.py`
+>   直连 `run.py`，所以本文档与 `RESULTS.md` §5.50 那张表的读数含义不变）。
+>   实测**无参数**跑交付入口 ≡ `-lean` 臂**逐位相同**：复刻尺 65.6143 / 协议尺 79.84、
+>   115 次调用 / 93 181 token、98~102 s / 10 张（对完整档 222 次 / 152 164 token、
+>   141 s，token −39%；官方侧硬预算 1200 s ⇒ 省下的时间就是安全边际）。
+>   换档只改这一个变量：`""` = 完整档、`-lean -vlm-value off` = 极限省（82 次 / 45 428）、
+>   `-offline` = 0 次外部调用兜底；生效值会写进判题机回传的 `decision_log.json`
+>   （`env.EDA_TIER_ARGS` 与 `config.vlm_pin` / `vlm_value_batch`），`packaging/run.sh`
+>   也把它打进容器日志。
 > - 每个 lane 各写一份 `runs/fusion/_fusion_report.json`，父进程再合并 ⇒ 顺带消掉了
 >   该文件「读-改-写」的跨 case 竞态。
 
