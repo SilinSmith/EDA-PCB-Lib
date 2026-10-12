@@ -72,7 +72,7 @@
 | `_desres` | 259 | **位号重解 pass（原型）**：把「没挂上位号」的元件，用附近**空闲**文字框里读出的位号补上。 |
 | `_deswhy` | 196 | **位号为什么错**：把「认不出来（字形/字体）」和「挂到别的元件上」分开量。 |
 | `_engchk` | 101 | **口径对照**：同一条框，走「语料口径（裸框裁片）」与「stage2 运行口径（`pad_box` 外扩）」 |
-| `_fantest` | 242 | case 级扇出（`-case-workers`）的回归测试：坏图 / 看门狗 / 关掉 / 自动 / 护栏 / 离线 / 增量发布。 |
+| `_fantest` | 276 | case 级扇出（`-case-workers`）的回归测试：坏图 / 看门狗 / 关掉 / 自动 / 护栏 / 离线 / 增量发布。 |
 | `_fontfit` | 174 | 官方渲染用的是哪一款字体？—— 拿真实裁片（GT 文本已知）去套候选字体的字形。 |
 | `_fontsheet` | 80 | 把真实裁片和候选字体的渲染并排画出来，肉眼看哪个像（`_fontfit.py` 的数字靠这个兜底）。 |
 | `_hardtest` | 200 | 灾难现场加固的**故障注入**测试（用户 m42543）。 |
@@ -96,14 +96,14 @@
 | `audit_labels` | 277 | Training-label quality audit for a YOLO dataset — "错误的标号" triage. |
 | `build_trainset_v4` | 599 | Assemble `work/trainset_v4` = `trainset_v3` (optionally label-repaired) + `新补充训练集`. |
 | `checkreport` | 23 | 校验生成的 Word 报告结构（段落/章节/表格/装饰残留）。 |
-| `gen_knobs` | 97 | 扫描源码里所有环境开关，生成 `docs/KNOBS.md`。 |
+| `gen_knobs` | 106 | 扫描源码里所有环境开关，生成 `docs/KNOBS.md`。 |
 | `gen_toolindex` | 96 | 生成 `docs/TOOLS.md` —— `tools/` 下每个脚本的索引（含首行 docstring）。 |
 | `gpu_gate` | 363 | GPU 串行闸门：**同一时刻只允许一个自己起的吃卡任务**，且起之前先确认显存够。 |
 | `mix_crnn_manifest` | 180 | 把「真实语料」和「合成语料里挑出来的那几类」混成一份 CRNN 训练清单。 |
 | `mk_fonttext` | 280 | **官方字体合成语料**：用与官方渲染器同款/同类的字体直接合成文字裁片，补上合成语料的字体域缺口。 |
 | `mk_official_textset` | 523 | 从**官方公开数据**（10GT + 200_train_cases）造一份「域内」文字识别训练集。 |
 | `mk_textrec_manifest` | 152 | 把「官方渲染图上的域内文字语料」（`mk_official_textset.py` 的产物）转成 `textrec` 能直接 |
-| `mkreport` | 718 | 生成赛题六《技术报告》Word 文档（python-docx）。 |
+| `mkreport` | 925 | 生成赛题六《技术报告》Word 文档（python-docx）。 |
 | `pack_submission` | 346 | 打包一个「可提交」的目录树：`<out>\eda-pcb-main\` + 四个平台文件。 |
 | `pinread_contract` | 213 | 队友 13 个「引脚读取器」的**接口契约检查器**（2026-10-16 统一后新增）。 |
 
@@ -412,7 +412,7 @@
 | `_pinloss` | 221 | 引脚失分分解：把 220 张的 `pin.missing`（8335）拆成 |
 | `_pinmap` | 53 |  |
 | `_pinmatch1` | 58 | 逐脚对账：我们的某个元件 vs GT —— 号对不对、名对不对。只读。 |
-| `_pinmiss` | 281 | 把「GT 有、我方没有」的 IC 引脚按**成因**分桶（取代 2026-10 之前的占位版）。 |
+| `_pinmiss` | 283 | 把「GT 有、我方没有」的 IC 引脚按**成因**分桶（取代 2026-10 之前的占位版）。 |
 | `_pinname` | 153 | Why does `pin.name_mismatch` fire?  (`p.get('pinname') != g.get('pinname')`) |
 | `_pinname_stat` | 23 |  |
 | `_pinnamepair` | 117 | **引脚名字账本**：官方档 IC 引脚的 GT `pinname` vs 我方 `_assigned` 槽位里读到的 |

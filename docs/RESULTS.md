@@ -5386,6 +5386,80 @@ python -X utf8 work\_knowngap.py --arms tok_g3known,tok_g5known2
 
 ---
 
+## §5.54 扇出发布链的正确语义：lane 里更新了就要**升级**，不是「只补缺不覆盖」（2026-10-13）
+
+**病**（③ 8×A800 并行优化那一轮的单卡 A/B 抓到）：`_publish_preds` 与 `_merge_lane`
+从前都是**只补缺不覆盖**（§5.47 的药 1 与 `_merge_lane` 的语义）。可是 `_run()` 里还有
+一条**渐进导出**（阶段二那一段，用户 m42543 的灾难现场加固）：阶段二刚跑完就把
+**还没融合**的文档顶到 lane 的 `final_results/<case>_Pred.json`，后面阶段三 / 融合层
+再覆盖它。两者一叠 ⇒ 父进程在 `EDA_PUBLISH_S` 的轮询里抢到的是**第一份（stage2 档）**，
+之后 lane 里换成融合档，却**没有任何代码去升级主输出目录** —— 那份旧档**永久胜出**。
+
+**取证**（本地单卡，10 张官方图，`-offline`，8 lane，`EDA_PUBLISH_S=1`）
+- `work\_fan_p8\final_results\1_Pred.json` = **13 293 B 且无 `__pin_index`**；lane 自己的
+  `work\_fan_p8\_lanes\lane0\final_results\1_Pred.json` = **14 812 B 且有 `__pin_index`**。
+  `work\_jsondiff.py` 显示两份**只差 `__pin_index` 一项**。13 293 B 正好等于
+  `_lanes\lane0\runs\stage2\1.json`（融合前的阶段二文档），而 `runs/fusion/1.json` 是 14 812 B。
+- 时间线：主目录那份 mtime **12:17:45.525**，lane 的最终产物 **12:17:46.460**；lane0 的
+  `stdout.log` 只有**一次** `=== 导出 final_results ===`（12:17:46）⇒ 主目录那份**不是**导出
+  循环写的，是父进程从 lane 的**渐进导出**里抢走的第一版，而收尾 `_merge_lane` 又被
+  「只补缺」挡住 ⇒ 交付出去的是**没过融合层**的文档。
+- 结果：8 lane 那一轮 **9 / 10 份产物与串行臂不同**；4 lane 那一轮 **10 / 10 相同** ——
+  因为 4 lane 用的是默认 `EDA_PUBLISH_S=15`，而整轮只跑了 15.4 s，轮询还没轮到第一次
+  发布就跑完了（日志只有一行「增量发布（收尾）10 份」）。⇒ 这个缺陷**只在
+  「发布间隔 < 单 case 耗时」时暴露**，而 8 卡比赛日 = 默认 15 s + 扇出 ≈ 卡数 ⇒ **必然命中**。
+
+**药**（`eda-pcb/submission/run.py`）
+1. 新增 `_publish_one(lane_file, dst, state, stage_dir) -> bool`：**按源文件新旧升级**。
+   `state` 记「上次发布时**源文件**的 `st_mtime_ns`」，只有源更新才覆盖 —— 所以主目录
+   那份「拷贝时刻更新」不会被误判成更新的版本；没有记忆时（例如输出目录里是上一轮
+   留下的产物）退回「源比主目录新才升级」；源更旧时**拒绝写回**。
+2. 拷贝前 `json.loads` 验一次（子进程可能正在写这个文件），并且**先落同卷暂存
+   `<runs>/.pub/<case>_Pred.json`、再 `os.replace`** ⇒ 判题机任何时刻读到的都是完整 JSON。
+3. `_publish_preds` 与 `_merge_lane` 的 `*_Pred.json` 都走它；`_merge_lane` 里 `runs/` 的中间
+   产物仍旧「只补缺不覆盖」（那些只是留档）。
+   日志里「增量发布 N 份（累计 M）」的 `M` 现在可能**大于图的张数** —— 多出来的就是**升级**。
+
+**读数**（本地单卡；判据 = 与串行臂 `work\_fan_s1` 的 `final_results` **逐字节相同**）
+
+| 臂 | 扇出 | 增量发布 | 内部墙钟 | 与串行逐字节相同 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| `work\_fan_s1` | 1 | — | 20.7 s | 基准 | 串行：渐进导出与最终导出写同一个文件，后者胜 |
+| `work\_fan_p4` | 4 | 默认 15 s（没轮到） | 15.4 s | **10 / 10** | 单卡 1.34× |
+| `work\_fan_p8`（**修前**） | 8 | 1 s | 12.7 s | **1 / 10** | 9 份是缺 `__pin_index` 的 stage2 旧档 |
+| `work\_fan_p8b`（修后） | 8 | 1 s | 12.5 s | **10 / 10** | 发布轮 5→11→15→19：10 张里有 **9 次升级** |
+| `work\_fan_p8c`（修后） | 8 | 1 s | 13.6 s | **10 / 10** | 发布轮 3→8→10→11→15：**5 次升级** |
+
+**灾难加固没被破坏**（这一条必须同验，否则等于把 §5.47 的好处吃掉）
+- `EDA_WALL_BUDGET_S=6` + 8 lane：8 个 lane 全 `rc=-9`；主目录 **10 / 10 份存在、10 / 10 可解析**
+  （全为空壳三键 —— 6 s 时连阶段二的渐进导出都还没落盘）。
+- `EDA_WALL_BUDGET_S=8` + 8 lane：`增量发布 5 份（累计 5）` → 强杀 → 收尾再发 6 份 = **11 次发布**；
+  主目录 **10 / 10 份、10 / 10 可解析**，其中 **6 份是跑完的融合档**（含 `__pin_index`）、4 份空壳。
+  ⇒ 语义变成「**先保证有**（渐进导出 + 只补缺），**再保证对**（lane 更新了就升级）」。
+
+**回归**：`eda-pcb/tests/test_fanout_publish.py`（7 例）固化 `_publish_one` 的六种情形：
+首次发布、**升级**、幂等、不倒退（源 mtime 被拨回）、半截 JSON 被拒且保留上一份、
+无记忆时按 mtime 比较、暂存目录不留残渣。
+
+**复现**
+
+```powershell
+$env:EDA_PUBLISH_S = "1"
+python -X utf8 eda-pcb\submission\run.py -input work\_pubtest_in -output work\_fan_p8c -offline -case-workers 8
+foreach ($c in 1,10,2,3,4,5,6,7,8,9) {
+  (Get-FileHash "work\_fan_s1\final_results\${c}_Pred.json").Hash -eq
+  (Get-FileHash "work\_fan_p8c\final_results\${c}_Pred.json").Hash      # 期望全部 True
+}
+cd eda-pcb; python -X utf8 -m unittest discover -s tests -p "test_fanout_publish.py"
+:: 灾难加固对照
+python -X utf8 eda-pcb\submission\run.py -input work\_pubtest_in -output work\_fan_kill8 -offline -case-workers 8
+```
+
+注：本节各臂目录（`work\_fan_*`）、取证脚本 `work\_jsondiff.py` / `work\_pubtest.py` /
+`work\_lanedev.py` 都在仓库外的 `work/`，不提交。
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |

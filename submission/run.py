@@ -453,20 +453,72 @@ def _child_argv(a, out_dir: Path, cases: list, device, vlm_workers: int,
     return argv
 
 
-def _merge_lane(lane_dir: Path, final_dir: Path, runs: Path) -> int:
-    """把一个 lane 的产物并回主输出目录（只补缺，不覆盖已有文件）。"""
+def _publish_one(lane_file: Path, dst: Path, state: dict, stage_dir: Path) -> bool:
+    """把 lane 里的一份 `<case>_Pred.json` **升级**进主输出目录（§5.54）。
+
+    ★ 为什么不是「只补缺不覆盖」：`_run()` 的**渐进导出**（阶段二那一段，用户 m42543
+    的灾难现场加固）会在阶段二刚跑完时就把**还没融合**的文档写进 lane 的
+    `final_results/`，然后阶段三 / 融合层再覆盖它。父进程若「只补缺不覆盖」，抢到的
+    第一份（stage2 档）就**永久胜出**：8 路扇出单卡实测 9/10 张交付的是缺
+    `__pin_index`、没过融合层的 stage2 文档（13 293 B），而 lane 里躺着的、以及
+    `runs/fusion/<case>.json` 才是对的（14 812 B）。
+
+    正确语义 = **按源文件的新旧升级**：lane 里有更新版本才覆盖主目录里的旧版本，
+    绝不把更旧的版本写回去。`state` 记「上次发布时**源文件**的 mtime」，所以主目录
+    那份（拷贝时刻更新）不会被误判成「更新的版本」。
+
+    拷贝前先 `json.loads` 验一次（子进程可能正在写这个文件），并且**先落同卷暂存
+    文件、再 `os.replace`**：判题机任何时刻读到的都是完整 JSON，不会是半截。
+    """
+    key = lane_file.name
+    try:
+        st = lane_file.stat()
+    except OSError:
+        return False
+    if dst.exists():
+        prev = state.get(key)
+        if prev is not None:
+            if st.st_mtime_ns <= prev:
+                return False
+        else:
+            # 没有本进程的记忆（例如输出目录里是上一轮留下的旧产物）⇒ 退回「源比它新才升级」
+            try:
+                if st.st_mtime_ns <= dst.stat().st_mtime_ns:
+                    return False
+            except OSError:
+                return False
+    try:
+        data = lane_file.read_bytes()
+        json.loads(data.decode("utf-8"))
+    except Exception:                                               # noqa: BLE001
+        return False                    # 还在写 / 写坏了 ⇒ 下一轮再看
+    try:
+        tmp = stage_dir / key
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_bytes(data)
+        os.replace(str(tmp), str(dst))
+    except Exception:                                               # noqa: BLE001
+        return False
+    state[key] = st.st_mtime_ns
+    return True
+
+
+def _merge_lane(lane_dir: Path, final_dir: Path, runs: Path,
+                state: dict = None, stage_dir: Path = None) -> int:
+    """把一个 lane 的产物并回主输出目录。
+
+    `*_Pred.json` 走 `_publish_one`（**按源文件新旧升级**，见那里的 §5.54 说明）；
+    `runs/` 下的中间产物仍旧「只补缺不覆盖」—— 它们只是留档，且同一个 case 的
+    `runs/<层>/<case>.json` 在 lane 里也会被后续层覆盖，主目录留第一份无碍。
+    """
     n = 0
+    state = {} if state is None else state
+    stage_dir = (runs / ".pub") if stage_dir is None else stage_dir
     lf = lane_dir / "final_results"
     if lf.is_dir():
         for f in sorted(lf.glob("*_Pred.json")):
-            dst = final_dir / f.name
-            if dst.exists():
-                continue
-            try:
-                shutil.copyfile(str(f), str(dst))
+            if _publish_one(f, final_dir / f.name, state, stage_dir):
                 n += 1
-            except Exception:                                       # noqa: BLE001
-                pass
     lr = lane_dir / "runs"
     if lr.is_dir():
         for f in sorted(lr.rglob("*.json")):
@@ -481,34 +533,27 @@ def _merge_lane(lane_dir: Path, final_dir: Path, runs: Path) -> int:
     return n
 
 
-def _publish_preds(lanes: list, final_dir: Path) -> int:
+def _publish_preds(lanes: list, final_dir: Path, state: dict = None,
+                   stage_dir: Path = None) -> int:
     """把各 lane **已完成**的 `<case>_Pred.json` 立刻补进主输出目录。
 
     为什么需要：平台侧超时是**硬杀容器**（官方练习环境实测 `Timeout: 1200 seconds
     (20 minutes)`，见 `docs/RESULTS.md` §5.46），父进程的收尾合并根本没机会跑；
     「边跑边发布」保证平台来杀我们时，已经做完的图**仍然躺在输出目录里**。
 
-    只补缺不覆盖（与 `_merge_lane` 同语义），并且拷贝前先 `json.loads` 验一次 ——
-    子进程可能正在写这个文件，半截 JSON 发给判题机等于这题零分。
+    每一份都走 `_publish_one`（§5.54：**按源文件新旧升级**）；从前那种「只补缺
+    不覆盖」会让阶段二的渐进导出把未融合的旧档永久钉在输出目录里。
     """
+    state = {} if state is None else state
+    stage_dir = (final_dir.parent / "runs" / ".pub") if stage_dir is None else stage_dir
     n = 0
     for lane in lanes:
         lf = lane["dir"] / "final_results"
         if not lf.is_dir():
             continue
         for f in sorted(lf.glob("*_Pred.json")):
-            dst = final_dir / f.name
-            if dst.exists():
-                continue
-            try:
-                json.loads(f.read_text(encoding="utf-8"))
-            except Exception:                                       # noqa: BLE001
-                continue                    # 还在写 / 写坏了 ⇒ 下一轮再看
-            try:
-                shutil.copyfile(str(f), str(dst))
+            if _publish_one(f, final_dir / f.name, state, stage_dir):
                 n += 1
-            except Exception:                                       # noqa: BLE001
-                pass
     return n
 
 
@@ -597,6 +642,10 @@ def _run_fanout(a) -> int:
     else:
         _log(fp, "增量发布关闭（EDA_PUBLISH_S=0）⇒ 父进程若被平台杀掉则输出目录为空")
     n_pub = 0
+    # §5.54：发布状态（记「上次发布时**源文件**的 mtime」，用来按新旧升级）
+    #   + 同卷暂存目录（先写它、再 `os.replace`，判题机不会读到半截 JSON）。
+    pub_state = {}
+    pub_stage = runs / ".pub"
     pending = [ln for ln in lanes if ln["proc"] is not None]
     while pending:
         still = []
@@ -612,7 +661,7 @@ def _run_fanout(a) -> int:
                 pass
             _log(fp, "lane%d 结束 rc=%s" % (lane["i"], lane["rc"]))
         if pub_every > 0 and still:
-            got = _publish_preds(lanes, final_dir)
+            got = _publish_preds(lanes, final_dir, pub_state, pub_stage)
             if got:
                 n_pub += got
                 _log(fp, "增量发布 %d 份（累计 %d）" % (got, n_pub))
@@ -639,14 +688,14 @@ def _run_fanout(a) -> int:
             wait = min(wait, max(0.5, deadline - time.time()))
         time.sleep(max(0.2, wait))
     if pub_every > 0:
-        got = _publish_preds(lanes, final_dir)
+        got = _publish_preds(lanes, final_dir, pub_state, pub_stage)
         if got:
             n_pub += got
             _log(fp, "增量发布（收尾）%d 份（累计 %d）" % (got, n_pub))
 
     n_merge = 0
     for lane in lanes:
-        n_merge += _merge_lane(lane["dir"], final_dir, runs)
+        n_merge += _merge_lane(lane["dir"], final_dir, runs, pub_state, pub_stage)
     n_shell_here = 0
     for cid, _p in items:
         if not (final_dir / ("%s_Pred.json" % cid)).exists():

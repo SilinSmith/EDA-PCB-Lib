@@ -570,9 +570,17 @@ def build():
          "`EDA_PUBLISH_S`（默认 15 s）把**已完成**的 `<case>_Pred.json` 补进输出目录"
          "（拷贝前先验一次 JSON，半截文件不发）。硬杀 A/B：第 11 s 杀掉整棵进程树时，"
          "开启增量发布 = 输出目录已有 9/10 份，关闭 = **0/10**（10 份全在 lane 私有目录，"
-         "判题机看不到）。正常路径逐位不变，只在「被杀」这条路径上把全损降为只损失未完成的图。"),
-        ("回归测试", "：`tools/dev/_fantest.py` 16 项（坏图 / 看门狗 / 强制串行 / 自动扇出）、"
-         "`tools/dev/_hardtest.py`（合成硬例）。"),
+         "判题机看不到）。正常路径逐位不变，只在「被杀」这条路径上把全损降为只损失未完成的图。"
+         "**发布语义（§5.54 修正）**：发布不是「只补缺不覆盖」——`_run()` 里另有一条渐进导出"
+         "（每完成一张先把**阶段二**文档顶进 `final_results/`，后续各层再覆盖它），父进程从前"
+         "抢到第一版就**永久胜出**，8 路 10 张实测有 9/10 份是没过融合层的旧档（13 293 B、缺 "
+         "`__pin_index`，正确版 14 812 B）。现在改为按**源文件 mtime 升级**、拷贝前验 JSON、"
+         "**先写 `runs/.pub/` 再 `os.replace`**（判题机任何时刻读到的都是完整文件）：8 路 A/B 由 "
+         "1/10 提升到 **10/10 与串行逐字节相同**；`EDA_WALL_BUDGET_S` 强杀场景仍 10/10 有产物、"
+         "10/10 可解析（其中 6 份已是跑完的融合档）。"),
+        ("回归测试", "：`tools/dev/_fantest.py` 八个现场（坏图 / 看门狗 / 强制串行 / 自动扇出 / "
+         "护栏 / 离线 / 增量发布 / 发布升级）、`tests/test_fanout_publish.py` 7 例"
+         "（发布升级、幂等、不倒退、半截 JSON / mtime 比较）、`tools/dev/_hardtest.py`（合成硬例）。"),
         ("可复现性", "：每次运行写出 `decision_log.json`（配置快照 + 资产 sha256 + "
          "逐案例计时 + 全部外部调用统计）；同一次运行在扇出/串行两种口径下产物逐字节相同。"),
         ("Linux 兼容", "：交付入口纯 Python、无 PowerShell 依赖，路径全部走 `pathlib`，"
@@ -881,6 +889,16 @@ def build():
         "  '-case-workers','4','-offline' -PassThru -NoNewWindow",
         "Start-Sleep -Seconds 11; taskkill /F /T /PID $p.Id",
         "(Get-ChildItem work\\_pubtest_kill1\\final_results\\*_Pred.json).Count   # 开=9，关=0",
+        "",
+        "# §5.54 扇出发布链的正确语义：lane 里更新了就要升级（判据 = 与串行逐字节相同）",
+        "$env:EDA_PUBLISH_S = \"1\"",
+        "python -X utf8 eda-pcb\\submission\\run.py -input work\\_pubtest_in -output work\\_fan_p8c -offline -case-workers 8",
+        "foreach ($c in 1,10,2,3,4,5,6,7,8,9) {",
+        "  (Get-FileHash \"work\\_fan_s1\\final_results\\${c}_Pred.json\").Hash -eq",
+        "  (Get-FileHash \"work\\_fan_p8c\\final_results\\${c}_Pred.json\").Hash }   # 期望 10 个 True",
+        "cd eda-pcb; python -X utf8 -m unittest discover -s tests -p \"test_fanout_publish.py\"",
+        "python -X utf8 eda-pcb\\tools\\dev\\_fantest.py      # 八个现场（含 ⑧ 发布升级）",
+        "# 灾难加固对照：EDA_WALL_BUDGET_S=8 + 8 路 ⇒ 强杀后 10/10 可解析（6 份跑完的融合档）",
     ])
 
     h(doc, 1, "附录 B  文档与开关索引")

@@ -4,7 +4,7 @@
 用法（仓库根 = `eda-pcb/` 的上一级）：
     python -X utf8 eda-pcb\\tools\\dev\\_fantest.py
 
-七个现场（用户 m42543「判题机同时给全部样例且允许并发」）：
+八个现场（用户 m42543「判题机同时给全部样例且允许并发」）：
   ① 扇出 3 路 + 一张坏图 ⇒ 三张都有产物（坏图是空壳）、`decision_log.summary.n_lanes=3`、
      `n_shell=1`、每 lane 摘要都在；
   ② `EDA_WALL_BUDGET_S=1` ⇒ 三个 lane 全被强杀（`rc=-9`），父进程仍写出 **3 份空壳** +
@@ -17,6 +17,8 @@
      import `vlm.client`）、打印离线档一行、产物件数不变（§5.41）。
   ⑦ 增量发布（§5.47）：起扇出 → 等到第一个产物 → `taskkill /F /T`（= 平台硬杀容器）
      ⇒ 开 `EDA_PUBLISH_S=1` 时输出目录非空、关（`=0`）时输出目录为空。
+  ⑧ 发布**升级**（§5.54）：3 路扇出 + `EDA_PUBLISH_S=1` 的产物必须与串行
+     **逐字节相同**（从前「只补缺不覆盖」会让阶段二的渐进导出永久胜出）。
 
 不碰交付产物：全部在 `work\\_fantest\\` 下自建输入/输出。
 """
@@ -231,6 +233,38 @@ def main() -> int:
                                        env_extra={"EDA_PUBLISH_S": "0"})
     chk("硬杀后输出目录为空（关增量发布）", _hit2 and not _preds2,
         "%d 份%s" % (len(_preds2), "" if _hit2 else "（超时未等到）"))
+
+    print("=== ⑧ 发布链要按新旧升级（§5.54：扇出产物必须与串行逐字节相同）===")
+    # §5.54：`_run()` 的阶段二**渐进导出**会先把**还没融合**的文档顶进 lane 的
+    # `final_results/`，随后各层再覆盖它。父进程从前「只补缺不覆盖」⇒ 抢到的第一版
+    # 永久胜出（8 路 10 张实测 9/10 份与串行不同）。现在 `_publish_one` 按源文件
+    # mtime 升级，扇出产物必须与串行**逐字节相同**。
+    import hashlib
+
+    def _hashes(od: Path, names):
+        out = {}
+        for n in names:
+            f = od / "final_results" / ("%s_Pred.json" % n)
+            if f.exists():
+                out[n] = hashlib.sha256(f.read_bytes()).hexdigest()
+        return out
+
+    _seq = _run(tin, tmp / "out_up_seq", ["-case-workers", "0"])
+    _fan = _run(tin, tmp / "out_up_fan", ["-case-workers", "3"],
+                env_extra={"EDA_PUBLISH_S": "1"})
+    _real = [n[:-4] for n in sorted(p.name for p in tin.glob("*.png")) if n != "broken.png"]
+    _hs, _hf = _hashes(tmp / "out_up_seq", _real), _hashes(tmp / "out_up_fan", _real)
+    _same = [n for n in _real if _hs.get(n) and _hs.get(n) == _hf.get(n)]
+    chk("扇出与串行逐字节相同（%d 张真图）" % len(_real), len(_same) == len(_real),
+        "%d/%d 相同%s" % (len(_same), len(_real),
+                          "" if len(_same) == len(_real) else "；不同：%s"
+                          % [n for n in _real if n not in _same]))
+    chk("扇出退出码 0", _fan["rc"] == 0, "rc=%s" % _fan["rc"])
+    _pub = [l for l in _fan["log"].splitlines() if "增量发布" in l]
+    chk("有增量发布行", bool(_pub), (_pub[-1][:80] if _pub else "无"))
+    _n_stage2 = len(list((tmp / "out_up_fan" / "_lanes").glob(
+        "lane*/runs/stage2/*.json"))) if (tmp / "out_up_fan" / "_lanes").is_dir() else 0
+    print("  （参考：lane 私有目录里 stage2 档 %d 份；主目录 mtime 均已升级）" % _n_stage2)
 
     print("\n%d 项通过，%d 项失败%s"
           % (len(ok), len(bad), ("：" + ", ".join(bad)) if bad else ""))

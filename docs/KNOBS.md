@@ -525,9 +525,9 @@
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
 | `EDA_CASE_WORKERS` | `""` | `submission/run.py:404` |
-| `EDA_PUBLISH_S` | `"15"` | `submission/run.py:591` |
+| `EDA_PUBLISH_S` | `"15"` | `submission/run.py:636` |
 | `EDA_TIER_ARGS` | `"-lean"` | `submission/agent_system:53` |
-| `EDA_WALL_BUDGET_S` | `"0"` | `submission/run.py:584` |
+| `EDA_WALL_BUDGET_S` | `"0"` | `submission/run.py:629` |
 | `FUSION_ITERATE` | — | `submission/run.py:300` |
 | `FUSION_LLM` | — *(4 处)* | `submission/run.py:300` |
 | `STAGE1_WIRE_COLOUR` | — | `submission/run.py:301` |
