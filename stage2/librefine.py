@@ -95,13 +95,16 @@ def _degen() -> str:
       * `known` —— 同 `letter`，但**还要求我方读数是库认识的名字**
                    （`libpins.LibCtx.is_known_name` 的全局词表，2401 条）：官方
                    `VIN`/`TAB`/`SDA` 拦得住，派生 `VWPSTO2`/`IOW2T` 这类乱码不拦。
+      * `known2`—— `known` 加上：我方读数是**≥2 个字母的库认识名字**时，**库名带字母也拦**。
+                   `known` 挡不住「库名有字母、但库里那颗元件的编号与图上对不上」这一类
+                   （官方第 2 张 `STC11` 的 `pin_2`：我方读对 `VCC`，库给 `P67`）。
     """
     v = (os.environ.get("STAGE2_LIB_REFINE_DEGEN", "known") or "").strip().lower()
     if LP is not None:
         # ★ 档位读取的唯一实现在 `libpins.degen_mode()`（规则 B 也走它）；这里保留
         #   `os.environ.get` 的字面量只为 `tools/dev/gen_knobs.py` 的 PAT 能扫到本开关。
         return LP.degen_mode()
-    return v if v in ("off", "letter", "shape", "known") else "known"
+    return v if v in ("off", "letter", "shape", "known", "known2") else "known"
 
 
 def refine(doc: dict, ctx=None, log=None) -> Dict[str, Any]:
@@ -180,9 +183,8 @@ def refine(doc: dict, ctx=None, log=None) -> Dict[str, Any]:
                 st["degen_keys"].append(key)
                 continue
         for pk, rec, num, cur, ref in cands:
-            if dmode in ("letter", "known") and _has_letter(cur) \
-                    and not _has_letter(ref) \
-                    and (dmode == "letter" or ctx.is_known_name(cur)):
+            # 判据的唯一实现在 `libpins.degen_block`（规则 B 与这里共用，避免漂移）。
+            if LP.degen_block(ctx, dmode, cur, ref):
                 st["degen"] += 1
                 continue
             rec["pinname"] = ref

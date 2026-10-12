@@ -107,12 +107,56 @@ def has_letter(s) -> bool:
     return any(ch.isalpha() for ch in str(s or ""))
 
 
+def n_letters(s) -> int:
+    """字母个数（`known2` 档判「我方读数是个像样的名字」而不是单字乱码）。"""
+    return sum(1 for ch in str(s or "") if ch.isalpha())
+
+
+def has_digit(s) -> bool:
+    """字符串里是否至少有一个数字（用来识别「编号式」的库名，如 `P67`/`L2`/`PA3`）。"""
+    return any(ch.isdigit() for ch in str(s or ""))
+
+
 #: `STAGE2_LIB_REFINE_DEGEN` 的合法档位（语义见 `stage2/librefine.py` 的模块 docstring）。
-DEGEN_MODES = ("off", "letter", "shape", "known")
+DEGEN_MODES = ("off", "letter", "shape", "known", "known2")
+
+
+def degen_block(ctx, mode: str, cur, ref) -> bool:
+    """库名回填守卫的**唯一判据**：`(我方读数 cur, 库名 ref)` 该不该挡。
+
+    两条回填路径（`stage2/assemble.py` 的规则 B、`stage2/librefine.py`）都调这里，
+    避免语义漂移（2026-10-12 §5.52 的教训：守卫挂错路径 = 等于没挂）。
+
+      * `letter` —— 我方读数有字母、库名没有 ⇒ 挡（纯数字库名是库自己的误读）。
+      * `known`  —— 同 `letter`，且我方读数必须是**库认识的名字**（乱码照旧让库纠正）。
+      * `known2` —— `known` **加上**：我方读数是「≥2 个字母的库认识名字」，而**库名是
+                    「编号式」（含数字）**时挡。`known` 挡不住的那一类是「库名也有字母、
+                    但库里那颗元件的编号与图上根本对不上」——官方第 2 张 `STC11` 的
+                    `pin_2` 就是 我方读对 `VCC`、库却给 `P67`（该键的 1..4 号在库里是
+                    `P50/P67/…`，与图上的 `GND/VCC/SCL/SDA` 完全不是一回事）。
+                    ★ 为什么必须**再加「库名含数字」这一道**：只看「我方名字库认识且 ≥2
+                    字母」会把库的**正确**修复也挡掉 —— 派生 19 张实测 4 根由对变错
+                    （`0011 U2.pin_9` `GN→GND_PAD`、`0029 U1.pin_2` `PGND→FAULTZ`、
+                    `0190 U1.pin_2` `DGND→SFL`、`0190 U1.pin_27` `AD→AVDD`），
+                    官方第 8 张 `U1.pin_7` `NC→VDDIO` 同病 ⇒ 只留「库给编号名」那一类
+                    （派生那 4 根的库名都是功能名、不含数字；官方 `P67` 含数字）。
+                    另外要求**我方名字也不含数字**：我方读数本身就是编号式时（`P67`/`L2`），
+                    与库处在同一套编号体系里，让库去纠正。
+    """
+    if not mode or mode in ("off", "shape") or not cur or not ref:
+        return False
+    if mode == "letter":
+        return has_letter(cur) and not has_letter(ref)
+    if not (has_letter(cur) and ctx.is_known_name(cur)):
+        return False                       # 乱码 / 纯数字读数 ⇒ 交给库纠正
+    if not has_letter(ref):
+        return True                        # `known` 的原判据：纯数字库名
+    return (mode == "known2" and n_letters(cur) >= 2
+            and has_digit(ref) and not has_digit(cur))
 
 
 def degen_mode() -> str:
-    """退化库名守卫的档位（`STAGE2_LIB_REFINE_DEGEN`，**默认 `known`**）。
+    """退化库名守卫的档位（`STAGE2_LIB_REFINE_DEGEN`，**默认 `known2`**）。
 
     ★ **唯一读取点**：库名回填有**两条**路径，都走这里读档，避免语义漂移 ——
       * `stage2/librefine.py`（融合层 ⑩ 的库名回填，`(型号,号) → 库名`）；
@@ -123,11 +167,18 @@ def degen_mode() -> str:
     `1`..`4` 把读对的 `VIN`/`TAB` 冲成 `3`/`4`；而 `librefine` 跑到时名字已经是
     数字了（`ref == cur`），一次都不会触发，所以只在 `librefine` 里挂守卫等于没挂。
 
-    档位（`off`/`letter`/`shape`/`known`）：
+    档位（`off`/`letter`/`shape`/`known`/`known2`）：
       * `off`    —— 老行为。
       * `letter` —— 库名不含字母、而我方读数含字母 ⇒ 该脚不改。
       * `shape`  —— 整颗元件：库给的名字全是纯数字、我方读数全不是 ⇒ 整颗不改。
       * `known`  —— `letter` + **我方读数必须是库认识的名字**（`LibCtx.is_known_name`）。
+      * `known2` —— `known` + 「我方读数是 ≥2 个字母的库认识名字、**而库名是编号式（含数字）**」
+                    ⇒ 拦。挡的是「库名有字母、但库里那颗元件的编号与图上对不上」那一类
+                    （官方第 2 张 `STC11` 的 `pin_2`：我方读对 `VCC`，库给 `P67`）。
+                    ★ 只按「≥2 字母」拦（不加「库名含数字」）实测**负收益**：派生 19 张
+                    4 根由对变错（库的正确修复 `GND_PAD`/`FAULTZ`/`SFL`/`AVDD` 被挡）、
+                    官方第 8 张 `VDDIO` 同病。判据的唯一实现在 `degen_block`，
+                    两条回填路径都调它。
 
     ★ 2026-10-12 为什么默认选 `known`（两池实测，`docs/RESULTS.md` §5.52）：
       官方 10 张离线档 复刻尺 63.0897 → **63.2759**（protocol2 75.75 → **76.21**，
@@ -136,12 +187,17 @@ def degen_mode() -> str:
       −0.0031（乱码 `VWPSTO2`/`IOW2T` 挡住库的合法纠正），`shape` 派生同分但官方
       少赚 0.0658（`STC11` 的库名表大多是字母，整颗判的「全纯数字」条件不成立）。
       ⇒ `known` 严格支配另外两档。精简 `-lean` 与完整档实测**不受影响**（逐位相同）。
+    ★ 2026-10-13 默认再升到 `known2`（`docs/RESULTS.md` §5.53）：官方 10 张
+      63.2759 → **63.3417**（protocol2 76.21 → **76.39**，tp 引脚 84 → 85，只动
+      case 2：54.4862 → 55.1441），派生 18 张 14.5376 → **14.5376**（protocol2
+      26.95 → **26.95**，逐位相同）、派生 **220 张**同向。宽判据（只看「≥2 字母」）
+      实测负收益，见 `degen_block` 的 docstring。
     ★ 用 `env_raw` 而不是 `env_str`：`env_str` 把 `off`/`0`/`none` 归一成空串
       （它服务的是「开关是否打开」），而这里的模式值 `off` 本身是个**合法档位** ——
       用 `env_str` 会让 `STAGE2_LIB_REFINE_DEGEN=off` 静默变成默认档（2026-10-12 自检抓到）。
     """
-    v = (env_raw("STAGE2_LIB_REFINE_DEGEN", "known") or "known").strip().lower()
-    return v if v in DEGEN_MODES else "known"
+    v = (env_raw("STAGE2_LIB_REFINE_DEGEN", "known2") or "known2").strip().lower()
+    return v if v in DEGEN_MODES else "known2"
 
 
 def lib_path() -> Path:
@@ -422,6 +478,15 @@ def _selftest() -> int:
             {"name": "Z1", "number": "6"}, {"name": "Z2", "number": "6"}, # 一号多名 → 不唯一
         ]},
         "BB-2": {"pins": [{"name": "nRST", "number": "7"}]},
+        # `degen_block` 的探针用（`known2` 要判「我方读数是库认识的名字」，
+        # 以及「库给的是编号式名字」那一类）。
+        "CC1": {"pins": [{"name": "VCC", "number": "1"},
+                         {"name": "P67", "number": "2"},
+                         {"name": "VIN", "number": "3"},
+                         {"name": "GN", "number": "4"},
+                         {"name": "DGND", "number": "5"},
+                         {"name": "SFL", "number": "6"},
+                         {"name": "VDDIO", "number": "7"}]},
     }
     # 规则 A：VDD 唯一 → 1；X 对应两个号 → 不动手
     # 规则 B：号 1 唯一 → VDD；号 6 对应两个名 → 不动手；号 3 同一名字重复出现 → X
@@ -471,16 +536,43 @@ def _selftest() -> int:
                 bad.append("is_known_name(%r) 应为 %s" % (nm, want))
         for mode, want in (("off", "off"), ("letter", "letter"),
                            ("shape", "shape"), ("known", "known"),
-                           ("KNOWN", "known"), ("乱写", "known"), ("", "known")):
+                           ("known2", "known2"), ("KNOWN2", "known2"),
+                           ("KNOWN", "known"), ("乱写", "known2"), ("", "known2")):
             os.environ["STAGE2_LIB_REFINE_DEGEN"] = mode
             if degen_mode() != want:
                 bad.append("degen_mode(%r) 应为 %r，得到 %r"
                            % (mode, want, degen_mode()))
         os.environ.pop("STAGE2_LIB_REFINE_DEGEN", None)
-        if degen_mode() != "known":
-            bad.append("degen_mode 默认应为 known")
+        if degen_mode() != "known2":
+            bad.append("degen_mode 默认应为 known2")
         if has_letter("4") or has_letter("") or not has_letter("VIN"):
             bad.append("has_letter 判据")
+        if n_letters("VCC") != 3 or n_letters("4") != 0 or n_letters("") != 0:
+            bad.append("n_letters 判据")
+        if not has_digit("P67") or has_digit("VIN") or has_digit(""):
+            bad.append("has_digit 判据")
+        # `degen_block`：两档 ×（乱码/单字母/多字母已知/纯数字）×（库名有无字母）
+        for mode, cur, ref, want in (
+                ("off", "VCC", "P67", False),
+                ("letter", "VCC", "P67", False),          # 库名有字母 ⇒ letter 不管
+                ("known", "VCC", "P67", False),           # 库名有字母 ⇒ known 也不管
+                ("known2", "VCC", "P67", True),           # ★ 本档新增的那一类（库名编号式）
+                ("known2", "VCC", "VCC_PAD", False),      # ★ 库给功能名 ⇒ 不挡（派生 4 根的坑）
+                ("known2", "GN", "GND_PAD", False),
+                ("known2", "DGND", "SFL", False),
+                ("known2", "VDDIO", "NC", False),
+                ("known2", "P67", "L2", False),           # 我方名字本身是编号式 ⇒ 让库修
+                ("known2", "VCC", "4", True),
+                ("known2", "VIN", "3", True),
+                ("known2", "P", "PP", False),             # 单字母乱码 ⇒ 让库修
+                ("known2", "VWPSTO2", "3", False),        # 库不认识的乱码 ⇒ 让库修
+                ("known2", "IOW2T", "2", False),
+                ("known2", "3", "VWPSTO2", False),        # 我方纯数字 ⇒ 让库修
+                ("known", "VWPSTO2", "3", False),
+                ("known", "VIN", "3", True),
+                ("letter", "VIN", "3", True)):
+            if degen_block(ctx, mode, cur, ref) is not want:
+                bad.append("degen_block(%r,%r,%r) 应为 %s" % (mode, cur, ref, want))
     print("libpins 自检：%s" % ("全部通过" if not bad else "失败 " + " / ".join(bad)))
     return 1 if bad else 0
 

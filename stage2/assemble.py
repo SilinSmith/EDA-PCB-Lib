@@ -1546,12 +1546,11 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                         #   `known` ：同 `letter`，且**我方读数必须是库认识的名字**
                         #             （`VIN`/`TAB`/`SDA` ⇒ 拦；`VWPSTO2`/`IOW2T` 这类库
                         #             不认识的乱码 ⇒ 照旧让库来纠正，派生集需要）。
-                        _guard = _shape_block or (
-                            _dmode in ("letter", "known")
-                            and _libpins.has_letter(nm)
-                            and not _libpins.has_letter(_new)
-                            and (_dmode == "letter"
-                                 or _LIB_CTX.is_known_name(nm)))
+                        #   `known2`：`known` 加上「我方读数是 ≥2 字母的库认识名字 ⇒
+                        #             库名有字母也拦」（官方 2 U3 的 `VCC`←`P67`）。
+                        #   判据的唯一实现在 `libpins.degen_block`。
+                        _guard = _shape_block or _libpins.degen_block(
+                            _LIB_CTX, _dmode, nm, _new)
                         if _guard:
                             if os.environ.get("STAGE2_DBG_PINS") or LIB_PINS_DBG:
                                 print("[libpins] 规则B 守卫挡下 元件=%r 号=%s 保留 %r"

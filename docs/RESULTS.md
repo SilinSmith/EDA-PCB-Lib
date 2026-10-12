@@ -5296,6 +5296,96 @@ python -X utf8 work\_off10.py --arms tok_l2off,tok_l2letter,tok_v2off,tok_v2lett
 
 ---
 
+## §5.53 库名回填守卫第二级：只拦「库给的是编号式名字」那一类（`STAGE2_LIB_REFINE_DEGEN` 默认 `known` → `known2`，2026-10-13）
+
+**病（§5.52 漏掉的另一半）**：`known` 只挡「**库名是纯数字**」这一种退化。库里那颗元件的
+**编号与图上对不上**时它挡不住 —— 官方第 2 张 `STC11` 的 `pin_2`：我方读对 `VCC`，
+库（键 `STC11`）的 2 号是 `P67`，于是被冲成 `P67`。该键的 1..4 号在库里是
+`P50/P51/P52/P53`，与图上的 `GND/VCC/SCL/SDA` 根本不是一个体系。
+
+**诊断工具（新增 `work\_knowngap.py`）**：对同一 case 的两条臂，逐脚打印
+`GT 名 / known 臂名 / known2 臂名 / 我方元件 Name / 库键 / 库给这一号的名 / 库是否认识我方名字 / 该键的库名集`。
+它一次就把「该拦」与「不该拦」分开了：
+
+```
+官方 10 张（tok_g3known → tok_g5known2，只列有变化的脚）
+  2 U3 pin_2  GT=VCC    P67→VCC   | key=STC11 库给2=P67  库名集=['4','7','p50','p51','p52','p53']
+派生 220 张（d220known → d220known2，n=200 可评）
+  + 0116 U7.pin_2 GT=PROG  P67→PROG
+  + 0116 U7.pin_5 GT=BAT   P65→BAT
+  + 0116 U3.pin_8 GT=GND   P63/RST P62→GND
+  + 0116 U4.pin_8 GT=GND   P63/RST P62→GND
+  + 0141 U3.pin_4 GT=EN    OS10→EN
+  ★ 0173 U2.pin_2 GT=V3P3  V3P3→SP        ← 唯一一根由对变错（见下「已知局限」）
+```
+
+**判据（唯一实现仍是 `stage2/libpins.py` 的 `degen_block`，两条回填路径都调它）**：
+
+```
+known2 = known + ( 我方名字 ≥2 个字母、且是库认识的名字
+                   且 库名含数字（编号式，如 P67/L2）
+                   且 我方名字不含数字 )
+```
+
+**为什么必须再加「库名含数字」这一道（★ 判负证据，别重犯）**：只看「我方名字库认识且
+≥2 字母 ⇒ 拦」的**宽判据**两池都测过，官方 63.3417（与窄判据同分，但由一根对一根错
+凑出来：`8 U1.pin_7` `NC→VDDIO` 被误拦），**派生 19 张 14.5197 vs 基线 14.5376（−0.0179）**，
+4 根由对变错：
+
+```
+0011 U2.pin_9  GT=GND_PAD  GN→GND_PAD      库名 GND_PAD 不含数字（功能名）
+0029 U1.pin_2  GT=FAULTZ   PGND→FAULTZ
+0190 U1.pin_2  GT=SFL      DGND→SFL
+0190 U1.pin_27 GT=AVDD     AD→AVDD
+```
+
+⇒ 库名是**功能名**（`GND_PAD`/`FAULTZ`/`VDDIO`）时，库是对的、我方那个「库认识的名字」
+反而常是残读；库名是**编号式**（`P67`/`P65`/`L2`）时才是「库的编号体系与图不符」。
+加这一道之后派生 19 张**逐位回到基线**，官方那根赢的还在。
+
+**读数（判题机复刻尺 / protocol2 双尺，全部离线、0 次外部调用）**：
+
+| 池子 | 臂 | 复刻尺总分 | pin F1 | protocol2 | pin tp | 逐脚审计 |
+|---|---|---|---|---|---|---|
+| 官方 10 张 | `tok_g3known`（§5.52） | 63.2759 | 0.739089 | 76.21 | 84 | — |
+| 官方 10 张 | `tok_g5known2`（本节） | **63.3417（+0.0658）** | **0.741720** | **76.39（+0.18）** | **85** | right→wrong **0** / wrong→right 1 |
+| 派生 19 张（n=18） | `tok_dg3known` | 14.5376 | 0.184699 | 26.95 | 50 | — |
+| 派生 19 张（n=18） | `tok_dg5known2` | **14.5376（±0）** | 0.184699 | **26.95（±0）** | 50 | 逐位相同 |
+| 派生 220 张（n=200） | `d220known` | 18.8541 | 0.246747 | 29.83 | 521 | — |
+| 派生 220 张（n=200） | `d220known2` | **18.8567（+0.0026）** | **0.246852** | **29.85（+0.02）** | **526** | wrong→right **5** / right→wrong 1 |
+
+官方那 0.0658 全来自 case 2（54.4862 → 55.1441），其余 9 张逐位不变；
+协议尺官方 `tp` 引脚 84 → 85，元件/网络/导线三项逐位不变。
+
+**验收（默认档翻成 `known2` 之后）**：
+
+```bat
+:: ① 不带任何环境变量 == 显式 known2 臂（逐文件 sha256：只有 run.log 时间戳不同）
+python -X utf8 eda-pcb\tools\eval\fast.py --cases (Get-Content work\_cases10gt.txt -Raw).Trim() --extra=-offline --out tok_g6def
+python -X utf8 eda-pcb\tools\eval\fast.py --cases (Get-Content work\_cases_v4val.txt -Raw).Trim() --extra=-offline --out tok_dg6def
+:: ② known 档行为未被改坏（case 5 产物与 §5.52 的 tok_g3known 逐字节相同）
+$env:STAGE2_LIB_REFINE_DEGEN='known'
+python -X utf8 eda-pcb\tools\eval\fast.py --cases 5 --extra=-offline --out tok_chk_known2c
+:: ③ 两池打分（判题机复刻尺）
+python -X utf8 work\_off10.py  --arms tok_g3known,tok_g5known2
+python -X utf8 work\_offval.py --arms tok_dg3known,tok_dg5known2
+python -X utf8 work\_offval.py --arms d220known,d220known2 --cases-file work\_cases220.txt
+:: ④ 逐脚审计
+python -X utf8 work\_pinname_audit.py --arms tok_g3known,tok_g5known2 --show 6
+python -X utf8 work\_pinname_audit.py --arms d220known,d220known2 --pool derived --cases (Get-Content work\_cases220.txt -Raw).Trim()
+python -X utf8 work\_knowngap.py --arms tok_g3known,tok_g5known2
+```
+
+**已知局限（下一轮）**：判据里的「库名含数字」是**编号式**的粗代理，会把**电源轨名**
+`V3P3`（`0173 U2.pin_2`）也算成编号式 ⇒ 挡掉库的正确修复，这是 220 张里唯一一根由对变错。
+更准的做法是分开「字母+数字**连续后缀**」的编号式（`P67`/`P65`/`L2`）与「字母数字交错」
+的轨名（`V3P3`/`3V3`），或按 §4.4 的思路改成**按元件类别的条件词表**。
+
+注：`work\_knowngap.py`（本节的取证脚本）与各 `work\_fast_out_*` 臂目录都在仓库外的 `work/`；
+`k_eval` 之类的一次性探针脚本不提交。
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |
