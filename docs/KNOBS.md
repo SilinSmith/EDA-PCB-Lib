@@ -6,7 +6,7 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **456** 个开关。
+共 **458** 个开关。
 
 ## 目录
 
@@ -14,7 +14,7 @@
 - [stage2](#stage2)（135）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（126）
-- [vlm](#vlm)（13）
+- [vlm](#vlm)（15）
 - [textrec](#textrec)（13）
 - [cvparts](#cvparts)（10）
 - [pipeline](#pipeline)（11）
@@ -452,19 +452,21 @@
 
 | 开关 | 默认值 | 定义位置 |
 |---|---|---|
-| `LLM_API_KEY` | `""` | `vlm/client.py:52` |
-| `LLM_BASE_URL` | `"http://127.0.0.1:1234/v1"` | `vlm/client.py:51` |
-| `LLM_MODEL` | `"qwen3.5-9b"` | `vlm/client.py:53` |
-| `VLM_BUDGET_S` | `"0"` | `vlm/client.py:60` |
-| `VLM_MAX_TOKENS` | `"2048"` | `vlm/client.py:55` |
+| `LLM_API_KEY` | `""` | `vlm/client.py:60` |
+| `LLM_BASE_URL` | `"http://127.0.0.1:1234/v1"` | `vlm/client.py:59` |
+| `LLM_MODEL` | `"qwen3.5-9b"` | `vlm/client.py:61` |
+| `VLM_BUDGET_S` | `"0"` | `vlm/client.py:68` |
+| `VLM_MAX_TOKENS` | `"2048"` | `vlm/client.py:63` |
 | `VLM_PIN_CHANNEL` | `"0"` | `vlm/enrich.py:819` |
 | `VLM_PIN_COLS` | `"4"` | `vlm/enrich.py:828` |
 | `VLM_PIN_MERGE` | `"0"` | `vlm/enrich.py:785` |
 | `VLM_PIN_PER` | `"8"` | `vlm/enrich.py:827` |
 | `VLM_PIN_REBUILD` | `"1"` | `vlm/enrich.py:793` |
-| `VLM_REASONING` | `"none"` | `vlm/client.py:56` |
-| `VLM_SCALE` | `"4"` | `vlm/client.py:54` |
-| `VLM_TIMEOUT` | `"600"` | `vlm/client.py:57` |
+| `VLM_REASONING` | `"none"` | `vlm/client.py:64` |
+| `VLM_RETRY` | `"3"` | `vlm/client.py:77` |
+| `VLM_RETRY_BASE` | `"1.0"` | `vlm/client.py:78` |
+| `VLM_SCALE` | `"4"` | `vlm/client.py:62` |
+| `VLM_TIMEOUT` | `"600"` | `vlm/client.py:65` |
 
 <a id="textrec"></a>
 

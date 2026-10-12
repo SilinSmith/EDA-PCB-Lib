@@ -19,7 +19,9 @@
 环境变量：`LLM_BASE_URL`（默认 `http://127.0.0.1:1234/v1`）、`LLM_API_KEY`、
 `LLM_MODEL`（默认 `qwen3.5-9b`）、`VLM_SCALE`（默认 4）、`VLM_MAX_TOKENS`（默认 2048）、
 `VLM_REASONING`（默认 `none`，置空字符串关掉这一项）、`VLM_TIMEOUT`（默认 600 秒/次）、
-`VLM_BUDGET_S`（默认 0 = 不限：**本进程**累计外部推理时间的上限，见 `ask()`）。
+`VLM_BUDGET_S`（默认 0 = 不限：**本进程**累计外部推理时间的上限，见 `ask()`）、
+`VLM_RETRY`（默认 3 = 传输层最多再试 3 次，`0` 关掉 ⇒ 与旧行为逐字节相同）、
+`VLM_RETRY_BASE`（默认 1.0 秒，指数退避基数，单次等待硬上限 8 秒，见 `_chat_with_retry`）。
 
 ★ 为什么要有 `VLM_BUDGET_S`（2026-10 加，为赛题「全部案例 < 2 小时」兜底）：
 没有它时，**单次 `ask()` 的耗时没有上界**，最坏 `4 × VLM_TIMEOUT`（旧默认 600 ⇒
@@ -36,7 +38,13 @@
 2. **剩余预算夹住单次超时**：`eff = min(调用方超时, max(1 s, 剩余预算))`（每次重试重算），
    于是「一次调用卡满」最多只多吃掉一点点，不会出现 40 分钟的黑洞。
 
-统计用 `stats()` 读（`used_s / calls / refused / errors / budget_s`），
+★ 传输层重试（`VLM_RETRY`，2026-10-13 加，为「8×A800 并列 lane + 外部端点」这一档）：
+上面那两级保护解决的是「**耗时没有上界**」，这一级解决「**并发一高就丢读数**」——
+单张图的 `ask()` 最坏耗时因此变成 `(1 + VLM_RETRY) × 4 × VLM_TIMEOUT`（默认 3 ⇒ 9600 s），
+所以交付入口钉的 `VLM_BUDGET_S=1800`（每 lane）是**必需**的护栏，不是可选项；
+退避本身也被剩余预算夹住（见 `_chat_with_retry`）。
+
+统计用 `stats()` 读（`used_s / calls / refused / errors / retries / budget_s`），
 `reset_budget()` 可清零（跑多案例时由调用方按需要决定「预算是整进程还是每案例」）。
 """
 from __future__ import annotations
@@ -59,10 +67,22 @@ TIMEOUT = float(os.environ.get("VLM_TIMEOUT", "600"))
 #   交付入口 `submission/run.py` 在**用户没设**的时候会给它一个默认值，见那里的注释。
 BUDGET = float(os.environ.get("VLM_BUDGET_S", "0") or 0)
 
+# ★ 传输层重试（2026-10-13 加，为「8×A800 并列 lane + 外部端点」这一档兜底）。
+#   病：并发一高，端点会回 429 / 5xx，或干脆把连接挂成超时；而旧实现**一次失败就把它
+#   当答案**（`ERR:...` 字符串，见 `ask()` 的 `except`），那个槽位的读数就永久丢了 ——
+#   单卡串行时几乎见不到，8 条 lane 各带若干 worker 时是常态。
+#   药：只对**传输层**错误（限流 / 网关 / 服务端 / 超时 / 连接）指数退避重试，
+#   对 400 / 401 这类「问错了」不重试（那是配置病，重试只会浪费时间）。
+#   `VLM_RETRY=0` ⇒ 一次就抛，路径与旧版逐字节相同；退避总时长仍被 `VLM_BUDGET_S` 夹住。
+RETRY = int(os.environ.get("VLM_RETRY", "3") or 0)
+RETRY_BASE = float(os.environ.get("VLM_RETRY_BASE", "1.0") or 0.0)
+RETRY_CAP = 8.0   # 单次等待的硬上限（秒）：防止退避把「2 小时」吃掉一大块
+
 _USED = 0.0      # 已花在外部推理上的时间（含失败/重试）
 _CALLS = 0       # 真正发出去的 ask() 次数
 _REFUSED = 0     # 因预算被拒的 ask() 次数
 _ERRORS = 0      # 返回 "ERR:..." 的次数（只作日志用）
+_RETRIES = 0     # 传输层重试**次数**（`VLM_RETRY` 触发，用来判断「今天端点是不是在限流」）
 # ★ 外部推理的 **token 用量**（服务端 `usage` 块的累计）。赛题评分里
 #   `FinalScore_Accuracy = 0.95·Score_Accuracy + 0.05·(m/M)·Score_Token` 而
 #   `Score_Token` 是**消耗越少排名越高**（见 `docs/COMPETITION_RULES.md`）——
@@ -76,6 +96,7 @@ def stats() -> dict:
     """预算、token 与调用统计（给日志/决策日志用）。"""
     return {"budget_s": round(BUDGET, 1), "used_s": round(_USED, 1),
             "calls": _CALLS, "refused": _REFUSED, "errors": _ERRORS,
+            "retries": _RETRIES,
             "exhausted": budget_exhausted(), "base": BASE, "model": MODEL,
             "tokens": {"prompt": _TOK_IN, "completion": _TOK_OUT,
                        "total": _TOK_ALL}}
@@ -83,11 +104,12 @@ def stats() -> dict:
 
 def reset_budget() -> None:
     """清零累计用量与会计数（预算语义由调用方决定：整进程 or 每案例）。"""
-    global _USED, _CALLS, _REFUSED, _ERRORS, _TOK_IN, _TOK_OUT, _TOK_ALL
+    global _USED, _CALLS, _REFUSED, _ERRORS, _RETRIES, _TOK_IN, _TOK_OUT, _TOK_ALL
     _USED = 0.0
     _CALLS = 0
     _REFUSED = 0
     _ERRORS = 0
+    _RETRIES = 0
     _TOK_IN = 0
     _TOK_OUT = 0
     _TOK_ALL = 0
@@ -224,12 +246,69 @@ def _chat_once(img_bgr, prompt, model, max_tokens, timeout):
     return strip_fence(msg.get("content") or ""), ch.get("finish_reason"), d.get("usage")
 
 
+def _retryable(exc) -> bool:
+    """这个异常「再问一次有可能成功」吗（传输层病 vs 配置病）。
+
+    可重试：408/409/425/429 与全部 5xx（限流、网关、服务端抖动）、`URLError` /
+    超时 / 连接类（`OSError` 家族，含 `socket.timeout`、`ConnectionResetError`）。
+    不可重试：400 / 401 / 403 / 404（端点不认这个模型、key 错、图不收）—— 它们是
+    **配置病**，重试只会把同一份错误再问几遍，白花时间与 token。
+    """
+    import urllib.error
+    code = getattr(exc, "code", None)
+    if isinstance(exc, urllib.error.HTTPError) or isinstance(code, int):
+        try:
+            c = int(code)
+        except (TypeError, ValueError):
+            return True
+        return c in (408, 409, 425, 429) or 500 <= c <= 599
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, OSError))
+
+
+def _chat_with_retry(img_bgr, prompt, model, max_tokens, timeout):
+    """`_chat_once` + 传输层重试：`VLM_RETRY` 次，指数退避 `VLM_RETRY_BASE·2^i`（上限 8 s）。
+
+    为什么放在这一层：`ask()` 的四次循环是**语义**重试（正文空 / 被 `length` 截断 ⇒
+    把 `max_tokens` 翻倍再问），而并发一高时真正丢读数的是**传输**失败。两者独立，
+    所以这里只补传输层，且成功后**立刻返回**，不改动任何既有语义。
+
+    预算语义完全不变：剩余预算 ≤ 0 就**不再重试**（把错误抛出去，`ask()` 收成 `ERR:`），
+    单次等待与整个重试循环都被剩余预算夹住 ⇒ `VLM_BUDGET_S` 依旧夹住总时长。
+    ★ 为什么这里要自己算一个 `deadline`：`_USED` 是 `ask()` 在**出口**才累加的，
+    所以「同一次 `ask()` 内部的退避」光看 `budget_left()` 是**看不见**的 ——
+    不自己记账的话，`VLM_BUDGET_S=20` 也会被退避拖成 `(1+RETRY)×超时`。
+    `VLM_RETRY=0` ⇒ 一次就抛，路径与旧版逐字节相同。
+    """
+    global _RETRIES
+    n = max(0, int(RETRY))
+    left0 = budget_left()
+    deadline = None if left0 == float("inf") else time.monotonic() + left0
+    for i in range(n + 1):
+        try:
+            return _chat_once(img_bgr, prompt, model, max_tokens, timeout)
+        except Exception as e:                                      # noqa: BLE001
+            if i >= n or not _retryable(e):
+                raise
+            wait = min(RETRY_BASE * (2 ** i), RETRY_CAP)
+            if deadline is not None:
+                rest = deadline - time.monotonic()
+                if rest <= 0:
+                    raise
+                wait = min(wait, rest)
+            time.sleep(max(0.0, wait))
+            _RETRIES += 1
+
+
 def ask(img_bgr, prompt, model=None, timeout=None, max_tokens=None):
     """思维链兜底：正文空或 `finish_reason=="length"` 就把预算翻倍重试（上限 16384）。
 
     带 `VLM_BUDGET_S` 时另做两件事（默认 0 = 不做，行为与旧版逐字节相同）：
     ① 累计用量已到预算 ⇒ **不发请求**，立刻返回 `("", 0.0)`（记进 `stats()["refused"]`）；
     ② 单次超时被**剩余预算**夹住（下限 1 s），于是「一次调用卡满」最多只能多吃几秒。
+
+    传输层失败（429 / 5xx / 超时 / 连接）另由 `_chat_with_retry` 退避重试 `VLM_RETRY` 次；
+    重试次数累进 `stats()["retries"]`（用来判断「今天端点是不是在限流」），
+    `VLM_RETRY=0` 时与旧版逐字节相同。
 
     另：每次响应里的 `usage` 都累进 `stats()["tokens"]` —— 赛题的 `Score_Token` 是
     **排名项**（`0.05·(m/M)·Score_Token`，消耗越少越高），用量必须可见。
@@ -249,7 +328,7 @@ def ask(img_bgr, prompt, model=None, timeout=None, max_tokens=None):
             #   后面三次重试还各自按满超时等下去（最坏多等 3 × 超时）。
             left = budget_left()
             eff = base_to if left == float("inf") else min(base_to, max(1.0, left))
-            txt, fin, usage = _chat_once(img_bgr, prompt, model or MODEL, budget, eff)
+            txt, fin, usage = _chat_with_retry(img_bgr, prompt, model or MODEL, budget, eff)
             _acc_tokens(usage)
             if txt and fin != "length":
                 return _close(t0, txt)

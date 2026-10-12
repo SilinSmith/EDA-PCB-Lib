@@ -5841,3 +5841,65 @@ python eda-pcb\tools\diag\_cmp9.py work\_f9_A_base.json work\_f9_B_pin.json   # 
 # 汇总所有归档的均分与分项
 python tools\diag\_basemean.py
 ```
+
+---
+
+## §5.60 转正：VLM 传输层重试（`VLM_RETRY`，2026-10-13）—— 并发丢读数不再发生，干净路径逐字节不变
+
+**病（8×A800 那天真会踩的坑）**：这一天的并发面 = lane 数 × 每 lane 的 VLM worker（`-vlm-workers`，默认 4）。外
+部端点在这些并发下回 429 / 503 / 连接超时是**常态**，而 `vlm/client.py` 从前**没有任何传输层重试**：
+`_chat_once()` 抛出的 `HTTPError` / `URLError` / 超时被 `ask()` 的 `except` 一次就吞成 `"ERR:%s"` 字符串返回，
+那个槽位的读数就**永久丢了** —— 而且一路静默：`enrich.py:434` 只挡 `ERR:` 前缀，`wires.py:543` / `audit.py:153` /
+`cropfix.py:266` 各自过滤，`vlm_stats.n_failed` 统计的是「VLM 补强层失败张数」，看不到传输层失败。读数丢了
+= 型号名/值/引脚名少一条证据，直接吃分；并发越高丢得越多，属于「越上规模越亏」的反向激励。
+
+**药（`eda-pcb/vlm/client.py`）**：
+- 新增常量 `VLM_RETRY`（默认 **3**）、`VLM_RETRY_BASE`（默认 **1.0** s）、内部硬上限 `RETRY_CAP = 8.0`：退避
+  `wait = min(VLM_RETRY_BASE * 2**i, RETRY_CAP)`。
+- 新增 `_retryable(exc)`：`HTTPError`（或带整数 `code` 的异常）只重试 `408 / 409 / 425 / 429 / 5xx`；其余异常只
+  重试 `urllib.error.URLError` / `TimeoutError` / `ConnectionError` / `OSError`。**400 / 401 / 403 / 404 与
+  `ValueError` 一律不重试** —— 那是配置病（key 错、模型名错、base 少 `/v1`），重试只会白花时间。
+- 新增 `_chat_with_retry()`，`ask()` 内层改用它。新增计数器进 `stats()["retries"]`，落盘在
+  `decision_log.json` 的 `vlm_client` 块里（可直接查「这次跑重试了几次」）。
+- **预算护栏（关键细节）**：`_USED` 是 `ask()` 在**出口**由 `_close()` 累加的，所以「同一次 `ask()` 内部的退避」
+  光看 `budget_left()` 是**看不见**的 —— 会写出「等 1+2+4+8 秒也不超预算」的假象。`_chat_with_retry()` 因此自己
+  记一个 `deadline = time.monotonic() + budget_left()`（首次调用前算一次），每次退避前检查剩余，等待时间也被剩余
+  预算夹住；剩余 ≤ 0 就把异常抛出去收成 `ERR:`。⇒ `VLM_BUDGET_S=1800` 依旧夹得住总时长，最坏传输时间 =
+  `(1+VLM_RETRY)` 倍，而不是「无限等」。
+- `VLM_RETRY=0` ⇒ 一次就抛，路径与旧版**逐字节相同**（一条 env 就能回退）。
+
+**测试（新增 `eda-pcb/tests/test_vlm_retry.py`，7 例，7/7 通过）**：本地 `ThreadingHTTPServer` 假端点按 `plan`
+逐请求回状态码，`importlib.reload(vlm_client)` 在设好环境后重读常量。关键读数：
+① `429 → 503 → 200`：读出 `C151`、`retries==2`、`errors==0`、共 3 次请求、`tokens.total==14`（错误响应没有 usage，
+不污染账本）；② `VLM_RETRY=0`：返回 `ERR:`、`retries==0`、**只 1 次请求**（= 旧行为）；③ `400`：不重试、1 次请求；
+④ 一直 429 + `VLM_RETRY=2`：3 次请求后放弃、`retries==2`；⑤ `VLM_BUDGET_S=0.02` + `VLM_RETRY=5`：**`retries<5`**
+（预算夹住退避 —— 这条就是上面那个「假象」的回归锁：初版实现用它一跑就红，`AssertionError: 5 not less than 5`）；
+⑥ `_retryable` 逐码断言；⑦ 干净路径 `retries==0`。
+
+**等价验收：干净路径逐字节不变**。官方 10 张、`-lean`、**不带任何环境变量**（即 `VLM_RETRY=3` 生效但无错可重试），
+臂 `tok_retry_lean`：
+
+```powershell
+python -X utf8 tools\eval\fast.py --engine protocol2 --cases 1,10,2,3,4,5,6,7,8,9 "--extra=-lean" --out tok_retry_lean
+```
+
+| 指标 | `tok_leanB`（改动前） | `tok_retry_lean`（改动后） |
+|---|---|---|
+| 协议尺均分 | **80.04** | **80.04** |
+| 元件 / 引脚 / 网络 / 导线 | 0.9819 / 0.7731 / 0.7749 / 0.4137 | 0.9819 / 0.7731 / 0.7749 / 0.4137 |
+| tp（元件/引脚/网络/导线） | 250 / 96 / 125 / 321 | 250 / 96 / 125 / 321 |
+| `vlm_client.calls` / `errors` / `retries` | 115 / 0 / — | **115 / 0 / 0** |
+| 墙钟 | 103.3 s | 106.7 s（`run.py` 109.1 s） |
+| `final_results/*_Pred.json` | — | 与 `tok_leanB` **sha256 10/10 全等** |
+
+**为什么默认 3 是安全的**：单次 `ask()` 最坏 = 4 轮（内层 `max_tokens` 加倍循环）× `(1+3)` 次传输 ×
+`VLM_TIMEOUT`(180 s) ≈ 48 min，但这条路径只在「端点持续 5xx」时才走到，而
+① `VLM_BUDGET_S=1800`（每进程外部推理预算，重试也吃它）与 ② `EDA_WALL_BUDGET_S=6900`（115 min，父进程强杀
+剩余 lane）双层护栏会先把它掐掉 —— 超时按双倍罚，这两条护栏必须在，本条不改变它们的语义。真遇到端点整体雪崩时，
+`VLM_RETRY=0` 一键回到旧行为。
+
+**全量回归**：`python -X utf8 -m unittest discover -s tests -p "test_*.py"` ⇒ **446 例**（含新增 7 例）。
+**既有 35 失败 / 332 错误与本改动无关**：把 `vlm/client.py` 暂存回 HEAD 后重跑是同样的 **439 例 / 35 失败 /
+332 错误**（多为 `tests/test_trusted_pin_binding.py` 一类 stage2 夹具里 `pin_lane` 读取器报
+`'types.SimpleNamespace' object has no attribute 'recognizer'`，属本机夹具环境问题）。
+
