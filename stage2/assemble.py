@@ -680,6 +680,142 @@ EDGE_DEDUP2 = float(os.environ.get("STAGE2_EDGE_DEDUP2", "2.0"))  # 第二遍去
 #   派生 19 张（臂 `cfv`/`trimv0`/`trimv`）：导线 0.0727/0.0729 → **0.0847**（+0.12 分，方向同）。
 EDGE_TRIM = float(os.environ.get("STAGE2_EDGE_TRIM", "3.0"))  # 自由端回缩 px，0 = 关
 
+# ★★ 端点外推（`STAGE2_EDGE_EXT`，默认 20 px，0 = 关）。
+#
+# 病（`work\_linelab.py` + `work\_linesample.py`，官方 10 交付口径）：
+#   配对网内 GT 边 635 / 配上 321；未配上的 303 条里 **209 条是「一端已 ≤3px、另一端差 9.5px（中位）」
+#   （p90 16.0，≤12px 的 147 条）**—— 上面的 `EDGE_TRIM` 只治「过冲」，治不了「不够长」。
+#   `work\_lineoracle.py` 量出「端点对端点对齐」的上界：netL 0.4243 → 0.7323（**+3.08 分**）。
+# 药：端点沿自身轴向**外推**，逐 px 试探，**只有外推点落到同网另一条边 ≤ `STAGE2_EDGE_EXT_HIT` 内**才生效；
+#   只动 `edges` 首尾两点 ⇒ 元件/引脚/netH 三通道逐位不变。
+# 读数（官方 10，`work\_edgelab.py` 纯后处理）：`ext:20` 导线 0.4137 → **0.4250**（总分 +0.12）；
+#   220 张跨池（`d220known` 臂）：`10GT` 76.21 → **76.30**（导线 0.4077 → 0.4171）、
+#   `golden10` 33.72 → 33.72、派生 196 张 27.42 → 27.42、`jlc` 99 张 32.37 → 32.37 ⇒ **跨池零负**。
+EDGE_EXT = float(os.environ.get("STAGE2_EDGE_EXT", "20"))          # 端点外推上限 px，0 = 关
+EDGE_EXT_HIT = float(os.environ.get("STAGE2_EDGE_EXT_HIT", "3.0"))  # 外推点要落到同网他边这么多 px 内
+
+# ★★ 近共线重叠边合并（`STAGE2_EDGE_OVERLAP`，默认 10 度，0 = 关）。
+#
+# 病：骨架分叉会把**同一条墨迹**发成两条部分重叠的边（case4 实测
+#   `(1689,792)-(1627,792)`、`(1619,792)-(1708,792)`、`(1541,792)-(1612,792)`）；
+#   官方口径一对一配对 ⇒ 只能配上一条，其余整条算 fp。`EDGE_DEDUP`(2px) 只去「几何几乎重合」的，
+#   部分重叠的漏网（`work\_linelab.py`：配对网里我们 869 条边只有 321 条被用上）。
+# 药：同网内两条边夹角 ≤ ang、端点到对方直线 ≤ off、投影重叠 ≥ min_ov ⇒ 合成并集跨度的一条。
+# 读数（官方 10，纯后处理）：`overlap:10,4,0.35` 导线 0.4137 → **0.4251**；与 `ext` 叠加 **0.4367**
+#   （总分 **80.28**）| 220 张跨池：`10GT` 76.21 → **76.34**、派生 196 张 27.42 → 27.42（导线 0.0463 → 0.0458）、
+#   `jlc` 32.37 → 32.36 ⇒ 派生池 −0.01（噪声量级）。
+EDGE_OVERLAP = float(os.environ.get("STAGE2_EDGE_OVERLAP", "10"))         # 近共线夹角容差(度)，0 = 关
+EDGE_OVERLAP_OFF = float(os.environ.get("STAGE2_EDGE_OVERLAP_OFF", "4.0"))  # 端点到对方直线容差 px
+EDGE_OVERLAP_MIN = float(os.environ.get("STAGE2_EDGE_OVERLAP_MIN", "0.35"))  # 投影重叠比例下限
+
+
+def extend_edge_ends(nets: Dict[str, dict], radius: float = None,
+                     hit: float = None) -> int:
+    """端点沿自身轴向外推，**只有外推点落到同网另一条边 `hit` px 内才生效**；返回改动端点数。"""
+    radius = EDGE_EXT if radius is None else radius
+    hit = EDGE_EXT_HIT if hit is None else hit
+    if radius <= 0:
+        return 0
+    moved = 0
+    for rec in nets.values():
+        edges = rec.get("edges") or {}
+        segs = [(k, _seg_ends(v)) for k, v in edges.items()]
+        segs = [(k, e) for k, e in segs if e is not None]
+        for k, ends in segs:
+            (ax, ay), (bx, by) = ends
+            dx, dy = bx - ax, by - ay
+            L = math.hypot(dx, dy)
+            if L < 1e-6:
+                continue
+            ux, uy = dx / L, dy / L
+            seg = edges[k]
+            for idx, (px, py), s in ((0, (ax, ay), -1.0), (-1, (bx, by), 1.0)):
+                for step in range(1, int(radius) + 1):
+                    qx, qy = px + s * ux * step, py + s * uy * step
+                    found = False
+                    for k2, e2 in segs:
+                        if k2 == k:
+                            continue
+                        (cx, cy), (ex_, ey) = e2
+                        vx, vy = ex_ - cx, ey - cy
+                        L2 = vx * vx + vy * vy
+                        if L2 <= 1e-9:
+                            d = math.hypot(qx - cx, qy - cy)
+                        else:
+                            t = max(0.0, min(1.0, ((qx - cx) * vx + (qy - cy) * vy) / L2))
+                            d = math.hypot(qx - (cx + t * vx), qy - (cy + t * vy))
+                        if d <= hit:
+                            found = True
+                            break
+                    if found:
+                        seg[idx]["x"] = round(qx, 2)
+                        seg[idx]["y"] = round(qy, 2)
+                        moved += 1
+                        break
+    return moved
+
+
+def merge_overlapping_edges(nets: Dict[str, dict], ang: float = None, off: float = None,
+                            min_ov: float = None) -> int:
+    """同网内近共线且投影重叠的边合成一条（并集跨度）；返回被合并掉的边数。"""
+    ang = EDGE_OVERLAP if ang is None else ang
+    off = EDGE_OVERLAP_OFF if off is None else off
+    min_ov = EDGE_OVERLAP_MIN if min_ov is None else min_ov
+    if ang <= 0:
+        return 0
+    cos_lim = math.cos(math.radians(ang))
+    dropped = 0
+    for rec in nets.values():
+        edges = rec.get("edges") or {}
+        live = {}
+        for k, v in edges.items():
+            e = _seg_ends(v)
+            if e is not None:
+                live[k] = e
+        keys = list(live)
+        for ii, ki in enumerate(keys):
+            if ki not in live:
+                continue
+            for kj in keys[ii + 1:]:
+                if kj not in live or ki not in live:
+                    continue
+                (ax, ay), (bx, by) = live[ki]
+                (cx, cy), (dx_, dy_) = live[kj]
+                ux, uy = bx - ax, by - ay
+                Li = math.hypot(ux, uy)
+                vx, vy = dx_ - cx, dy_ - cy
+                Lj = math.hypot(vx, vy)
+                if Li < 1e-6 or Lj < 1e-6:
+                    continue
+                if abs((ux * vx + uy * vy) / (Li * Lj)) < cos_lim:
+                    continue
+                ux, uy = ux / Li, uy / Li
+                ts, offs = [], []
+                for (px, py) in ((cx, cy), (dx_, dy_)):
+                    ts.append(((px - ax) * ux + (py - ay) * uy) / Li)
+                    offs.append(abs(-(px - ax) * uy + (py - ay) * ux))
+                if max(offs) > off:
+                    continue
+                lo, hi = min(ts), max(ts)
+                ov = min(hi, 1.0) - max(lo, 0.0)
+                if ov <= 0 or ov / max(1e-9, min(1.0, Lj / Li)) < min_ov:
+                    continue
+                a0, b0 = min(0.0, lo), max(1.0, hi)
+                edges[ki][0]["x"] = round(ax + a0 * Li * ux, 2)
+                edges[ki][0]["y"] = round(ay + a0 * Li * uy, 2)
+                edges[ki][-1]["x"] = round(ax + b0 * Li * ux, 2)
+                edges[ki][-1]["y"] = round(ay + b0 * Li * uy, 2)
+                live[ki] = ((edges[ki][0]["x"], edges[ki][0]["y"]),
+                            (edges[ki][-1]["x"], edges[ki][-1]["y"]))
+                (ax, ay), (bx, by) = live[ki]
+                vx2, vy2 = bx - ax, by - ay
+                Li = math.hypot(vx2, vy2) or 1e-9
+                ux, uy = vx2 / Li, vy2 / Li
+                edges.pop(kj, None)
+                del live[kj]
+                dropped += 1
+    return dropped
+
 
 def _seg_ends(seg):
     """一条边的 (首点, 尾点) 坐标元组；不合法返回 None。"""
@@ -1796,6 +1932,13 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # ★ 自由端回缩（`STAGE2_EDGE_TRIM`，默认 3.0 px，见长注释）：必须在切分/去重
         #   **之后**跑 —— 结点是在切分那一步才定下来的，先回缩会把结点也拉动。
         trim_free_ends(out_nets)
+    if EDGE_EXT > 0:
+        # ★ 端点外推（`STAGE2_EDGE_EXT`）：回缩之后跑（先治过冲，再补不足）。
+        extend_edge_ends(out_nets)
+    if EDGE_OVERLAP > 0:
+        # ★ 近共线重叠边合并（`STAGE2_EDGE_OVERLAP`，默认 10 度）：必须最后跑 —— 它会改变边的跨度，
+        #   放在切分/回缩之前会把切点与自由端判定带歪。
+        merge_overlapping_edges(out_nets)
     _pidx: Dict[str, Dict[str, str]] = {}
     for (_c, _k), _pk in pin_pk.items():
         _pidx.setdefault(_c, {})[str(_k)] = _pk
