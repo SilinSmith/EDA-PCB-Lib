@@ -24,8 +24,19 @@
     def setUpModule():
         import _unmerged_gate
         _unmerged_gate.gate([("stage2.structmatch", ("normalize_number_evidence",))])
+
+模块里**只有一部分**用例打未并入符号时（drift 与孤儿混装），不要用整模块的 `setUpModule`，
+改用逐用例装饰器把门收窄到真正缺前置条件的那几条::
+
+    @_unmerged_gate.requires([("stage2.assign", ("PIN_TRUST_BIND",))])
+    def test_something(self): ...
+
+排障：`EDA_UNMERGED_GATE=off` 时 `gate()`/`requires()` 全部变成空操作（用于「不跳、看真实红」
+的临时分诊，**不要**在提交面里带这个环境变量）。
 """
+import functools
 import importlib
+import os
 import unittest
 
 BRANCH = "improve-pin-network-parsing"
@@ -53,6 +64,8 @@ def missing(checks):
 
 def gate(checks, note=""):
     """前置符号缺失 ⇒ 整模块跳过（理由写全）。齐备 ⇒ 什么都不做。"""
+    if os.environ.get("EDA_UNMERGED_GATE") == "off":
+        return
     miss = missing(checks)
     if not miss:
         return
@@ -60,3 +73,24 @@ def gate(checks, note=""):
         "未并入路径的规格测试（main 上无被测对象）：缺 %s。%s 该分支上这些符号齐备，"
         "本模块与其上 %s 的测试逐字节相同；把绑定主体并入后本门自动打开，原断言原样开跑。%s"
         % ("、".join(miss), WHY, BRANCH, ("　" + note) if note else ""))
+
+
+def requires(checks, note=""):
+    """逐用例的门：只在打未并入符号的那几条用例上跳过（模块里 drift 与孤儿混装时用）。
+
+    与 `gate()` 同一语义 —— 缺前置条件就 `SkipTest`，齐备则原样开跑；断言不动。
+    """
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*a, **kw):
+            if os.environ.get("EDA_UNMERGED_GATE") != "off":
+                miss = missing(checks)
+                if miss:
+                    raise unittest.SkipTest(
+                        "未并入路径的规格测试（main 上无被测对象）：缺 %s。%s 缺的符号在 %s 上齐备；"
+                        "把绑定主体并入后本门自动打开，原断言原样开跑。%s"
+                        % ("、".join(miss), WHY, BRANCH, ("　" + note) if note else ""))
+            return fn(*a, **kw)
+        wrapper.__unmerged_checks__ = checks
+        return wrapper
+    return deco

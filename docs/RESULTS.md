@@ -6008,21 +6008,44 @@ main `stage2/color_crops.py:115` 是 `color_number_boxes(doc, image, reads=None)
 min_conf=0.0, mode='off', …)` 把队友的位置参 `mode="auto"` 变成 keyword-only 且默认 `off`，但队友
 `stage2/run.py:254-258` 的调用点**始终显式传** `mode=MONO_PIN_OCR` ⇒ 改默认值对管线零影响）、
 `test_pin_name_reading`（§5.29 把 `engine` 插成第 3 位置参，`stage2/pin_name_reading.py:91`；补 `None` 占位后
-`Ran 26 … failures=4, errors=8` ⇒ **26 例里 14 例在 main 上本来就能过**，其余需仲裁主体 ⇒ 走门并在 `note=` 写明）、
+`Ran 26 … failures=4, errors=8` ⇒ **其中 19 例在 main 上本来就能过**（后续细粒度门机械数出；当时误记为 14），
+其余需仲裁主体 ⇒ 先走整模块门、后在细粒度门里逐例挂门）、
 `test_mono_pin_pipeline`（6 条 drift 修好：`stage2/run.py:110-129` 的 `PIN_READERS` 是 import 时求值 ⇒
 `patch.multiple` 改不到已构造元组；夹具缺 box 器件名文字 ⇒ `stage2/assign.py:919-934` 的 `_best_read`
 （`pref = 1.0 if r == role else 0.85`，docstring 明写「也允许串角色借读…因为角色条件只是弱条件」，main 与队友分支
 逐字相同、由 `a6d06f0` 加入且从未删除）让 partname 槽借走 VBA1 ⇒ `stage2/assemble.py:1628-1630` 的迟到闸门丢脚
 ⇒ `KeyError: 'pin_13'`）。
 
-**读数（本条落地后）**：`Ran 222 tests ... OK (skipped=20)` —— **0 失败 0 错误**；被跳的 20 个模块内含 224 例
-（`Ran` 不再计入）。套件从「常红、不能当回归网」变成「全绿 + 20 个显式未并入门」。
+**读数（整模块门落地时）**：`Ran 226 tests ... OK (skipped=20)` —— **0 失败 0 错误**；被跳的 20 个模块内含
+224 例（`Ran` 不再计入）。套件从「常红、不能当回归网」变成「全绿 + 20 个显式未并入门」。
 
-**已知可回收项（留给后续）**：3 个模块把门收窄到类/方法，可救回约 **21 例**在 main 上真能过的断言 ——
-`test_pin_name_reading` 14、`test_mono_pin_pipeline` 6、`test_pin_text_role_guard` 1（后者是
-`PINNUM_CONSENSUS`：main `stage2/assign.py:58` 默认 `"0"`、队友分支 `:87` 默认 `"1"`，`_best_number_read`
-函数体 main `:61-94` 与分支 `:573-602` **逐字节相同**，`patch.object(assign, "PINNUM_CONSENSUS", True)`
-即可让 `'1' != '14'` 那条断言通过；`tests/test_pin_number_consensus.py` 5 例恒绿正是因为它打的是真开关）。
-需要一个「同模块内 drift 与孤儿混装」的细粒度门，属后续工作，故本条不落。
+**细粒度门收尾（用户 `m01183`「先把这 21 例捞回来，然后主线继续挤分」）**：`tests/_unmerged_gate.py`
+新增逐用例装饰器 `requires(checks, note="")`（同一语义：缺符号 ⇒ 该用例 `SkipTest`，齐备 ⇒ 原样开跑、
+断言不动；wrapper 上留 `__unmerged_checks__`）与临时排障开关 `EDA_UNMERGED_GATE=off`（`gate()`/`requires()`
+同时变空操作，只用于分诊，不进提交面）。3 个混装模块的整模块门拆除，改成只给「断言真打在未并入主体上」的
+用例挂门，其余原样开跑。分诊方法：`cd eda-pcb; $env:EDA_UNMERGED_GATE='off'; python -X utf8 -m unittest
+discover -s tests -p "test_<mod>.py"`，按 `^(FAIL|ERROR):|^Ran |^OK|^FAILED` 过滤。
+
+- `tests/test_pin_name_reading.py`：26 例 **19 跑 / 7 跳**（原以为 14，机械分诊得的真值是 19 —— 队友当时把
+  subtest 级失败数当成了用例数）。跳的 7 例断言分别打在「旧名保留」「合格提供者优先」「同文本去重」「伙伴号码确认」
+  上，统一挂文件头 `_ARBITRATION`＝`stage2.assign` 的 `_preferred_name_observation` / `_name_reservation` /
+  `_preferred_number_observation`（`test_new_name_confidence_does_not_reselect_duplicate_number_contact`
+  另挂 `stage2.assemble.BOX_PIN_DUPLICATE_BEST`）。断言确认门面与红面**完全重合**：关掉门仍恰好是这 7 例红
+  （6 例 `TypeError: 'NoneType' object is not subscriptable` —— main 没做旧名保留，name 槽落空；1 例值不等）。
+- `tests/test_mono_pin_pipeline.py`：7 例 **6 跑 / 1 跳**；唯一红是
+  `test_accepted_reader_observations_reach_real_binding_and_export`，
+  `AssertionError: Tuples differ: ('VBA1', '13') != ('VBAT', '113')`（`:169-172`）⇒ 它编码的是队友的
+  `_qualified_mono_views`（原注释 "Do not compare optional OCR confidence with the legacy model's score."），
+  只给它挂门。
+- `tests/test_pin_text_role_guard.py`：17 例 **1 跑 / 16 跳**。16 例孤儿（`patch.object(assign,
+  "PIN_TEXT_ROLE_GUARD"/"PIN_DIGIT_ENTITY", …)` 在 main 上抛 `AttributeError`）挂门；唯一在 main 上本来
+  就能过的是 `test_strong_truncated_number_uses_three_strong_same_box_votes_only_on_color`，按本仓既有惯例
+  在用例内开开关：`with patch.object(assign, "PINNUM_CONSENSUS", True)`（main `stage2/assign.py:58` 默认
+  `"0"`、队友分支 `:87` 默认 `"1"`；`_best_number_read` 函数体 main `:61-94` 与分支 `:573-602` **逐字节
+  相同**，`tests/test_pin_number_consensus.py:14/26/36/44/55` 全是这个写法）。关掉门后该文件恰好只剩这 16 例红。
+
+**读数（细粒度门落地后，权威）**：`Ran 276 tests ... OK (skipped=41)` —— **0 失败 0 错误**；收集数 226→276
+是因为这 3 个模块的 50 例重新进入收集（26 跑 + 24 跳），跳过数 20→41＝17 个整模块门 + 24 例逐例门。
+净效果：**26 例从「不计入 `Ran` 的隐身状态」回到回归网里**。
 
 

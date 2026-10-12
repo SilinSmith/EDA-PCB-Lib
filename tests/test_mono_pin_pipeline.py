@@ -14,6 +14,8 @@ import numpy as np
 from stage2 import run
 from stage2 import mono_pin_reading
 
+import _unmerged_gate
+
 
 def targeted(role, value, rect):
     return {"bbox": rect, "geometry_bbox": rect,
@@ -153,6 +155,12 @@ class MonoPinPipelineTests(unittest.TestCase):
                 reader.assert_not_called()
                 loader.assert_not_called()
 
+    # 门（细粒度）：只有这一条断言测的是队友分支**未并入**的绑定主体 ——
+    # `_qualified_mono_views` 的原注释："Do not compare optional OCR confidence with the
+    # legacy model's score."。其余 6 条已按 main 自己的 API 修好（`run.PIN_READERS` 注册表
+    # 重建 + box 器件名夹具），不再整模块跳过。见 tests/_unmerged_gate.py。
+    @_unmerged_gate.requires([("stage2.assign", ("_qualified_mono_views",
+                                                 "_preferred_name_observation"))])
     def test_accepted_reader_observations_reach_real_binding_and_export(self):
         name = targeted("pin_name", "VBAT", [111, 174, 151, 188])
         number = targeted("pin_number", "113", [77, 165, 96, 179])
@@ -186,14 +194,8 @@ class MonoPinPipelineTests(unittest.TestCase):
         self.assertEqual(assigned["comps"]["ic"]["pins"]["0"]["number"]["text"], "13")
 
 
-def setUpModule():
-    """§5.28：本模块的「合格读数压过更高分旧读数」那条断言测的是队友分支**未并入**的绑定
-    主体（`_qualified_mono_views` 原注释："Do not compare optional OCR confidence with the
-    legacy model's score."）。其余 6 条已按 main 自己的 API 修好（`run.PIN_READERS`
-    注册表重建 + box 器件名夹具），门开后原样开跑。见 tests/_unmerged_gate.py。"""
-    import _unmerged_gate
-    _unmerged_gate.gate([("stage2.assign", ("_qualified_mono_views",
-                                            "_preferred_name_observation"))])
+# ── 门：见 `test_accepted_reader_observations_reach_real_binding_and_export` 上的
+# `@_unmerged_gate.requires(...)`；本模块不再整模块跳过，其余 6 例原样开跑。
 
 
 if __name__ == "__main__":

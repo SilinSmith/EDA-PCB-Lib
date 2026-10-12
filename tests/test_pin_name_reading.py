@@ -16,6 +16,14 @@ from stage2.isolated_ocr import prepare_isolated_sample
 from stage2.pin_name_reading import read_pin_names
 from textrec.dataset import crop_gray
 
+import _unmerged_gate
+
+# ── 门（细粒度）：本模块测的名字/号码仲裁主体未并入 main ──
+# 缺失 ⇒ 只跳过断言打在该主体结果上的那几条用例（`requires()`，见 tests/_unmerged_gate.py），
+# 其余用例原样开跑、断言不动。并进来后本门自动打开。
+_ARBITRATION = [("stage2.assign", ("_preferred_name_observation", "_name_reservation",
+                                   "_preferred_number_observation"))]
+
 
 class FakeProvider:
     def __init__(self, outputs=None):
@@ -110,6 +118,7 @@ class PinNameReadingTests(unittest.TestCase):
         self.assertTrue(result[0]["name_only"])
         self.assertFalse(result[0]["number_only"])
 
+    @_unmerged_gate.requires(_ARBITRATION)
     def test_low_confidence_preserves_old_name(self):
         image, candidate, doc = self.fixture()
         reads = [self.old_name(candidate, "KEEP")]
@@ -279,12 +288,14 @@ class PinNameReadingTests(unittest.TestCase):
             "number_only": False, "source": "color_pin_name_ppocr",
             "pin_name_ocr": {"backend": "ppocr_v4", "accepted": True, "flags": []}}
 
+    @_unmerged_gate.requires(_ARBITRATION)
     def test_qualified_provider_name_wins_without_cross_model_confidence_comparison(self):
         _, candidate, doc = self.fixture()
         old = [self.old_name(candidate, "F", .999)]
         got = self.bind(doc, old+[self.preferred(candidate, confidence=.91)])
         self.assertEqual(got["comps"]["ic"]["pins"][0]["name"]["text"], "FB")
 
+    @_unmerged_gate.requires(_ARBITRATION)
     def test_excluded_nearer_old_crop_cannot_hide_targeted_replacement(self):
         _, candidate, doc = self.fixture()
         old_candidate = dict(candidate, bbox=[22, 26, 32, 35])
@@ -292,6 +303,7 @@ class PinNameReadingTests(unittest.TestCase):
         got = self.bind(doc, [self.old_name(old_candidate, "F", .999), observed])
         self.assertEqual(got["comps"]["ic"]["pins"][0]["name"]["text"], "FB")
 
+    @_unmerged_gate.requires(_ARBITRATION)
     def test_low_conf_invalid_stale_cross_frame_wrong_row_do_not_displace_old(self):
         _, candidate, doc = self.fixture()
         variants = []
@@ -317,6 +329,7 @@ class PinNameReadingTests(unittest.TestCase):
                 got = self.bind(doc, [self.old_name(candidate, "KEEP")]+[variant])
                 self.assertEqual(got["comps"]["ic"]["pins"][0]["name"]["text"], "KEEP")
 
+    @_unmerged_gate.requires(_ARBITRATION)
     def test_crossing_two_trusted_rows_cannot_get_provider_priority(self):
         _, candidate, doc = self.fixture()
         spanning = self.preferred(candidate)
@@ -324,6 +337,7 @@ class PinNameReadingTests(unittest.TestCase):
         got = self.bind(doc, [self.old_name(candidate, "KEEP")]+[spanning])
         self.assertEqual(got["comps"]["ic"]["pins"][0]["name"]["text"], "KEEP")
 
+    @_unmerged_gate.requires(_ARBITRATION)
     def test_same_text_dedup_preserves_qualified_new_observation(self):
         _, candidate, doc = self.fixture()
         with patch("stage2.assign.PINNUM_DUP", 3):
@@ -343,6 +357,8 @@ class PinNameReadingTests(unittest.TestCase):
         for index in before["pins"]:
             self.assertEqual(after["pins"][index]["number"], before["pins"][index]["number"])
 
+    @_unmerged_gate.requires(_ARBITRATION
+                             + [("stage2.assemble", ("BOX_PIN_DUPLICATE_BEST",))])
     def test_new_name_confidence_does_not_reselect_duplicate_number_contact(self):
         from stage2 import assemble
         image, first, doc = self.fixture()
@@ -402,15 +418,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-# ── §5.28 门：本模块测的是队友分支未并入 main 的名字/号码仲裁主体 ──
-# 前置符号缺失 ⇒ setUpModule 抛 SkipTest，整模块标为 skipped（一条断言都不改）；
-# 队友那条绑定路径并进来后本门自动打开，原测试原样开跑。
-def setUpModule():
-    import _unmerged_gate
-    _unmerged_gate.gate([
-            ('stage2.assign', ('_preferred_name_observation', '_name_reservation',
-                               '_preferred_number_observation')),
-            ('stage2.assemble', ('BOX_PIN_DUPLICATE_BEST',))],
-            note="本模块 26 例里 14 例在 main 上本来就能过（read_pin_names 的 §5.29 "
-                 "engine/bgr 签名漂移已在测试里修好，tests/test_pin_name_reading.py:76-80、"
-                 ":135-136）；其余 12 例要队友的名字仲裁主体。")
+# ── 门：见文件头 `_ARBITRATION` 与各用例上的 `@_unmerged_gate.requires(...)` ──
+# 本模块**不再**整模块跳过：`read_pin_names` 的 §5.29 engine/bgr 签名漂移已在测试里修好
+# （tests/test_pin_name_reading.py:88-91、:147-148 补 `None` 占位），26 例里 19 例在 main
+# 上本来就能过；只有断言打在队友名字/号码仲裁主体上的 7 例按缺失前置条件跳过。

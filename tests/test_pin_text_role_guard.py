@@ -6,6 +6,13 @@ from unittest.mock import patch
 
 assign = importlib.import_module("stage2.assign")
 
+import _unmerged_gate
+
+# ── 门（细粒度）：本模块绝大多数用例测的是队友分支未并入 main 的绑定路径 ──
+# 缺失 ⇒ 只跳过打在该主体上的那些用例（`requires()`，见 tests/_unmerged_gate.py）；
+# 例外见文件尾注释（`_best_number_read` 那条在 main 上本来就能过）。
+_GUARD = [("stage2.assign", ("PIN_TEXT_ROLE_GUARD", "PIN_DIGIT_ENTITY"))]
+
 
 def text(rect, value, roles=("pin_name", "partname"), conf=.98, **metadata):
     return dict(bbox=list(rect), reads={role: (value, conf) for role in roles}, **metadata)
@@ -34,6 +41,7 @@ class PinTextRoleGuardTests(unittest.TestCase):
                 patch.object(assign, "PIN_DIGIT_ENTITY", True):
             return assign.assign(components, pins, copy.deepcopy(texts), pin_evidence=records)
 
+    @_unmerged_gate.requires(_GUARD)
     def test_vout_and_fault_keep_name_role_before_partname(self):
         for name in ("VOUT", "FAULT"):
             with self.subTest(name=name):
@@ -45,6 +53,7 @@ class PinTextRoleGuardTests(unittest.TestCase):
                 self.assertIsNone(fixed["partname"])
                 self.assertEqual(fixed["pins"][0]["name"]["text"], name)
 
+    @_unmerged_gate.requires(_GUARD)
     def test_central_or_external_model_is_still_available(self):
         for rect in ([130, 205, 205, 215], [110, 245, 185, 255]):
             with self.subTest(rect=rect):
@@ -55,6 +64,7 @@ class PinTextRoleGuardTests(unittest.TestCase):
                 self.assertEqual(fixed["pins"][0]["name"]["text"], "VOUT")
                 self.assertIsNone(fixed["pins"][1]["name"])
 
+    @_unmerged_gate.requires(_GUARD)
     def test_monochrome_or_stale_evidence_preserves_old_role_behavior(self):
         reads = [text([110, 140, 150, 150], "VOUT")]
         records = [
@@ -67,6 +77,7 @@ class PinTextRoleGuardTests(unittest.TestCase):
             with self.subTest(records=rec):
                 self.assertEqual(self.assigned(reads, rec), self.assigned(reads, rec, guard=False))
 
+    @_unmerged_gate.requires(_GUARD)
     def test_pin_name_only_reads_cannot_become_designator_partname_or_value(self):
         for name in ("U1", "TPS54331", "1.0uF"):
             reads = [text([110, 140, 150, 150], name, roles=("pin_name",), name_only=True)]
@@ -77,6 +88,7 @@ class PinTextRoleGuardTests(unittest.TestCase):
             self.assertEqual(rec["pins"][0]["name"]["text"], name)
             self.assertIsNone(rec["pins"][0]["number"])
 
+    @_unmerged_gate.requires(_GUARD)
     def test_valid_pin_target_overrides_equal_nearest_component(self):
         components = [{"id": cid, "type": "box", "bbox_img": self.box} for cid in ("other", "ic")]
         pins = {cid: self.points for cid in ("other", "ic")}
@@ -87,12 +99,14 @@ class PinTextRoleGuardTests(unittest.TestCase):
         self.assertEqual(out["ic"]["pins"][0]["name"]["text"], "VOUT")
         self.assertIsNone(out["other"]["pins"][0]["name"])
 
+    @_unmerged_gate.requires(_GUARD)
     def test_targeted_name_cannot_jump_to_another_row(self):
         reads = [text([110, 140, 150, 150], "VOUT", roles=("pin_name",),
                       pin_target=target("ic", 1, self.points[1]))]
         slots = self.assigned(reads)["comps"]["ic"]["pins"]
         self.assertTrue(all(slot["name"] is None for slot in slots.values()))
 
+    @_unmerged_gate.requires(_GUARD)
     def test_targeted_name_cannot_jump_when_other_contact_forces_legacy_phase(self):
         reads = [text([110, 180, 150, 190], "VOUT", roles=("pin_name",),
                       pin_target=target("ic", 0, self.points[0]))]
@@ -101,6 +115,7 @@ class PinTextRoleGuardTests(unittest.TestCase):
         slots = self.assigned(reads, records)["comps"]["ic"]["pins"]
         self.assertTrue(all(slot["name"] is None for slot in slots.values()))
 
+    @_unmerged_gate.requires(_GUARD)
     def test_malformed_or_expired_targets_are_skipped_entirely(self):
         targets = [None, "ic", {}, target("missing", 0, self.points[0]),
                    target("ic", -1, self.points[0]), target("ic", True, self.points[0]),
@@ -114,6 +129,7 @@ class PinTextRoleGuardTests(unittest.TestCase):
                 slots = self.assigned(reads)["comps"]["ic"]["pins"]
                 self.assertTrue(all(slot["name"] is None for slot in slots.values()))
 
+    @_unmerged_gate.requires(_GUARD)
     def test_targeted_crop_with_stale_contact_evidence_is_skipped(self):
         reads = [text([110, 140, 150, 150], "VOUT", roles=("pin_name",),
                       pin_target=target("ic", 0, self.points[0]))]
@@ -122,15 +138,21 @@ class PinTextRoleGuardTests(unittest.TestCase):
         self.assertTrue(all(slot["name"] is None for slot in slots.values()))
 
     def test_strong_truncated_number_uses_three_strong_same_box_votes_only_on_color(self):
+        # `_best_number_read` 的「同框三票一致才改号」在主分支上存在，但它是 opt-in：
+        # `stage2/assign.py:58 PINNUM_CONSENSUS = env_on("STAGE2_PINNUM_CONSENSUS", "0")`
+        # （队友分支默认 "1"），函数体两边逐字节相同 ⇒ 测试按本仓既有惯例把这个开关打开
+        # （同 tests/test_pin_number_consensus.py:14/26/36/44/55）。
         digits = {"pin_number": ("1", .999), "designator": ("14", .987),
                   "value": ("14", .939), "net_label": ("14", .980), "pin_name": ("N", .9)}
-        self.assertEqual(assign._best_number_read(digits, fresh_color=True)[1], "14")
-        self.assertEqual(assign._best_number_read(digits, fresh_color=False)[1], "1")
-        for bad in ({"value": ("14", .7)}, {"net_label": ("12", .99)},
-                    {"designator": ("4", .99), "value": ("4", .99), "net_label": ("4", .99)}):
-            revised = dict(digits, **bad)
-            self.assertEqual(assign._best_number_read(revised, fresh_color=True)[1], "1")
+        with patch.object(assign, "PINNUM_CONSENSUS", True):
+            self.assertEqual(assign._best_number_read(digits, fresh_color=True)[1], "14")
+            self.assertEqual(assign._best_number_read(digits, fresh_color=False)[1], "1")
+            for bad in ({"value": ("14", .7)}, {"net_label": ("12", .99)},
+                        {"designator": ("4", .99), "value": ("4", .99), "net_label": ("4", .99)}):
+                revised = dict(digits, **bad)
+                self.assertEqual(assign._best_number_read(revised, fresh_color=True)[1], "1")
 
+    @_unmerged_gate.requires(_GUARD)
     def test_number_ink_geometry_keeps_padding_out_of_candidate_ranking(self):
         # These are two readings of exactly the same digit ink; the clean
         # re-read has a wider padded sampling box but should not lose by row.
@@ -146,6 +168,7 @@ class PinTextRoleGuardTests(unittest.TestCase):
         self.assertEqual(slots[0]["number"]["text"], "8")
         self.assertEqual(slots[0]["name"]["text"], "IS")
 
+    @_unmerged_gate.requires(_GUARD)
     def test_trusted_color_on_other_row_cannot_override_uncertain_rows_strong_digit(self):
         digits = {"pin_number": ("1", .999), "designator": ("14", .987),
                   "value": ("14", .939), "net_label": ("14", .980), "pin_name": ("N", .9)}
@@ -167,6 +190,7 @@ class PinTextRoleGuardTests(unittest.TestCase):
                                 "glyph_touches_search_boundary": False}}
         return old, clean
 
+    @_unmerged_gate.requires(_GUARD)
     def test_symbol_contaminated_digit_is_replaced_only_by_same_clean_glyph(self):
         old, clean = self._digit_fixture()
         reads = [text([110, 140, 150, 150], "IS", roles=("pin_name",)), old, clean]
@@ -174,12 +198,14 @@ class PinTextRoleGuardTests(unittest.TestCase):
         self.assertEqual(slots[0]["number"]["text"], "4")
         self.assertEqual(slots[0]["name"]["text"], "IS")
 
+    @_unmerged_gate.requires(_GUARD)
     def test_old_numeric_read_is_preserved_when_clean_glyph_hits_search_boundary(self):
         old, clean = self._digit_fixture()
         clean["color_crop"]["glyph_touches_search_boundary"] = True
         slots = self.assigned([old, clean])["comps"]["ic"]["pins"]
         self.assertEqual(slots[0]["number"]["text"], "24")
 
+    @_unmerged_gate.requires(_GUARD)
     def test_stale_digit_entity_anchor_or_wrong_side_cannot_suppress_original_read(self):
         for changes in ({"anchor_img": [100, 185]}, {"anchor_img": [float("nan"), 145]},
                         {"edge": "right"}, {"component_id": "missing"},
@@ -190,6 +216,7 @@ class PinTextRoleGuardTests(unittest.TestCase):
                 slots = self.assigned([old, clean])["comps"]["ic"]["pins"]
                 self.assertEqual(slots[0]["number"]["text"], "24")
 
+    @_unmerged_gate.requires(_GUARD)
     def test_nonfinite_digit_geometry_or_bad_source_container_cannot_crash_or_suppress(self):
         for field, value in (("geometry_bbox", [86, 135, float("nan"), 145]),
                              ("source_boxes", None), ("source_boxes", "not boxes"),
@@ -203,6 +230,7 @@ class PinTextRoleGuardTests(unittest.TestCase):
                 slots = self.assigned([old, clean])["comps"]["ic"]["pins"]
                 self.assertEqual(slots[0]["number"]["text"], "24")
 
+    @_unmerged_gate.requires(_GUARD)
     def test_numeric_entity_cannot_claim_ink_from_another_pin_row(self):
         old, clean = self._digit_fixture()
         # The stale crop's stored anchor is current, but its alleged glyph
@@ -217,10 +245,9 @@ if __name__ == "__main__":
     unittest.main()
 
 
-# ── §5.28 门：本模块测的是队友分支未并入 main 的绑定路径 ──
-# 前置符号缺失 ⇒ setUpModule 抛 SkipTest，整模块标为 skipped（一条断言都不改）；
-# 队友那条绑定路径并进来后本门自动打开，原测试原样开跑。
-def setUpModule():
-    import _unmerged_gate
-    _unmerged_gate.gate([
-             ('stage2.assign', ('PIN_TEXT_ROLE_GUARD', 'PIN_DIGIT_ENTITY'))])
+# ── 门（细粒度）：见文件头 `_GUARD` 与各用例上的 `@_unmerged_gate.requires(...)` ──
+# 本模块**不再**整模块跳过。17 例里只有 `test_strong_truncated_number_uses_three_strong_
+# same_box_votes_only_on_color` 在 main 上本来就能过（它测的 `_best_number_read` 存在，
+# 只是 opt-in），已按本仓惯例在用例内打开 `PINNUM_CONSENSUS`；其余 16 例断言打在队友分支
+# 未并入的 `PIN_TEXT_ROLE_GUARD` / `PIN_DIGIT_ENTITY` 上（`patch.object` 会因属性不存在
+# 抛 `AttributeError`），按缺失前置条件逐例跳过。
