@@ -24,8 +24,11 @@ PKGS = ["stage1", "stage2", "stage3", "fusion", "vlm", "textrec",
 # ★ 2026-10-14：把裸 `env_str`（从 `envflag` 直接 import 的名字）也纳入 —— 否则像
 #   `stage2/libpins.py` 的 `STAGE2_CPNT_LIB` / `STAGE2_BOXIC_LIB`（库文件覆盖路径）这种
 #   「值本身就是路径、没有布尔/数值默认」的开关会整条从 KNOBS.md 里消失。
+# ★ 2026-10-12：把 `env_raw` 也纳入 —— 多档开关（如 `STAGE2_LIB_REFINE_DEGEN` 的
+#   `off|letter|shape|known`）必须用 `env_raw` 读，`env_str` 会把 `off`/`0`/`none`
+#   归一成空串、把 `off` 档静默变成默认档（§5.52 自检抓到的坑）。
 PAT = re.compile(
-    r"""(?:os\.environ\.get|env_on|env_int|env_float|env_str|envflag\.\w+)\s*\(\s*"""
+    r"""(?:os\.environ\.get|env_on|env_int|env_float|env_str|env_raw|envflag\.\w+)\s*\(\s*"""
     r"""["']([A-Z][A-Z0-9_]{3,})["']\s*(?:,\s*([^)\n]{0,60}))?""")
 
 

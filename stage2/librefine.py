@@ -71,6 +71,39 @@ def _num_of(pin_key: str) -> str:
     return s if s else ""
 
 
+def _has_letter(s: str) -> bool:
+    # ★ 与 `stage2/assemble.py` 规则 B 共用同一份实现（`libpins.has_letter`）：
+    #   两条库名回填路径的守卫必须逐字符同语义，否则 A/B 读不出真因。
+    return LP.has_letter(s) if LP is not None else any(ch.isalpha() for ch in (s or ""))
+
+
+def _degen() -> str:
+    """退化库名守卫（2026-10-22 加，A/B 见 `docs/RESULTS.md` §5.52）。
+
+    背景：官方库里有一批**纯数字库名**（`STC11` 的 4 号叫 `'4'`、`OUT` 的 1..4 号叫
+    `'1'..'4'`）——那是库自己从同一个自动流程里读出来的，和我方误读同源。当型号名是
+    **模糊吸附**来的（§5.48 把 `FUSION_NAME_SNAP_TOL` 放到 4，`5 U3` 的 `VOUTAD` 被
+    吸附到键 `OUT`）时，拿这种库名去覆盖本来读对的 `VIN`/`TAB` 只会丢信息：实测官方
+    10 张上 2 根脚 `right→wrong`（`work\\_pinname_audit.py`）。
+
+    档位：
+      * `off`   —— 老行为（默认，等 A/B 读数决定是否翻）。
+      * `letter`—— 库名不含字母、而我方读数含字母 ⇒ 该脚不改。
+      * `shape` —— 整颗元件判：**库给的名字全是纯数字，而我方读数一个纯数字都没有**
+                   ⇒ 认定这个库键可疑，该元件一律不改（派生集里 GT 脚名本身就是数字，
+                   那种情况下我方读数通常也是数字 ⇒ 不会误挡）。
+      * `known` —— 同 `letter`，但**还要求我方读数是库认识的名字**
+                   （`libpins.LibCtx.is_known_name` 的全局词表，2401 条）：官方
+                   `VIN`/`TAB`/`SDA` 拦得住，派生 `VWPSTO2`/`IOW2T` 这类乱码不拦。
+    """
+    v = (os.environ.get("STAGE2_LIB_REFINE_DEGEN", "known") or "").strip().lower()
+    if LP is not None:
+        # ★ 档位读取的唯一实现在 `libpins.degen_mode()`（规则 B 也走它）；这里保留
+        #   `os.environ.get` 的字面量只为 `tools/dev/gen_knobs.py` 的 PAT 能扫到本开关。
+        return LP.degen_mode()
+    return v if v in ("off", "letter", "shape", "known") else "known"
+
+
 def refine(doc: dict, ctx=None, log=None) -> Dict[str, Any]:
     """就地校准 `doc["pins"][cid][pin_<号>]["pinname"]`，返回统计。
 
@@ -80,8 +113,10 @@ def refine(doc: dict, ctx=None, log=None) -> Dict[str, Any]:
       3. 库对该 **号** 有唯一名（`name_for_num`，一号多名 ⇒ 库里就没这个映射）；
       4. 档位判据（见 `_when`），且库名与当前名**不是只差大小写**。
     """
-    st: Dict[str, Any] = {"on": _on(), "when": _when(), "n_seen": 0, "n_key": 0,
-                          "n_chg": 0, "blocked": 0, "case_only": 0, "rows": []}
+    st: Dict[str, Any] = {"on": _on(), "when": _when(), "degen_mode": _degen(),
+                          "n_seen": 0, "n_key": 0, "n_chg": 0, "blocked": 0,
+                          "case_only": 0, "degen": 0, "degen_comp": 0,
+                          "degen_keys": [], "rows": []}
     if not st["on"] or not isinstance(doc, dict):
         return st
     if LP is None:                                           # pragma: no cover
@@ -92,6 +127,7 @@ def refine(doc: dict, ctx=None, log=None) -> Dict[str, Any]:
         st["err"] = "库加载失败"
         return st
     when = st["when"]
+    dmode = st["degen_mode"]
     pins = doc.get("pins") or {}
     for cid, comp in (doc.get("components") or {}).items():
         if not isinstance(comp, dict):
@@ -105,6 +141,8 @@ def refine(doc: dict, ctx=None, log=None) -> Dict[str, Any]:
             continue
         st["n_key"] += len(rows)
         nm_set = {LP.norm(x) for x in ctx.names_of(key)}
+        cands = []                                           # (pk, rec, num, cur, ref)
+        pairs = []                                           # 所有「库里有唯一名」的脚（供 shape 守卫看形状）
         for pk, rec in rows.items():
             if not isinstance(rec, dict):
                 continue
@@ -113,7 +151,10 @@ def refine(doc: dict, ctx=None, log=None) -> Dict[str, Any]:
                 continue
             cur = str(rec.get("pinname") or "")
             ref = ctx.name_for_num(key, num)
-            if not ref or ref == cur:
+            if not ref:
+                continue
+            pairs.append((cur, ref))
+            if ref == cur:
                 continue
             if cur and LP.norm(cur) == LP.norm(ref):
                 st["case_only"] += 1                          # 只差大小写/标点 ⇒ 保留我方读法
@@ -128,6 +169,22 @@ def refine(doc: dict, ctx=None, log=None) -> Dict[str, Any]:
                     if other in (None, "", num):
                         st["blocked"] += 1
                         continue
+            cands.append((pk, rec, num, cur, ref))
+        # ★ 退化库名守卫（见 `_degen()`）：挡住「用纯数字库名覆盖有字母的读数」
+        if dmode == "shape" and cands:
+            n_ref_num = sum(1 for c, r in pairs if not _has_letter(r))
+            n_our_num = sum(1 for c, r in pairs if not _has_letter(c))
+            if n_ref_num and n_ref_num == len(pairs) and not n_our_num:
+                st["degen"] += len(cands)
+                st["degen_comp"] += 1
+                st["degen_keys"].append(key)
+                continue
+        for pk, rec, num, cur, ref in cands:
+            if dmode in ("letter", "known") and _has_letter(cur) \
+                    and not _has_letter(ref) \
+                    and (dmode == "letter" or ctx.is_known_name(cur)):
+                st["degen"] += 1
+                continue
             rec["pinname"] = ref
             st["n_chg"] += 1
             st["rows"].append({"cid": cid, "pin": pk, "num": num,
@@ -141,9 +198,9 @@ def refine(doc: dict, ctx=None, log=None) -> Dict[str, Any]:
                           by="stage2:librefine")
         except Exception:                                    # noqa: BLE001
             pass
-    if log and st["n_chg"]:
-        log("  [librefine] 校准引脚名 %d 处（档 %s，键命中 %d/%d 个脚）"
-            % (st["n_chg"], when, st["n_key"], st["n_seen"]))
+    if log and (st["n_chg"] or st["degen"]):
+        log("  [librefine] 校准引脚名 %d 处（档 %s，键命中 %d/%d 个脚；退化库名守卫 %s 挡下 %d 处 / %d 颗）"
+            % (st["n_chg"], when, st["n_key"], st["n_seen"], dmode, st["degen"], st["degen_comp"]))
     return st
 
 
@@ -156,6 +213,8 @@ def _selftest() -> int:
         "AA1": {"pins": [{"name": "VDD", "number": "1"}, {"name": "PA00", "number": "2"},
                          {"name": "X", "number": "3"}, {"name": "Y", "number": "3"},
                          {"name": "VIN", "number": "4"}]},
+        "BB2": {"pins": [{"name": "1", "number": "1"}, {"name": "2", "number": "2"},
+                         {"name": "3", "number": "3"}]},
     }
     with tempfile.TemporaryDirectory() as td:
         from pathlib import Path
@@ -202,8 +261,58 @@ def _selftest() -> int:
         s2 = refine(doc2, ctx)
         if s2["n_chg"] != 0 or s2["blocked"] != 1:
             bad.append("missing 档该挡住库内合法名 %s" % s2)
+        # ★ 退化库名守卫（`STAGE2_LIB_REFINE_DEGEN`）
+        doc3 = {"components": {"U3": {"Name": "BB2"}},
+                "pins": {"U3": {"pin_1": {"pinname": "VIN", "point": {"x": 0, "y": 0}},
+                                "pin_2": {"pinname": "TAB", "point": {"x": 1, "y": 1}}}}}
+        os.environ["STAGE2_LIB_REFINE_WHEN"] = "any"
+        os.environ["STAGE2_LIB_REFINE_DEGEN"] = "letter"
+        s3 = refine(doc3, ctx)
+        if s3["n_chg"] != 0 or s3["degen"] != 2:
+            bad.append("letter 档该挡住纯数字库名 %s" % s3)
+        if doc3["pins"]["U3"]["pin_1"]["pinname"] != "VIN":
+            bad.append("letter 档不该覆盖有字母的读数")
+        doc4 = {"components": {"U3": {"Name": "BB2"}},
+                "pins": {"U3": {"pin_1": {"pinname": "VIN"}, "pin_2": {"pinname": "TAB"}}}}
+        os.environ["STAGE2_LIB_REFINE_DEGEN"] = "shape"
+        s4 = refine(doc4, ctx)
+        if s4["n_chg"] != 0 or s4["degen"] != 2 or s4["degen_comp"] != 1:
+            bad.append("shape 档该整颗挡住 %s" % s4)
+        doc5 = {"components": {"U3": {"Name": "BB2"}},
+                "pins": {"U3": {"pin_1": {"pinname": "1"}, "pin_2": {"pinname": "TAB"}}}}
+        s5 = refine(doc5, ctx)
+        if s5["n_chg"] != 1 or s5["degen"] != 0:
+            bad.append("shape 档：我方也有数字读数时不该整颗挡 %s" % s5)
+        if doc5["pins"]["U3"]["pin_2"]["pinname"] != "2":
+            bad.append("shape 档放行时应写库名")
+        # off 档 = 老行为：照样覆盖
+        doc6 = {"components": {"U3": {"Name": "BB2"}},
+                "pins": {"U3": {"pin_1": {"pinname": "VIN"}}}}
+        os.environ["STAGE2_LIB_REFINE_DEGEN"] = "off"
+        s6 = refine(doc6, ctx)
+        if s6["n_chg"] != 1 or doc6["pins"]["U3"]["pin_1"]["pinname"] != "1":
+            bad.append("off 档该保持老行为 %s" % s6)
+        # ★ `known` 档：只有当**我方读数是库认识的名字**时才挡 —— 官方 5 U3 的 `VIN`
+        #   挡得住（库表里有 VIN），派生 0011 的 `VWPSTO2` 挡不住（库里没有这个词）。
+        os.environ["STAGE2_LIB_REFINE_DEGEN"] = "known"
+        doc7 = {"components": {"U3": {"Name": "BB2"}},
+                "pins": {"U3": {"pin_1": {"pinname": "VIN"}}}}
+        s7 = refine(doc7, ctx)
+        if s7["n_chg"] != 0 or s7["degen"] != 1:
+            bad.append("known 档该挡住库里认识的名字 %s" % s7)
+        if doc7["pins"]["U3"]["pin_1"]["pinname"] != "VIN":
+            bad.append("known 档不该覆盖库认识的名字")
+        doc8 = {"components": {"U3": {"Name": "BB2"}},
+                "pins": {"U3": {"pin_1": {"pinname": "VWPSTO2"}}}}
+        s8 = refine(doc8, ctx)
+        if s8["n_chg"] != 1 or s8["degen"] != 0:
+            bad.append("known 档不该挡库里没有的乱码 %s" % s8)
+        if doc8["pins"]["U3"]["pin_1"]["pinname"] != "1":
+            bad.append("known 档放行时应写库名")
+        os.environ["STAGE2_LIB_REFINE_DEGEN"] = "off"
         os.environ.pop("STAGE2_LIB_REFINE", None)
         os.environ.pop("STAGE2_LIB_REFINE_WHEN", None)
+        os.environ.pop("STAGE2_LIB_REFINE_DEGEN", None)
     print("librefine 自检：%s" % ("全部通过" if not bad else "失败 " + " / ".join(bad)))
     return 1 if bad else 0
 

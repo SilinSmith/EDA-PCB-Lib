@@ -63,11 +63,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 try:                                          # 作为包导入（正常路径）
-    from envflag import env_on, env_str
+    from envflag import env_on, env_raw, env_str
 except ImportError:                           # 直接跑脚本自检
     import sys as _sys
     _sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from envflag import env_on, env_str
+    from envflag import env_on, env_raw, env_str
 
 # ── 开关 ──────────────────────────────────────────────────────────────────
 # `STAGE2_LIB_PINS`（默认 "1"=开，2026-10-09 翻）：本通道总闸。见模块 docstring。
@@ -100,6 +100,48 @@ def norm(s) -> str:
     那一份），`1.25-2PWB` → `1252pwb`、`AMS1117-3.3` → `ams111733`。
     """
     return _NON_ALNUM.sub("", str(s or "").lower())
+
+
+def has_letter(s) -> bool:
+    """字符串里是否至少有一个字母（用来识别「纯数字」的库名 / 读数）。"""
+    return any(ch.isalpha() for ch in str(s or ""))
+
+
+#: `STAGE2_LIB_REFINE_DEGEN` 的合法档位（语义见 `stage2/librefine.py` 的模块 docstring）。
+DEGEN_MODES = ("off", "letter", "shape", "known")
+
+
+def degen_mode() -> str:
+    """退化库名守卫的档位（`STAGE2_LIB_REFINE_DEGEN`，**默认 `known`**）。
+
+    ★ **唯一读取点**：库名回填有**两条**路径，都走这里读档，避免语义漂移 ——
+      * `stage2/librefine.py`（融合层 ⑩ 的库名回填，`(型号,号) → 库名`）；
+      * `stage2/assemble.py:1516` 的**规则 B**（`build_doc` 里的同名回填）。
+
+    为什么规则 B 也要挂：2026-10-12 追到的回归正是发生在它这条路径上 ——
+    融合层把型号名吸附成库键 `OUT`/`STC11` 之后，规则 B 用该键的**纯数字**引脚名
+    `1`..`4` 把读对的 `VIN`/`TAB` 冲成 `3`/`4`；而 `librefine` 跑到时名字已经是
+    数字了（`ref == cur`），一次都不会触发，所以只在 `librefine` 里挂守卫等于没挂。
+
+    档位（`off`/`letter`/`shape`/`known`）：
+      * `off`    —— 老行为。
+      * `letter` —— 库名不含字母、而我方读数含字母 ⇒ 该脚不改。
+      * `shape`  —— 整颗元件：库给的名字全是纯数字、我方读数全不是 ⇒ 整颗不改。
+      * `known`  —— `letter` + **我方读数必须是库认识的名字**（`LibCtx.is_known_name`）。
+
+    ★ 2026-10-12 为什么默认选 `known`（两池实测，`docs/RESULTS.md` §5.52）：
+      官方 10 张离线档 复刻尺 63.0897 → **63.2759**（protocol2 75.75 → **76.21**，
+      tp 引脚 81 → 84）、派生 18 张 14.5290 → **14.5376**（protocol2 25.44 → **25.48**，
+      tp 引脚 49 → 50），两池**逐脚 right→wrong 均为 0**。`letter` 官方同分但派生
+      −0.0031（乱码 `VWPSTO2`/`IOW2T` 挡住库的合法纠正），`shape` 派生同分但官方
+      少赚 0.0658（`STC11` 的库名表大多是字母，整颗判的「全纯数字」条件不成立）。
+      ⇒ `known` 严格支配另外两档。精简 `-lean` 与完整档实测**不受影响**（逐位相同）。
+    ★ 用 `env_raw` 而不是 `env_str`：`env_str` 把 `off`/`0`/`none` 归一成空串
+      （它服务的是「开关是否打开」），而这里的模式值 `off` 本身是个**合法档位** ——
+      用 `env_str` 会让 `STAGE2_LIB_REFINE_DEGEN=off` 静默变成默认档（2026-10-12 自检抓到）。
+    """
+    v = (env_raw("STAGE2_LIB_REFINE_DEGEN", "known") or "known").strip().lower()
+    return v if v in DEGEN_MODES else "known"
 
 
 def lib_path() -> Path:
@@ -233,6 +275,19 @@ class LibCtx:
             return {}
         return (self._index or {}).get("names", {}).get(key) or {}
 
+    def is_known_name(self, name) -> bool:
+        """`norm(name)` 是不是**库里任何键**用过的引脚名（全局词表 2401 条）。
+
+        用途：`STAGE2_LIB_REFINE_DEGEN=known` 档的判据 —— 只有当我方读数**是库认识的
+        名字**（官方 5 U3 的 `VIN`/`TAB`、2 U3 的 `SDA`）时才拦「库的纯数字名覆盖它」；
+        `VWPSTO2`/`IOW2T` 这种库完全不认识的乱码照旧让库来纠正 —— 派生 19 张里正是
+        这一类**必须**被覆盖（`0011 U2.pin_3` GT=`3`、`0151 U2.pin_2` GT=`2`），
+        所以 `letter` 档（不看词表）在派生集上是 −0.0031、`known` 档不掉。
+        """
+        if not self.load():
+            return False
+        return norm(name) in ((self._index or {}).get("all_names") or ())
+
 
 def _build_index(raw: dict) -> dict:
     """把库扫一遍，建 4 张表（337 键 / ~1.2 万条引脚记录，实测 <0.3 s）。
@@ -243,11 +298,15 @@ def _build_index(raw: dict) -> dict:
     * `name_by_num`  —— `键 → {norm(号) → 名}`，同样只保留唯一映射（规则 B）；
                        改名前要落回**库里原始写法**（不是 `norm` 后的串）
     * `names`        —— `键 → {norm(名) → 出现次数}`（规则 B 判「当前名在不在库里」）
+    * `all_names`    —— **全局**引脚名词表（`norm(名)` 的集合，2401 条）。
+                       给 `STAGE2_LIB_REFINE_DEGEN=known` 档用：判「我方这个读数是不是
+                       库认识的名字」，见 `LibCtx.is_known_name`。
     """
     by_norm: Dict[str, List[str]] = {}
     num_by_name: Dict[str, Dict[str, str]] = {}
     name_by_num: Dict[str, Dict[str, str]] = {}
     names: Dict[str, Dict[str, int]] = {}
+    all_names: set = set()
     for k in raw:
         by_norm.setdefault(norm(k), []).append(k)
         _n2n: Dict[str, set] = {}
@@ -261,6 +320,7 @@ def _build_index(raw: dict) -> dict:
             nn, nu = norm(nm), norm(num)
             if nn:
                 nm_cnt[nn] = nm_cnt.get(nn, 0) + 1
+                all_names.add(nn)
             if nn and nu:
                 _n2n.setdefault(nn, set()).add(nu)
                 _n2n_raw.setdefault(nn, num)           # 首次出现的**原始号写法**
@@ -273,7 +333,7 @@ def _build_index(raw: dict) -> dict:
                           for u, s in _num2name.items() if len(s) == 1}
         names[k] = nm_cnt
     return {"by_norm": by_norm, "num_by_name": num_by_name,
-            "name_by_num": name_by_num, "names": names}
+            "name_by_num": name_by_num, "names": names, "all_names": all_names}
 
 
 # ── 对外接口 ──────────────────────────────────────────────────────────────
@@ -404,6 +464,23 @@ def _selftest() -> int:
         if names_for("AA1", "1", ctx) is not None:
             bad.append("总闸关时不该改名")
         globals()["LIB_PINS"] = True
+        # ★ `known` 档用到的全局引脚名词表 + 档位读取
+        for nm, want in (("vdd", True), ("pa00", True), ("nrst", True),
+                         ("vw psto2", False), ("iow2t", False), ("", False)):
+            if ctx.is_known_name(nm) is not want:
+                bad.append("is_known_name(%r) 应为 %s" % (nm, want))
+        for mode, want in (("off", "off"), ("letter", "letter"),
+                           ("shape", "shape"), ("known", "known"),
+                           ("KNOWN", "known"), ("乱写", "known"), ("", "known")):
+            os.environ["STAGE2_LIB_REFINE_DEGEN"] = mode
+            if degen_mode() != want:
+                bad.append("degen_mode(%r) 应为 %r，得到 %r"
+                           % (mode, want, degen_mode()))
+        os.environ.pop("STAGE2_LIB_REFINE_DEGEN", None)
+        if degen_mode() != "known":
+            bad.append("degen_mode 默认应为 known")
+        if has_letter("4") or has_letter("") or not has_letter("VIN"):
+            bad.append("has_letter 判据")
     print("libpins 自检：%s" % ("全部通过" if not bad else "失败 " + " / ".join(bad)))
     return 1 if bad else 0
 

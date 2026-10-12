@@ -6,12 +6,12 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **452** 个开关。
+共 **453** 个开关。
 
 ## 目录
 
 - [stage1](#stage1)（134）
-- [stage2](#stage2)（131）
+- [stage2](#stage2)（132）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（126）
 - [vlm](#vlm)（13）
@@ -188,7 +188,7 @@
 | `STAGE2_CONFORM_TYPE_PEN` | `"0.85"` | `stage2/assign.py:551` |
 | `STAGE2_CPNT_LIB` | `""` | `stage2/libpins.py:90` |
 | `STAGE2_DBG_CID` | — | `stage2/assign.py:220` |
-| `STAGE2_DBG_PINS` | — *(4 处)* | `stage2/assemble.py:1420` |
+| `STAGE2_DBG_PINS` | — *(5 处)* | `stage2/assemble.py:1420` |
 | `STAGE2_DEMOTE_HARD` | `"0.05"` | `stage2/structmatch.py:36` |
 | `STAGE2_DESIG_MAXW` | `"6.0"` | `stage2/assign.py:342` |
 | `STAGE2_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:76` |
@@ -208,8 +208,9 @@
 | `STAGE2_GROW_PER_COMP` | `"4"` | `stage2/run.py:40` |
 | `STAGE2_LIB_PINS` | `"1"` *(2 处)* | `stage2/assemble.py:300` |
 | `STAGE2_LIB_PINS_DBG` | `"0"` | `stage2/assemble.py:302` |
-| `STAGE2_LIB_PINS_FUZZY` | `"0.85"` | `stage2/libpins.py:199` |
+| `STAGE2_LIB_PINS_FUZZY` | `"0.85"` | `stage2/libpins.py:241` |
 | `STAGE2_LIB_REFINE` | `"1"` | `stage2/librefine.py:56` |
+| `STAGE2_LIB_REFINE_DEGEN` | `"known"` *(2 处)* | `stage2/libpins.py:143` |
 | `STAGE2_LIB_REFINE_WHEN` | `"any"` | `stage2/librefine.py:62` |
 | `STAGE2_MIN_EDGE_LEN` | `"20"` | `stage2/assemble.py:399` |
 | `STAGE2_MONO_PIN_OCR` | `PIN_NAME_OCR` | `stage2/run.py:78` |
@@ -285,8 +286,8 @@
 | `STAGE2_PIN_TRUST_DROP` | `""` | `stage2/run.py:94` |
 | `STAGE2_PREFIX` | `"strict"` | `stage2/assign.py:156` |
 | `STAGE2_PREFIX_SKEL` | `"0"` | `stage2/assign.py:166` |
-| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1713` |
-| `STAGE2_RAIL_SPLIT` | `"1"` | `stage2/assemble.py:1724` |
+| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:1752` |
+| `STAGE2_RAIL_SPLIT` | `"1"` | `stage2/assemble.py:1763` |
 | `STAGE2_STAMP_ONE_SIDE` | `"1"` | `stage2/assemble.py:934` |
 | `STAGE2_STEAL` | `"80"` | `stage2/assign.py:398` |
 | `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:385` |

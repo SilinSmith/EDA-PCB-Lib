@@ -1484,6 +1484,28 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             else:
                 for k in range(len(raw)):
                     raw[k]["num"] = str(k + 1)
+        # ★ 退化库名守卫（`STAGE2_LIB_REFINE_DEGEN`，档位唯一读取点 `libpins.degen_mode()`）
+        #   规则 B 会用库名覆盖我方读数，而**融合层会把型号名吸附成库里同名但不同元件
+        #   的键**（§5.48 把阈值放到 4 后，`5 U3` 的 `VOUTAD` → 键 `OUT`），那个键的引脚名
+        #   表是纯数字 `1`..`4` ⇒ 读对的 `VIN`/`TAB` 被冲成 `3`/`4`（官方 10 张实测
+        #   2 根脚 right→wrong，`work\_pinname_audit.py`）。只挂在 `librefine` 上没用：
+        #   它跑到时名字已经是数字了（`ref == cur`），所以守卫必须在规则 B 这里。
+        _dmode = _libpins.degen_mode() if _LIB_CTX is not None else "off"
+        _shape_block = False
+        if _dmode == "shape" and ctype == "box":
+            _lkey0 = _LIB_CTX.key_for(name)
+            _pairs0 = []
+            for _q in raw:
+                _n0 = str(_q.get("num") or "")
+                if not _n0.isdigit():
+                    continue
+                _r0 = _LIB_CTX.name_for_num(_lkey0, _n0)
+                if _r0:
+                    _pairs0.append((str(_q.get("nm") or ""), _r0))
+            # 库给的名字全无字母 + 我方读数全都有字母 ⇒ 这个库键可疑，整颗不动。
+            if _pairs0 and not any(_libpins.has_letter(_r0) for _c0, _r0 in _pairs0) \
+                    and not any(not _libpins.has_letter(_c0) for _c0, _r0 in _pairs0):
+                _shape_block = True
         for k, p in enumerate(pts):
             r = raw[k]
             num = r["num"] or str(k + 1)
@@ -1519,11 +1541,28 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 if not (_lnames and _libpins.norm(nm) in _lnames):
                     _new = _LIB_CTX.name_for_num(_lkey, num)
                     if _new:
-                        nm = _new
-                        _lib_named = True
-                        if os.environ.get("STAGE2_DBG_PINS") or LIB_PINS_DBG:
-                            print("[libpins] 规则B 元件=%r 号=%s 名改 %r → %r"
-                                  % (name, num, r["nm"] or "", _new))
+                        # ★ 退化库名守卫（见上面 `_dmode`/`_shape_block` 的注释）。
+                        #   `letter`：我方读数有字母、库名纯数字 ⇒ 不改。
+                        #   `known` ：同 `letter`，且**我方读数必须是库认识的名字**
+                        #             （`VIN`/`TAB`/`SDA` ⇒ 拦；`VWPSTO2`/`IOW2T` 这类库
+                        #             不认识的乱码 ⇒ 照旧让库来纠正，派生集需要）。
+                        _guard = _shape_block or (
+                            _dmode in ("letter", "known")
+                            and _libpins.has_letter(nm)
+                            and not _libpins.has_letter(_new)
+                            and (_dmode == "letter"
+                                 or _LIB_CTX.is_known_name(nm)))
+                        if _guard:
+                            if os.environ.get("STAGE2_DBG_PINS") or LIB_PINS_DBG:
+                                print("[libpins] 规则B 守卫挡下 元件=%r 号=%s 保留 %r"
+                                      "（库名 %r，档 %s）"
+                                      % (name, num, r["nm"] or "", _new, _dmode))
+                        else:
+                            nm = _new
+                            _lib_named = True
+                            if os.environ.get("STAGE2_DBG_PINS") or LIB_PINS_DBG:
+                                print("[libpins] 规则B 元件=%r 号=%s 名改 %r → %r"
+                                      % (name, num, r["nm"] or "", _new))
             # ★★★ 「迟到闸门」（下半）：到这里桩还没名字、库也没能补出名字，**才**丢。
             #     语义：`BOX_PIN_NEED_NAME_LATE` 时不再要求「读到的名字」，
             #     而是要求「有名字 —— 读到的或库里补的都算」；仍然**不**发射

@@ -5158,6 +5158,144 @@ $env:EDA_TIER_ARGS='-offline'; python -X utf8 eda-pcb\submission\agent_system -i
 
 ---
 
+## §5.52 引脚名回归修复：库名回填不再覆盖「库认识的名字」（`STAGE2_LIB_REFINE_DEGEN=known`，2026-10-12）
+
+**一、病（这条回归是 §5.48 自己带来的）**
+
+§5.48 把型号名吸附的阈值 `FUSION_NAME_SNAP_TOL` 从 2 放宽到 4，收益为主，但它把官方
+第 5 张的 `VOUTAD` 吸附成了库键 **`OUT`** —— 这个键在官方库里的引脚名表就是纯数字
+`1`..`6`。于是规则 B 拿它去覆盖**本来就读对**的引脚名：交付产物里
+`5 U3` 的 `pin_3` / `pin_4` 从 `VIN` / `TAB` 变成 `3` / `4`（`right→wrong` = fp+fn 双罚）。
+`work\_pinname_audit.py`（本阶段新增的逐脚审计）量出这条回归在官方 10 张上是
+**right→wrong 2 / wrong→right 3**（净 +1，所以总分没塌，但两分是白丢的）。
+
+**二、真凶在 `stage2/assemble.py` 的规则 B，不在 `librefine`**
+
+`$env:STAGE2_DBG_PINS='1'` 跑单案（`work\_dbg5_in`，即官方第 5 张）拿到原话：
+
+```
+[libpins] 规则B 元件='OUT' 号=4 名改 'TAB' → '4'
+[libpins] 规则B 元件='OUT' 号=3 名改 'VIN' → '3'
+[libpins] 规则B 元件='TPS61240DRVR' 号=7 名改 'P' → 'PP'      ← 合法（乱码 → 库名）
+[libpins] 规则B 元件='TPS61240DRVR' 号=2 名改 'VCOUT' → 'VOUT' ← 合法
+```
+
+写入点是 `stage2/assemble.py` 的**规则 B**（`_lkey = _LIB_CTX.key_for(name)` →
+`_new = _LIB_CTX.name_for_num(_lkey, num)` → `nm = _new`），它跑在**融合层**里 ——
+型号名已被 §5.48 吸附成 `OUT` 之后。而 `stage2/librefine.py` 跑到时名字**已经是数字**了
+（`ref == cur`），一次都不触发；这就是上一轮「守卫挂在 `librefine` 上、三臂逐位相同
+（`tok_goff`/`tok_gletter`/`tok_gshape` 全 63.0897）」的原因 —— 挂在**没有写权限的那条路径**上。
+⇒ 守卫必须落在 `assemble.py` 规则 B；同时保留 `librefine` 的同一守卫（两条路径共用一个读取点）。
+
+**三、药：四档守卫 + 唯一读取点**
+
+* `stage2/libpins.py`：新增 `has_letter()`、`degen_mode()`（**唯一读取点**，两条回填路径都走它）、
+  `LibCtx.is_known_name()`，`_build_index()` 增第 5 张表 `all_names`（库的**全局**引脚名词表，2401 条）。
+* `stage2/assemble.py` 规则 B：命中守卫时保留我方读数并打印
+  `[libpins] 规则B 守卫挡下 元件=… 号=… 保留 …（库名 …，档 …）`；`shape` 档还有一个元件级预扫描
+  `_shape_block`（库给的名字全无字母、我方读数全有字母 ⇒ 整颗不改）。
+* `stage2/librefine.py`：逐脚同判据（`dmode in ("letter","known")` 且 `cur` 有字母、`ref` 无字母）。
+* ★ 顺手修掉一个自己写出来的坑：`env_str()` 把 `off`/`0`/`none` 归一成**空串**
+  （它是给「开关开没开」用的），于是 `STAGE2_LIB_REFINE_DEGEN=off` 会**静默变成默认档** ⇒
+  改用 `env_raw()`。自检里加了 7 个档位断言才抓到它。
+
+四档语义：`off`（老行为）｜`letter`（库名无字母、我方读数有字母 ⇒ 该脚不改）｜
+`shape`（整颗元件按形状判）｜**`known`**（= `letter` + **我方读数必须是库认识的名字**）。
+
+**四、读数（两池 × 四档，官方 10 张 + 派生 18 张，全部离线档）**
+
+| 档 | 复刻尺（官方 10） | protocol2（tp 引脚） | 复刻尺（派生 18） | protocol2（tp 引脚） | right→wrong 官方 / 派生 |
+|---|---|---|---|---|---|
+| `off` | 63.0897 | 75.75（81） | 14.5290 | 25.44（49） | 0 / 0 |
+| `letter` | 63.2759（**+0.1862**） | 76.21（84） | 14.5259（**−0.0031**） | 25.46（49） | 0 / **2** |
+| `shape` | 63.2101（+0.1204） | 76.03（83） | 14.5376（+0.0086） | 25.48（50） | 0 / 0 |
+| **`known`（新默认）** | **63.2759（+0.1862）** | **76.21（84）** | **14.5376（+0.0086）** | **25.48（50）** | **0 / 0** |
+
+`comp` / `conn` / `wire` 三档**逐位不变**（0.474783 / 0.756528 / 0.407676 官方；
+0.084532 / 0.200933 / 0.035148 派生）⇒ 这条改动只动 `pin` 分项。派生 19 张的 harness 引擎
+同口径读数是 off 15.58 / letter 15.58 / shape 15.59。
+
+逐脚（`work\_pinname_audit.py`）：
+
+* 官方 `off → letter`/`known`：right→right 109 / 缺脚 18 / wrong→wrong 6 /
+  **wrong→right 3** = `2 U3.pin_4 GT=SDA 4→SDA`、`5 U3.pin_3 GT=VIN 3→VIN`、
+  `5 U3.pin_4 GT=TAB 4→TAB` / **right→wrong 0**。
+* 派生 `off → known`：缺脚 779 / right→right 103 / wrong→wrong 45 /
+  wrong→right 1 = `0166 U1.pin_2 GT=VIN 2→VIN` / **right→wrong 0**。
+* 对照：派生 `off → letter` 是 right→wrong **2** = `0011 U2.pin_3 GT=3 3→VWPSTO2`、
+  `0151 U2.pin_2 GT=2 2→IOW2T`（乱码挡住了库的**合法**纠正，−0.0031 就来自这两根）。
+
+**五、为什么 `known` 严格支配另外两档**
+
+派生集 GT 的脚名**经常就是数字**（`work\_gtletter.py`：官方 10 张 136 条**全有字母**；
+派生 9119 条里 **2129 条没有字母**），所以「禁止用纯数字库名覆盖」这种一刀切在派生集上
+必然误伤 —— 那正是 `letter` 掉分的地方。真正该问的不是「数字 vs 字母」，而是
+**「我方这个读数是不是库认识的名字」**：
+
+| 我方读数 | 库里有没有这个词 | 该不该让库覆盖 | 例 |
+|---|---|---|---|
+| `SDA` / `VIN` / `TAB` / `VOUT` / `EN` / `FB` / `P67` | 有 | **不该**（读对了） | 官方 `2 U3.pin_4`、`5 U3.pin_3/4` |
+| `VWPSTO2` / `IOW2T` / `ADIGND` / `P` | 没有 | **该**（乱码，库更可信） | 派生 `0011 U2.pin_3`、`0151 U2.pin_2` |
+
+`is_known_name` 的实测值与该表完全一致（`SDA/VIN/TAB/Q/VOUT/EN/FB/P67/GN/SCLK/SISIOO/VCC/GND/PP`
+= True；`ADIGND/P/VWPSTO2/IOW2T` = False）⇒ `known` = 官方的 +0.1862 **且** 派生的 +0.0086
+（两条都不是「换来换去」的零和）。`shape` 拿不到官方那 0.0658，因为 `STC11` 的库名表
+（num1 `P50`、2 `P67`、4 `'4'`、5 `P65`…）大多是字母，「库名全纯数字」这个条件不成立。
+
+**六、对交付档位的影响：只有离线档吃这条药**
+
+同一份代码在另外三档上实测**逐位相同**（`pwsh-231`）：
+
+| 档 | `off` 臂 | `letter` 臂 |
+|---|---|---|
+| 精简 `-lean`（**交付默认**） | 65.6143 / 79.84 | 65.6143 / 79.84 |
+| 完整档 | 65.6745 / 79.66 | 65.6745 / 79.66 |
+
+原因：那两档引脚名走 VLM 通道，不会出现「本地 CV 读对了名字、再被库的纯数字名冲掉」
+这个模式。⇒ §5.51 的交付默认档读数不变；这条药是**纯对的离线档补血**。
+默认档（不设任何环境变量）单案/全案与 `known` 臂**逐位相同**、29 份产物 sha256 全等
+（官方 63.2759 / 76.21；派生 14.5376 / 25.48）。
+
+**七、开关与自检**
+
+* `STAGE2_LIB_REFINE_DEGEN`：默认 **`known`**；`off` / `letter` / `shape` 为回退档。
+  读取点唯一：`stage2/libpins.py` 的 `degen_mode()`（`assemble.py` 规则 B 与 `librefine.py` 都调它）。
+* 自检：`python -X utf8 -m stage2.libpins`（含 7 个档位断言 + `is_known_name` 6 个探针）、
+  `python -X utf8 -m stage2.librefine`（含 `known` 档「该挡的挡、该放的放」两例）**全部通过**。
+* ⚠️ `python -X utf8 -m stage2.assemble` 会报 `自检 23 项：失败 / FAIL 边首点: {'x': 3.0, 'y': 25.0}
+  （期望 {'x': 0.0, 'y': 25.0}，EDGE_SNAP=10.0）`——**既有问题**：用
+  `git stash push -- stage2/assemble.py` 在未改动版本上复现同一 FAIL，与本次改动无关。
+
+**八、复现**
+
+```powershell
+# ① 四档 × 两池（--extra=-offline；每档换一次环境变量）
+$env:STAGE2_LIB_REFINE_DEGEN='off'   # 然后 letter / shape / known
+python -X utf8 eda-pcb\tools\eval\fast.py --cases (Get-Content work\_cases10gt.txt -Raw).Trim()   --extra=-offline --out tok_g2off
+python -X utf8 eda-pcb\tools\eval\fast.py --cases (Get-Content work\_cases_v4val.txt -Raw).Trim() --extra=-offline --out tok_dg2off
+# ② 复刻尺（两池）
+python -X utf8 work\_off10.py  --arms tok_g2off,tok_g2letter,tok_g2shape,tok_g3known
+python -X utf8 work\_offval.py --arms tok_dg2off,tok_dg2letter,tok_dg2shape,tok_dg3known
+# ③ 逐脚审计（right→wrong 是这套守卫唯一要压的数）
+python -X utf8 work\_pinname_audit.py --arms tok_g2off,tok_g3known  --pool 10 --show 20
+python -X utf8 work\_pinname_audit.py --arms tok_dg2off,tok_dg3known --pool derived --cases (Get-Content work\_cases_v4val.txt -Raw).Trim() --show 20
+# ④ 真凶复现（应打出「规则B 名改 'VIN' → '3'」）
+$env:STAGE2_DBG_PINS='1'; $env:STAGE2_LIB_REFINE_DEGEN='off'
+python -X utf8 eda-pcb\submission\run.py -offline -input work\_dbg5_in -output work\_dbg5_out
+# ⑤ 默认档验收（不设环境变量；与 known 臂逐位相同）
+python -X utf8 eda-pcb\tools\eval\fast.py --cases (Get-Content work\_cases10gt.txt -Raw).Trim() --extra=-offline --out tok_g4def
+python -X utf8 work\_off10.py --arms tok_g3known,tok_g4def
+# ⑥ 其它档位不受影响
+python -X utf8 eda-pcb\tools\eval\fast.py --cases (Get-Content work\_cases10gt.txt -Raw).Trim() --extra=-lean --out tok_l2letter
+python -X utf8 work\_off10.py --arms tok_l2off,tok_l2letter,tok_v2off,tok_v2letter
+```
+
+注：`work\_pinname_audit.py`（逐脚 right→wrong 审计：按判分语义配对两臂的 `pin_<号>` 名）、
+`work\_gtletter.py`（统计 GT 脚名里不含字母的条数）、`work\_dbg5_in` / `work\_dbg5_out`、
+各 `work\_fast_out_tok_*` 臂目录都在仓库外的 `work/`。
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |
