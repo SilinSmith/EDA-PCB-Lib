@@ -6333,3 +6333,34 @@ case 4 的 GND 并错与 case 7 的 C7.1/L1.1 孤立是最集中的两处）；�
 **产物/口径**：`work/_edgelab.py`（新增 `dropempty[:N]`、`mergefrag:R[,pin|seg]`；`seg` 第一版因 `src=None` 恒 0 命中，已修）、`work/_poolstat.py`（三池统计）、`work/_all220.txt`（220 张清单）、`work/_grp/*.txt`（分池清单：`10GT`/`golden10`/`tr_jlc`/`tr_Datasheet`/`tr_Altium_Designer`/`tr_other`/`tr_KiCad`/`tr_kicad`/`tr_ALL`）、臂 `work/_fast_out_d220known`（220 张全池基线）、`d220_mf80seg`、`d220_drop1`。复现：`python -X utf8 work\_edgelab.py --src d220known --out d220_mf80seg --ops "mergefrag:80,seg" --cases <csv>` → `python -X utf8 eda-pcb\tools\eval\fast.py --score-only --engine protocol2 --cases <组 csv> --out d220_mf80seg`。踩坑：PowerShell 里 `--cases 0002,0011,...` **不加引号**会被当成整数数组、前导零被吃掉（只处理 `2`、`11`），必须 `$csv = "..."`；`work/_srccases.json` 同时含 `KiCad`/`kicad` 两个键，`ConvertFrom-Json` 因大小写不敏感报重复键。全部在 `work/`，**不进提交面**。
 
 
+
+## §5.67 box 引脚通道的逐槽解剖 + 三条松闸 A/B：「键对上但脚缺 202」里只有 37 是闸门丢的（2026-10-14）
+
+**背景**：`work/_valpin2.py` 把 val18 的 GT box 脚 928 分成了「键对上且脚对 66 / **键对上但脚缺 202** / 键没对上 527 / 名错 54 / 位错 79」，当时把 202 当成「被交付闸门丢掉的可挣脚」。本节用逐槽解剖（新探针 `work/_valceil2.py`：GT 脚 → 阶段一槽位（5px 内）→ 交付字段）把它拆开，并在两个池上同时 A/B 三条松闸档。
+
+**读数 1（官方 10）——已到顶：** 臂 `fan_lean_8c`（基线 **80.04**）：GT box 元件 19 个 / GT box 脚 **136**；交付 tp **121**、名错 6、「槽位在 GT 点 5px 内却没发出来」**7**（其中 OCR 号已读对的只有 **1**）、真没检出 2、**键闸 0**。⇒ 官方池引脚通道已 89%，剩余可挣 ≤7 根（≤ +0.02 总分）。
+
+**读数 2（val18 同口径）——结构性主导：** 臂 `vallean`（基线 **30.14**）：GT box 脚 **928** = **键没对上 527（56.8%）** + tp 145（本探针只看键+名，官方尺含位置后 66）+ **发出号错 70** + 名错 54 + **槽位在却没发出 37（号已读对仅 4）** + 真没检出 95。
+**关键纠正**：202 里只有 **37** 是真的被交付闸门丢掉，且只有 **4** 根的 OCR 号与 GT 号相同 ⇒「松开引脚闸门」最多 +4 根，不是 202 根。
+
+**读数 3（三条松闸档的跨池 A/B，`-lean`）**
+
+| 档 | 官方 10 | val18 |
+|---|---|---|
+| 默认 `STAGE2_BOX_PIN_DROP_UNREAD=mixed` | **80.04**（pin 0.7731 / netH 0.7749） | **30.14**（pin 0.1345） |
+| `=0`（保留全部未读出号的桩） | **74.63**（pin **0.6764** / netH **0.6908**） | 29.74（pin 0.1299 / conn 0.2322） |
+| `=cap`（上限版） | **78.60**（pin 0.7604 / netH 0.7430） | 29.82（pin 0.1301） |
+| `STAGE2_BOX_PIN_KEEP_NAMED=1` | **76.58**（pin 0.7042 / netH 0.7267） | 29.75（pin 0.1321） |
+
+⇒ 三个方向在**官方池上都大幅判负**（−1.4 〜 −5.4），val 同时为负 ⇒ 默认 `mixed` 的取舍是稳的，**这条线关闭**（与镜像历史 A/B、`BOX_PIN_DROP_UNREAD` 长注释一致）。
+
+**读数 4（官方 10 的 netH 成员可用性上界）**
+
+* GT 网 **160** / 我们网 **167**；GT 网成员 **487 = ∅（电源）108 + real 379**；
+* real 379 里我们确实发出了同名 `(元件, 引脚)` 键的 **371（97.9%）**，只缺 8；
+* 现在 soft_tp **125.48** ⇒ netH F1 **0.7675**；把 371 个可用成员**完美归网**的上界 soft_tp **133.06** ⇒ F1 ≈ **0.8138**。
+⇒ 归网（拆碎/并错）最多值 **+1.6 总分**；再往上是 108 个电源脚随机号的**结构性税**（22.2% 成员不可赢，与 §5.65 同源）。**wire（netL，0.4137 权重 0.10）是剩下最大的缸**。
+
+**中间产物链路（顺手确定，`work/_pinleak.py`）**：`runs/stage1/<case>.stage1.json` 的 **`pins` 是 `{c####: [[x,y]…]}`（图像坐标）**，元件条目里**没有** `pins` 字段；交付引脚表在 `runs/stage2/<case>.json` 里重建，`stage3` 与 `stage3_vlm` 逐位相同，而 **fusion 会把引脚数改变**（例：0176 的 `U1` 在 stage1 有 30 个槽位、stage2/3 只发 13 根、fusion 发到 **23** 根）。⇒ 追引脚丢失必须分段看（字段读错会得到「阶段一一根脚都没有」的假读数）。
+
+**产物/口径**：`work/_valceil2.py`（新）、`work/_pinleak.py`（新）、`work/_valpin2.py`；臂 `work/_fast_out_du0_10`/`du0_val`/`ducap_10`/`ducap_val`/`kn1_10`/`kn1_val`。复现：`$env:STAGE2_BOX_PIN_DROP_UNREAD='cap'; python -X utf8 eda-pcb\tools\eval\fast.py --cases $off10 --out ducap_10 "--extra=-lean"`。全部在 `work/`，**不进提交面**。
