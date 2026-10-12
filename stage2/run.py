@@ -59,7 +59,8 @@ PINCOL_WIN_KEYS = tuple(k.strip() for k in
 #      A/B（用户 m55811 的要求：改了识别逻辑的要 A/B）。逐个 A/B 有正收益的再翻默认。
 #      · `STAGE2_COLOR_NUMBER_CROP`  =1 彩色引脚外部脚号重裁（`stage2/color_crops.py`）
 #      · `STAGE2_PIN_TEXT_CROP`      =1 完整旋转引脚词（`stage2/pin_text_crops.py`）
-#      · `STAGE2_PIN_LANE_CROP`      =1 独立引脚车道窗口 + 选择性恢复
+#      · `STAGE2_PIN_LANE_CROP`      =1 独立引脚车道窗口 + 选择性恢复（§5.59 起**默认 1**：
+#                                        离线 +1.11/张、派生 +0.1868、精简 +0.20、完整 +0.31）
 #                                        （`stage2/pin_lane_crops.py` / `pin_lane_reading.py`）
 #        `STAGE2_PIN_LANE_CLEANUP`   =light/heavy，车道裁片的去杂强度
 #      · `STAGE2_PIN_NUMBER_REPAIR`  =1 脚号几何保守修复 + 双视图一致才确认
@@ -72,19 +73,26 @@ PINCOL_WIN_KEYS = tuple(k.strip() for k in
 # ---------------------------------------------------------------------------
 COLOR_NUMBER_CROP = env_on("STAGE2_COLOR_NUMBER_CROP", "0")
 PIN_TEXT_CROP = env_on("STAGE2_PIN_TEXT_CROP", "0")
-PIN_LANE_CROP = env_on("STAGE2_PIN_LANE_CROP", "0")
+PIN_LANE_CROP = env_on("STAGE2_PIN_LANE_CROP", "1")
 PIN_LANE_CLEANUP = os.environ.get("STAGE2_PIN_LANE_CLEANUP", "light").strip().lower()
 PIN_NAME_OCR = os.environ.get("STAGE2_PIN_NAME_OCR", "off").strip().lower()
 MONO_PIN_OCR = os.environ.get("STAGE2_MONO_PIN_OCR", PIN_NAME_OCR).strip().lower()
 PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "0")
 
-# ★ 引脚「灰底证据」通道（`STAGE2_PIN_GREY_EVIDENCE`，默认 0）：
+# ★ 引脚「灰底证据」通道（`STAGE2_PIN_GREY_EVIDENCE`，§5.59 起默认 1）：
 #   队友的读音器（`pin_text_crops._observations`）只认「彩色端点」证据
 #   （`source ∈ COLOR_SOURCES`），而 `stage1/pin_evidence.py` 对我们的 220 个框
-#   引脚写的是**灰底**记录（没有 `source` 字段）⇒ 读数器长期是 no-op。
+#   引脚写的是**灰底**记录（没有 `source` 字段）⇒ 读数器长期是 no-op（§5.28/§5.29）。
 #   打开后：`trust == "trusted"` + `frame_confirmed` + 点与证据点一致 + 锚点贴框
 #   的灰底记录也能开出车道（几何判据一字未改，只放宽 source 门）。
-PIN_GREY_EVIDENCE = env_on("STAGE2_PIN_GREY_EVIDENCE", "0")
+#   §5.30 量到 +1.98/张（`--no-vlm`，当时基线 71.65），但按纪律**留默认 0**
+#   等交付口径（VLM 开）同批 A/B；§5.59 补做后四档全为正（离线协议尺
+#   76.39→77.50、复刻尺 63.3417→63.7827、派生 14.5376→14.7244、
+#   精简 79.84→80.04、完整 79.66→79.97）⇒ 翻默认 1。
+#   ★ 只有与 `STAGE2_PIN_LANE_CROP=1` 同时开才有收益：单独开本闸实测
+#   与基线**逐位相同**（`tok_grey0` = `tok_g6def` = 76.39，其余三个读数器
+#   在本机仍是 no-op：号修复/彩色号要 PP-OCR，整词读数器净中性）。
+PIN_GREY_EVIDENCE = env_on("STAGE2_PIN_GREY_EVIDENCE", "1")
 
 # ★ 引脚「信任闸门」：用队友 `stage1/pin_evidence.py` 的逐脚图像证据决定哪些脚
 #   不可信（`""`=关；`rejected` / `rejected+uncertain` / `uncertain`）。

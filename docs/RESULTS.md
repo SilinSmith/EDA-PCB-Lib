@@ -5629,6 +5629,149 @@ Remove-Item Env:STAGE2_BOX_PIN_KEEP_NAMED; python -X utf8 eda-pcb\tools\eval\fas
 
 ---
 
+## §5.58 判负：把「纯数字的文本框」放宽进引脚号候选池（`STAGE2_PINNUM_INSIDE` / `STAGE2_PINNAME_NODIGIT`，2026-10-13）
+
+**病（`work\_pinnum.py` + `STAGE2_DBG_CID` 逐槽取证）**：官方 10 张的 18 根缺 box 脚按「**号文本**的下落」分类 = 号对 3 / 号错 6 / 同件他槽抢号 5 / 只有非数字文本 4（15 根有槽位、3 根槽位也偏）。其中 case 2 的 `U3`/`U4` 各缺一根 `pin_1 GND`，病因**不是**没检测到号，而是：号码 `1` 的文本框被过检成 **21×13**（同一排别的号框只有 6~8 px），框心落进符号框 ⇒ `inside=True` ⇒ 号轮（闸门要求 `not inside`）拿不到它；名轮（闸门要求 `inside`）却以 `0.15（`fit_pinname` 对纯数字）+ 0.15（`inside` 加分）= 0.30` 把它绑给**注定被丢的体外假槽** `pin[0]`，并进 `taken_box` ⇒ 真脚 `fn`。`STAGE2_DBG_CID=c0001,c0002` 原话：`[pin:pin_name] … pin[ 0] <- 1 s=0.299 c=(822,682) pt=(826,658)`、`[pin:pin_number] … bound=3`（真脚 `pin[6]` 无号）。
+
+**药（本轮新增，两个开关都留默认 0）**：`stage2/assign.py` 的 `PINNUM_INSIDE`（`STAGE2_PINNUM_INSIDE`，=1 时**纯数字**框即使 `inside` 也允许进号轮）与 `PINNAME_NODIGIT`（`STAGE2_PINNAME_NODIGIT`，=1 时纯数字框**不再**当引脚名）。判据函数 `_pure_digit_read(t)` = `_best_read(t["reads"], "pin_number", fit_pinnum)` 且结果 `isdigit()`。两个都关时与原闸门**逐位等价**（`python -X utf8 -m stage2.assign` 自检 18 项全通过）。开开关后的调试跑确认**机制按设计生效**：c0001 号轮 `pin[ 6] <- 1 s=1.150`、c0002 号轮 `pin[ 6] <- 1 s=0.977`（真脚拿到号，配上已有的 `GND` 名 ⇒ 预期 2 根 tp）。
+
+**读数（两把尺子、官方 10 张，全负 ⇒ 不翻默认）**：
+
+| 臂 | 开关 | 协议尺 | 元件 | 引脚 | 网络 | 导线 | 复刻尺 | tp（元件/引脚/网络/导线） |
+|---|---|---|---|---|---|---|---|---|
+| `tok_g6def` 基线 | — | 76.39 | 0.9302 | 0.7170 | 0.7565 | 0.4077 | 63.3417 | 236/85/121/316 |
+| `tok_pi11` | INSIDE=1 NODIGIT=1 | **75.62（−0.77）** | 0.9302 | 0.6950 | 0.7520 | 0.4018 | **63.0258（−0.3159）** | 236/85/121/**311** |
+| `tok_pi10` | 只 INSIDE=1 | **75.64（−0.75）** | 0.9302 | 0.6984 | 0.7497 | 0.4033 | **62.9639（−0.3778）** | 236/**84**/**120**/312 |
+| `tok_pi01` | 只 NODIGIT=1 | **76.22（−0.17）** | 0.9302 | 0.7108 | 0.7565 | 0.4063 | **63.2664（−0.0753）** | 236/**84**/121/315 |
+
+逐案（协议尺）：`tok_pi11` 的 case 2 **78.28（+2.99，正是预期那 2 根）** 是唯一的涨分，同时 case 6 67.06（−0.51）、case 7 **74.26（−6.66）**、case 8 67.17（−1.70）；`tok_pi10` 的 case 2 **无变化**（数字框仍被名轮以 `taken_box` 吃掉）而 case 7 掉 5.19；`tok_pi01` 只让 case 8 掉 1.70。
+
+**为什么会亏**：① `inside` 放行会把**符号体内的普通数字**（丝印、料号、批次）也放进号轮，被绑到体外/无名的假槽 ⇒ case 7 掉 5~7 分（这正是 `PINNUM_NEAR`/`inside` 闸门当初存在的原因）；② `nodigit` 会弄丢「名字**确实**来自一个纯数字框」的脚（case 8 掉 1.70）；③ 两个通道的收益（case 2 的 +2.99）与损伤（case 7/8）在**同一批槽位**上纠缠。⇒ 真瓶颈不是「候选池太窄」，而是「候选框与槽的**归属**错了却没有任何机制去**重归属**」——而这条恰好是 §5.59 车道读数器在做的事（只在 `missing_bound_role` / `incomplete_bound_glyph` / `duplicate_bound_number` 这类**可观测失败**上开新路，不动候选池、不动闸门）。
+
+**复现**：
+```powershell
+$c10 = (Get-Content work\_cases10gt.txt -Raw).Trim()
+$env:STAGE2_PINNUM_INSIDE='1'; $env:STAGE2_PINNAME_NODIGIT='1'; python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra=-offline --out tok_pi11
+$env:STAGE2_PINNUM_INSIDE='1'; Remove-Item Env:STAGE2_PINNAME_NODIGIT;   python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra=-offline --out tok_pi10
+Remove-Item Env:STAGE2_PINNUM_INSIDE; $env:STAGE2_PINNAME_NODIGIT='1';   python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra=-offline --out tok_pi01
+Remove-Item Env:STAGE2_PINNUM_INSIDE,Env:STAGE2_PINNAME_NODIGIT
+python -X utf8 work\_off10.py --arms tok_g6def,tok_pi11,tok_pi10,tok_pi01
+# 逐槽取证（病因）
+$env:STAGE2_DBG_CID='c0001,c0002'; python -X utf8 eda-pcb\tools\eval\fast.py --cases 2 --extra=-offline --out tok_dbg2 2>&1 | Select-String -Pattern '\[pin:'
+python -X utf8 work\_pinnum.py --arm tok_g6def --show 30
+```
+
+---
+
+## §5.59 转正：引脚**车道读数器**（`STAGE2_PIN_LANE_CROP`）+「灰底证据」门（`STAGE2_PIN_GREY_EVIDENCE`）翻默认 1 —— 四档全为正（2026-10-13）
+
+**背景（§5.30 的遗留）**：§5.30 把队友分支的灰底证据门做出来后量到官方 10 张 `--no-vlm` **71.65 → 73.63（+1.98）**，赚分**全部**来自车道读数器（`pin_lane`：按车道切口 + 单样本独立识别 + 选择性恢复），并按纪律**留默认 0**、等「交付口径（VLM 开）同批 A/B」再翻。那次 A/B 一直没做（`work/_gy_vlm.ps1` 未跑），此后 §5.31–§5.57 八轮改动落地，基线从 71.65 涨到 76.39，这条 +1.98 的收益一直被冻在开关里。本轮补做，并在**当前树**上四档复测。
+
+**机制（为什么它比 §5.57 那类「放宽闸门」安全）**：`stage2/pin_lane_reading.py:48 _recovery_reasons()` 只在**可观测的失败**上开新路 —— `missing_bound_role`（该槽的号/名根本没绑到）、`incomplete_bound_glyph`（绑到的字形只覆盖候选框的 10%~92%，即**截断**）、`duplicate_bound_number`（同一号在**同一元件**里绑了多处）、以及「绑走的源框与候选源框不是同一个」；`conf` 单独高**不算**理由（模块 docstring 原话：*confidence alone is not truth*）。所以它不会替换一个**干净**的既有读数，只在「空/截断/重复」上补。这就是它能在 4 张涨分的同时只让 1 张掉 1.28 分的结构性原因。
+
+**一、离线档（`--extra=-offline`）官方 10 张 协议尺**（`fast.py --engine protocol2`，权重 元件 .30 / 引脚 .25 / 网络 .35 / 导线 .10）：
+
+| 臂 | 车道 | 灰底 | 协议尺 | 元件 | 引脚 | 网络 | 导线 | tp（元件/引脚/网络/导线） |
+|---|---|---|---|---|---|---|---|---|
+| `tok_g6def` 基线 | 0 | 0 | 76.39 | 0.9302 | 0.7170 | 0.7565 | 0.4077 | 236/85/121/316 |
+| `tok_grey0` **只开灰底** | 0 | 1 | **76.39** | 逐位同基线 | 逐位同基线 | 逐位同基线 | 逐位同基线 | 236/85/121/316 |
+| **`tok_lane1` 只开车道** | 1 | 1 | **77.50（+1.11）** | 0.9268 | **0.7502** | **0.7675** | 0.4081 | 235/**90**/**123**/316 |
+| `tok_lane4` 四个读数器全开 | 1 | 1 | 76.98（+0.59） | 0.9302 | 0.7252 | 0.7675 | 0.4081 | 236/88/123/316 |
+
+- **`tok_grey0` 是与基线逐位相同的 no-op** ⇒ 收益**只**来自车道读数器，灰底门本身不做事（其余三个读数器在本机仍是 no-op：号修复/彩色号要 PP-OCR，整词读数器净中性，与 §5.30 的 `gN`/`gT` 结论一致）。
+- 逐案（`tok_lane1` − 基线）：case 4 75.01 → **77.03（+2.02）**、case 6 67.57 → **69.70（+2.13）**、case 7 80.92 → **85.49（+4.57）**、case 8 68.87 → **67.59（−1.28）**；case 2 / 3 / 5 / 9 逐位不变。
+- 代价：`comp` 0.9302 → 0.9268（元件 tp 236 → 235，掉的那一颗在 case 1/10 之一）；`wire` 0.4077 → 0.4081（+）。⇒ 元件通道的 −0.0034×0.30 被引脚 +0.0332×0.25 与网络 +0.0110×0.35 吃掉后仍净赚 +1.11。
+- **仍然「只开车道」最优**：把整词/号修复/彩色号一起开（`tok_lane4`）反而把 77.50 拉回 76.98（引脚 0.7502 → 0.7252）⇒ 与 §5.30 的「可选臂 = 只开车道」结论一致，本轮**只翻车道那一个开关**。
+
+**二、判题机复刻尺（`eda-pcb/schematic_parser/official.py`，`OFFICIAL_BBOX_PX=5` / `collapse_nonbox=False`）两池**：
+
+| 池 | 臂 | 元件 | 引脚 | 网络 | 导线 | 总分 |
+|---|---|---|---|---|---|---|
+| 官方 10 | `tok_g6def` | 0.474783 | 0.741720 | 0.756528 | 0.407676 | 63.3417 |
+| 官方 10 | **`tok_lane1`** | 0.471393 | **0.747979** | **0.767450** | 0.408068 | **63.7827（+0.4410）** |
+| 官方 10 | `tok_lane4` | 0.474783 | 0.743433 | 0.767450 | 0.408068 | 63.7708（+0.4291） |
+| 派生 18 张可评 | `tok_dg6def` | 0.084532 | 0.184699 | 0.200933 | 0.035148 | 14.5376 |
+| 派生 18 张可评 | **`tok_dlane1`** | 0.084532 | **0.184877** | **0.205394** | **0.037767** | **14.7244（+0.1868）** |
+
+⇒ 复刻尺上**两池都为正**，且派生池的网络（+0.004461）与导线（+0.002619）同向 ⇒ 不是单一通道的偶然抖动。
+复刻尺逐案（`work\_off10.py --arms tok_g6def,tok_lane1 --verbose`）：case 4 60.7080 → 61.7470（**+1.0390**）、case 6 59.8516 → 61.2826（**+1.4310**）、case 7 70.4205 → 72.0851（**+1.6646**）、case 10 67.4172 → 68.0014（**+0.5842**）、case 8 63.9318 → 63.6229（**−0.3089**），case 1/2/3/5/9 **逐位不变**；`comp` 的唯一下降是 case 10（0.6102 → 0.5763，掉一颗元件 tp，协议尺上也是它把整体 `comp` 从 0.9302 拉到 0.9268）。
+
+**三、交付档位（VLM 开）官方 10 张 协议尺** —— 这就是 §5.30 一直在等的那次同批对照：
+
+| 档位 | 车道关 | 车道开 | Δ | 分项（推/网/导线） |
+|---|---|---|---|---|
+| 精简 `-lean`（比赛日默认） | 79.84（0.9819/0.7688/0.7716/0.4155；tp 250/95/124/323） | **80.04**（0.9819/**0.7731**/**0.7749**/0.4137；tp 250/**96**/**125**/321） | **+0.20** | 引脚 +1 tp、网络 +1 tp、导线 −2 tp |
+| 完整档（不带档位开关） | 79.66（0.9819/0.7579/0.7741/0.4162；tp 250/95/125/323） | **79.97**（0.9819/**0.7731**/0.7728/0.4137；tp 250/**96**/125/321） | **+0.31** | 引脚 +1 tp、导线 −2 tp |
+
+（两档的 VLM 位号/值抽样抖动在单张上可达 ±3.6 分，但两档的 `comp` 都是 **0.9819 逐位不变**、引脚 tp 都 **+1**，方向一致 ⇒ 不是抽样假象。）
+
+**四、同样的两档在判题机复刻尺上**（`work\_off10.py`）—— 与协议尺**不完全同向**，如实记录：
+
+| 档位 | 车道关 | 车道开 | Δ |
+|---|---|---|---|
+| 精简 `-lean` | 65.6143（引脚 0.751394 / 网络 0.771571 / 导线 0.415472） | **65.7184**（引脚 **0.751550** / 网络 **0.774940** / 导线 0.413706） | **+0.1041** |
+| 完整档 | **65.6745**（引脚 0.749978 / 网络 0.774084 / 导线 0.416246） | 65.6440（引脚 0.751550 / 网络 0.772814 / 导线 0.413706） | −0.0305 |
+
+⇒ 精简档两把尺子都为正（协议 +0.20 / 复刻 +0.1041），**完整档在复刻尺上是 −0.03（噪声带内）**、协议尺 +0.31。翻默认的依据是**四档里三档两尺同向为正 + 完整档只在噪声带内抖动**，而**离线/派生这两个主池两把尺子都明确为正**（+1.11/+0.4410 与 +0.1868）。
+
+**三·补、交付档位的 VLM 通道 ROI 复测（转正后，同一份默认代码）**：车道读数器转正会改变阶段二喂给 VLM 的槽位，所以表 3-3 的旧读数（转正前所测）必须重测。重测结果（官方 10 张，协议尺；token/调用/墙钟取自各臂的 `decision_log.json`，汇总脚本 `work\_vlmtab.py`）：
+
+| 臂 | 调用 | token | 墙钟 | 协议尺 |
+|---|---|---|---|---|
+| 无（默认 full） | 223 | **152 927** | 125.1 s | **79.97** |
+| `-vlm-name off` | 202 | 140 526 | 123.0 s | **74.91（−5.06）** |
+| `-vlm-pin off` | 199 | 142 913 | 113.6 s | 80.04（+0.07） |
+| `-vlm-value off` | 106 | **55 442（−64%）** | 77.8 s | 79.58（−0.39） |
+| `-vlm-value-batch 4` | 139 | 103 194（−33%） | 104.2 s | 79.97（±0.00） |
+| `-lean`（pin off + batch 4） | 115 | 93 181（−39%） | 103.3 s | 80.04（+0.07） |
+| `-lean -vlm-value off`（极限省） | 82 | **45 428（−70%）** | 63.7 s | 79.66 |
+
+复刻尺同批：默认 **65.6440**、精简 **65.7184**、极限省 **64.5810**、离线 **63.7827**。⇒ 结论与转正前一致、且更干净：**名称通道是唯一必须保留的通道**（关掉 −5.06 分、`comp` 0.9819 → 0.9057）；**值通道关掉省 64% token 只掉 0.39 分、批量化 4 倍完全免费（±0.00）**；**引脚 + 网格通道关掉反而 +0.07**。旧读数里的「名称 −6.87」是在没有车道读数器的基线上测的，转正后同一份代码下是 **−5.06**（数据以本节为准）。
+
+**四、默认翻转与验收**：`eda-pcb/stage2/run.py` 的
+`PIN_LANE_CROP = env_on("STAGE2_PIN_LANE_CROP", "1")`、`PIN_GREY_EVIDENCE = env_on("STAGE2_PIN_GREY_EVIDENCE", "1")`（默认 0 → 1，注释里记了本节的四档读数与「必须两个一起开」）。
+
+- **默认不变性（官方 10）**：不带任何环境变量跑 `-offline`（`tok_lane_def`）= **77.50**，`comp/pin/conn/wire` 与 `tok_lane1` **逐位相同**；10 份 `final_results/<case>_Pred.json` 与 `tok_lane1` **sha256 全等**（`1 c31a85de0387`、`10 6044719e54a7`、`2 3faf3a321c41`、`3 0087523caa76`、`4 6f5244c0f2ad`、`5 cb84af4ff30f`、`6 11536ab7117e`、`7 23a93880180e`、`8 4b10f264b257`、`9 ee7d3b8ffe92`）。
+- **默认不变性（派生 18）**：`tok_dlane_def` ≡ `tok_dlane1`，产物 sha256 全等、tp 逐项相同（元件 522 / 引脚 56 / 网络 178 / 导线 106）。
+- **代价**：阶段二 14.0 s → 16.7 s / 张（§5.30 已量；220 张全量约 +10 min，远在「每例 <2 h」之内）。
+
+**为什么 §5.57 / §5.58 判负而本节转正**：§5.57（`STAGE2_BOX_PIN_KEEP_NAMED`）是**放宽装配闸门**，它直接改变「哪些脚进交付文档」，于是把假槽也发了出去（+28 根 `pin.extra`、网络 0.7565 → 0.7223）；§5.58（`STAGE2_PINNUM_INSIDE` / `STAGE2_PINNAME_NODIGIT`）是**放宽候选池**，让符号体内的普通数字也进号轮，被绑到假槽（case 7 −6.66）。本节是**只在失败处补读数**：道路由 `missing_bound_role` / `incomplete_bound_glyph` / `duplicate_bound_number` 打开，交付文档的**脚集合不变**（元件 tp 只掉 1、引脚 tp 反而 +5）。⇒ 同一类「缺脚」问题，**改候选层/闸门层**亏分、**在失败槽上补读数**赚分。
+
+**复现**：
+```powershell
+$c10 = (Get-Content work\_cases10gt.txt -Raw).Trim()
+$env:STAGE2_PIN_GREY_EVIDENCE='1'; python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra=-offline --out tok_grey0   # 只开灰底 = no-op
+$env:STAGE2_PIN_LANE_CROP='1';     python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra=-offline --out tok_lane1   # 只开车道
+$env:STAGE2_PIN_TEXT_CROP='1'; $env:STAGE2_PIN_NUMBER_REPAIR='1'; $env:STAGE2_COLOR_NUMBER_CROP='1'
+python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra=-offline --out tok_lane4                                          # 四个全开
+python -X utf8 work\_off10.py --arms tok_g6def,tok_lane1,tok_lane4
+python -X utf8 work\_off10.py --arms tok_fullA,tok_fullB,tok_leanA,tok_leanB
+Remove-Item Env:STAGE2_PIN_LANE_CROP,Env:STAGE2_PIN_GREY_EVIDENCE,Env:STAGE2_PIN_TEXT_CROP,Env:STAGE2_PIN_NUMBER_REPAIR,Env:STAGE2_COLOR_NUMBER_CROP
+python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra=-offline --out tok_lane_def                                      # 默认不变性
+python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra=-lean --out tok_leanA                                           # 精简档 车道关
+$env:STAGE2_PIN_LANE_CROP='1'; $env:STAGE2_PIN_GREY_EVIDENCE='1'
+python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra=-lean --out tok_leanB                                           # 精简档 车道开
+Remove-Item Env:STAGE2_PIN_LANE_CROP,Env:STAGE2_PIN_GREY_EVIDENCE
+python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --out tok_fullA                                                         # 完整档 车道关
+$env:STAGE2_PIN_LANE_CROP='1'; $env:STAGE2_PIN_GREY_EVIDENCE='1'
+python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --out tok_fullB                                                         # 完整档 车道开
+Remove-Item Env:STAGE2_PIN_LANE_CROP,Env:STAGE2_PIN_GREY_EVIDENCE
+$c18 = (Get-Content work\_cases_v4val.txt -Raw).Trim()   # 必须整串读文件，否则 PowerShell 吃掉前导零
+python -X utf8 eda-pcb\tools\eval\fast.py --cases $c18 --extra=-offline --out tok_dlane1
+python -X utf8 work\_offval.py --arms tok_dg6def,tok_dlane1,tok_dlane_def
+
+# §5.59 补：交付档位的 VLM 通道 ROI 复测（全部不带额外 env，即车道读数器已默认开）
+python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra="-vlm-name off"        --out tok_ab_nameoff
+python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra="-vlm-pin off"         --out tok_ab_pinoff
+python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra="-vlm-value off"       --out tok_ab_valoff
+python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra="-vlm-value-batch 4"   --out tok_ab_vb4
+python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra="-lean -vlm-value off" --out tok_ab_max
+python -X utf8 work\_vlmtab.py tok_fullB tok_leanB tok_ab_nameoff tok_ab_pinoff tok_ab_valoff tok_ab_vb4 tok_ab_max
+python -X utf8 work\_off10.py --arms tok_ab_max,tok_fullB,tok_leanB
+```
+
+---
+
 ## 6. 归因尺子（怎么把失分拆成可行动项）
 
 | 尺子 | 脚本 | 它回答什么 |

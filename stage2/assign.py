@@ -275,6 +275,43 @@ PINNUM_DUP = float(os.environ.get("STAGE2_PINNUM_DUP", "0"))
 # 已挂键的邻居的框一根都不碰（那才是抢别人东西）。位号（`STEAL_R`）与值
 # （`VALUE_STEAL_R`）早就有这条通道，引脚号是最后一个没有的。
 PINNUM_STEAL = float(os.environ.get("STAGE2_PINNUM_STEAL", "0"))
+# ★★ 「纯数字文本框 = 引脚号，不是引脚名」（`STAGE2_PINNUM_INSIDE` + `STAGE2_PINNAME_NODIGIT`，
+#    **默认都 0 = 关**；两者**必须成对打开**，只开一个几乎不起作用，见下）。
+#
+# 病（10GT case 2 的 `U3`/`U4`，2026-10 实测，`STAGE2_DBG_CID=c0001`）：
+#   真脚 `pin_1`（GT `GND`）的号码 `1` 被文字检测**过检成 21x13 的大框**
+#   （同一排别的号框只有 6~8px 宽，见 `_pinnum.py` 的槽位表），框心于是落进符号框内
+#   ⇒ `t["inside"] = True`：
+#     * `pin_number` 轮要求 `not inside` ⇒ 这块文字**根本进不了号候选池**；
+#     * `pin_name` 轮要求 `inside` ⇒ 它反而进了名候选池，靠 `fit_pinname("1") = 0.15`
+#       加 `_score` 的 `inside` 奖励 0.15 拿到 `s = 0.299`，被 `structmatch` 绑给
+#       **体外假槽** `pin[0]`（该槽本来会被丢），并进 `taken_box` 被永久占用。
+#   ⇒ 真脚既没号（`fn`）、假槽白得一个「名」。`fit_pinnum` 本来就把纯数字判为
+#   `1.0`、`fit_pinname` 只给 `0.15` —— 这条判据只是没有贯穿到 `inside` 闸门上。
+#
+# 规则：① `STAGE2_PINNUM_INSIDE=1` ⇒ 号候选池接受「框心在体内、但**最佳号读法是纯
+#   数字**」的框（`d=0` 照旧参与打分，`MAX_BOX_W` 等闸门照旧）；②
+#   `STAGE2_PINNAME_NODIGIT=1` ⇒ 名候选池不再收「最佳号读法是纯数字」的框。
+#   成对使用：只开 ① 时那块框已被名轮 `taken_box` 吃掉，号轮仍拿不到它。
+PINNUM_INSIDE = env_on("STAGE2_PINNUM_INSIDE", "0")
+PINNAME_NODIGIT = env_on("STAGE2_PINNAME_NODIGIT", "0")
+
+
+def _pure_digit_read(t: dict):
+    """框的**最佳引脚号读法**；纯数字（`PINNUM_RE` 且 `isdigit`）返回该串，否则 `None`。
+
+    `None` = 这块框在任何角色下都不像一个「号」（读不出、或读出来不像数字）。
+    """
+    try:
+        got = _best_read(t.get("reads") or {}, "pin_number", fit_pinnum)
+    except Exception:                                                       # noqa: BLE001
+        return None
+    if not got:
+        return None
+    txt = str(got[1] or "").strip()
+    return txt if txt.isdigit() else None
+
+
 # ★★ 幻影脚点槽合并半径（`STAGE2_PIN_STUB_MERGE`，**默认 0 = 关**，单位 px）。
 #
 # 病（10GT case 5 的 `U1`，2026-10 实测，见 `work/tools/dev/_slotdbg.py`）：
@@ -1533,13 +1570,22 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     continue
                 if t.get("wide") and (t.get("wratio") or 0.0) > _wlim:
                     continue
+                # ★ 「纯数字 = 号」的两个开关（见 `PINNUM_INSIDE` 的长注释）：
+                #   号轮放行「体内但读成纯数字」的框，名轮不再收这类框。
+                _pdig = (_pure_digit_read(t) if (PINNUM_INSIDE or PINNAME_NODIGIT)
+                         else None)
                 if want_inside and not t["inside"]:
                     continue
-                if (not want_inside) and (t["inside"] or t["d"] > _dlim):
+                if (not want_inside) and t["inside"] \
+                        and not (PINNUM_INSIDE and _pdig):
+                    continue
+                if (not want_inside) and t["d"] > _dlim:
                     continue
                 got = (_best_number_read(t["reads"]) if (slot == "number" and PINNUM_CONSENSUS)
                        else _best_read(t["reads"], role, fit_fn))
                 if not got:
+                    continue
+                if slot == "name" and PINNAME_NODIGIT and _pdig:
                     continue
                 s, txt, conf, f = got
                 s = _score(s, conf, t["d"], t["inside"], dist_w=_dw)
