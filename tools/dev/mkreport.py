@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import os
+import zipfile
 from pathlib import Path
 
 from docx import Document
@@ -21,6 +22,28 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
+
+
+def _restamp_docx(path: Path, when=(2026, 1, 1, 0, 0, 0)) -> None:
+    """把 docx 的 zip 条目时间戳钉死 —— 让「内容没改」的重建产出**逐字节相同**的文件。
+
+    为什么需要：python-docx 的 `save()` 用当前时间写每个 zip 条目，于是每次重跑
+    `mkreport.py` 都会产生一个「大小一样、17 个内部部件 sha256 全一样、只有条目时间戳不同」
+    的 diff，把 `git status` 弄脏，也让人没法用「docx 变了没有」判断读数有没有更新。
+    这里按原顺序重打包、条目顺序与压缩方式保持不变，只把 `date_time` 固定。
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with zipfile.ZipFile(path) as zin, \
+            zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        for it in zin.infolist():
+            data = zin.read(it.filename)
+            ni = zipfile.ZipInfo(it.filename, date_time=when)
+            ni.compress_type = it.compress_type
+            ni.external_attr = it.external_attr
+            ni.internal_attr = it.internal_attr
+            ni.create_system = it.create_system
+            zout.writestr(ni, data)
+    os.replace(str(tmp), str(path))
 
 
 def _locate():
@@ -327,7 +350,7 @@ def build():
          "负责最终裁决与导出。"),
     ])
     para(doc, "全链共 31 个处理节点、65 条数据依赖，可视化见 `workflow.html`；可调开关 "
-              "456 个（`docs/KNOBS.md` 自动生成，每个开关都标注了定义位置与默认值），"
+              "458 个（`docs/KNOBS.md` 自动生成，每个开关都标注了定义位置与默认值），"
               "所有开关默认值都经过 A/B 验证后才翻正。", 11, indent=0.74)
 
     h(doc, 2, "2.2  阶段一：几何检测与 CV 重建")
@@ -983,8 +1006,8 @@ def build():
 
     h(doc, 1, "附录 B  文档与开关索引")
     table(doc, ["文档 / 资产", "内容", "规模"], [
-        ["`docs/RESULTS.md`", "全部实验读数与结论（按 §5.x 分节，含判负路线）", "≈4 800 行"],
-        ["`docs/KNOBS.md`", "全部可调开关、默认值与定义位置（自动生成）", "456 个开关"],
+        ["`docs/RESULTS.md`", "全部实验读数与结论（按 §5.x 分节，含判负路线）", "≈5 900 行"],
+        ["`docs/KNOBS.md`", "全部可调开关、默认值与定义位置（自动生成）", "458 个开关"],
         ["`docs/COMPETITION_RULES.md`", "官方规则要点与硬约束（含评测环境）", "303 行"],
         ["`docs/DIAGNOSTICS.md`", "诊断尺子与归因方法", "—"],
         ["`docs/TOOLS.md`", "工具与脚本索引", "—"],
@@ -997,6 +1020,7 @@ def build():
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(OUT))
+    _restamp_docx(OUT)
     print("wrote", OUT, os.path.getsize(OUT), "bytes")
 
 
