@@ -111,6 +111,14 @@ def main(argv=None) -> int:
                     help="YOLO 用；torch 侧由 textrec.infer.normalize_device 翻译"
                          "（'0' -> 'cuda:0'，没卡则退 CPU）")
     ap.add_argument("-imgsz", "--imgsz", dest="imgsz", type=int, default=1600)
+    ap.add_argument("-tile", "--tile", dest="tile", type=int, default=0,
+                    help="阶段一切块推理的瓦片边长（px）。0（默认）= 整图，即今天的行为。"
+                         ">0 时交给 `stage1.detect.Detector.detect(tiler=(tile, overlap))` "
+                         "做跨瓦片全局 NMS —— 大图（如 val 的 4500×2850 / 3450×2280）"
+                         "在 `-imgsz 1600` 下小元件与细脚文字会被缩没，切块是唯一"
+                         "不看整图缩放的对策。**未过 val 前不要改默认**。")
+    ap.add_argument("-overlap", "--overlap", dest="overlap", type=int, default=0,
+                    help="切块重叠像素（仅 `-tile > 0` 时生效；0 = 自动取 tile/8）")
     ap.add_argument("-workers", "--workers", dest="workers", type=int, default=1,
                     help="**stage1 内部**进程池大小（CPU 密集；>1 会各自占显存）")
     ap.add_argument("-case-workers", "--case-workers", dest="case_workers", type=int,
@@ -401,6 +409,21 @@ def _visible_cuda_devices() -> int:
         return int(torch.cuda.device_count()) if torch.cuda.is_available() else 0
     except Exception:                                               # noqa: BLE001
         return 0
+
+
+def _tiler(a):
+    """阶段一切块参数 `(tile, overlap)`，或 `None`（= 整图，今天的行为）。
+
+    为什么存在：`stage1/detect.py:202` 早就实现了切块 + 跨瓦片全局 NMS，但**从来
+    没有接进交付入口**（`submission/run.py` 里此前搜不到 `tile`），于是 val 池里
+    4500×2850 / 3450×2280 的图在 `-imgsz 1600` 下被整体缩掉 ~2.8×，小元件与细脚
+    文字一起消失（README 口径 `pin.missing=729`）。默认 0 ⇒ 交付行为不变。
+    """
+    tile = int(getattr(a, "tile", 0) or 0)
+    if tile <= 0:
+        return None
+    ov = int(getattr(a, "overlap", 0) or 0)
+    return (tile, ov if ov > 0 else max(64, tile // 8))
 
 
 def _resolve_case_workers(a, n_cases: int) -> int:
@@ -865,7 +888,8 @@ def _run(a) -> int:
     t0 = time.time()
     r1 = run_cases(cases, s1_dir, workers=a.workers, weights=DEFAULT_WEIGHTS,
                    imgsz=a.imgsz, conf=0.25, device=a.device,
-                   use_cv=True, do_wires=not a.no_wires)
+                   use_cv=True, do_wires=not a.no_wires,
+                   tiler=_tiler(a))
     ok1 = {r["case"] for r in r1 if r["ok"]}
     _log(fp, "阶段一完成 %d/%d，用时 %.1fs" % (len(ok1), len(r1), time.time() - t0))
     stage1_report = {r["case"]: r for r in r1}
@@ -1280,6 +1304,8 @@ def _write_decision(out_dir: Path, summary: dict, cases_log: list,
         "output_dir": str(a.output_dir),
         "config": {
             "device": a.device, "imgsz": a.imgsz, "workers": a.workers,
+            "tile": int(getattr(a, "tile", 0) or 0),
+            "overlap": int(getattr(a, "overlap", 0) or 0),
             "case_workers": getattr(a, "case_workers", -1),
             "do_wires": not a.no_wires, "texts": a.texts,
             "llm_mode": a.mode, "llm_batch": a.llm_batch,
