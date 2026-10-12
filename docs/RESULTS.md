@@ -6049,3 +6049,128 @@ discover -s tests -p "test_<mod>.py"`，按 `^(FAIL|ERROR):|^Ran |^OK|^FAILED` �
 净效果：**26 例从「不计入 `Ran` 的隐身状态」回到回归网里**。
 
 
+## §5.63 未并入的队友仲裁主体**不整并**：冻结 stage1 的 A/B（2026-10-13）—— 只换阶段二净 −4，只有 case 2 明显赚
+
+**背景**：主线的瓶颈仍指向 §5.56 的病据（官方 10 张 18 根缺 box 脚、其中 15 根槽位就落在 GT 点上、6 根「名字读到、
+号没读到」），而 §5.57/§5.58 已判负「靠位置/库补号」。队友分支 `improve-pin-network-parsing`（`bd0a529`，
+2026-10-11）里正好是一整套**读数归属仲裁**主体：`stage2/assign.py` 的 `PIN_NUMBER_TRUST_BIND` /
+`PIN_TEXT_ROLE_GUARD` / `PIN_DIGIT_ENTITY`（三个都默认 `1`）、`_name_reservation`、
+`_preferred_name_observation`、`_preferred_number_observation`，以及 `_best_read` 里两道 main 没有的
+**硬角色闸门**（队友 `stage2/assign.py:553-558`：`if set(reads) == {"pin_number"} and role != "pin_number":
+return None`，对称的一条管 `pin_name`）。历史上只并了**证据采集**（`stage1/pin_evidence.py`、各读数器／裁片器），
+**绑定主体没并**（就是 §5.62 那 20 个模块门在等的东西）。问：值不值得整并？
+
+**方法（可复现）**：`git worktree add Y:\workspace\EDA\work\_wt_tm improve-pin-network-parsing`（脚手架，不进提交面），
+拿**冻结的 main stage1**（`work/_fast_out_fan_off_1/runs/stage1`，官方 10 张 `-offline` 产物）只重跑阶段二：
+`cd work/_wt_tm; python -X utf8 -m stage2.run --stage1 <上面的目录> --out Y:\workspace\EDA\work\_tm_stage2
+--cases 1,10,2,3,4,5,6,7,8,9 --device cpu`（37.4 s / 10 张，纯 CPU）。口径脚本 `work/_abpins.py`：以
+**官方 GT 的 box 脚**为分母（`components[*].type == "box"`，10 张共 **136** 根），命中 = 位号在、`pin_<号>` 在、
+`pinname` 逐字符相等；两侧都从各自 `_assigned` 的 `comps[cid].designator.text` + `pins[槽].number/name.text` 取。
+
+**读数（「中」= 136 根 GT box 脚里命中几根）**：
+
+| case | GT box 脚 | main | 队友 | Δ |
+|---|---|---|---|---|
+| 1 | 26 | 16 | 17 | +1 |
+| 10 | 12 | 4 | 3 | −1 |
+| 2 | 16 | 10 | **15** | **+5** |
+| 3 | 6 | 5 | 4 | −1 |
+| 4 | 12 | 10 | 8 | −2 |
+| 5 | 18 | 11 | 9 | −2 |
+| 6 | 16 | 8 | 8 | 0 |
+| 7 | 8 | 6 | 3 | −3 |
+| 8 | 16 | 4 | 5 | +1 |
+| 9 | 6 | 5 | 3 | −2 |
+| **合计** | **136** | **79** | **75** | **−4** |
+
+case 2 赚的 5 根正是 SCL/SDA 那一簇：`U1.pin_4(None≠SDA)`、`U2.pin_4(SCL→SDA)`、`U3.pin_3(None→SCL)`、
+`U4.pin_4(None→SDA)`、`U3.pin_1`/`U4.pin_1`；队友在这一张上只剩 `U1.pin_1` 一根没中。
+
+**归因（同一冻结 stage1、仍在队友代码里关开关）**：全开 **75**；`STAGE2_PIN_TEXT_ROLE_GUARD=0` **70**
+（case 2 仍 15）；`STAGE2_PIN_DIGIT_ENTITY=0` **75**（本口径下无影响）；
+`STAGE2_PIN_NUMBER_TRUST_BIND=0` **57**（case 2 15→6）；三个全关 **53**。⇒ ① case 2 的增益**完全**由
+`PIN_NUMBER_TRUST_BIND` 承载（开 15 / 关 6）；② `PIN_TEXT_ROLE_GUARD` 在其它图上值 +5；③ `_best_read`
+的两道硬角色闸门在所有队友臂里**都常开**，所以「三开关全关」不等于 main 的等价物（53 ≪ 79）—— 队友这套
+是**成套使用**才成立的。
+
+**另一条独立读数（判负）**：队友把 `STAGE2_PIN_NAME_OCR` 默认改成了 `auto`（main 是 `off`，`MONO_PIN_OCR`
+继承它），但在本机这条通道**空转**：`rapidocr-onnxruntime` 未安装，`stage2/pin_name_reading.py:113` 打
+`RuntimeWarning: Optional pin name OCR is unavailable; using existing OCR`；在 main 上打开它**逐字节不变** ——
+`STAGE2_PIN_NAME_OCR=auto` 的 `-offline` 官方 10 臂 = **77.50**（元件 0.9268 / 引脚 0.7502 / 网络 0.7675 /
+导线 0.4081，tp 235/90/123/316），与 `fan_off_1` 完全相同。
+
+**决策：不整并**。① 分支落后 main **111** 个提交（缺 `structmatch.rebind` 的 anchored 重排、§5.51 的 `-lean`
+交付档、§5.56–§5.58 的 box 判定、§5.59 的车道读数器、§5.60 的 VLM 重试……），对齐成本高；② 在最公平的口径
+（只换阶段二、输入完全相同）下它**净 −4**，只有 case 2 明显赚；③ 唯一有明确正收益的机制是
+`PIN_NUMBER_TRUST_BIND`（相对队友基线 +18，其中 case 2 +9）—— 要取它必须**单独移植**并在 main 上重测，
+不能整并。20 个模块门（`tests/_unmerged_gate.py`）保持不变。
+
+
+## §5.64 box 引脚通道的天花板实测：跨槽重归属最多 ~8 根、库先验在交付档上是死的（2026-10-14）
+### —— 剩下的错以「读不准」为主，不是「归错槽」
+
+**背景**：§5.56/§5.58 的结论是「真瓶颈是**归属错**，而且 main 没有重归属机制」，并建议往下做「库驱动的槽位落地」。
+§5.63 又量到队友那套仲裁主体只在 case 2 赚、整体净 −4。⇒ 在动手造重归属机制之前，先**量出它的天花板**，
+免得又造一个零收益的部件。
+
+**方法（`work/_slotrepair.py`，探针，永不提交）**：读 `runs/stage1/<case>.stage1.json` +
+`runs/stage2/_assigned/<case>.json` + `10GT`，分母用 **GT `components[des]["type"] == "box"`**（用我方 `type`
+会把 246 根被动件也算进来）。两个待造动作各算一次上限：
+* **A（搬名）**：把坐在**无号槽**上、内容等于 GT 名的名字，按行对齐搬到**有号的那个槽**；
+* **B（数字当号）**：把**纯数字文本**（含被误当名字用的）按行对齐当缺掉的号。
+
+**现状读数（官方 10，`--run work/_fast_out_fan_off_1`）**：
+
+| case | GT box 脚 | 命中 | 有号无名 | 有号名错 | 无号 |
+|---|---|---|---|---|---|
+| 1 | 26 | 16 | 0 | 0 | 10 |
+| 10 | 12 | 4 | 0 | 5 | 3 |
+| 2 | 16 | 10 | 3 | 1 | 2 |
+| 3 | 6 | 5 | 0 | 0 | 1 |
+| 4 | 12 | 10 | 1 | 0 | 1 |
+| 5 | 18 | 11 | 1 | 5 | 1 |
+| 6 | 16 | 8 | 0 | 2 | 6 |
+| 7 | 8 | 6 | 0 | 1 | 1 |
+| 8 | 16 | 4 | 1 | 6 | 5 |
+| 9 | 6 | 5 | 0 | 0 | 1 |
+| **合计** | **136** | **79（58.1%）** | **6** | **20** | **31** |
+
+**天花板：搬名 A = 3 根**（`case5 U2 pin_1` 从槽 4 搬 `GND`、`case6 U4 pin_4` 从槽 6 搬 `EN`、`case6 U4 pin_5`
+从槽 0 搬 `IN`；三条的行距 38.7 / 64.8 / 23.6 px 都**远大于 pitch**，实战里还要再收紧，能兑现的更少）。
+**B 的原始计数 27 是虚高** —— 行轴与 pitch 对**多边 IC**（脚散布在四条边上）估错，容差被放大；
+§5.58 逐条核过的权威分解里只有「同件他槽抢号 **5**」。
+⇒ 两个动作合起来的天花板 **≈ 8 根 / 136**（5.9% 的通道）＝ 协议尺 **+0.014**（引脚权重 .25）＝ 总分 **+0.0035**。
+**判负：不造跨槽重归属机制。**
+
+**交付档一致（重要）**：同一探针跑 `--run work/_fast_out_fan_lean_8c`（`-lean` 交付档）**逐案逐项完全相同**
+（79 / 136、6 / 20 / 31）⇒ **VLM 不动引脚归属**，`-offline` 臂可以当引脚通道的快速代理（30 s vs 107 s）。
+
+**那 20 条「有号名错」的性质**：几乎全是**OCR 截断／串读**，不是跨槽错绑 —— `case10 U1 pin_1 'U1'≠'VIN'`、
+`pin_6 'V'≠'VB'`、`pin_7 'VSS'≠'VS'`、`pin_8 'S'≠'IS'`、`U2 pin_3 'Vn'≠'VIn'`；`case5 U1 pin_2 'VCOUT'≠'VOUT'`、
+`pin_7 'P'≠'PP'`、`U3 pin_1 'Q'≠'ADJ(GND)'`、`pin_2 'ADIGND'≠'VOUT(TAB)'`；`case7 U1 pin_4 'D'≠'GND'`；
+`case8 U1 pin_1 'MOTION'≠'NC'`、`pin_7 'NC'≠'VDDIO'`、`pin_8 'MOTON'≠'GNDIO'`、`pin_12 'P'≠'MISO'`、
+`pin_14 'NESE'≠'NRESET'`、`pin_15 'LED'≠'LED_P'`；`case6 U4 pin_4 'N'≠'EN'`。探针对这些条目一律打
+「**无同一块文本可搬**」⇒ 想修只能走**裁片／检测／识别质量**，不是归属逻辑。
+
+**库先验的尸检（关闭 §5.56 的「库驱动的槽位落地」这条建议）**：
+* GT 侧的型号名**能**命中库：官方 10 的 21 颗 box 元件里 **18 颗**（85.7%）在 `work/data/cpntLibrary.json`
+  （337 键）∪ `eda-pcb/data/BoxICLibrary_200cases.json`（360 键）里 —— 与 `stage2/libpins.py` docstring /
+  `tools/diag/_libcov.py` 的 85.7% 对得上；命中型号的 **引脚名覆盖 99.0%、引脚号 100%**（`_libcov.py` 输出）。
+* **但我方读出来的型号名命中 1 / 21**（`case6 U3 '78M12'` 是唯一一个，交付档 `-lean` 与 `-offline` **逐字相同**）；
+  退到模糊 0.85 也只多 **2** 个，且其中一个还是**错件**：`case6 U1 '79WM12' → '79M12'`（GT 是 `78M12`）——
+  拿错型号的库表回填会**主动致错**。另外 `case6 U2/U4`、`case7 U1` 的 GT 型号**本来就不在库里**。
+* 交付档 `Name` 与 GT 相符的只有 **1 / 21** ⇒ **`STAGE2_LIB_REFINE` / `STAGE2_LIB_PINS` 这条通道在交付档上
+  没有可用入口**：它不是「库表不够」，而是「型号名读不出来」。（`libpins.py` 的 `STAGE2_LIB_PINS_FUZZY` 默认
+  0.85 也救不了 —— 上面 21 颗里模糊能命中的只有 3 颗，其中 1 颗指错件。）
+
+**⇒ 本轮结论**：box 引脚通道剩下的 **31 无号 + 20 名错**（占 136 根的 37.5%）里，
+**归属类问题最多只值 ~8 根**，**库类问题在交付档上是 0 根**，其余全是**读数质量问题**。
+下一步不该再在归属/库上花力气（已有 §5.57/§5.58/§5.63/本节的四次判负），要么攻读数质量
+（检测框／裁片／CRNN 截断，`case8` 一颗 IC 就占 6 条名错），要么转去协议尺上权重更大的
+**连接 .35 / 导线 .10**（交付档 0.7749 / 0.4137，是四个维度里离满分最远的两项）。
+
+**产物/口径**：探针 `work/_slotrepair.py`（逐案 + `--detail`）与 `work/_abpins.py`（§5.63 的 A/B 口径），
+库覆盖率用 `python -X utf8 eda-pcb\tools\diag\_libcov.py`；队友分支 worktree 仍在 `work/_wt_tm`。
+以上全在 `work/`，**不进提交面**。
+
+
