@@ -219,6 +219,58 @@ BOX_PIN_DROP_UNREAD = _DROP_MODE not in ("", "0", "false", "off", "none")
 BOX_PIN_DROP_MIXED_ONLY = _DROP_MODE in ("mixed", "mix", "partial")
 BOX_PIN_DROP_CAP = _DROP_MODE in ("cap", "max", "ceiling")
 
+# ★ `STAGE2_BOX_PIN_KEEP_NAMED`（默认关）：`box`(IC) 里**读到了引脚名、但没读出合法号**的桩，
+#   在 `BOX_PIN_DROP_UNREAD` 那条闸上**不再丢**，用位置补位号发出去。
+#
+# 病（§5.56/§5.57 的逐槽取证，官方 10 张 18 根缺 box 脚）：15 根在阶段一就有槽位落在 GT 点
+#   5 px 内，其中 **6 根**是「名字读到了、号没读到」：
+#   `2 U3.pin_1 GND`（槽 #6 读到名 `GND`）、`2 U4.pin_1 GND`、`6 U2.pin_1 OUT`、`6 U4.pin_1 OUT`
+#   —— 这四个名字**完全读对**；`6 U1.pin_1 IN` / `6 U1.pin_2 GND` 读成 `D` / `O`（单字符残读）。
+#   它们死在**第一条闸**（`kept=False` ⇒ 直接 `continue`），连「这根桩有真名字」都没看：
+#   规则 A（`(型号, 名) → 号`）只在库认识这个名字时才能补号，而 `OUT`/`GND` 不在
+#   `EG1192L`/`STC11` 的库名集里 ⇒ 补不出号 ⇒ 桩被丢。
+#   发出去的代价：位置补位号**猜中** GT 号 ⇒ `pin.<号>` 名对 = tp；猜不中 ⇒
+#   `name_mismatch`（fp+fn，比「不发」的 1 fn 多一个 fp），但网络通道白赚一个成员。
+#   ⇒ 必须 A/B 量，不能想当然（同类「一律不丢」的旧档都判负：`DROP_UNREAD` 的老行为、
+#   `BOX_PIN_NEED_NAME=0` 的交付官方 10 张 **73.53 vs 73.60**、模式 3 的 **−0.1993**）。
+#
+# 取值：`0`/`off`（默认）= 现行行为；`1`/`named` = 「名字 ≥2 字符且含字母」就留；
+#       `2`/`known` = 再加一道「这是全局引脚名词表认识的名字」（`libpins.is_known_name`
+#       ⇒ `GND`/`OUT`/`IN` 过、`D`/`O`/`N`/`H` 这种单字符残读不过）。
+#
+# ★ 实测判负（§5.57，2026-10-13，两把尺子都掉、默认保持 `0`）：
+#   - 判题机复刻尺（官方 10 张）`tok_g6def` 63.3417 → `named` **61.5613（−1.7804）**、
+#     `known` **62.0943（−1.2474）**；协议尺 76.39 → **73.67 / 74.40**。
+#   - 派生 18 张：`known` 复刻尺 14.5376 → **14.2543（−0.2833）**、协议尺 26.95 → 26.81。
+#   - **18 根缺脚一根都没救回来**（`work\_pinname_audit.py` 的「缺脚」计数仍是 18）：
+#     位置补位号与 GT 号对不上，多出来的脚全是 `pin.extra`。官方 10 张多出 28/21 根脚，
+#     例如 case 7 的 `U1` 多出 `pin_1 = "2R"`（点 `(824, 689.7)`，而 GT `pin_1 AGND` 在
+#     `(881, 550)`）—— 这是**垃圾文本槽**，不是我们要救的那 6 根。
+#   - 真代价在**网络**：假脚会挂进网络、把连通性搅浑（官方 conn F1 0.7565 →
+#     0.7223/0.7336）。⇒ 「让库来补号」这条路的本体不是「名字缺」，而是**号缺**；
+#     号没法从库里推出来时，发出去只会多 fp。
+#   - 反例教训：`known` 档比 `named` 档少发 7 根脚、却仍掉 1.25 分 ⇒ 问题不在「名字像不像」，
+#     而在「号是不是猜的」；未来若要重开，必须先有**读出号**或**号序可信**的新证据。
+_KEEP_NAMED_MODE = os.environ.get("STAGE2_BOX_PIN_KEEP_NAMED", "0").strip().lower()
+BOX_PIN_KEEP_NAMED = _KEEP_NAMED_MODE not in ("", "0", "false", "off", "none")
+BOX_PIN_KEEP_NAMED_KNOWN = _KEEP_NAMED_MODE in ("2", "known", "vocab")
+
+
+def _named_slot_ok(nm, ctx=None) -> bool:
+    """`BOX_PIN_KEEP_NAMED` 的判据：这个「读到的名字」算不算真名字（见上方长注释）。
+
+    注意 `ctx` 必须由调用方传进来：`_LIB_CTX` 是装配函数里的**局部变量**（`assemble.py:1283`），
+    模块级函数直接引用它会 `NameError`（2026-10-13 的 `known` 档首跑就踩了这个坑：10 张里
+    9 张阶段二失败、总分掉到 8.04）。
+    """
+    s = str(nm or "").strip()
+    if len(s) < 2 or not any(ch.isalpha() for ch in s):
+        return False
+    if not BOX_PIN_KEEP_NAMED_KNOWN:
+        return True
+    return bool(ctx is not None and ctx.is_known_name(s))
+
+
 # ★ `STAGE2_BOX_PIN_NEED_NAME`（默认关）：box 引脚「没读出**名字**就一个都不发」。
 # 依据（`schematic_parser/metrics.py:455-456` 官方口径 + 全库实测）：
 #   * `pin_f1` 的键是 `(元件, pin_key_to_number(pk))`，命中之后还要求
@@ -1419,10 +1471,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                     ok = ordered == list(range(1, len(nums) + 1))
         if os.environ.get("STAGE2_DBG_PINS"):
             print("[dbg pins] cid=%s ctype=%s n_pts=%d n_raw=%d ok=%s partial=%s "
-                  "drop=%s mixed=%s cap=%s nums=%s"
+                  "drop=%s mixed=%s cap=%s keepnamed=%s nums=%s"
                   % (cid, ctype, len(pts), len(raw), ok, BOX_PIN_PARTIAL,
                      BOX_PIN_DROP_UNREAD, BOX_PIN_DROP_MIXED_ONLY,
-                     BOX_PIN_DROP_CAP, [r["num"] for r in raw][:40]))
+                     BOX_PIN_DROP_CAP, _KEEP_NAMED_MODE, [r["num"] for r in raw][:40]))
         _anykept = True
         if not ok:
             if ctype == "box" and BOX_PIN_PARTIAL:
@@ -1516,7 +1568,14 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             # 时才丢**（一个都没读懂的那些，位置号 1..N 本身是个有用的先验）。
             if (not r.get("kept", True)) and BOX_PIN_DROP_UNREAD \
                     and (not BOX_PIN_DROP_MIXED_ONLY or _anykept):
-                continue
+                # ★ `STAGE2_BOX_PIN_KEEP_NAMED`（默认关，见常量区长注释）：这条闸原本
+                #   连「这根桩读到了真名字」都不看就丢。开了以后：
+                #   `named` 档 = 名字 ≥2 字符且含字母就留 → 用位置补位号发出去；
+                #   `known` 档 = 再加一道「全局引脚名词表认识这个名字」的闸（挡 `D`/`O`/`N` 残读）。
+                #   猜中号 ⇒ `pin.<号>` 名对 = tp；猜不中 ⇒ `name_mismatch`(fp+fn)，
+                #   但网络通道白赚一个成员 ⇒ 收益只能由 A/B 定（同类旧档都判负）。
+                if not (BOX_PIN_KEEP_NAMED and _named_slot_ok(r.get("nm"), _LIB_CTX)):
+                    continue
             # ★★★ 「迟到闸门」：`BOX_PIN_NEED_NAME_LATE` 时**不在**这里丢，挪到规则 B 之后
             #     （见下方同名判断）—— 让库的 `(型号, 号) → 名` 先有机会把这个桩救活。
             _lib_named = False

@@ -5546,6 +5546,12 @@ bbox_json[3]`）。
 而不是造位置）。绑号那一步必须自带闸门（用「库名是否认识我方读数」+ 形状闸门，见 §5.52/§5.53），
 否则会像 `diff` 那 3 根一样写错名字、fp 双罚。
 
+> ⚠️ **修正（§5.57，2026-10-13）**：上面这条「值得做」的指向**只对了一半**。做下去（把「读到名字、
+> 没读出号」的桩发出去）**两把尺子、两池全部判负**：官方 10 张 63.3417 → **61.5613 / 62.0943**、
+> 派生 18 张 14.5376 → **14.2543**，而且 **18 根缺脚一根都没救回来**（「缺脚」计数仍是 18）——
+> 多出来的脚全是 `pin.extra`，代价落在网络通道（conn F1 0.7565 → 0.7223/0.7336）。真瓶颈是
+> **号**不是名字（位置补位号与 GT 号对不上），详见 §5.57。
+
 ```powershell
 python -X utf8 work\_misslib.py  --arm tok_g6def           # 缺脚 → 库名 exact/diff/none + 槽位距
 python -X utf8 work\_pinrecall.py --arm tok_g6def --case 7 --comp U1   # 逐槽证据表
@@ -5554,6 +5560,72 @@ python -X utf8 work\_misslib.py  --arm d220known2 --pool derived --cases-file _c
 ```
 
 注：这些探针都在仓库外的 `work/`（`--cases-file` 相对 `work/` 解析），不提交。
+
+---
+
+## §5.57 判负：把「读到名字、没读出号」的桩发出去，救不回缺脚（`STAGE2_BOX_PIN_KEEP_NAMED`，2026-10-13）
+
+**动机（照 §5.56 的下一步做）**：§5.56 量出官方 18 根缺 box 脚里 **15 根**在阶段一就有槽位落在
+GT 点 5 px 内，其中 **6 根**是「名字读到了、号没读到」——`2 U3.pin_1 GND`（槽 #6 读到名 `GND`）、
+`2 U4.pin_1 GND`、`6 U2.pin_1 OUT`、`6 U4.pin_1 OUT`（**这四根名字完全读对**）、
+`6 U1.pin_1 IN` / `6 U1.pin_2 GND`（读成 `D` / `O`）。它们死在 `BOX_PIN_DROP_UNREAD` 那条闸上
+（`kept=False` ⇒ 直接 `continue`），**连「这根桩有真名字」都没看**；规则 A 想救也救不了 ——
+`OUT`/`GND` 不在 `EG1192L`/`STC11` 的库名集里，`(型号, 名) → 号` 补不出号。
+
+**药（新开关，默认关）**：`eda-pcb/stage2/assemble.py` 的 `STAGE2_BOX_PIN_KEEP_NAMED`
+（`:254`；判据函数 `_named_slot_ok` 在 `:259`；闸门改动在 `:1577`）：
+`0`/`off` = 现行行为；`1`/`named` = 名字 ≥2 字符且含字母就留；
+`2`/`known` = 再加一道「这是全局引脚名词表认识的名字」（`libpins.is_known_name`，
+挡 `D`/`O`/`N`/`H` 这种单字符残读）。留下的桩用**位置补位号**发出去。
+
+**读数（两把尺子 × 两池，全部判负）**
+
+| 池 | 臂 | 判题机复刻尺 | 协议尺 | 引脚 F1（复刻尺） | 网络 F1（复刻尺） |
+|---|---|---|---|---|---|
+| 官方 10 张 | `tok_g6def`（默认，`=0`） | **63.3417** | **76.39** | 0.741720 | 0.756528 |
+| 官方 10 张 | `=1` `named` | **61.5613（−1.7804）** | 73.67 | 0.718279 | 0.722326 |
+| 官方 10 张 | `=2` `known` | **62.0943（−1.2474）** | 74.40 | 0.723531 | 0.733578 |
+| 派生 18 张 | `tok_dg6def`（默认） | **14.5376** | **26.95** | 0.184699 | 0.200933 |
+| 派生 18 张 | `=2` `known` | **14.2543（−0.2833）** | 26.81 | 0.175066 | 0.198766 |
+
+逐案（官方、复刻尺）：`named` 有 7 张掉分（case 2 −4.85 / 4 −1.63 / 5 −1.74 / 6 −2.70 / 7 −1.18 /
+8 −3.83 / 10 −1.87），**没有一张涨**；`known` 6 张掉分（case 2 −3.60 / 4 −1.63 / 5 −1.74 / 6 −2.70 /
+8 −1.86 / 10 −0.94）。协议尺下 `known` 的 case 7 涨 2.37（库里 `in→2`、`vcc→7` 那类正确绑定），
+但被其余各案的假脚盖掉了。
+
+**为什么 18 根一根都没救回来**：`work\_pinname_audit.py --arms tok_g6def,tok_kn1` 的「缺脚（一边没发）」
+**仍是 18**、`right→right` 112 → 113（只有 1 根从「错」翻成「对」）⇒ **位置补位号与 GT 号对不上**，
+多出来的脚全落在 GT 没有的键上（= `pin.extra`，纯 fp）：官方 10 张多发 **28 根**（`named`）/ **21 根**
+（`known`）。例子（case 7 的 `U1`，MP2236；以下都用 **JSON 帧**，`H=1003.0`）：`named` 档多出
+`pin_1 = "2R"`，点 `(824, 689.7)` —— 换算回图像帧是 `y_img = 313.3`，正是那 5 个**顶边假槽**之一
+（`trust=uncertain`、`text_overlap 0.9`）；而 GT `pin_1 AGND` 在 JSON `(881, 550)`（图像帧 `(881,455)`）、
+GT `pin_2 IN` 在 JSON `(809, 659)`（图像帧 `(810,344)`）—— 真正该救的这两根**根本没被这条闸放出来**
+（它们的名/号状态与「读到名字、没读到号」不是同一类）。
+
+**真代价在网络**：假脚会挂进网络，把连通性搅浑（官方 conn F1 0.7565 → 0.7223/0.7336）。
+`known` 档比 `named` 档少发 7 根脚、却仍掉 1.25 分 ⇒ 掉分的根因**不是「名字像不像」**，
+而是「号是猜的」：只要号是猜的，发出去就是「多一个 fp、少一个 fn」的赔本买卖。
+
+**默认不变性（必做）**：不设 `STAGE2_BOX_PIN_KEEP_NAMED` 重跑官方 10 张（`tok_kn0`）⇒ 协议尺
+**76.39**（元件 0.9302 / 引脚 0.7170 / 网络 0.7565 / 导线 0.4077，tp 元件 236 / 引脚 85 / 网络 121 /
+导线 316），10 份产物与 `tok_g6def` **逐文件 sha256 全等** ⇒ 开关默认关、交付行为零变化。
+
+**结论**：默认保持 `0`。这条通道的真瓶颈是**号**不是名字 —— 要把缺的 18 根补回来，得先有
+「读出号」或「号序可信（槽序 ↔ 号序的可靠映射）」的新证据，否则任何「先发出去再说」的变体
+都只会往网络和引脚里塞假脚。开关与判负数据留在代码注释里，供将来重开时对照。
+
+```powershell
+$c10 = (Get-Content work\_cases10gt.txt -Raw).Trim()
+$env:STAGE2_BOX_PIN_KEEP_NAMED='1'; python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra=-offline --out tok_kn1
+$env:STAGE2_BOX_PIN_KEEP_NAMED='2'; python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra=-offline --out tok_kn2
+python -X utf8 work\_off10.py  --arms tok_g6def,tok_kn1
+python -X utf8 work\_off10.py  --arms tok_g6def,tok_kn2
+python -X utf8 work\_pinname_audit.py --arms tok_g6def,tok_kn1
+$c18 = (Get-Content work\_cases_v4val.txt -Raw).Trim()   # 必须整串读文件，否则 PowerShell 吃掉前导零
+$env:STAGE2_BOX_PIN_KEEP_NAMED='2'; python -X utf8 eda-pcb\tools\eval\fast.py --cases $c18 --extra=-offline --out tok_dgkn2
+python -X utf8 work\_offval.py --arms tok_dg6def,tok_dgkn2
+Remove-Item Env:STAGE2_BOX_PIN_KEEP_NAMED; python -X utf8 eda-pcb\tools\eval\fast.py --cases $c10 --extra=-offline --out tok_kn0   # 默认不变性
+```
 
 ---
 
