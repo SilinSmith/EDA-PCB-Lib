@@ -54,7 +54,8 @@ class MonoPinPipelineTests(unittest.TestCase):
                                     "bbox_img": [100, 100, 270, 290],
                                     "bbox_json": [100, 10, 270, 200]}],
                     "pins": {"ic": [[90, 180]]}, "pin_evidence": {"ic": [evidence]},
-                    "texts": [[111, 72, 132, 85], [111, 174, 151, 188], [79, 165, 96, 179]],
+                    "texts": [[111, 72, 132, 85], [111, 174, 151, 188], [79, 165, 96, 179],
+                              [150, 120, 250, 134]],
                     "nets": []}
         (self.base / "sample.stage1.json").write_text(json.dumps(self.doc), encoding="utf8")
         self.old_reads = [
@@ -62,7 +63,11 @@ class MonoPinPipelineTests(unittest.TestCase):
             {"bbox": [111, 174, 151, 188], "name_only": True,
              "reads": {"pin_name": ("VBA1", .99)}},
             {"bbox": [79, 165, 96, 179], "number_only": True,
-             "reads": {"pin_number": ("13", .99)}}]
+             "reads": {"pin_number": ("13", .99)}},
+            # box 元件的「器件名」槽走 `_best_read`，允许按 0.85 折扣串角色借读
+            # （stage2/assign.py:919 `_best_read` docstring），所以真图上 box 旁边
+            # 必须有一块型号文字；缺了它 VBA1 那块会被器件名槽借走、引脚反而没名字。
+            {"bbox": [150, 120, 250, 134], "reads": {"partname": ("ACME42", .99)}}]
 
     def pipeline(self, *, mode="auto", extras=None, real_reader=False, **options):
         def read(image, boxes, roles=None):
@@ -74,10 +79,29 @@ class MonoPinPipelineTests(unittest.TestCase):
 
         engine = SimpleNamespace(read=Mock(side_effect=read))
         out = self.base / ("output-%d" % len(list(self.base.glob("output-*"))))
+        # 0cc7fdc/§5.29：main 把「调用点现读模块全局」的七段 if 换成了**import 时求值**的
+        # `run.PIN_READERS` 注册表（stage2/run.py:110-129、:412-431），所以
+        # `patch.multiple(run, ...)` 只改全局、改不到注册表里已固化的 `_on`/`_kw`。
+        # 这里按被 patch 的全局重建同一张表 —— 分发语义与断言都不动，只让桩真的被调到。
         with ExitStack() as stack:
             stack.enter_context(patch.multiple(run, PINCOL_WIN_TEXTS=False,
                 COLOR_NUMBER_CROP=False, PIN_TEXT_CROP=False, PIN_LANE_CROP=False,
                 PIN_NUMBER_REPAIR=False, PIN_NAME_OCR="off", MONO_PIN_OCR=mode))
+            switches = {"color_crops": bool(run.COLOR_NUMBER_CROP),
+                        "pin_text_crops": bool(run.PIN_TEXT_CROP),
+                        "pin_lane_reading": bool(run.PIN_LANE_CROP),
+                        "pin_number_reading": bool(run.PIN_NUMBER_REPAIR),
+                        "pin_name_reading": run.PIN_NAME_OCR != "off"}
+            readers = []
+            for _name, _on, _mod, _fn, _need, _kw in run.PIN_READERS:
+                _kw = dict(_kw)
+                if _mod == "mono_pin_reading":
+                    _on = run.MONO_PIN_OCR != "off"
+                    _kw["mode"] = run.MONO_PIN_OCR
+                else:
+                    _on = switches.get(_mod, _on)
+                readers.append((_name, _on, _mod, _fn, _need, _kw))
+            stack.enter_context(patch.object(run, "PIN_READERS", readers))
             loader = stack.enter_context(patch.object(mono_pin_reading, "get_pin_name_ocr", return_value=None))
             arguments = ({"wraps": mono_pin_reading.read_mono_pin_texts} if real_reader
                          else {"return_value": copy.deepcopy(extras or [])})
@@ -160,6 +184,16 @@ class MonoPinPipelineTests(unittest.TestCase):
         self.assertEqual(final, expected)
         self.assertEqual(index, expected_index)
         self.assertEqual(assigned["comps"]["ic"]["pins"]["0"]["number"]["text"], "13")
+
+
+def setUpModule():
+    """§5.28：本模块的「合格读数压过更高分旧读数」那条断言测的是队友分支**未并入**的绑定
+    主体（`_qualified_mono_views` 原注释："Do not compare optional OCR confidence with the
+    legacy model's score."）。其余 6 条已按 main 自己的 API 修好（`run.PIN_READERS`
+    注册表重建 + box 器件名夹具），门开后原样开跑。见 tests/_unmerged_gate.py。"""
+    import _unmerged_gate
+    _unmerged_gate.gate([("stage2.assign", ("_qualified_mono_views",
+                                            "_preferred_name_observation"))])
 
 
 if __name__ == "__main__":

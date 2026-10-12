@@ -22,6 +22,11 @@ class Provider:
 
 class MonoPinReadingTests(unittest.TestCase):
     def run_reader(self, values=None, role="pin_number", flags=None, provider_missing=False, **kwargs):
+        # 0cc7fdc（§5.29 接口统一）把 read_mono_pin_texts 的 mode 默认值由 "auto" 改成
+        # "off"（未在 §5.29 记录），并且一律走关键字传参；管线里的调用点
+        # （stage2/run.py 的 PIN_READERS）始终显式传 mode。本夹具保持被测入口的
+        # auto 语义，因此显式传参。
+        kwargs.setdefault("mode", "auto")
         gray = np.full((80, 90), 255, np.uint8)
         gray[26:35, 12:18] = np.arange(54, dtype=np.uint8).reshape(9, 6)
         bgr = np.repeat(gray[:, :, None], 3, axis=2)
@@ -261,7 +266,7 @@ class MonoPinReadingTests(unittest.TestCase):
         provider = Provider([("VBAT", .96), ("VBAT", .96)])
         with patch("stage2.mono_pin_reading.mono_pin_boxes", return_value=(candidates, image[:, :, 0])), \
              patch("stage2.mono_pin_reading.get_pin_name_ocr", return_value=provider):
-            output = read_mono_pin_texts(doc, old, None, image, min_conf=.90)
+            output = read_mono_pin_texts(doc, old, None, image, min_conf=.90, mode="auto")
         self.assertEqual(output[0]["reads"], {})
         self.assertIsNone(output[0]["mono_pin_ocr"]["previous_name"])
         self.assertEqual(output[0]["mono_pin_ocr"]["held_reason"], "unresolved_dirty_partner_number_geometry")

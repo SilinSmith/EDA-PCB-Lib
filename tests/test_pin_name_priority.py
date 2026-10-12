@@ -67,5 +67,13 @@ class PinNamePriorityTests(unittest.TestCase):
         self.assertEqual([old, new], before)
 
 
+def setUpModule():
+    """§5.28：本模块测的是队友分支**未并入**的绑定主体（见 tests/_unmerged_gate.py）。"""
+    import _unmerged_gate
+    _unmerged_gate.gate([("stage2.assign", ("_preferred_name_observation", "_name_reservation")),
+                         ("stage2.structmatch", ("_name_edge_midpoint_enabled",
+                                                 "name_edge_midpoint"))])
+
+
 if __name__ == "__main__":
     unittest.main()

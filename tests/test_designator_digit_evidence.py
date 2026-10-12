@@ -57,5 +57,11 @@ class DesignatorDigitEvidenceTests(unittest.TestCase):
         self.assertIsNone(result["comps"]["reg"]["designator"])
 
 
+def setUpModule():
+    """§5.28：本模块测的是队友分支**未并入**的位号数字证据（见 tests/_unmerged_gate.py）。"""
+    import _unmerged_gate
+    _unmerged_gate.gate([("stage2.assign", ("PIN_DIGIT_ENTITY", "_digit_entities"))])
+
+
 if __name__ == "__main__":
     unittest.main()

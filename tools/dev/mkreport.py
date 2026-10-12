@@ -617,8 +617,11 @@ def build():
     bullets(doc, [
         ("案例级扇出", "：一张图的全流程作为不可分割任务分给 N 个独立子进程，"
          "`-case-workers` 默认 `-1` 自动（可见 GPU ≥2 时取 `min(GPU 数, 图数)`，"
-         "单卡机器回落到串行且与旧行为逐位一致）；lane 内并发自动降档"
-         "（`-vlm-workers` 减半、`-workers 1`、限制 `OMP_NUM_THREADS`）。"),
+         "单卡机器回落到串行且与旧行为逐位一致）；lane 内并发按**在飞外部请求数**自动降档"
+         "（全进程在飞 VLM 请求 ≤ **8** 是实测硬拐点：2 lane×4 与 4 lane×2 的产物与串行"
+         "**逐字节相同**，8 lane×2 = 16 在飞则掉 2.79 分且重试救不回；因此 8 lane 时分到 "
+         "`-vlm-workers 1`，并压 `-workers 1`、限制 `OMP_NUM_THREADS`；见 "
+         "`docs/RESULTS.md` §5.61）。"),
         ("看门狗兜底", "：`EDA_WALL_BUDGET_S` 到点强杀剩余 lane，父进程对没有产出的图"
          "**补空壳 JSON**，保证「超时也留下东西」，避免 `m/M` 双重惩罚。"),
         ("增量发布（本轮新增）", "：平台侧超时是**硬杀容器**（官方练习环境实测 "
@@ -637,7 +640,10 @@ def build():
          "10/10 可解析（其中 6 份已是跑完的融合档）。"),
         ("回归测试", "：`tools/dev/_fantest.py` 八个现场（坏图 / 看门狗 / 强制串行 / 自动扇出 / "
          "护栏 / 离线 / 增量发布 / 发布升级）、`tests/test_fanout_publish.py` 7 例"
-         "（发布升级、幂等、不倒退、半截 JSON / mtime 比较）、`tools/dev/_hardtest.py`（合成硬例）。"),
+         "（发布升级、幂等、不倒退、半截 JSON / mtime 比较）、`tests/test_fanout_concurrency.py` "
+         "20 例（lane 解析 / 设备轮转 / 在飞上限 / 子进程参数）、`tools/dev/_hardtest.py`（合成硬例）；"
+         "`tests/` 全量 **226 例全绿**（0 失败 0 错误；另有 20 个模块按「缺失前置条件」跳过 —— "
+         "它们打的是队友分支里、按 §5.28 有意未并入的绑定主体，见 `docs/RESULTS.md` §5.62）。"),
         ("可复现性", "：每次运行写出 `decision_log.json`（配置快照 + 资产 sha256 + "
          "逐案例计时 + 全部外部调用统计）；同一次运行在扇出/串行两种口径下产物逐字节相同。"),
         ("Linux 兼容", "：交付入口纯 Python、无 PowerShell 依赖，路径全部走 `pathlib`，"

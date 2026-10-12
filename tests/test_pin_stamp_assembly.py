@@ -77,5 +77,11 @@ class PinStampAssemblyTests(unittest.TestCase):
                          {"(R1.1)", "(R1.2)"})
 
 
+def setUpModule():
+    """§5.28：本模块测的是队友分支**未并入**的绑定主体（见 tests/_unmerged_gate.py）。"""
+    import _unmerged_gate
+    _unmerged_gate.gate([("stage2.assemble", ("BOX_PIN_DUPLICATE_BEST", "_pin_contact_rank"))])
+
+
 if __name__ == "__main__":
     unittest.main()

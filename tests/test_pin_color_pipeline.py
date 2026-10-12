@@ -89,3 +89,13 @@ class ColorPinIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── §5.28 门：本模块测的是队友分支未并入 main 的「彩色实测连线 → 挂载闸门」 ──
+# 前置符号缺失 ⇒ setUpModule 抛 SkipTest，整模块标为 skipped（一条断言都不改）；
+# 队友那条绑定路径并进来后本门自动打开，原测试原样开跑。
+def setUpModule():
+    import _unmerged_gate
+    _unmerged_gate.gate([
+            ('stage1.nets', ('_guard_distances', '_component_boxes',
+                             '_crosses_box_interior'))])

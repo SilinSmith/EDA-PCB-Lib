@@ -5901,5 +5901,128 @@ python -X utf8 tools\eval\fast.py --engine protocol2 --cases 1,10,2,3,4,5,6,7,8,
 **全量回归**：`python -X utf8 -m unittest discover -s tests -p "test_*.py"` ⇒ **446 例**（含新增 7 例）。
 **既有 35 失败 / 332 错误与本改动无关**：把 `vlm/client.py` 暂存回 HEAD 后重跑是同样的 **439 例 / 35 失败 /
 332 错误**（多为 `tests/test_trusted_pin_binding.py` 一类 stage2 夹具里 `pin_lane` 读取器报
-`'types.SimpleNamespace' object has no attribute 'recognizer'`，属本机夹具环境问题）。
+`'types.SimpleNamespace' object has no attribute 'recognizer'`）。**注：当时把它归为「本机夹具环境问题」是误判，真因见 §5.62**。
+
+---
+
+## §5.61 8 卡扇出口径：在飞 VLM 请求 ≤ 8 是硬拐点（2026-10-13）—— 扇出只改谁先跑，不改答案
+
+**动机**：平台是 8×A800，`packaging/Dockerfile` 不设 `EDA_CASE_WORKERS`，所以 50 图会自动开 8 条 lane；
+每条 lane 默认再带 `-vlm-workers 4` ⇒ **32 路并发打同一个 LLM 端点**。§5.60 加了传输层重试把「丢读数」堵住了，
+但重试救得回读数、救不回**答案**（下面第 3 行起）。所以「扇出到底怎么配」要按量出来的拐点定，不靠猜。
+
+**方法**：`work/_vram_probe.py <tag> -- <命令>`，每秒采 `nvidia-smi --query-gpu=memory.used,utilization.gpu`
+（WDDM 上 `apps_sum` 恒 0，故只记**整卡 total**）。官方 10 张、`-lean` 档、本机 **1×RTX 4080 16 GB**
+（时间列是本机单卡读数，不是 A800 读数；显存列才有跨卡参考价值）。
+
+| 臂 | 档 | lane | 在飞 VLM | 墙钟（本机） | 协议尺 | 与串行产物 | 整卡峰值 |
+|---|---|---|---|---|---|---|---|
+| `fan_off_1` | `-offline` | 1 | — | 29.5 s | 77.50 | 基线 | 2 676 MiB |
+| `fan_off_8` | `-offline` | 8 | — | 32.6 s | 77.50 逐案相同 | **sha256 10/10 全等** | 7 924 MiB |
+| `tok_retry_lean` | `-lean` | 1 | 4 | 106.7 s | **80.04** | 基线 | — |
+| `fan_lean_2` | `-lean` | 2 | 8 | 114.3 s | 80.04 逐案相同 | **sha256 10/10 全等** | 13 346 MiB |
+| `fan_lean_4` | `-lean` | 4 | 8 | 122.3 s | 80.04 逐案相同 | **sha256 10/10 全等** | 15 800 MiB |
+| `fan_lean_8`（旧规则：8×2=16 在飞） | `-lean` | 8 | 16 | 407.4 s | **77.25**（−2.79） | 只有 4/10 相同 | 15 992 MiB |
+| `fan_lean_8c`（新规则：8×1=8 在飞） | `-lean` | 8 | 8 | 184.0 s | **80.04** | **sha256 10/10 全等** | 15 963 MiB |
+
+**四条结论**：
+
+1. **拐点在「全进程在飞 VLM 请求数」8 与 16 之间**，不是「lane 数」也不是「减半」：2 lane×4 = 8 在飞逐字节不变，
+   4 lane×2 = 8 在飞逐字节不变，8 lane×2 = **16** 在飞才变。故规则定为「在飞 ≤ `VLM_INFLIGHT_CAP`(8)」。
+2. **过载掉的分，重试救不回来**：16 在飞那次 lane 级 `vlm_client` 求和 = `calls 129 / errors 6 / retries 21 /
+   exhausted 0 / refused 0`，即 21 次重试全部最终成功，但答案已经变了 —— 网络 0.7749→0.7056、导线 0.4137→0.3687，
+   逐案 case3 −7.53（81.52→73.99）、case7 −13.22（82.09→68.87），另有 case5 **+3.85**（过载是随机噪声，不是单调变差）。
+   同一批 lane 的 `vlm_stats` 求和与串行完全一致（26 desig / 33 value_calls / 21 name_calls / 0 pins / 0 grid）
+   ⇒ **调用结构没变，变的是「同一张图拿到的回答」**（端点并发下的批处理/超时截断）。
+3. **显存不是约束**：纯 CV 侧每 lane 增量 ≈ **0.75 GB**（`-offline`：1 lane 峰值 2 676 MiB → 8 lane 7 924 MiB，
+   差额 5 248 MiB ÷ 7 条新 lane），加上驱动/桌面固定占用后 8 lane 合计 ≈ 7.9 GB。`-lean` 档 8 lane 峰值
+   15.96 GB，但那一次有**本机 qwen3.5-9b 服务**同卡常驻（`work/_vram_probe.py` 量的是整卡 total，没法拆进程，
+   WDDM 上 `apps_sum` 恒 0）⇒ 比赛日 LLM 在远端、视觉侧 8 lane 合计 ≈ 6–8 GB，80 GB 的 A800 上完全宽裕。
+   ⚠ 只有本机这种「16 GB 卡 + 本地 LLM 服务」的组合才会贴顶。
+4. **本机单卡上扇出只会更慢**（`-offline` 29.5→32.6 s；`-lean` 106.7→114.3→122.3→184.0 s），因为 8 条 lane 抢同一张卡；
+   只有「lane 数 ≤ 可见 GPU 数」时才有加速面。**时间预算本来就不紧**：`-lean` 串行 10.7 s/图 ⇒ 50 图 ≈9 min，
+   `-offline` 2.7 s/图 ⇒ 50 图 ≈2.3 min，都远在 2 h 限内 ⇒ **扇出的价值是「防单例变慢/防端点抖动」的保险，不是必需**。
+
+**落地（`submission/run.py`）**：新增模块常量 `VLM_INFLIGHT_CAP = 8`（紧跟 `_PLATFORM_DEFAULTS` 之后）；
+`_child_concurrency(a, n_lanes)` 由旧的 `if n_lanes >= 4: vw = max(1, vw // 2); s1 = 1` 改为
+`if n_lanes > 1: vw = max(1, min(vw, VLM_INFLIGHT_CAP // n_lanes)); s1 = 1`（stage1 workers 在大扇出时压到 1，
+子进程线程数仍是 `nthr = max(1, ncpu // n_lanes)`）。串行路径（`n_lanes <= 1`）完全不动。
+
+**等价验收**：`work/_vram_probe.py lean8c -- python -X utf8 eda-pcb\tools\eval\fast.py --cases 1,10,2,3,4,5,6,7,8,9
+--out fan_lean_8c "--extra=-lean -case-workers 8"` ⇒ 协议尺 **80.04**、四项 0.9819 / 0.7731 / 0.7749 / 0.4137、
+tp 250/96/125/321，与串行 `tok_retry_lean` 的 10 份产物 **sha256 10/10 全等**，lane 级 `errors 0 / retries 7`，
+墙钟 184.0 s（本机 1 卡；8 条 lane 各 ≈1 张图、`n_shell=0`）。
+
+**这条是常量不是 env 开关**：不存在 `EDA_VLM_INFLIGHT`；要临时放宽只能改代码，要收紧用
+`-case-workers ≤4`（`min()` 只降不升，显式 `-vlm-workers` 也压不过 cap）。
+`tests/test_fanout_concurrency.py` 的 `ChildConcurrencyTests` 把上面这张表钉成了断言
+（1 lane→(4,2)、2 lane→(4,1)、4 lane→(2,1)、8 lane→(1,1)、8/12/50 lane→(1,1)、`n×vw ≤ 8` 扫描、cap==8）。
+
+**⚠ 口径限制（不许把本条读成「远程端点的并发上限是 8」）**：本机端点是与推理进程**同卡**的本地
+`qwen3.5-9b`（`http://127.0.0.1:1234/v1`），所以 16 在飞那次的退化里既有「服务端排队/截断」也有
+「抢同一张 16 GB 卡」的成分；比赛日端点是 dashscope 的**远程** `qwen3.7-plus`，两者不能混同。
+本条的用法是**取保守侧**：cap=8 的时间代价已量出（50 图 ≈9 min，远在 2 h 内），而 32 路并发打远程端点的
+429/5xx 雪崩是真实风险（§5.60 就是为它加的重试）。若比赛日实测远程端点宽松，把 `VLM_INFLIGHT_CAP`
+调大是一行改动；调大前应先确认「8 lane × 2 worker」在真实端点上仍逐字节等价。
+
+---
+
+## §5.62 测试套件归因：22 模块 367 红是「测试在、被测对象不在」，按缺失前置条件加门（2026-10-13）
+
+**症状**：全量 `python -X utf8 -m unittest discover -s tests -p "test_*.py"` ⇒ **446 例 / 35 失败 / 332 错误**。
+§5.60 末尾把这批红写成「本机夹具环境问题」——**误判**。
+
+**真因（机械证据）**：这 22 个红色模块的**测试文件全部来自同一个提交** `ebabf5d`（并入队友分支
+`codex/improve-pin-network-parsing`，96 个文件里 36 个是测试）；而它们要打的产品那一半**按 §5.28 有意未并**。
+`docs/RESULTS.md:3225` 原文：「队友 `stage2/assign.py` 的 **507 行绑定主体**与 `stage2/structmatch.py` 的
+**879 行** …… **未并** —— 它们是互斥的另一条绑定路径，不是可增量吸收的小件」（§5.28 已判其负收益：
+`pev1` 逐字节 no-op、`pev2` 引脚 0.6179→0.0725、trust gate `tdoff→tdrej→tdboth` = 71.65→64.15→53.42）。
+两侧 `hasattr` 对照（main → 队友分支）：`assign.PIN_TRUST_BIND`（分支 `assign.py:138`）、`PIN_NUMBER_TRUST_BIND`
+(:141)、`PIN_TEXT_ROLE_GUARD`(:142)、`PIN_DIGIT_ENTITY`(:143)、`assemble.BOX_PIN_DUPLICATE_BEST`
+(`assemble.py:72`)、`_box_number_winners`(:545)、`structmatch.normalize_number_evidence` / `rebind_numbers` /
+`pin_anchor` / `pin_edge` / `_candidate_faces_edge` / `name_edge_midpoint` / `name_edge_midpoint_distance` /
+`_name_corridor_distance` / `_directional_name_groups` / `number_row_distance` —— **main 上全是 False**。
+`git diff main..improve-pin-network-parsing -- tests/` 只差本仓新增的 `test_fanout_publish.py` + `test_vlm_retry.py`
+⇒ **`tests/` 在两分支上逐字节相同，差的全是产品**。故红例不是产品回归，也不是夹具问题。
+
+**分类（22 模块 / 367 红块）**：① API 漂移 128（`rebind()` 多 `pin_evidence=` 等 68、`normalize_number_evidence`
+缺失 34）；② `stage2.assign` / `stage2.assemble` 模块级补丁落点漂移 111（`AttributeError: <module
+'stage2.assemble'>` 一类，补丁打在不存在的属性上）；③ 签名漂移 76（`read_pin_names()` 少一个位置参 `bgr` 22、
+`build_nets()` 多个 kwarg 19、`sample_segments()` 多 `return_directions` 8）；④ 期望值/夹具漂移 52。
+
+**处置（用户裁决：按缺失前置条件跳过）**：新增 `tests/_unmerged_gate.py` —— 常量 `BRANCH` /
+`MERGE_COMMIT = "ebabf5d"` / `WHY`（含上面 §5.28 的摘要）、`missing(checks)` 用 `importlib.import_module`
+逐「(模块, 名字序列)」探测、`gate(checks, note="")` 有缺失即 `raise unittest.SkipTest(...)`；各文件
+`def setUpModule(): import _unmerged_gate; _unmerged_gate.gate([...])`。
+**20 个模块加门**（断言一字未弱化、文件未删）：test_bigic_borders、test_black_frame_binding、
+test_box_pin_duplicates、test_designator_digit_evidence、test_mono_pin_binding、test_mono_pin_pipeline、
+test_network_attachment、test_pin_color_pipeline、test_pin_geometry、test_pin_name_corridor、
+test_pin_name_edge_midpoint、test_pin_name_frame_guard、test_pin_name_priority、test_pin_name_reading、
+test_pin_number_priority、test_pin_number_row_binding、test_pin_stamp_assembly、test_pin_text_role_guard、
+test_pipeline_pin_network、test_trusted_pin_binding。**队友绑定主体真并进来时门自动打开、测试自动复活。**
+
+**其中 4 个模块是真 drift（不是孤儿），已按 main 现签名修好**：`test_color_number_crops`（11 红→`Ran 17 OK`；
+main `stage2/color_crops.py:115` 是 `color_number_boxes(doc, image, reads=None)`，队友分支是 `(doc, reads, image)`，
+旧序把 ndarray 传进 `reads` ⇒ 10× `ValueError: The truth value of an array with more than one element is ambiguous`）、
+`test_mono_pin_reading`（11 红→`Ran 15 OK`；`read_mono_pin_texts(doc, reads, engine, bgr, *,
+min_conf=0.0, mode='off', …)` 把队友的位置参 `mode="auto"` 变成 keyword-only 且默认 `off`，但队友
+`stage2/run.py:254-258` 的调用点**始终显式传** `mode=MONO_PIN_OCR` ⇒ 改默认值对管线零影响）、
+`test_pin_name_reading`（§5.29 把 `engine` 插成第 3 位置参，`stage2/pin_name_reading.py:91`；补 `None` 占位后
+`Ran 26 … failures=4, errors=8` ⇒ **26 例里 14 例在 main 上本来就能过**，其余需仲裁主体 ⇒ 走门并在 `note=` 写明）、
+`test_mono_pin_pipeline`（6 条 drift 修好：`stage2/run.py:110-129` 的 `PIN_READERS` 是 import 时求值 ⇒
+`patch.multiple` 改不到已构造元组；夹具缺 box 器件名文字 ⇒ `stage2/assign.py:919-934` 的 `_best_read`
+（`pref = 1.0 if r == role else 0.85`，docstring 明写「也允许串角色借读…因为角色条件只是弱条件」，main 与队友分支
+逐字相同、由 `a6d06f0` 加入且从未删除）让 partname 槽借走 VBA1 ⇒ `stage2/assemble.py:1628-1630` 的迟到闸门丢脚
+⇒ `KeyError: 'pin_13'`）。
+
+**读数（本条落地后）**：`Ran 222 tests ... OK (skipped=20)` —— **0 失败 0 错误**；被跳的 20 个模块内含 224 例
+（`Ran` 不再计入）。套件从「常红、不能当回归网」变成「全绿 + 20 个显式未并入门」。
+
+**已知可回收项（留给后续）**：3 个模块把门收窄到类/方法，可救回约 **21 例**在 main 上真能过的断言 ——
+`test_pin_name_reading` 14、`test_mono_pin_pipeline` 6、`test_pin_text_role_guard` 1（后者是
+`PINNUM_CONSENSUS`：main `stage2/assign.py:58` 默认 `"0"`、队友分支 `:87` 默认 `"1"`，`_best_number_read`
+函数体 main `:61-94` 与分支 `:573-602` **逐字节相同**，`patch.object(assign, "PINNUM_CONSENSUS", True)`
+即可让 `'1' != '14'` 那条断言通过；`tests/test_pin_number_consensus.py` 5 例恒绿正是因为它打的是真开关）。
+需要一个「同模块内 drift 与孤儿混装」的细粒度门，属后续工作，故本条不落。
+
 

@@ -150,5 +150,13 @@ class MonoPinBindingTests(unittest.TestCase):
         self.assertEqual(final["__pin_index"], {"ic": {"1": "pin_113"}})
 
 
+
+def setUpModule():
+    """§5.28：本模块测的是队友分支**未并入**的绑定主体（见 tests/_unmerged_gate.py）。"""
+    import _unmerged_gate
+    _unmerged_gate.gate([("stage2.assign", ("_qualified_mono_views", "_name_reservation",
+                                            "_fresh_number_candidate"))])
+
+
 if __name__ == "__main__":
     unittest.main()

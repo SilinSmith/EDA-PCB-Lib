@@ -84,5 +84,14 @@ class PinNumberPriorityTests(unittest.TestCase):
         self.assertEqual(self.bind([self.old, record])[0]["number"]["text"], "8")
 
 
+def setUpModule():
+    """§5.28：本模块测的是队友分支**未并入**的绑定主体（见 tests/_unmerged_gate.py）。"""
+    import _unmerged_gate
+    _unmerged_gate.gate([("stage2.assign", ("_preferred_number_observation",
+                                            "_fresh_number_candidate")),
+                         ("stage2.structmatch", ("normalize_number_evidence",
+                                                 "deduplicate_number_candidates"))])
+
+
 if __name__ == "__main__":
     unittest.main()

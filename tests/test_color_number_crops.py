@@ -23,7 +23,7 @@ class ColorNumberCropsTests(unittest.TestCase):
 
     def test_cross_frame_digit_crop_excludes_body_circle_and_colored_frame(self):
         image,doc,reads=self.fixture()
-        boxes,gray=color_crops.color_number_boxes(doc,reads,image)
+        boxes,gray=color_crops.color_number_boxes(doc,image,reads)
         self.assertEqual(len(boxes),1)
         self.assertLessEqual(boxes[0]["bbox"][2],50)
         self.assertTrue(np.all(gray[20:61,50]==255))
@@ -36,8 +36,16 @@ class ColorNumberCropsTests(unittest.TestCase):
         self.assertEqual(reads,original)
         self.assertEqual(result[0]["reads"],{"pin_number":("1",.98)})
         self.assertTrue(result[0]["number_only"])
-        self.assertIsNone(_best_read(result[0]["reads"],"pin_name",fit_pinname))
-        self.assertEqual(_best_read(result[0]["reads"],"pin_number",fit_pinnum)[1],"1")
+        # `_best_read` 本就允许「串角色借读」（stage2/assign.py:919 docstring、
+        # docs/reports/统一校验与裁决层_侦察报告.md:45），只按 0.85 折扣；角色限制
+        # 落在适配度 fit 上：纯数字对 pin_name 只有很低适配度，因此借读分必须
+        # 明显低于本角色分，且不可能靠借读拿号。
+        own=_best_read(result[0]["reads"],"pin_number",fit_pinnum)
+        borrowed=_best_read(result[0]["reads"],"pin_name",fit_pinname)
+        self.assertIsNotNone(borrowed)
+        self.assertLess(borrowed[3],own[3])
+        self.assertLess(borrowed[0],own[0])
+        self.assertEqual(own[1],"1")
 
     def test_valid_numeric_names_from_name_role_are_preserved(self):
         self.assertEqual(_best_read({"pin_name":("1",.98)},"pin_name",fit_pinname)[1],"1")
@@ -46,11 +54,11 @@ class ColorNumberCropsTests(unittest.TestCase):
         image,doc,reads=self.fixture()
         for change in ({"source":"grayscale"},{"point_img":[30,30]}, {"frame_confirmed":False}):
             modified=copy.deepcopy(doc);modified['pin_evidence']['ic'][0].update(change)
-            self.assertEqual(color_crops.color_number_boxes(modified,reads,image)[0],[])
+            self.assertEqual(color_crops.color_number_boxes(modified,image,reads)[0],[])
 
     def test_identical_windows_are_deduplicated(self):
         image,doc,reads=self.fixture()
-        self.assertEqual(len(color_crops.color_number_boxes(doc,reads*2,image)[0]),1)
+        self.assertEqual(len(color_crops.color_number_boxes(doc,image,reads*2)[0]),1)
 
     def test_geometry_tracks_actual_ink_not_sampling_padding(self):
         image,doc,reads=self.fixture()
@@ -71,7 +79,7 @@ class ColorNumberCropsTests(unittest.TestCase):
             image[30+dy,34+dy]=[0,150,0]
             image[30+dy,34-dy]=[0,150,0]
         reads[0]["bbox"]=[29,25,50,36]
-        boxes,gray=color_crops.color_number_boxes(doc,reads,image)
+        boxes,gray=color_crops.color_number_boxes(doc,image,reads)
         self.assertEqual(boxes[0]["geometry_bbox"],[41,27,49,35])
         self.assertEqual(np.count_nonzero(gray[25:36,29:39]<190),0)
         self.assertGreater(boxes[0]["color_contamination_ratio"],.1)
@@ -81,7 +89,7 @@ class ColorNumberCropsTests(unittest.TestCase):
     def test_overlap_sources_of_same_glyph_keep_provenance(self):
         image,doc,reads=self.fixture()
         second=copy.deepcopy(reads[0]);second["bbox"]=[43,26,61,36]
-        boxes,_=color_crops.color_number_boxes(doc,reads+[second],image)
+        boxes,_=color_crops.color_number_boxes(doc,image,reads+[second])
         self.assertEqual(len(boxes),1)
         self.assertEqual(boxes[0]["original_bboxes"],[reads[0]["bbox"],second["bbox"]])
         self.assertEqual([item["read_index"] for item in boxes[0]["source_boxes"]],[0,1])
@@ -92,11 +100,11 @@ class ColorNumberCropsTests(unittest.TestCase):
         for field,value in (("point_img",[30]),("point_img",[float("nan"),38]),
                             ("anchor_img","wrong"),("source",[])):
             bad=copy.deepcopy(doc);bad['pin_evidence']['ic'][0][field]=value
-            self.assertEqual(color_crops.color_number_boxes(bad,reads,image)[0],[])
+            self.assertEqual(color_crops.color_number_boxes(bad,image,reads)[0],[])
         for malformed in ({"bbox":[42,25,float("inf"),36],"reads":reads[0]["reads"]},
                           {"bbox":"no", "reads":reads[0]["reads"]},
                           {"bbox":reads[0]["bbox"],"reads":None},None):
-            self.assertEqual(color_crops.color_number_boxes(doc,[malformed],image)[0],[])
+            self.assertEqual(color_crops.color_number_boxes(doc,image,[malformed])[0],[])
 
     def test_edge_clipping_is_separate_from_complete_multidigit_ink(self):
         image,doc,reads=self.fixture()
@@ -104,10 +112,10 @@ class ColorNumberCropsTests(unittest.TestCase):
         image[27:35,39:42]=0
         image[27:35,46:49]=0
         image[27:35,53:60]=0  # internal marker excluded
-        boxes,_=color_crops.color_number_boxes(doc,reads,image)
+        boxes,_=color_crops.color_number_boxes(doc,image,reads)
         # Expand original OCR window to include both external digits.
         reads[0]["bbox"]=[38,25,62,36]
-        boxes,_=color_crops.color_number_boxes(doc,reads,image)
+        boxes,_=color_crops.color_number_boxes(doc,image,reads)
         self.assertEqual(boxes[0]["geometry_bbox"],[39,27,49,35])
         self.assertEqual(boxes[0]["bbox"][2],50)
         self.assertTrue(boxes[0]["frame_clipped"])
@@ -119,14 +127,14 @@ class ColorNumberCropsTests(unittest.TestCase):
         peer=copy.deepcopy(doc["pin_evidence"]["ic"][0])
         peer["point_img"]=[30,58];peer["anchor_img"]=[50,58]
         doc["pin_evidence"]["ic"].append(peer)
-        boxes,_=color_crops.color_number_boxes(doc,reads,image)
+        boxes,_=color_crops.color_number_boxes(doc,image,reads)
         self.assertEqual([box["pin_index"] for box in boxes],[0])
 
     def test_complete_digit_not_cut_at_pin_row_minus_one(self):
         image,doc,reads=self.fixture()
         image[35:39,44:48]=0
         reads[0]["bbox"]=[42,25,49,39]
-        boxes,_=color_crops.color_number_boxes(doc,reads,image)
+        boxes,_=color_crops.color_number_boxes(doc,image,reads)
         self.assertEqual(boxes[0]["geometry_bbox"],[44,27,48,39])
         self.assertEqual(boxes[0]["bbox"][3],41)
 
@@ -135,7 +143,7 @@ class ColorNumberCropsTests(unittest.TestCase):
         image[36,42]=[0,160,0]
         image[36,43]=[130,144,168]  # faint NC/wire compression fringe
         image[28,45]=[110,130,140]  # distant antialiased dark text preserved
-        boxes,cleaned=color_crops.color_number_boxes(doc,reads,image)
+        boxes,cleaned=color_crops.color_number_boxes(doc,image,reads)
         self.assertEqual(cleaned[36,43],255)
         self.assertLess(cleaned[28,45],190)
         self.assertEqual(boxes[0]["geometry_bbox"],[44,27,48,35])

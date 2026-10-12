@@ -351,6 +351,11 @@ _PLATFORM_DEFAULTS = (
     ("EDA_WALL_BUDGET_S", "6900"),
 )
 
+# 扇出时**全进程同时在飞**的 VLM 请求数上限（`_child_concurrency` 用它反推每 lane 的
+# `-vlm-workers`）。8 是 §5.61 量出来的拐点：8 路在飞时官方 10 张逐字节不变，16 路时
+# 答案本身变了（-2.79 分）。串行路径（lane 数 ≤ 1）不受它影响。
+VLM_INFLIGHT_CAP = 8
+
 
 def _platform_budgets() -> dict:
     """补上没设过的护栏默认值，返回**实际生效**的三元组（进决策日志）。"""
@@ -451,6 +456,32 @@ def _child_argv(a, out_dir: Path, cases: list, device, vlm_workers: int,
             val = vlm_workers
         argv += [flag, str(val)]
     return argv
+
+
+def _child_concurrency(a, n_lanes: int):
+    """lane 内的并发度 `(vlm_workers, stage1_workers)`：整体并发 = lanes × 每 lane 并发。
+
+    端点通常是**单模型**的兼容端点（8 卡那天是外部服务），并发太高只会让它排队并回
+    429/5xx（读数靠 `vlm/client.py` 的 `VLM_RETRY` 兜，但兜回来的是时间）。所以这里
+    把「全进程同时在飞的 VLM 请求数」钉在 `VLM_INFLIGHT_CAP` 以内。
+
+    ★ 8 是量出来的，不是拍的（`docs/RESULTS.md` §5.61，官方 10 张、`-lean`、本机 1 卡）：
+      1 lane × vw 4 = 4 路在飞 → 与基线逐字节相同；
+      2 lane × vw 4 = 8 路在飞 → **10/10 逐字节相同**，80.04，墙钟 114 s；
+      4 lane × vw 2 = 8 路在飞 → **10/10 逐字节相同**，80.04，墙钟 122 s；
+      8 lane × vw 2 = 16 路在飞 → 只有 4/10 相同、**77.25（-2.79）**、墙钟 407 s（3.8×）。
+    即拐点在 8 与 16 之间：8 路在飞时端点给的答案逐字节不变，16 路时答案本身变了
+    （过载下采样/截断不同），掉的分靠重试救不回来。所以 8 路扇出时每 lane 只留 1 个
+    worker（8 在飞），而不是默认的 2。
+
+    lane 数一多同时也把 stage1 的进程内并行让给 lane 之间的并行（`s1 = 1`）。
+    """
+    vw = int(getattr(a, "vlm_workers", 4))
+    s1 = int(getattr(a, "workers", 1))
+    if n_lanes > 1:
+        vw = max(1, min(vw, VLM_INFLIGHT_CAP // n_lanes))
+        s1 = 1
+    return vw, s1
 
 
 def _publish_one(lane_file: Path, dst: Path, state: dict, stage_dir: Path) -> bool:
@@ -590,12 +621,7 @@ def _run_fanout(a) -> int:
 
     # lane 内并发度：整体并发 = lanes × 每 lane 并发，别把本地 LLM/VLM 端点打爆。
     # 端点通常是 LM Studio 单模型（127.0.0.1:1234），32 路并发只会让它排队。
-    child_vw = int(getattr(a, "vlm_workers", 4))
-    if n_lanes >= 4:
-        child_vw = max(1, child_vw // 2)
-    child_s1 = int(getattr(a, "workers", 1))
-    if n_lanes >= 4:
-        child_s1 = 1                     # 每 lane 的 stage1 交给 lane 之间的并行
+    child_vw, child_s1 = _child_concurrency(a, n_lanes)
     ncpu = os.cpu_count() or 4
     child_env = dict(os.environ)
     nthr = str(max(1, ncpu // n_lanes))
