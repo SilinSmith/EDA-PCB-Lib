@@ -871,6 +871,78 @@ def _pt_seg_dist(px: float, py: float, segs: List[Tuple[str, tuple]], skip: str 
     return best
 
 
+# ★★ L/T 拐角合拢（`STAGE2_EDGE_CORNER`，默认 12 px，0 = 关）。
+# 病：骨架化在**结点**处解不出真交叉位置 —— 一个 T/十字的每一条腿都比真结点**短 8~13 px**
+#   （见 `STAGE2_EDGE_SPLIT` 长注释与 `_linelab.py` 的「截断」类：一端已 ≤3px、另一端中位 9.5px）。
+# 药：两条同网边各自的**轴延长线**若在 ≤ `STAGE2_EDGE_CORNER` px 内相交，且交点落在对方跨度内
+#   （或离对方某个端点 ≤ 同值），就把端点搬到交点 —— 一次把**腿们一起**推到真结点上。
+# 位置：**必须跑在 `extend_edge_ends`/`extend_ends_to_evidence` 之前**（离线实测顺序反了收益从 +0.17 掉到 -0.10：
+#   先把端点搬到真结点，后面两个外推算子才有正确的起点）。
+# 实测（官方 10，纯后处理，叠在 `ext:20;overlap:10,4,0.35;extany:25,2,1,1` 之上）：
+#   对照 80.58 / 导线 0.4676 → **先 corner 80.75 / 0.4840**；放最后 80.48 / 0.4570；放中间 80.50 / 0.4593。
+# 只动 `edges` 首尾两点 ⇒ 元件/引脚/netH 三通道逐位不变。
+EDGE_CORNER = float(os.environ.get("STAGE2_EDGE_CORNER", "12"))          # 拐角合拢半径 px，0 = 关
+EDGE_CORNER_INT = float(os.environ.get("STAGE2_EDGE_CORNER_INT", "0.05"))  # 交点落在对方跨度外的容差(比例)
+
+
+def snap_ends_to_crossings(nets: Dict[str, dict], radius: float = None,
+                           interior: float = None) -> int:
+    """把端点搬到**同网**另一条边的轴延长线交点（治骨架在 T/十字结点处短 8~13px）；返回改动的端点数。"""
+    radius = EDGE_CORNER if radius is None else radius
+    interior = EDGE_CORNER_INT if interior is None else interior
+    if radius <= 0:
+        return 0
+    moved = 0
+    for rec in nets.values():
+        edges = rec.get("edges") or {}
+        segs = [(k, _seg_ends(v)) for k, v in edges.items()]
+        segs = [(k, e) for k, e in segs if e is not None]
+        if len(segs) < 2:
+            continue
+        newpts: Dict[Tuple[str, int], Tuple[float, float]] = {}
+        for i, (k, ends) in enumerate(segs):
+            (ax, ay), (bx, by) = ends
+            for idx, (px, py), (qx, qy) in ((0, (ax, ay), (bx, by)), (1, (bx, by), (ax, ay))):
+                ux, uy = px - qx, py - qy                 # ★ 朝**外**（从边体指向端点外）
+                L = math.hypot(ux, uy)
+                if L < 1e-6:
+                    continue
+                ux, uy = ux / L, uy / L
+                for j, (k2, ends2) in enumerate(segs):
+                    if j == i:
+                        continue
+                    (cx, cy), (ex_, ey_) = ends2
+                    vx, vy = ex_ - cx, ey_ - cy
+                    cr = ux * vy - uy * vx
+                    if abs(cr) < 1e-6:
+                        continue
+                    t = ((cx - px) * vy - (cy - py) * vx) / cr
+                    if not (0.0 < t <= radius):
+                        continue
+                    X = (px + t * ux, py + t * uy)
+                    L2 = vx * vx + vy * vy
+                    tj = ((X[0] - cx) * vx + (X[1] - cy) * vy) / (L2 if L2 > 1e-9 else 1.0)
+                    ok = -interior <= tj <= 1.0 + interior
+                    if not ok:
+                        for e in ((cx, cy), (ex_, ey_)):
+                            dj = math.hypot(e[0] - X[0], e[1] - X[1])
+                            if 0.0 < dj <= radius:
+                                ok = True
+                                break
+                    if not ok:
+                        continue
+                    newpts[(k, idx)] = X
+                    moved += 1
+                    break
+        for (k, idx), X in newpts.items():
+            seg = edges.get(k)
+            if not seg or len(seg) < 2:
+                continue
+            seg[idx]["x"] = round(X[0], 2)
+            seg[idx]["y"] = round(X[1], 2)
+    return moved
+
+
 def extend_edge_ends(nets: Dict[str, dict], radius: float = None,
                      hit: float = None) -> int:
     """端点沿自身轴向外推，**只有外推点落到同网另一条边 `hit` px 内才生效**；返回改动端点数。"""
@@ -2094,6 +2166,11 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # ★ 自由端回缩（`STAGE2_EDGE_TRIM`，默认 3.0 px，见长注释）：必须在切分/去重
         #   **之后**跑 —— 结点是在切分那一步才定下来的，先回缩会把结点也拉动。
         trim_free_ends(out_nets)
+    if EDGE_CORNER > 0:
+        # ★ L/T 拐角合拢（`STAGE2_EDGE_CORNER`，默认 12）：必须跑在 `extend_ends_to_evidence` /
+        #   `extend_edge_ends` **之前** —— 先把各条腿搬回真结点，后面两个外推算子才有正确起点
+        #   （离线实测：先 corner 80.75，夹在中间 80.50，放最后 80.48）。
+        snap_ends_to_crossings(out_nets)
     if EDGE_EXT_FREE > 0:
         # ★ 自由端外推（`STAGE2_EDGE_EXT_FREE`）：必须跑在 `extend_edge_ends` **之前** ——
         #   离线实验里顺序反过来（ext;overlap;extfree）会把已对齐的端点再推过头，收益从 +0.42 掉到 +0.13。

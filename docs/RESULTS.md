@@ -6450,3 +6450,49 @@ case 4 的 GND 并错与 case 7 的 C7.1/L1.1 孤立是最集中的两处）；�
 **下一步**：`extany` 治的是「短端附近有几何」的那部分；`_linesample.py` 里**「什么都没有」的 114 条**仍未解 —— 它们的 GT 端点处我们连引脚/边都没有，说明骨架在墨迹还在的地方就断了。要再往上吃只能把**证据换成一等公民**：在阶段一（`eda-pcb/stage1/wires.py`，掩膜在手）给每个折线端点算「沿轴墨迹还能续多少 px」，再据此外推（现在是 stage2 的几何近似）。oracle 上界仍是 **+3.08**（§5.68 读数 2）。
 
 **产物/口径**：`work/_edgelab.py` 新增 `extfree:R[,mode[,pin_r[,edge_r]]]` 与 `extany:R[,hit[,pins[,edges]]]` 两个算子（后者可拆半边做正交实验）；臂 `lf_*`/`lg_*`/`lh_*`/`li_*`/`lj_*`/`lk_*`/`lm_*`、`d220_ef8`/`d220_a25`/`d220_pin`/`d220_edg`、端到端 `lq_*`/`ly_*`/`lz_*`。复现：`python -X utf8 work\_edgelab.py --src fan_lean_8c --out TAG --cases $off10 --ops "extany:25,2,1,1;ext:20;overlap:10,4,0.35"` 后 `python -X utf8 eda-pcb\tools\eval\fast.py --score-only --engine protocol2 --cases $off10 --out TAG`；跨池把 `--src` 换 `d220known`、`--cases` 用 `work\_all220.txt`，分组 csv 在 `work\_grp\*.txt`。
+
+## §5.70 导线结点合拢：`STAGE2_EDGE_CORNER` 上线（骨架在 T/十字结点处每条腿短 8~13px）（2026-10-14）
+
+§5.68/§5.69 的三个算子都在治「端点差一点」，但它们都是**沿一条边自己**外推；而 `_linelab.py` 的「截断」类里最常见的一种是**结点的每一条腿都短**：谁也够不着谁，三个算子全部失效。
+
+**读数 1（病灶人眼实证，官方 case 10）**：GT `net_10` 三条边在 `(1389,362)` **精确汇合** —— `(1389,314)→(1389,362)`、`(1389,362)→(1389,412)`、`(1389,362)→(1326,362)`；我们 `net_2` 的三条腿是 `edge_7 (1389,323)→(1389,350)`、`edge_1 (1389,403)→(1389,375)`、`edge_5 (1326,361)→(1379,361)` —— **每条短 10~13px**（`work/_edgenear.py 10 1389 362`）。裁片 `work/preview/_cropat/10_net9.png` 里结点是一个**焊点圆**，骨架没解算到圆心（与 `assemble.py` 的 `EDGE_SPLIT` 长注释「骨架的分叉点没解算到真交叉处，比真结点短 8~10px」一致）。
+
+**读数 2（★ 探针里的一个写反，把这条线埋了一个月）**：`work/_edgelab.py:op_corner` 里「沿自身轴朝外」的方向写成了 `u = q - p`（`p` 是待搬端点、`q` 是另一端 ⇒ **朝内**），于是 `0 < t <= R` 收的全是「体内/穿体」交点 ⇒ 端点被沿轴**内缩**，`corner:*` 当初测出来是中性偏负（`8`/`15`/`25` = 导线 0.4123/0.4123/0.3940，基线 0.4137）。改成 `u = p - q`（朝外）后立刻转正。
+
+**读数 3（离线，官方 10，`work/_edgelab.py` 纯后处理；基线 `fan_lean_8c` 80.04 / 导线 0.4137；控制组 = 已上线的 `ext:20;overlap:10,4,0.35;extany:25,2,1,1` = 80.58 / 0.4676）**
+
+| 变体 | 总分 | 导线 F1 |
+|---|---|---|
+| `corner:8` 单独 | 80.13 | 0.4222 |
+| `corner:12` 单独 | 80.29 | 0.4384 |
+| `corner:15` / `20` / `25` 单独 | 80.23 / 80.18 / 80.21 | 0.4322 / 0.4272 / 0.4301 |
+| 控制组（不动） | 80.58 | 0.4676 |
+| **先 `corner:12` 再控制组** | **80.75** | **0.4840** |
+| 控制组中间插 `corner:12`（overlap 后、extany 前） | 80.50 | 0.4593 |
+| 控制组最后 `corner:12` | 80.48 | 0.4570 |
+
+细扫（先 corner）：`10` 80.61｜`11` 80.71｜**`12` 80.75**｜`13` 80.76｜`14` 80.75 ⇒ 12~13 是一段平台。**顺序是硬条件**：先把各条腿搬回真结点，后面两个外推算子才有正确起点。
+
+**读数 4（端到端上线读数，官方 10，`-lean`，同一作业内单变量）**
+
+| `STAGE2_EDGE_CORNER` | 总分 | 导线 F1 | tp 导线 |
+|---|---|---|---|
+| `0`（§5.69 交付态） | 80.73 | 0.4821 | 319 |
+| `15` | 80.83 | 0.4927 | 326 |
+| **`12`（新默认）** | **80.88** | **0.4975** | **329** |
+
+comp / pin / netH = 0.9819 / 0.7731 / 0.7749 **三项逐位不变**（只动 `edges` 首尾两点）。
+
+**读数 5（跨池，两种仪器）**
+
+* 离线代理（`d220known` 臂 220 张，确定性，只动导线通道）：`10GT` 76.21 → **76.46**（导线 0.4077 → **0.4333**）｜`golden10` 33.72 → 33.72（导线 0.1044 不动）｜派生 196 张 27.42 → 27.42（导线 0.0463 → 0.0462）｜`jlc` 99 张 32.37 不变｜`Datasheet` 0.0522 → 0.0519｜`Altium` 0.0331 → 0.0332｜`other` 0.0528 → 0.0536｜`KiCad` 不变 ⇒ **每一池都非负**（唯一正项是官方池）。
+* 端到端 sanity（有 ±0.3 噪声）：golden10 35.88 → 36.12（导线 0.0905 → 0.0920）、val18 30.05 → 30.01（导线 0.0695 → 0.0685）⇒ 都在噪声内。
+
+**判据与结论**：官方池 **+0.15**，离线代理跨池**零负**（对比 §5.69 的 `extany` 是 golden −0.16、§5.66 被拒的两个是派生 −0.66/−1.03）⇒ **上线并置默认** `STAGE2_EDGE_CORNER=12`（`STAGE2_EDGE_CORNER_INT=0.05`），可用 `STAGE2_EDGE_CORNER=0` 逐位退回。
+
+**实现**（`eda-pcb/stage2/assemble.py`）：`def snap_ends_to_crossings(nets: Dict[str, dict], radius: float = None, interior: float = None) -> int` —— 两条**同网**边各自的轴延长线相交，交点离端点 ≤`radius`（且 `t>0` 朝外）、并落在对方跨度内（容差 `interior` 比例）或离对方某端点 ≤`radius` 时，把端点搬过去。调用点：`build_doc` 里 `trim_free_ends(out_nets)` **之后**、`extend_free_ends` / `extend_ends_to_evidence` / `extend_edge_ends` **之前**。
+
+**产物/口径**：探针 `work/_edgenear.py`（列某 json 点附近的本网/GT 边）、`work/_inkprobe.py`（墨迹续长可行性）、`work/_cropat.py`（按 json 框裁放大图）；臂 `cn{8,12,15,20,25}`、`cf{10..14}`、`cx_ctrl/A/B/C`、端到端 `ec0_10`/`ec12_10`/`ec15_10`/`ec0_gold`/`ec12_gold`/`ec0_val`/`ec12_val`、跨池 `d220_corner12`。复现：`python -X utf8 work\_edgelab.py --src fan_lean_8c --out cn12 --cases $off10 --ops "corner:12"` 后 `python -X utf8 eda-pcb\tools\eval\fast.py --score-only --engine protocol2 --cases $off10 --out cn12`；端到端 `python -X utf8 eda-pcb\tools\eval\fast.py --cases $off10 --out ec12_10 "--extra=-lean"`。
+
+**下一步**：`_linesample.py` 里**短端 5px 内什么都没有**的 114 条仍未解 —— 它们连「对方端点」都不存在，说明骨架在墨迹还在的地方就断了，只能回阶段一（`eda-pcb/stage1/wires.py`，掩膜在手）算「沿轴墨迹还能续多少 px」。oracle 上界仍是 **+3.08**（§5.68 读数 2）。
+
