@@ -1745,6 +1745,22 @@ PIN_STAMP_DEFAULT_SPAN = 20.0
 PIN_STAMP_ON = env_on("STAGE2_PIN_STAMP", "1")
 # ★ 竖放 d/led 的 pin_1 在 −SPAN 一侧（默认 0 = 旧行为，见 `stamp_pins` 里的长注释）
 PIN_AXIS_DL = env_on("STAGE2_PIN_AXIS_DL", "0")
+# ★★ 两脚 d/led 的 pin_1(K) 落在哪一端**从图上读横杠**（默认 0 = 关；判据见
+# `stage2/ledpol.py` 的模块 docstring）。`PIN_AXIS_DL` 那种「按轴选符号」的多数票
+# 规则在官方 10 张上 **80.88 → 80.81（−0.07）**（`3/D1` 判对、`7/LED1` 与 `10/LED1`
+# 判反），因为竖放 LED 可以朝上/朝下两种画法 —— 横杠在哪一端只能看图。
+# `ledpol` 的横杠判据：官方 10 张 **判对 7 / 判错 0 / 不判 1**（case 6 LED2）；220 池
+# 383 件上（`work/_ledpoolsim.py`，输入就是本函数的两个图章端点、真值取 GT 的 K 点）
+# 现行几何默认只对 **211/383 = 55.1%**，判据判出 179 件、换向 80 次（**真该换 63 /
+# 误换 17**）⇒ **池上净 +46 件**（每件错号影响 2 个 netH 成员）。端到端 A/B（官方
+# 10 张，`work/_led_ab.ps1`~`_led_ab4.ps1`）：臂 `ledref`/`ledoff2`（显式 =0）=
+# **80.88**（与交付口径逐位相同）、臂 `led1`/`led1b`（=1）= **80.98**（+0.10；逐案只有
+# case 3 变：83.92→84.92，netH 0.6788→0.7074 = +2 成员，其余九案逐位不变）⇒
+# **默认 1（上线）**，置 `STAGE2_LED_POLARITY=0` 可回到旧行为（那时连 cv2 都不读图）。
+# ⚠ 曾试过「第二信号闸门」（两条横笔里游程更长的那条算横杠，两信号一致就判不出）：
+# 换向精度 78.8%→95.8%，但判出件数腰斩 ⇒ 池上净收益 **+46 → +22 件**，已删除该分支
+# （那条游程信号的比较式当时还写错了，详见 `docs/RESULTS.md` §5.81 第七节）。
+LED_POLARITY = env_on("STAGE2_LED_POLARITY", "1")
 # ★ 两脚二极管/LED 的官方脚名**不是号码**：`pin_1 = "K"`（阴极）、`pin_2 = "A"`（阳极），
 # 只有 r/c/l 才是 `(1→"1", 2→"2")`。依据：400 张训练 GT 的 d/led 元件全量统计
 # （d 192+192、led 177+177，各占该类 100%）与 10GT 全量一致。
@@ -1790,7 +1806,8 @@ STAMP_ONE_PER_SIDE = os.environ.get("STAGE2_STAMP_ONE_SIDE", "1").strip().lower(
     not in ("", "0", "false", "off", "no", "none")
 
 
-def stamp_pins(c: dict, ctype: str, pts_img: Sequence, H: float
+def stamp_pins(c: dict, ctype: str, pts_img: Sequence, H: float,
+               mask=None
                ) -> Optional[List[Optional[Tuple[str, Tuple[float, float]]]]]:
     """两脚贴章元件的官方引脚点位。
 
@@ -1833,6 +1850,23 @@ def stamp_pins(c: dict, ctype: str, pts_img: Sequence, H: float
         p1, p2 = (cx, cy + s1 * span), (cx, cy - s1 * span)
     else:
         p1, p2 = (cx + s1 * span, cy), (cx - s1 * span, cy)
+
+    # ★ `STAGE2_LED_POLARITY`：d/led 的 pin_1(K) 在哪一端**由图上的横杠决定**。
+    #   `mask` 是本案原图的暗红笔画掩膜（`build_doc` 惰性算一次）；判据返回 'A' 表示
+    #   横杠在 p2 那端 ⇒ 换向（等价于 s1 取反后重算两个候选点）。判不出来（None）就
+    #   保持旧行为。读数见 `stage2/ledpol.py` 与上面 `LED_POLARITY` 的注释。
+    if LED_POLARITY and ctype in ("d", "led") and mask is not None:
+        try:
+            from stage2 import ledpol as _ledpol
+            _got = _ledpol.k_end(mask, p1, p2, H)[0]
+        except Exception:
+            _got = None
+        if _got == "A":
+            s1 = -s1
+            if axis_y:
+                p1, p2 = (cx, cy + s1 * span), (cx, cy - s1 * span)
+            else:
+                p1, p2 = (cx + s1 * span, cy), (cx - s1 * span, cy)
 
     projs = []
     side = []
@@ -2083,6 +2117,18 @@ def merge_by_label(nets: Dict[str, dict]) -> Dict[str, dict]:
 def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     img = stage1.get("image") or {}
     H = float(img.get("h") or 0.0)
+    # ★ `STAGE2_LED_POLARITY=1` 时才读原图（算暗红笔画掩膜，供 `stamp_pins` 判 d/led 极性）。
+    #   关的时候**连 cv2 都不 import**，产物与不挂这条通道时逐字节一致。
+    _led_mask = None
+    if LED_POLARITY and img.get("path"):
+        try:
+            import cv2 as _cv2
+            from stage2 import ledpol as _ledpol
+            _bgr = _cv2.imread(str(img["path"]))
+            if _bgr is not None:
+                _led_mask = _ledpol.red_mask(_bgr)
+        except Exception:
+            _led_mask = None
     comps = stage1.get("components") or []
     a = assigned.get("comps") or {}
     st1_pins = stage1.get("pins") or {}
@@ -2217,7 +2263,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             continue
         # 两脚贴章元件：官方点位是「中心 ±SPAN」的理想图章点，不是走线接点。
         # 直接照图章生成，顺便把 1/2 号按官方约定摆正（见 `stamp_pins` 的长注释）。
-        _st = stamp_pins(c, ctype, pts, H)
+        _st = stamp_pins(c, ctype, pts, H, _led_mask)
         if _st is not None:
             _g: Dict[str, dict] = {}
             for k, _item in enumerate(_st):
