@@ -7084,3 +7084,58 @@ comp / pin / netH = 0.9819 / 0.7731 / 0.7749 **三项逐位不变**（只动 `ed
 * 教训（本会话第二次生效）：**判据的「第二意见」在合入前必须单独量它的净收益**——精度提升看着漂亮（78.8% → 95.8%），净收益却腰斩；而这次能发现，是因为给新模块补了单测。
 
 **产物/复现**：`work/_ledpool.py`（220 池极性普查与逐件对比）、`work/_ledrun.py`（判据 v1/v2/v3 迭代）、`work/_ledpoolsim.py`（**净收益口径**：直接调 `stage2.ledpol.k_end`，输入 = 图章端点、真值 = GT 的 K 点）、`work/_ledoracle.py`（离线重排 oracle）、`work/_ledacc.py`（**作废**：它测的那条游程信号比较式写错，其 27.9%/90.2% 读数见第七节）、`work/_led_ab.ps1`/`_led_ab2.ps1`/`_led_ab3.ps1`/`_led_ab4.ps1`（A/B，注意本会话 shell **没有 `pwsh`** 且 `& .\x.ps1` 会被执行策略拦 ⇒ 用 `powershell -ExecutionPolicy Bypass -NoProfile -File .\work\_led_ab4.ps1`）。判据实现 `eda-pcb/stage2/ledpol.py`，单测 `eda-pcb/tests/test_ledpol_polarity.py`（`python -X utf8 -m unittest discover -s tests -p "test_ledpol*.py"`，6 passed）。复现打分：`python -X utf8 tools\eval\fast.py --cases 1,10,2,3,4,5,6,7,8,9 --out led1b --extra "-vlm-pin off"`（应为 80.98；`STAGE2_LED_POLARITY=0` 则 80.88）。
+
+---
+
+### 5.82 ★ 用户 m07576 的「框选 → 大模型读 → 判不了就自报扩框」模式：引脚名上离线 **+0.64**、端到端落地 **−0.97**（80.98 → 80.01）⇒ 通道落库但**默认关**（`FUSION_PINZOOM=0`）（2026-10）
+
+用户原话（m07576）：「可不可以通过框选问题区域，然后让大模型来处理，如果大模型没法断言，那就让大模型给出扩大框选范围的命令，然后再反复操作。其中，大模型必须要明确的知道自己不知道的情况下不能伪造输出。」本节是这条提议的完整取证。
+
+**一、这个模式仓库里**已经**有，而且实测零产出**：`fusion/cropfix.py` 就是它（模型给离散方向 + 梯子 `FUSION_CROPFIX_LADDER="0.5,1.0,2.0,4.0"`、`ROUNDS=2`、prompt「宁可回答 none，也不要猜」）。它在 96 个可疑槽位上净 **0**（`n_gain=0`、逐位相同），因为它挑的槽位口径（「文字被裁掉一半」）根本没打中真错；`submission/run.py:1088` 在非 `-fusion llm` 下还把它强制关掉。⇒ **模式不是瓶颈，「挑对目标 + 判对答案」才是。**
+
+**二、换目标：引脚名**（`pin_f1` 只统计 `canon_type ∈ {box,ic,boxic}` 的 GT 元件，要求名字相等 + 点距 ≤5px）。官方 10 张里名字错的**只有 5 处**：`5/U3.1 Q→ADJ(GND)`、`5/U3.2 ADIGND→VOUT(TAB)`、`6/U4.4 N→EN`、`6/U4.5 N→IN`、`7/U1.4 CND→GND`。离线把它们按 GT 改对的 **oracle = 80.98 → 81.93（+0.94）**，`pin F1 0.7731 → 0.8109`。
+
+**三、模型的两种错法（用户那条「不知道必须说」实测不成立）**
+
+* **自由读会读到邻行的标签**：`5/U3.1` 与 `5/U3.2` 两次都被读成同一串 `ADJ(GND)`；`8/U1.10` 的 `SCLK` 两次都被读成 `LED_P`。这正是 `vlm/enrich.py:read_pins` docstring 里记的老毛病（窗口垂直于引脚轴过宽 ⇒ 相邻引脚行进框 ⇒ 10GT 上 55 处名错里 41 处是 name_mismatch）。按该器件**自己的引脚间距**给半宽（`0.45×pitch`）只解决了一部分（截断被修好：`NRESET`/`LED_P` 重读正确，但邻行污染仍在）。
+* **几乎从不弃权**：对照组（16 个本来正确的名字）11 读对 / 3 篡改 / 2 弃权；在我们的裁剪上，`UNCERTAIN:` 只在「这一格里确实没有字」时才出现。⇒ **「不许伪造」不能靠 prompt，只能靠结构**（下面第四条）。
+
+**四、真正管用的是二选一强迫选择（2AFC）**：把「我们现在的读」与「模型那次自由读」摆成菜单，只让它**比对**画面里是哪一串（不让它自由认字）。离线（`work/_pinzoomrule.py`，官方 10 张、26 个触发槽、逐槽 2~3 次调用、答案落盘 `work/_pinzoom_cache3.json`）：
+
+| 采信规则 | 总分 | 说明 |
+|---|---|---|
+| `naive`（有读就写） | 80.61（**−0.37**） | 篡改与真值同权，净负 |
+| `conservative`（≥3 字不许变长、距离 ≤2） | 81.40（**+0.42**） | 仍会采纳邻行标签 |
+| `agree`（两次独立裁剪逐字一致 + 上面那条） | 81.00（+0.02） | B 视角（+8px、140px）会漂进别的文字，白搭 |
+| `v4`（一致 + 同件不重名） | 81.29（+0.31） | |
+| **`pickd`（2AFC 选中模型自己的读 + 不抢同件别的脚的名字 + 不许变短）** | **81.62（+0.64）** | 5 个真错采到 3 个、1 次误采（`10/U1.4 VIA→EN`） |
+| `oracle`（完美读名） | 81.93（**+0.94**） | |
+| `spellfix`（零调用：往核心词表纠拼） | 79.70（**−1.28**） | 名字空间是开放的，**不许**朝词表纠正，已否 |
+
+**五、零 token 的本地 OCR 路线已否**（`work/_pinnamecrnn.py`：按 `stage2/pinname.py` 的裁剪口径 + 两个带宽当免费一致性闸门）：26 槽上**改对 1 处、改错 10 处、漏 4 处**（`VDDA→VD`、`SCLK→MOTO`、`GNDIO→GNDMC`…）⇒ 这些槽位只能靠 VLM，本地 CRNN 反而更差。
+
+**六、批量 2AFC 可行（调用数 ÷4）**：多槽位竖排成一张图、**每格左上角画格号**后，1 张图 3 格与单槽单独问**逐格一致（3/3）**；不画格号时格会串（3 格只对 1 格）。⇒ 1 次调用可问 `FUSION_PINZOOM_BATCH`（默认 4）个槽。
+
+**七、落地与端到端 A/B**（`eda-pcb/vlm/pinzoom.py` + `submission/run.py` 导出 `final_results` 前改写；`work/_pinzoom_ab.ps1`）
+
+| 臂 | 总分 | comp | pin | netH | netL | tp（元件/引脚/网络/导线） |
+|---|---|---|---|---|---|---|
+| `pzoff`（`FUSION_PINZOOM=0`） | **80.98** | 0.9819 | 0.7731 | 0.7778 | 0.4975 | 250 / 96 / 125 / 329 |
+| `pzon`（`=1`） | **80.01（−0.97）** | 0.9819 | 0.7340 | 0.7778 | 0.4975 | 250 / 93 / 125 / 329 |
+
+* 逐案：`3` 84.92→**80.75**（pin 1.0000→0.8333，掉 2 个 tp）、`4` 79.39→**77.12**、`7` 83.64→**80.31**；其余七案不变。**4 次改写全是坏的**，而 `3`/`4` 本来一个名字都没错（pin F1 = 1.0000 / 0.8182）⇒ 「多改」在这两张上纯粹是损失。
+* ⇒ **离线的 +0.64 不能迁移**：离线版是「沿轴 100px + 按引脚间距给半宽 + 单槽菜单」，落地版是「90px + 固定 13px 半宽 + 竖排批量」。这条规则对裁剪几何与问法**极其敏感**。
+* 结论：通道**留库、默认关**（`vlm/pinzoom.py` 里 `ON = _env_on("FUSION_PINZOOM", "0")`），交付口径仍是 **80.98**。
+
+**八、沿途踩到的坑（都已修，留作教训）**
+
+1. **触发器口径**：第一版没有限定 IC/box、也没要求纯字母 ⇒ 电阻电容的「引脚名」就是 `1`/`2`，3 张图触发 69 槽、烧 **166 次调用**、乱采 19 次（`C1.2 2→ADJ(GND)`、`R1.2 2→R1`）。收紧成「IC/box **且** 纯字母 **且**（单字符 或 与核心表距离 ≤1）」后：官方 10 张 **13 槽 / 33 次调用**。
+2. **`UNCERTAIN` 重试会把调用量翻倍**：模型在「这一格确实没有文字」时倾向回**整页框**，每次重试 +1 次调用（第 1 版 3 张图 166 次里有一半是重试）。现在「整页框不重试 + 每案上限 `FUSION_PINZOOM_RETRY=2`」。
+3. **`client.available()` 不能当闸门**：它只看 BASE/KEY 有没有配，本机端点（无 KEY）返回 False，而实际问得动 ⇒ 第一版直接 0 槽位退出。
+4. **日志写在 `fp.close()` 之后** ⇒ 开通道时 `ValueError: I/O operation on closed file`、`run.py` 退出码 **3**（产物已落盘但整批失败）。已修（`submission/run.py:1228-1236`：先写合计再 close）—— 这是**交付级**的坑，任何「导出后补日志」的写法都要先看 `fp` 还开着没有。
+5. **PowerShell 改源码**：`(Get-Content -Raw) -replace ... | Set-Content -Encoding UTF8` 会把 UTF-8 中文按 GBK 读进来再按 UTF-8 写回去（mojibake、`"` 被破坏 ⇒ `SyntaxError: invalid decimal literal`），**不可逆**（GBK 往返有 117 个字符落不到）。改源码只用 `write`/`edit` 工具，别用 PowerShell 拼字符串。
+
+**九、残余（若还要继续做）**：① 落地版与离线版**几何对齐**（pitch 半宽、+8px 的 B 视角）后再量一次；② 采信闸门加**几何核对**（模型读到的字框必须压在本条引脚的行上）——这是唯一能真正压住「读到邻行」的东西；③ 触发器再加一层「这张 IC 本来就很可疑」的判据，把 `3`/`4` 这类**本来就全对**的案子挡掉；④ `5/U3.2 ADIGND`（与核心表距离 2）当前的触发器收不到，属于 §5.65 那条已封口的「引脚通道」边界。
+
+**产物/复现**：`work/_pinzoomsel.py`（触发器标定：`--vocab near|corpus`、`--nodup`）、`work/_pinzoomprobe.py`（宽/窄裁剪的弃权行为对照）、`work/_pinzoomrule.py`（**采信规则离线标定**：`--read` 跑 VLM 并落盘 → 只用缓存复算各规则分数与逐槽判决，`python -X utf8 work\_pinzoomrule.py`）、`work/_pinzoombatch.py`（批量 2AFC 与单槽一致性）、`work/_pinnamecrnn.py`（零 token 本地 OCR 复读）、`work/_pinzoomapply.py`（单案逐槽决策追踪）、`work/_pinzoom_ab.ps1`（A/B；本会话 shell 无 `pwsh`、`& .\x.ps1` 被策略拦 ⇒ `powershell -ExecutionPolicy Bypass -NoProfile -File work\_pinzoom_ab.ps1`）。落地代码 `eda-pcb/vlm/pinzoom.py`（默认关）、接线 `eda-pcb/submission/run.py`（导出前 + `decision_log.summary.pinzoom`）。复现：`FUSION_PINZOOM=1 python -X utf8 tools\eval\fast.py --cases 1,10,2,3,4,5,6,7,8,9 --out pzon --extra "-vlm-pin off"`（80.01），去掉 env 即 80.98。
+

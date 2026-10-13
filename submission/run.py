@@ -1154,6 +1154,14 @@ def _run(a) -> int:
     n_export = 0
     n_shell = 0
     exported = set()
+    pinzoom_rows = []
+    try:
+        from vlm import pinzoom as _pzmod                      # noqa: PLC0415
+        _pinzoom_on = bool(_pzmod.ON)
+    except Exception:                                          # noqa: BLE001
+        _pinzoom_on = False
+    if _pinzoom_on:
+        _log(fp, "引脚名重读通道：开（FUSION_PINZOOM=1）")
     for cid, _p in items:
         # 导出优先序：融合层 > VLM 补强 > 阶段三 > 阶段二。
         # 每一层都是「上一步的产物 + 一次受约束的改写」，所以取到哪一层都是完整的
@@ -1174,7 +1182,26 @@ def _run(a) -> int:
             _log(fp, "  %-28s 没有产物（阶段一/二失败）→ %s"
                  % (cid, "已写空壳" if ok else "⚠️ 空壳也写失败"))
             continue
-        shutil.copyfile(src, final_dir / ("%s_Pred.json" % cid))
+        # §5.82：引脚名「框选重读」通道（`FUSION_PINZOOM`，默认 1）。它在**导出前**
+        #   对最终文档再补一层受约束的名字改写（只碰名字、不动点/号/边），采信规则
+        #   见 `vlm/pinzoom.py` 顶注。失败一律不影响导出（退化成直接拷贝）。
+        pz_note = ""
+        dst = final_dir / ("%s_Pred.json" % cid)
+        if _pinzoom_on:
+            try:
+                from vlm import pinzoom                            # noqa: PLC0415
+                _st = pinzoom.apply_file(_p, src, dst)
+                if _st is not None:
+                    pinzoom_rows.append({"case": cid, **{k: v for k, v in _st.items()}})
+                    pz_note = "（名字重读：槽 %d 采用 %d 调用 %d）" % (
+                        _st.get("slots", 0), _st.get("adopted", 0), _st.get("calls", 0))
+                    exported.add(cid)
+                    n_export += 1
+                    _log(fp, "  %-28s 引脚名重读 %s" % (cid, pz_note))
+                    continue
+            except Exception as exc:                        # noqa: BLE001
+                _log(fp, "  ⚠️ %s 引脚名重读失败：%s: %s" % (cid, type(exc).__name__, exc))
+        shutil.copyfile(src, dst)
         exported.add(cid)
         n_export += 1
     _log(fp, "导出 %d 份 <case>_Pred.json%s"
@@ -1198,13 +1225,21 @@ def _run(a) -> int:
             e["stage3"] = {"n_slots": r["n_slots_total"], "n_named": r["n_named"],
                            "arb": r.get("arb"), "t": r["t"]}
     wall = round(time.time() - t_start, 1)
+    # ★ 必须在 `fp.close()` **之前**写：第一版把这几行放在 close 之后，开通道时
+    #   直接 `ValueError: I/O operation on closed file` ⇒ run.py 退出码 3（2026-10 A/B 实测）。
+    if pinzoom_rows:
+        _log(fp, "引脚名重读合计：槽 %d 采用 %d 调用 %d（%d 张图）"
+             % (sum(r.get("slots", 0) for r in pinzoom_rows),
+                sum(r.get("adopted", 0) for r in pinzoom_rows),
+                sum(r.get("calls", 0) for r in pinzoom_rows), len(pinzoom_rows)))
     _log(fp, "全部完成，墙钟 %.1fs（%.2f s/张）" % (wall, wall / max(1, len(items))))
     fp.close()
 
     _write_decision(out_dir,
                     {"n_cases": len(items), "n_stage1_ok": len(ok1),
                      "n_stage2_ok": len(s2_rows), "n_stage3_ok": len(s3_rows),
-                     "n_exported": n_export, "n_shell": n_shell, "wall_s": wall},
+                     "n_exported": n_export, "n_shell": n_shell, "wall_s": wall,
+                     "pinzoom": pinzoom_rows},
                     cases_log, a, t_start)
     print("产物 -> %s" % final_dir)
     return 0
