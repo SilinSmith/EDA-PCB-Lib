@@ -788,6 +788,22 @@ def extend_free_ends(nets: Dict[str, dict], pins: Dict[str, dict], radius: float
 EDGE_EXT_ANY = float(os.environ.get("STAGE2_EDGE_EXT_ANY", "25"))       # 证据外推上限 px，0 = 关
 EDGE_EXT_ANY_HIT = float(os.environ.get("STAGE2_EDGE_EXT_ANY_HIT", "2.0"))  # 落点要贴到几何这么多 px 内
 
+# ★★ 自由端吸附到引脚（`STAGE2_PIN_SNAP`，默认 0 = 关）。
+#   病（RESULTS §5.74 三）：netH ③ 桶里 6 个「不在任何网」的引脚，其最近边端点在
+#   17.7~41.0px 外、夹角 0.4~31.3°；`extend_ends_to_evidence` 的判据是「外推点落在引脚
+#   2.0px 内」⇒ 走那么远后横向偏 5~9px，判不中（实测把 EXT_ANY 放大到 45/70，netH 逐位不变）。
+#   药：换成「引脚到边所在直线的垂距 ≤ `STAGE2_PIN_SNAP_PERP`」判据，并把端点**直接搬到引脚点**。
+#   ★ 读数（`work/_psnap_ab.ps1`，官方 10 张，参考臂 psref = 80.88 / 导线 0.4975 / tp 329）：
+#     ps45p8（R=45 PERP=8）**80.53 / 0.4626 / tp 304**、ps45p5 同 80.53 / 0.4626 / 304、
+#     ps70p8（R=70）80.54 / 0.4636 / 304 ⇒ **判负（−0.34~−0.35，导线 tp −25）、comp/pin/netH 逐位不变**。
+#     机理：GT 的线端落在**元件引脚引线尖**上（case 9 `R1` 的 GT 端 (650,637) 比我们的端点 (649,653)
+#     多出 ~16px），把自由端搬到**引脚锚点**反而离开 GT 的真端点，而 `line_tol = 5.0`
+#     （`schematic_parser/metrics.py:88`）一超就翻 tp ⇒ 端点「差不多对」时**不动**才是最优。
+#     ⇒ 默认 0（关），机制留着；见 RESULTS §5.76。
+PIN_SNAP = env_on("STAGE2_PIN_SNAP", "0")
+PIN_SNAP_R = float(os.environ.get("STAGE2_PIN_SNAP_R", "45"))         # 向前搜索半径 px
+PIN_SNAP_PERP = float(os.environ.get("STAGE2_PIN_SNAP_PERP", "8"))    # 允许的垂距 px
+
 
 def extend_ends_to_evidence(nets: Dict[str, dict], pins: Dict[str, dict], radius: float = None,
                             hit: float = None) -> int:
@@ -1001,6 +1017,69 @@ def extend_edge_ends(nets: Dict[str, dict], radius: float = None,
                         seg[idx]["y"] = round(qy, 2)
                         moved += 1
                         break
+    return moved
+
+
+def snap_ends_to_pins(nets: Dict[str, dict], pins: Dict[str, dict],
+                      radius: float = None, perp: float = None) -> int:
+    """**自由端**沿自身轴向前 `radius` 内有引脚、且该引脚到边所在直线的**垂距** ≤ `perp`
+    时，把端点**吸附到引脚点**；返回改动端点数。
+
+    依据（RESULTS §5.74 三 / §5.76）：`extend_ends_to_evidence` 要求**外推的那个点**
+    落在引脚点 2.0px 内，而 §5.74 的 5 个「不在任何网」的引脚是 17.7~41.0px、夹角 0.4~31.3°
+    ⇒ 走那么远后横向偏 5~9px，**永远判不中**（放大 `EDGE_EXT_ANY` 到 45/70 实测对 netH 零效果）。
+    这里换成「引脚到边所在直线的垂距」判据 + 直接把端点搬到引脚点。
+    """
+    radius = PIN_SNAP_R if radius is None else radius
+    perp = PIN_SNAP_PERP if perp is None else perp
+    if not PIN_SNAP or radius <= 0:
+        return 0
+    ppt: List[Tuple[float, float]] = []
+    for _c, _pn in (pins or {}).items():
+        for _pv in (_pn or {}).values():
+            _p = (_pv or {}).get("point")
+            if isinstance(_p, dict) and "x" in _p and "y" in _p:
+                ppt.append((float(_p["x"]), float(_p["y"])))
+    if not ppt:
+        return 0
+    moved = 0
+    for rec in nets.values():
+        edges = rec.get("edges") or {}
+        segs = [(k, _seg_ends(v)) for k, v in edges.items()]
+        segs = [(k, e) for k, e in segs if e is not None]
+        if not segs:
+            continue
+        verts = [p for _k, e in segs for p in e]
+        for k, ((ax, ay), (bx, by)) in segs:
+            dx, dy = bx - ax, by - ay
+            L = math.hypot(dx, dy)
+            if L < 1e-6:
+                continue
+            ux, uy = dx / L, dy / L
+            seg = edges[k]
+            if not isinstance(seg, list) or len(seg) < 2:
+                continue
+            for idx, (px, py) in ((0, (ax, ay)), (1, (bx, by))):
+                # 只动自由端：同网别的边的端点贴在这个点上 ⇒ 是结点，不动
+                if any(math.hypot(px - qx, py - qy) <= 3.0
+                       for (qx, qy) in verts if (qx, qy) != (px, py)):
+                    continue
+                sx, sy = (ux, uy) if idx == 1 else (-ux, -uy)
+                best = None
+                for (qx, qy) in ppt:
+                    vx, vy = qx - px, qy - py
+                    t = vx * sx + vy * sy
+                    if t <= 0.0 or t > radius:
+                        continue
+                    if abs(vx * (-sy) + vy * sx) > perp:
+                        continue
+                    if best is None or t < best[0]:
+                        best = (t, qx, qy)
+                if best is None:
+                    continue
+                seg[idx]["x"] = round(best[1], 2)
+                seg[idx]["y"] = round(best[2], 2)
+                moved += 1
     return moved
 
 
@@ -1226,6 +1305,93 @@ def split_dedup_edges(nets: Dict[str, dict], split_tol: float = None,
 #   整条（GT 切的是**导线—导线**的 T 结点）。所以「在引脚点切」多数是假切分（多出一条 fp）。
 #   **默认 0（关）**：机制留着，等有「哪些引脚真的在 GT 里切」的判据（见 RESULTS §5.75）。
 EDGE_SPLIT_PIN = float(os.environ.get("STAGE2_EDGE_SPLIT_PIN", "0"))  # 引脚切分容差 px，0 = 关
+
+
+# ★★ 跨网顶点切分（`STAGE2_EDGE_SPLIT_XNET`，默认 0 = 关）。
+#   取值：`work/_inside.py` 取证 + `work/_xnet_ab.ps1` / `work/_psnap_ab.ps1` 扫描，见 RESULTS §5.76。
+#   ★ 读数（官方 10 张，参考臂 80.88 / 导线 0.4975 / tp 329）：xn3 79.79 / 0.3887 / 305、
+#     xn5 79.80 / 0.3894 / 306、xn8 79.92 / 0.4011 / 315；**加了切点去重**后 xnd5
+#     79.71 / 0.3803 / 290（仍大负，逐案 2/1/5 涨、3/4/9/10 崩）⇒ **判负（−1.0~−1.2）**。
+#   ★ 为什么必负（`work/_xhit.py` 直接量）：xn8 引入 **526 个新顶点，只有 86 个（16.3%）**
+#     落在 GT 真切点 3px 内（召回 24.5%）；而度量的代价不对称 —— **假切一次 = tp−1 / fp+2 / fn+1**
+#     （一条已配对的边被切两半后两半都过不了「两端点都在 5px 内」），**真切一次只 +1 tp**，
+#     ⇒ 精度要 >~67% 才不亏，实测 16% ⇒ 原理上不可能赢。切分类机制整族封口。
+EDGE_SPLIT_XNET = float(os.environ.get("STAGE2_EDGE_SPLIT_XNET", "0"))
+
+
+def split_edges_at_xnet(nets: Dict[str, dict], tol: float = None) -> Dict[str, int]:
+    """把每条边的**内部**穿过「**别的网**的边端点」（≤ `tol`）时，在该点一分为二。
+
+    返回 `{"split": 切点数}`。端点附近（≤ `tol`）的候选点不切（那已经是结点）。
+
+    依据（`work/_inside.py`，官方 10 交付口径）：netL 账本里 GT 侧 `inside` 那一类
+    （GT 有两条边、我们只有一条长边）取到的 **136 个 GT 内部结点里 134 个，
+    我方顶点本来就在结点处（d = 1.0~3.2px）**——只是那些顶点属于**另外一条网**
+    （另一根导线穿过/搭上这条线），而 `split_dedup_edges` 的切点只在本网内找 ⇒ 漏切。
+    """
+    tol = EDGE_SPLIT_XNET if tol is None else tol
+    st = {"split": 0}
+    if tol <= 0:
+        return st
+    cand: List[Tuple[float, float]] = []
+    for _nm, _rec in nets.items():
+        for _v in (_rec.get("edges") or {}).values():
+            e = _seg_ends(_v)
+            if e is not None:
+                cand.append((e[0][0], e[0][1]))
+                cand.append((e[1][0], e[1][1]))
+    if not cand:
+        return st
+    for rec in nets.values():
+        edges = rec.get("edges") or {}
+        segs = [(k, _seg_ends(v)) for k, v in edges.items()]
+        segs = [(k, e) for k, e in segs if e is not None]
+        if not segs:
+            continue
+        out: List[tuple] = []
+        touched = False
+        for _k, ((ax, ay), (bx, by)) in segs:
+            dx, dy = bx - ax, by - ay
+            L2 = dx * dx + dy * dy
+            if L2 <= 1e-9:
+                out.append(((ax, ay), (bx, by)))
+                continue
+            cuts: List[Tuple[float, float, float]] = []
+            for (qx, qy) in cand:
+                if (math.hypot(qx - ax, qy - ay) <= tol
+                        or math.hypot(qx - bx, qy - by) <= tol):
+                    continue                   # 与端点重合 ⇒ 已经有顶点
+                t = ((qx - ax) * dx + (qy - ay) * dy) / L2
+                if t <= 0.0 or t >= 1.0:
+                    continue
+                fx, fy = ax + t * dx, ay + t * dy
+                if math.hypot(qx - fx, qy - fy) > tol:
+                    continue
+                cuts.append((t, fx, fy))
+            if not cuts:
+                out.append(((ax, ay), (bx, by)))
+                continue
+            cuts.sort()
+            # 去重：同一处结点常有多个候选点（同一根桩的两个端点等），相距 ≤ tol 只留一个 ——
+            # 否则会切出 1~3px 的碎片边（每条碎片 = +1 fp +1 fn）。
+            kept: List[Tuple[float, float, float]] = []
+            for _t, cx, cy in cuts:
+                if kept and math.hypot(cx - kept[-1][1], cy - kept[-1][2]) <= tol:
+                    continue
+                kept.append((_t, cx, cy))
+            if not kept:
+                out.append(((ax, ay), (bx, by)))
+                continue
+            pts = [(ax, ay)] + [(cx, cy) for _t, cx, cy in kept] + [(bx, by)]
+            for i in range(len(pts) - 1):
+                out.append((pts[i], pts[i + 1]))
+            st["split"] += len(kept)
+            touched = True
+        if touched:
+            rec["edges"] = {"edge_%d" % (i + 1): [
+                {"x": round(p0[0], 2), "y": round(p0[1], 2)},
+                {"x": round(p1[0], 2), "y": round(p1[1], 2)}] for i, (p0, p1) in enumerate(out)}
+    return st
 
 
 def split_edges_at_pins(nets: Dict[str, dict], pins: Dict[str, dict],
@@ -2276,6 +2442,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # ★ 引脚切分（`STAGE2_EDGE_SPLIT_PIN`，见长注释）：必须在切分/去重**之后**、
         #   自由端回缩**之前** —— 切出来的新端点在回缩那一步才算得上「结点」。
         split_edges_at_pins(out_nets, pins)
+    if EDGE_SPLIT_XNET > 0:
+        # ★ 跨网顶点切分（`STAGE2_EDGE_SPLIT_XNET`，见长注释）：同一位置 —— 切分/去重之后、
+        #   回缩之前。`split_dedup_edges` 只看本网，漏掉「别的网的导线搭在这条线上」的切点。
+        split_edges_at_xnet(out_nets)
     if EDGE_TRIM > 0:
         # ★ 自由端回缩（`STAGE2_EDGE_TRIM`，默认 3.0 px，见长注释）：必须在切分/去重
         #   **之后**跑 —— 结点是在切分那一步才定下来的，先回缩会把结点也拉动。
@@ -2295,6 +2465,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     if EDGE_EXT > 0:
         # ★ 端点外推（`STAGE2_EDGE_EXT`）：回缩之后跑（先治过冲，再补不足）。
         extend_edge_ends(out_nets)
+    if PIN_SNAP:
+        # ★ 自由端吸附到引脚（`STAGE2_PIN_SNAP`）：放在所有外推**之后** —— 否则外推会把
+        #   刚吸附好的端点又推走。
+        snap_ends_to_pins(out_nets, pins)
     if EDGE_OVERLAP > 0:
         # ★ 近共线重叠边合并（`STAGE2_EDGE_OVERLAP`，默认 10 度）：必须最后跑 —— 它会改变边的跨度，
         #   放在切分/回缩之前会把切点与自由端判定带歪。
