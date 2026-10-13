@@ -343,6 +343,42 @@ def _poly_len(pl) -> float:
     return sum(_seg_len(pl[i], pl[i + 1]) for i in range(len(pl) - 1))
 
 
+def _split_at_points(segments, pts, tol: float = 1.5):
+    """把每条线段在 **给定点集** `pts` 落在其内部（垂距 ≤ tol）处切开。
+
+    返回 (新线段表, 被切过的线段条数)。与 `_split_at_nodes` 的唯一区别是切点来源：
+    这里可以喂 `pskel` 真正的**结点**（degree ≥ 3 的骨架簇），而不是「别人的线段端点」。
+    """
+    out, n_split = [], 0
+    for a, b in segments:
+        ax, ay, bx, by = float(a[0]), float(a[1]), float(b[0]), float(b[1])
+        dx, dy = bx - ax, by - ay
+        L2 = dx * dx + dy * dy
+        cuts = []
+        if L2 > 1e-6:
+            for px, py in pts:
+                t = ((px - ax) * dx + (py - ay) * dy) / L2
+                if t <= 1e-3 or t >= 1.0 - 1e-3:
+                    continue
+                qx, qy = ax + t * dx, ay + t * dy
+                if math.hypot(px - qx, py - qy) <= tol:
+                    cuts.append((t, qx, qy))
+        if not cuts:
+            out.append([a, b])
+            continue
+        cuts.sort()
+        n_split += 1
+        prev = (ax, ay)
+        for _t, qx, qy in cuts:
+            if math.hypot(qx - prev[0], qy - prev[1]) <= tol:
+                continue
+            out.append([[prev[0], prev[1]], [qx, qy]])
+            prev = (qx, qy)
+        if math.hypot(bx - prev[0], by - prev[1]) > tol:
+            out.append([[prev[0], prev[1]], [bx, by]])
+    return out, n_split
+
+
 def _split_at_nodes(segments, tol: float = 1.5):
     """把「别的线段的端点落在自己身上」的线段在那些点切开（T 形分叉处切段）。
 
@@ -644,6 +680,15 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
     dt = time.time() - t0
 
     inv = 1.0 / s
+    # ★ 2026-10（本轮）：`pskel` 其实**已经算出**真正的骨架结点（degree ≥ 3 的像素簇，
+    #   `SkeletonResult.junctions`，n_nodes 也一并返回），但 `wires.py` 一直没用它 ——
+    #   `_rebuild_nodes` 那套「≥3 条线段共用同一个 1px 桶」的判据在官方 10 张上只数出
+    #   0~4 个结点（case 2/9 = 0，case 1 = 4），而按 netL 账本每张图需要 ~11~37 个切点
+    #   （`work/_splitoracle.py`：切在 GT 端点的天花板是 netL 0.5157→0.6684 ≈ **+1.53 分**）。
+    #   ⇒ 把 pskel 的结点接出来（`STAGE1_SPLIT_JUNC_NODES=1` 时直接在结点处切段），
+    #   默认 0 = 行为不变。
+    jnodes = [[float(x) * inv, float(y) * inv]
+              for x, y in (getattr(r, "junctions", None) or [])]
     blines = [[[float(x) * inv, float(y) * inv] for x, y in pl] for pl in r.polylines]
     bsegs = [[[float(a[0]) * inv, float(a[1]) * inv],
               [float(b[0]) * inv, float(b[1]) * inv]] for a, b in r.segments]
@@ -873,6 +918,14 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
         segments, n_split = _split_at_nodes(
             segments, tol=float(os.environ.get("STAGE1_SPLIT_TOL", "1.5")))
 
+    # --- 在 pskel 的真结点处切段（`STAGE1_SPLIT_JUNC_NODES=1`）---
+    # 与上面那条的区别：切点来自**骨架结点**（degree≥3 的像素簇），不是「别的线段端点」。
+    # 骨架结点才是图上的 T/十 分叉，GT 的边正是在那里断开的。
+    n_jsplit = 0
+    if env_on("STAGE1_SPLIT_JUNC_NODES", "0") and jnodes:
+        segments, n_jsplit = _split_at_points(
+            segments, jnodes, tol=float(os.environ.get("STAGE1_SPLIT_JUNC_TOL", "2.5")))
+
     endpoints, junctions = _rebuild_nodes(segments, tol=1.0)
     if not segments:
         endpoints, junctions = [], []
@@ -889,6 +942,9 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
         "n_dropped_axis": n_axis,
         "n_dropped_frame": n_frame,
         "n_segments_split": n_split,
+        "n_junction_nodes": len(jnodes),
+        "n_segments_junc_split": n_jsplit,
+        "junction_nodes": jnodes,
         "n_bridges": len(bridges),
         "bridges": bridges,
         "bridge_info": b_info,

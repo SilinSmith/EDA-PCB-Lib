@@ -1317,33 +1317,55 @@ EDGE_SPLIT_PIN = float(os.environ.get("STAGE2_EDGE_SPLIT_PIN", "0"))  # 引脚�
 #     （一条已配对的边被切两半后两半都过不了「两端点都在 5px 内」），**真切一次只 +1 tp**，
 #     ⇒ 精度要 >~67% 才不亏，实测 16% ⇒ 原理上不可能赢。切分类机制整族封口。
 EDGE_SPLIT_XNET = float(os.environ.get("STAGE2_EDGE_SPLIT_XNET", "0"))
+# 候选点处必须有一条与目标边**非共线**（夹角 ≥ ANG）且长度 ≥ MINLEN 的边，才认它是 T 结点。
+EDGE_SPLIT_XNET_ANG = float(os.environ.get("STAGE2_EDGE_SPLIT_XNET_ANG", "30"))
+EDGE_SPLIT_XNET_MINLEN = float(os.environ.get("STAGE2_EDGE_SPLIT_XNET_MINLEN", "6"))
 
 
-def split_edges_at_xnet(nets: Dict[str, dict], tol: float = None) -> Dict[str, int]:
-    """把每条边的**内部**穿过「**别的网**的边端点」（≤ `tol`）时，在该点一分为二。
+def split_edges_at_xnet(nets: Dict[str, dict], tol: float = None,
+                        ang: float = None, minlen: float = None) -> Dict[str, int]:
+    """把每条边的**内部**穿过「**别的网**的边端点」时，在该点一分为二。
 
-    返回 `{"split": 切点数}`。端点附近（≤ `tol`）的候选点不切（那已经是结点）。
+    返回切分计数。端点附近（≤ `tol`）的候选点不切（那已经是结点）。
 
     依据（`work/_inside.py`，官方 10 交付口径）：netL 账本里 GT 侧 `inside` 那一类
     （GT 有两条边、我们只有一条长边）取到的 **136 个 GT 内部结点里 134 个，
     我方顶点本来就在结点处（d = 1.0~3.2px）**——只是那些顶点属于**另外一条网**
     （另一根导线穿过/搭上这条线），而 `split_dedup_edges` 的切点只在本网内找 ⇒ 漏切。
+
+    ★ 第二轮（`STAGE2_EDGE_SPLIT_XNET_ANG`，默认 30°）：第一版把「所有网的**任何**边端点」
+    都当候选，实测大负（`work/_xnet_ab.ps1`：xn3 79.79 / xn8 79.92 vs 参考 80.88）——
+    机理是**假切分的代价是 tp−1、fp+2、fn+1（≈ −4 单位），而真切分只赚 +1 tp**，
+    所以假切率必须 < 1/3。第一版最大的假切来源：**共线碎片端**（同一条长线被切出的邻段端点
+    落在自己身上）与 1~3px 的残段。现在要求候选点处**存在一条与目标边非共线（夹角 ≥ ang）
+    且长度 ≥ minlen 的边**（T 形另有一笔横着过来），共线碎片被这一条挡掉。
     """
     tol = EDGE_SPLIT_XNET if tol is None else tol
-    st = {"split": 0}
+    ang = EDGE_SPLIT_XNET_ANG if ang is None else ang
+    minlen = EDGE_SPLIT_XNET_MINLEN if minlen is None else minlen
+    st = {"split": 0, "cand": 0, "rej_col": 0, "rej_net": 0}
     if tol <= 0:
         return st
-    cand: List[Tuple[float, float]] = []
-    for _nm, _rec in nets.items():
-        for _v in (_rec.get("edges") or {}).values():
-            e = _seg_ends(_v)
-            if e is not None:
-                cand.append((e[0][0], e[0][1]))
-                cand.append((e[1][0], e[1][1]))
-    if not cand:
+    cos_min = math.cos(math.radians(max(0.0, min(89.0, ang))))
+    # 点桶：把每条边的**两个端点**按 1px 归并，桶里存 (方向, 网名, 边长)
+    bkt: Dict[Tuple[int, int], List[tuple]] = {}
+    for nm, rec in nets.items():
+        for v in (rec.get("edges") or {}).values():
+            e = _seg_ends(v)
+            if e is None:
+                continue
+            (p0, p1) = e
+            L = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+            if L <= 1e-9:
+                continue
+            ux, uy = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
+            for a, b in ((p0, p1), (p1, p0)):
+                key = (int(round(a[0])), int(round(a[1])))
+                bkt.setdefault(key, []).append((ux, uy, nm, L, (a[0], a[1])))
+    if not bkt:
         return st
-    for rec in nets.values():
-        edges = rec.get("edges") or {}
+    for nm_a, rec_a in nets.items():
+        edges = rec_a.get("edges") or {}
         segs = [(k, _seg_ends(v)) for k, v in edges.items()]
         segs = [(k, e) for k, e in segs if e is not None]
         if not segs:
@@ -1356,16 +1378,33 @@ def split_edges_at_xnet(nets: Dict[str, dict], tol: float = None) -> Dict[str, i
             if L2 <= 1e-9:
                 out.append(((ax, ay), (bx, by)))
                 continue
+            Le = math.sqrt(L2)
+            ex, ey = dx / Le, dy / Le
             cuts: List[Tuple[float, float, float]] = []
-            for (qx, qy) in cand:
+            for _key, entries in bkt.items():
+                qx, qy = entries[0][4]
                 if (math.hypot(qx - ax, qy - ay) <= tol
                         or math.hypot(qx - bx, qy - by) <= tol):
                     continue                   # 与端点重合 ⇒ 已经有顶点
+                if not any(e_nm != nm_a for _ux, _uy, e_nm, _L, _p in entries):
+                    st["rej_net"] += 1
+                    continue                   # 候选点必须来自**别的网**
                 t = ((qx - ax) * dx + (qy - ay) * dy) / L2
                 if t <= 0.0 or t >= 1.0:
                     continue
                 fx, fy = ax + t * dx, ay + t * dy
                 if math.hypot(qx - fx, qy - fy) > tol:
+                    continue
+                st["cand"] += 1
+                ok = False
+                for ux, uy, _e_nm, eL, _p in entries:
+                    if eL < minlen:
+                        continue
+                    if abs(ux * ex + uy * ey) <= cos_min:
+                        ok = True
+                        break
+                if not ok:
+                    st["rej_col"] += 1
                     continue
                 cuts.append((t, fx, fy))
             if not cuts:
@@ -1388,7 +1427,7 @@ def split_edges_at_xnet(nets: Dict[str, dict], tol: float = None) -> Dict[str, i
             st["split"] += len(kept)
             touched = True
         if touched:
-            rec["edges"] = {"edge_%d" % (i + 1): [
+            rec_a["edges"] = {"edge_%d" % (i + 1): [
                 {"x": round(p0[0], 2), "y": round(p0[1], 2)},
                 {"x": round(p1[0], 2), "y": round(p1[1], 2)}] for i, (p0, p1) in enumerate(out)}
     return st
