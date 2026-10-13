@@ -360,6 +360,25 @@ PINNAME_CFRAC = float(os.environ.get("STAGE2_PINNAME_CFRAC", "0.20"))
 # 器件名块是 53x22（两行大字块），放行会被读成 `15IO` 抢走 pin2（80.00 → 78.22）。
 # 实测三条该放行的框：case 1 U1 89x18、case 2 U3 26x10、case 5 U3 75x13。
 PARTNAME_FREE_H = float(os.environ.get("STAGE2_PARTNAME_FREE_H", "18.0"))
+# ★★ 「名候选必须靠近它的**最近那根脚**」与「同一块墨迹的重叠副本只留最宽的一份」
+#   （`STAGE2_PINNAME_ROWNEAR` / `STAGE2_PINNAME_DUPOV`；见 `docs/RESULTS.md` §5.93）。
+#
+# 病（10GT case 6 的 `U4`，`STMPS2141STR`）：stage1 给出 **10 个脚点**（1 上 / 3 右 / 4 下 / 2 左），
+# 而 `pincol` 那套窗口引导在这张图上**根本没产出**（`pincol_stat.comps = 0`）⇒ 名轮退回
+# `structmatch.rebind` 的**沿边**距离打分。沿边距离对「上边脚」量的是 x 方向：
+# 左侧名框 `IN`（中心 x1647）与上边脚点（x1643.8）沿边只差 3px ⇒ 它被对齐到**上边脚**上；
+# 而左侧那两根脚（行 y=208 / y=247.5）只剩下**同一块墨迹的窄副本**（8x10，CRNN 读 `N`，
+# conf 0.99 反而比 12x10 的 `IN` 0.987 高）⇒ 最终 `pin4`/`pin5` 都读成 `N`（每根 −1.67 分）。
+#
+# 两条零调用几何规则（互补，缺一条都不行）：
+#   ① 名候选只允许归到「2D 距离最近的脚」（允许 `×PINNAME_ROWTIE` 的并列）——
+#      挡住跨行/跨侧的抢读（上边脚抢左侧名框）；
+#   ② 同一行（|Δcy| ≤ `PINNAME_DUPGAP`）且 x 重叠 ≥ `PINNAME_DUPOV`（占较窄者宽度）的两块框，
+#      只留**更宽**的那份 —— 窄副本是同一块墨迹的截断裁片（§5.86 记过 `IS→S`/`EN→N`）。
+PINNAME_ROWNEAR = int(os.environ.get("STAGE2_PINNAME_ROWNEAR", "1") or 0)
+PINNAME_ROWTIE = float(os.environ.get("STAGE2_PINNAME_ROWTIE", "1.5"))
+PINNAME_DUPOV = float(os.environ.get("STAGE2_PINNAME_DUPOV", "0.60"))
+PINNAME_DUPGAP = float(os.environ.get("STAGE2_PINNAME_DUPGAP", "6.0"))
 # ★★ 2026-10-08：**框外补引脚名**的距离上限（px，`0` = 关闭）。
 # 语义 = 「引脚号那一轮跑完之后，只往**还空着**的名字槽里补框外的名字」，
 # 也就是 late pass。取值是「文字中心到元件框」的距离上限，走 `t["d"]` 那套量。
@@ -1666,6 +1685,27 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                         continue
                     _keep.append(cc)
                 pool = _keep
+            # ★ 同一块墨迹的**窄副本**只留最宽的一份（`STAGE2_PINNAME_DUPOV`，见 §5.93）。
+            #   窄副本是同一个字被截断的裁片（`IN`→`N`、`EN`→`N`），而它的 conf 反而可能更高，
+            #   于是「谁分高谁上」会把完整的那份挤掉。
+            if slot == "name" and PINNAME_DUPOV > 0 and len(pool) > 1:
+                _keep = []
+                for cc in sorted(pool, key=lambda x: -(x["rec"]["bbox"][2] - x["rec"]["bbox"][0])):
+                    _cb = cc["rec"]["bbox"]
+                    _cw = _cb[2] - _cb[0]
+                    _dup = False
+                    for k in _keep:
+                        _kb = k["rec"]["bbox"]
+                        _ov = min(_cb[2], _kb[2]) - max(_cb[0], _kb[0])
+                        if _ov <= 0:
+                            continue
+                        if (_ov / max(1.0, min(_cw, _kb[2] - _kb[0])) >= PINNAME_DUPOV
+                                and abs(cc["center"][1] - k["center"][1]) <= PINNAME_DUPGAP):
+                            _dup = True
+                            break
+                    if not _dup:
+                        _keep.append(cc)
+                pool = _keep
             pool.sort(key=lambda x: -x["score"])
 
             # ★★ **引脚列窗口引导**（`stage1/pincol.py`，默认开）。
@@ -1713,6 +1753,18 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
 
             def score_of(c, pi, _pl=plist, _bb=_cbb,
                          _dec=PINNUM_DECAY if slot == "number" else 20.0):
+                if PINNAME_ROWNEAR and slot == "name" and len(_pl) > 1:
+                    # ★ 名候选只允许归到「2D 距离最近的那根脚」（并列允许 ×PINNAME_ROWTIE）。
+                    #   见常量处注释：沿边距离对**上边脚**量的是 x 方向，左侧名框会被它抢走。
+                    _dm = c.get("_dmin")
+                    if _dm is None:
+                        _dm = min(((p[0] - c["center"][0]) ** 2
+                                   + (p[1] - c["center"][1]) ** 2) ** 0.5 for p in _pl)
+                        c["_dmin"] = _dm
+                    _dp = ((_pl[pi][0] - c["center"][0]) ** 2
+                           + (_pl[pi][1] - c["center"][1]) ** 2) ** 0.5
+                    if _dp > _dm * PINNAME_ROWTIE + 1e-6:
+                        return 0.0
                 if PIN_ALONG:
                     # ★ 用**沿边**距离而不是 2D 距离。
                     # 同一排的文字框在垂直方向（沿边）上各自贴着它的引脚，而在
