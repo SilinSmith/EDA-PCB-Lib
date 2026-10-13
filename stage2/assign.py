@@ -353,6 +353,12 @@ PINNAME_MAXW = float(os.environ.get("STAGE2_PINNAME_MAXW", "6.0"))
 # 于是名候选池里踢掉 `cfrac > PINNAME_CFRAC` 的框。**只压名轮**：号轮不动。
 # 该属性只在 `STAGE2_TEXT_INK=1` 时才存在 —— 两开关要**一起**开（`cfrac` 缺席时本闸门不生效）。
 PINNAME_CFRAC = float(os.environ.get("STAGE2_PINNAME_CFRAC", "0.20"))
+# ★ 号轮的「每字符像素宽」闸门（`STAGE2_PINNUM_PXC`，默认 0 = 关）：
+#   引脚号是 1~3 个字符，真号码框 ≈ 10~11 px/字符；而合并了上下两行、或抢到名字
+#   宽度的框会到 14+ px/字符（case 8 的 U1：`[967,701,994,711]` 27x10 读成 `26`
+#   = 13.5、`[967,470,996,485]` 29x15 读成 `11` = 14.5 ⇒ 后者的号码是错的）。
+#   只对「读出的号码含数字」的框生效，宽度取框自身 bbox。
+PINNUM_PXC = float(os.environ.get("STAGE2_PINNUM_PXC", "0"))
 # ★★ 「器件名框放行回名轮」的高度闸门（`STAGE2_PARTNAME_FREE_H`，px；见 §5.92）。
 # `take()` 原先无条件把器件名框赶出名轮候选池，而 `vlm/enrich.py` 改写器件名**文字**时
 # 保留旧框，于是像 case 5 的 U3 那样「框其实是 `VOUT(TAB)` 名框」的记录会把真名框也赶走。
@@ -1648,6 +1654,16 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 # ★ 名候选的有色墨迹闸门（`STAGE2_PINNAME_CFRAC`）：挡掉红点/极性标记
                 if slot == "name" and t.get("cfrac", 0.0) > PINNAME_CFRAC:
                     continue
+                # ★ 号轮的「每字符像素宽」闸门（`STAGE2_PINNUM_PXC`，默认 0 = 关）：见常量注释
+                if slot == "number" and PINNUM_PXC > 0:
+                    _nr = (t.get("reads") or {}).get("pin_number")
+                    _txt = str(_nr[0]) if _nr else ""
+                    _dig = "".join(ch for ch in _txt if ch.isdigit())
+                    _bb = t.get("bbox") or []
+                    if _dig and len(_bb) == 4:
+                        _wpx = float(_bb[2]) - float(_bb[0])
+                        if _wpx / float(len(_dig)) > PINNUM_PXC:
+                            continue
                 # ★ 「纯数字 = 号」的两个开关（见 `PINNUM_INSIDE` 的长注释）：
                 #   号轮放行「体内但读成纯数字」的框，名轮不再收这类框。
                 _pdig = (_pure_digit_read(t) if (PINNUM_INSIDE or PINNAME_NODIGIT)
