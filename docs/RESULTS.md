@@ -7139,3 +7139,45 @@ comp / pin / netH = 0.9819 / 0.7731 / 0.7749 **三项逐位不变**（只动 `ed
 
 **产物/复现**：`work/_pinzoomsel.py`（触发器标定：`--vocab near|corpus`、`--nodup`）、`work/_pinzoomprobe.py`（宽/窄裁剪的弃权行为对照）、`work/_pinzoomrule.py`（**采信规则离线标定**：`--read` 跑 VLM 并落盘 → 只用缓存复算各规则分数与逐槽判决，`python -X utf8 work\_pinzoomrule.py`）、`work/_pinzoombatch.py`（批量 2AFC 与单槽一致性）、`work/_pinnamecrnn.py`（零 token 本地 OCR 复读）、`work/_pinzoomapply.py`（单案逐槽决策追踪）、`work/_pinzoom_ab.ps1`（A/B；本会话 shell 无 `pwsh`、`& .\x.ps1` 被策略拦 ⇒ `powershell -ExecutionPolicy Bypass -NoProfile -File work\_pinzoom_ab.ps1`）。落地代码 `eda-pcb/vlm/pinzoom.py`（默认关）、接线 `eda-pcb/submission/run.py`（导出前 + `decision_log.summary.pinzoom`）。复现：`FUSION_PINZOOM=1 python -X utf8 tools\eval\fast.py --cases 1,10,2,3,4,5,6,7,8,9 --out pzon --extra "-vlm-pin off"`（80.01），去掉 env 即 80.98。
 
+## 5.83 元件通道：`STAGE2_CONFORM_KEY` 转正（官方 10 张 80.98 → **81.14，+0.16**）+ 残值离线标定
+
+**一、先把尺子校准（这是本节成立的前提）**：交付读数是 `tools/eval/fast.py` 的**默认引擎 `protocol2`**
+（`schematic_parser/metrics.py` 的 `evaluate_case` + `EvalConfig()`），**不是** `schematic_parser/official.py`
+（那是 `harness` = 判题机复刻尺，业主已认定写错）。两者对**同一批产物**结论相反：
+`harness` 下 case 4 的 comp = 0.4898、case 6 = 0.5263（`∅NNN` 按键精确、`Name` 逐字比），
+`protocol2` 下 case 4 = 0.9796、case 6 = 0.9474（`∅` 走坐标匹配、**`d`/`led`/`gnd`/`v` 根本不比 `Name`**
+—— 见 `metrics.py:233` 的 `component_text_ok`：只有 `IC_TYPES` 比 `Name`、`VALUE_TYPES` 比 `value`，其余 `return True`）。
+⇒ `assign.py` 里那条「每发出一颗 `d`/`led` 就是一个必然判错的「多余元素」（`EXTRA_MODELNAME_TYPES`）」
+**只在 `harness` 下成立**，在交付尺下不成立 —— 这颗 LED 只要 `type` 对就 tp。
+
+**二、转正**：`stage2/assign.py` 的 `CONFORM_KEY`（内涵键回收：读出的位号前缀反过来判类型、
+削开头胶连）由 `STAGE2_CONFORM_KEY=0` 改为**默认 `1`**。
+A/B（官方 10 张、`-vlm-pin off`、同一批输入逐案对比）：
+`work/_fast_out_pzoff`（=0）**80.98** vs `work/_fast_out_ckey`（=1）**81.14（+0.16）**；
+**逐案只有 case 6 变**（77.14 → 78.72），其余 9 张的总分与四个分项**逐位相同**。
+变的只有两颗 LED 的 `type`（`d` → `led`，`bbox`/`pins` 完全不动，见两臂 `6_Pred.json` 的 diff）
+⇒ `6` 的 comp **0.9474 → 1.0000**。自检 `python -X utf8 -m stage2.assign`：
+默认（=1）与 `STAGE2_CONFORM_KEY=0` 两种状态**各 18 项全过**。
+
+**三、20 张广义回归**（10GT + 200 池最差的 10 张，`--out ckey20off/ckey20on --save dkou`）：
+**49.53 → 49.60（+0.07）**；逐案 **3 涨 2 跌 15 平**：`6` +1.58、`0092` +1.40、`0103` +0.11 /
+`0048` **−1.41**、`0086` −0.12。分项 comp 0.6874→0.6900、netH 0.4541→0.4545、netL 0.2762→0.2748。
+⇒ 两个集合都是正、照线上线；但 `0048` 那条 netH 0.0323→**0** 是真回归（回收出来的元件多带了一条网，
+把一对已配上的网撞掉了），留作残余。
+
+**四、元件通道残值（离线试算 `work/_compfix.py`，**不跑管线**：直接改 `_Pred.json` 用 protocol2 重算）**：
+基线 81.14（comp 有 8/10 张已经是 1.0000）。剩下的三条：
+* case 1 `C154`/`C158` 的值 `10nF` 被读成 `10uF` ⇒ **+0.27**（comp 0.9091 → 1.0000，用 GT 覆盖做的 oracle 验证）；
+* case 4 **重复检测** `p010`（type `d`、假键 `p010`）与真键 `LED1` 的框重叠（x 重叠 0.85、中心距 6.4px）⇒ **+0.06**；
+* case 10 `p016`/`p015`（同为 `gnd`、x 重叠 1.0、中心 y 差 16px）⇒ **+0.05**。
+合计残值 **+0.38**（值 0.27 + 重复 0.11），**尚未落地**。
+值那两条难在哪：`tools/diag/_valbeam.py --case 1 --filter "F|H|u|n"` 显示模型对这两个框的 top-3 是
+`u -1.18 / I -2.05 / 0 -2.10` —— **`n` 连前三都排不进**，且这两条的置信度只有 0.66（正确读多在 0.85~0.95）
+⇒ 束搜索 / 词表重排救不了，只能换裁剪或换模型（`work/_valcrop.py` 把 `crop_gray` 真正喂进模型的裁片
+放大成 `work/_valcrop.png` 看过：`t0163`/`t0174` 第三个字形与真值 `1uF` 的 `u` 几乎一模一样）。
+
+**产物/复现**：`work/_compfix.py`（元件残值离线试算：D1 假键 `d`/`led` 去重、D2 同类型重合去重、
+V1 值 oracle）、`work/_valcrop.py`（`crop_gray` 输入可视化）、`work/_comploss.py`（逐案元件失分归因）。
+读数目录：`work/_fast_out_pzoff`（=0）、`work/_fast_out_ckey`（=1）、`work/_fast_out_ckey20off`/`ckey20on`（20 张）、
+基线 `work/_fast_base/dkou.json`（=0 那臂）。
+
