@@ -883,63 +883,78 @@ def _pt_seg_dist(px: float, py: float, segs: List[Tuple[str, tuple]], skip: str 
 # 只动 `edges` 首尾两点 ⇒ 元件/引脚/netH 三通道逐位不变。
 EDGE_CORNER = float(os.environ.get("STAGE2_EDGE_CORNER", "12"))          # 拐角合拢半径 px，0 = 关
 EDGE_CORNER_INT = float(os.environ.get("STAGE2_EDGE_CORNER_INT", "0.05"))  # 交点落在对方跨度外的容差(比例)
+EDGE_CORNER_CROSS = os.environ.get("STAGE2_EDGE_CORNER_CROSS", "1") not in ("0", "", "no", "off")
 
 
 def snap_ends_to_crossings(nets: Dict[str, dict], radius: float = None,
-                           interior: float = None) -> int:
-    """把端点搬到**同网**另一条边的轴延长线交点（治骨架在 T/十字结点处短 8~13px）；返回改动的端点数。"""
+                           interior: float = None, cross: bool = None) -> int:
+    """把端点搬到另一条边的轴延长线交点（治骨架在 T/十字结点处短 8~13px）；返回改动的端点数。
+
+    `cross=True`（默认）时横向边取自**全图所有网** —— 结点另一半被切成别的网时也能合拢；
+    `cross=False` 只在**本网**内找横向边（旧行为，离线与跨池读数都略低）。
+    只改**被搬端点自己那条边**，横向边与 `hyperGraph` 一律不碰。
+    """
     radius = EDGE_CORNER if radius is None else radius
     interior = EDGE_CORNER_INT if interior is None else interior
+    cross = EDGE_CORNER_CROSS if cross is None else cross
     if radius <= 0:
         return 0
-    moved = 0
-    for rec in nets.values():
+    allsegs: List[Tuple[str, str, tuple]] = []
+    ref: Dict[Tuple[str, str], list] = {}
+    for nk, rec in nets.items():
         edges = rec.get("edges") or {}
-        segs = [(k, _seg_ends(v)) for k, v in edges.items()]
-        segs = [(k, e) for k, e in segs if e is not None]
-        if len(segs) < 2:
-            continue
-        newpts: Dict[Tuple[str, int], Tuple[float, float]] = {}
-        for i, (k, ends) in enumerate(segs):
-            (ax, ay), (bx, by) = ends
-            for idx, (px, py), (qx, qy) in ((0, (ax, ay), (bx, by)), (1, (bx, by), (ax, ay))):
-                ux, uy = px - qx, py - qy                 # ★ 朝**外**（从边体指向端点外）
-                L = math.hypot(ux, uy)
-                if L < 1e-6:
-                    continue
-                ux, uy = ux / L, uy / L
-                for j, (k2, ends2) in enumerate(segs):
-                    if j == i:
-                        continue
-                    (cx, cy), (ex_, ey_) = ends2
-                    vx, vy = ex_ - cx, ey_ - cy
-                    cr = ux * vy - uy * vx
-                    if abs(cr) < 1e-6:
-                        continue
-                    t = ((cx - px) * vy - (cy - py) * vx) / cr
-                    if not (0.0 < t <= radius):
-                        continue
-                    X = (px + t * ux, py + t * uy)
-                    L2 = vx * vx + vy * vy
-                    tj = ((X[0] - cx) * vx + (X[1] - cy) * vy) / (L2 if L2 > 1e-9 else 1.0)
-                    ok = -interior <= tj <= 1.0 + interior
-                    if not ok:
-                        for e in ((cx, cy), (ex_, ey_)):
-                            dj = math.hypot(e[0] - X[0], e[1] - X[1])
-                            if 0.0 < dj <= radius:
-                                ok = True
-                                break
-                    if not ok:
-                        continue
-                    newpts[(k, idx)] = X
-                    moved += 1
-                    break
-        for (k, idx), X in newpts.items():
-            seg = edges.get(k)
-            if not seg or len(seg) < 2:
+        for k, v in edges.items():
+            e = _seg_ends(v)
+            if e is None:
                 continue
-            seg[idx]["x"] = round(X[0], 2)
-            seg[idx]["y"] = round(X[1], 2)
+            allsegs.append((nk, k, e))
+            ref[(nk, k)] = v
+    if len(allsegs) < 2:
+        return 0
+    moved = 0
+    newpts: Dict[Tuple[str, str, int], Tuple[float, float]] = {}
+    for i, (nk, k, ends) in enumerate(allsegs):
+        (ax, ay), (bx, by) = ends
+        for idx, (px, py), (qx, qy) in ((0, (ax, ay), (bx, by)), (1, (bx, by), (ax, ay))):
+            ux, uy = px - qx, py - qy                 # ★ 朝**外**（从边体指向端点外）
+            L = math.hypot(ux, uy)
+            if L < 1e-6:
+                continue
+            ux, uy = ux / L, uy / L
+            for j, (nk2, k2, ends2) in enumerate(allsegs):
+                if j == i:
+                    continue
+                if not cross and nk2 != nk:
+                    continue
+                (cx, cy), (ex_, ey_) = ends2
+                vx, vy = ex_ - cx, ey_ - cy
+                cr = ux * vy - uy * vx
+                if abs(cr) < 1e-6:
+                    continue
+                t = ((cx - px) * vy - (cy - py) * vx) / cr
+                if not (0.0 < t <= radius):
+                    continue
+                X = (px + t * ux, py + t * uy)
+                L2 = vx * vx + vy * vy
+                tj = ((X[0] - cx) * vx + (X[1] - cy) * vy) / (L2 if L2 > 1e-9 else 1.0)
+                ok = -interior <= tj <= 1.0 + interior
+                if not ok:
+                    for e in ((cx, cy), (ex_, ey_)):
+                        dj = math.hypot(e[0] - X[0], e[1] - X[1])
+                        if 0.0 < dj <= radius:
+                            ok = True
+                            break
+                if not ok:
+                    continue
+                newpts[(nk, k, idx)] = X
+                moved += 1
+                break
+    for (nk, k, idx), X in newpts.items():
+        seg = ref.get((nk, k))
+        if not seg or len(seg) < 2:
+            continue
+        seg[idx]["x"] = round(X[0], 2)
+        seg[idx]["y"] = round(X[1], 2)
     return moved
 
 
