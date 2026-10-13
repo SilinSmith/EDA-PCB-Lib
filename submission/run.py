@@ -1175,6 +1175,44 @@ def _run(a) -> int:
         _log(fp, "值重读通道：开（FUSION_VALREAD=1，trigger=%s，guard=%d）"
              % (getattr(_vrmod, "TRIGGER", "?"), int(bool(getattr(_vrmod, "GUARD", 0)))))
 
+    # §5.86：引脚名「紧框复读」通道（`FUSION_PINNAME`，默认 1）。与值通道同构 —— 槽位来自
+    #   管线自己的账 `_assigned`（`comps[*].pins[*].name.{box,text,conf}` 就是 CRNN 读名字用的
+    #   那个框），紧框 + 只问「这段文字是什么」；采信规则见 `vlm/pinname.py` 顶注（四条闸门，
+    #   其中「不与同元件别的脚重名」用来挡 case 4 那种「两个名字框被归到同一根脚」的误采）。
+    pinname_rows = []
+    try:
+        from vlm import pinname as _pnmod                      # noqa: PLC0415
+        _pinname_on = bool(_pnmod.ON)
+    except Exception:                                          # noqa: BLE001
+        _pinname_on = False
+    if _pinname_on:
+        _log(fp, "引脚名复读通道：开（FUSION_PINNAME=1，conf<%.2f 或 w<=%.0f，guard=%d）"
+             % (getattr(_pnmod, "CONF", 0.0), getattr(_pnmod, "MAXW", 0.0),
+                int(bool(getattr(_pnmod, "GUARD", 0)))))
+
+    def _pinname_step(cid, png):
+        """在**已经落盘**的 `<cid>_Pred.json` 上补一层引脚名复读；失败一律不影响导出。"""
+        if not _pinname_on:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            _ap = runs / "fusion" / "_assigned" / ("%s.json" % cid)
+            if not _ap.exists():
+                _ap = runs / "stage2" / "_assigned" / ("%s.json" % cid)
+            _st = _pnmod.apply_file(png, _ap, dst_j, dst_j)
+            if not _st:
+                return
+            pinname_rows.append({"case": cid,
+                                 **{k: v for k, v in _st.items() if k != "trace"}})
+            if _st.get("adopted"):
+                _log(fp, "  %-28s 引脚名复读 槽 %d 采用 %d 调用 %d：%s"
+                     % (cid, _st.get("slots", 0), _st.get("adopted", 0), _st.get("calls", 0),
+                        "；".join("%s.%s %s→%s" % (t.get("key"), t.get("num"),
+                                                   t.get("cur"), t.get("ans"))
+                                  for t in (_st.get("trace") or []) if t.get("adopted"))))
+        except Exception as exc:                               # noqa: BLE001
+            _log(fp, "  ⚠️ %s 引脚名复读失败：%s: %s" % (cid, type(exc).__name__, exc))
+
     def _valread_step(cid, png):
         """在**已经落盘**的 `<cid>_Pred.json` 上补一层值重读；失败一律不影响导出。"""
         if not _valread_on:
@@ -1217,9 +1255,10 @@ def _run(a) -> int:
             _log(fp, "  %-28s 没有产物（阶段一/二失败）→ %s"
                  % (cid, "已写空壳" if ok else "⚠️ 空壳也写失败"))
             continue
-        # §5.82：引脚名「框选重读」通道（`FUSION_PINZOOM`，默认 1）。它在**导出前**
-        #   对最终文档再补一层受约束的名字改写（只碰名字、不动点/号/边），采信规则
-        #   见 `vlm/pinzoom.py` 顶注。失败一律不影响导出（退化成直接拷贝）。
+        # §5.82：引脚名「框选重读」通道（`FUSION_PINZOOM`，**默认 0 = 关**；A/B 实测
+        #   80.98 → 80.01（−0.97），4 次采纳全坏 ⇒ 只留库，见 `vlm/pinzoom.py` 顶注）。它在
+        #   **导出前**对最终文档再补一层受约束的名字改写（只碰名字、不动点/号/边）；失败
+        #   一律不影响导出（退化成直接拷贝）。
         pz_note = ""
         dst = final_dir / ("%s_Pred.json" % cid)
         if _pinzoom_on:
@@ -1234,6 +1273,7 @@ def _run(a) -> int:
                     n_export += 1
                     _log(fp, "  %-28s 引脚名重读 %s" % (cid, pz_note))
                     _valread_step(cid, _p)
+                    _pinname_step(cid, _p)
                     continue
             except Exception as exc:                        # noqa: BLE001
                 _log(fp, "  ⚠️ %s 引脚名重读失败：%s: %s" % (cid, type(exc).__name__, exc))
@@ -1241,6 +1281,7 @@ def _run(a) -> int:
         exported.add(cid)
         n_export += 1
         _valread_step(cid, _p)
+        _pinname_step(cid, _p)
     _log(fp, "导出 %d 份 <case>_Pred.json%s"
          % (n_export, ("（另有 %d 份空壳兜底）" % n_shell) if n_shell else ""))
 
@@ -1274,6 +1315,11 @@ def _run(a) -> int:
              % (sum(r.get("slots", 0) for r in valread_rows),
                 sum(r.get("adopted", 0) for r in valread_rows),
                 sum(r.get("calls", 0) for r in valread_rows), len(valread_rows)))
+    if pinname_rows:
+        _log(fp, "引脚名复读合计：槽 %d 采用 %d 调用 %d（%d 张图）"
+             % (sum(r.get("slots", 0) for r in pinname_rows),
+                sum(r.get("adopted", 0) for r in pinname_rows),
+                sum(r.get("calls", 0) for r in pinname_rows), len(pinname_rows)))
     _log(fp, "全部完成，墙钟 %.1fs（%.2f s/张）" % (wall, wall / max(1, len(items))))
     fp.close()
 
@@ -1281,7 +1327,8 @@ def _run(a) -> int:
                     {"n_cases": len(items), "n_stage1_ok": len(ok1),
                      "n_stage2_ok": len(s2_rows), "n_stage3_ok": len(s3_rows),
                      "n_exported": n_export, "n_shell": n_shell, "wall_s": wall,
-                     "pinzoom": pinzoom_rows, "valread": valread_rows},
+                     "pinzoom": pinzoom_rows, "valread": valread_rows,
+                     "pinname": pinname_rows},
                     cases_log, a, t_start)
     print("产物 -> %s" % final_dir)
     return 0
