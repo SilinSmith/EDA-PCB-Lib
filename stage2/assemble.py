@@ -1492,6 +1492,136 @@ def split_edges_at_pins(nets: Dict[str, dict], pins: Dict[str, dict],
     return st
 
 
+# ★★ 引脚端推进到元件框边（`STAGE2_END_TO_BOX`，默认 0 = 关）。
+#
+# 病（`work\_extoracle.py`，官方 10 交付口径）：现在不是 tp 的边里，**只把端点沿自身方向
+#   外推 ≤10px 就能多出 69 条 tp**（R=0:329 → R=5:363 → R=10:398 → R=20:403）。
+#   逐条看（`work\_extwhy.py`）这些「短掉的 9~10px」几乎全在**端点落在引脚上**的那一端。
+# 实证（case 6 `C10`，像素级核对过）：
+#   GT 框 `C10.bbox = [1729, 308, 1745, 328]`、我方引脚 `C10.pin_1 = (1736.55, 299.6)`
+#   （= 框底边往**外** 8.4px，正是 `STAGE1_PIN_OUT_BOX=12` 那套「框边 ∓ PIN_OUT」的摆放），
+#   GT 那条边的端点 = **(1736, 308) = 框边本身**；我方边停在引脚点 ⇒ 系统性短 8~12px。
+#   图像核对：x=1737 处墨迹在 image y=790~795 断开（导线描边），y=796 起是**引线**描边，
+#   我们的端点 (y_img 810) 落在引线里、GT 的端点 (y_img 802) 也在引线里但更靠里 ⇒ 差 8px。
+# 药：**只动「端点落在引脚上（≤ tol）且是同网自由端」的那一端**，沿边方向推进到该引脚的
+#   **元件框边**（射线与轴对齐框的第一个交点），推进量 ≤ maxlen。只动 `edges` 首尾两点
+#   ⇒ 元件/引脚/netH 三个通道逐位不变。
+END_TO_BOX = env_on("STAGE2_END_TO_BOX", "0")
+END_TO_BOX_TOL = float(os.environ.get("STAGE2_END_TO_BOX_TOL", "4.0"))
+END_TO_BOX_MAX = float(os.environ.get("STAGE2_END_TO_BOX_MAX", "30.0"))
+END_TO_BOX_FREE = float(os.environ.get("STAGE2_END_TO_BOX_FREE", "3.0"))
+# ★ 只对哪些**元件类型**做（`STAGE2_END_TO_BOX_TYPES`，默认 `c`；`all` = 全做）。
+#   依据（`work\_gtendrule.py`，官方 10 的 533 个 GT 悬空端）：GT 的导线端**两种画法都有** ——
+#     贴引脚（d_pin≤2）180 个、贴框边（|d_box|≤2）**69 个（全是电容 C\*）**、两者都不是 365 个。
+#   按类型：`c` 有 68 贴框边 / 22 贴引脚；`box`（IC）70 贴引脚 / 1 贴框边；`r/gnd/v/led/l`
+#   基本两者都不是。⇒ 一刀切（模拟 `work/_btb_sim.py`）**会亏**；只对 `c` 做，按上式
+#   netL 0.5157→0.5878（**+0.072 F1 ≈ +0.72 分**）。
+END_TO_BOX_TYPES = tuple(
+    t.strip().lower() for t in os.environ.get("STAGE2_END_TO_BOX_TYPES", "c").split(",") if t.strip())
+END_TO_BOX_ALL = ("all" in END_TO_BOX_TYPES) or (not END_TO_BOX_TYPES)
+# ★ 实测（全交付路径 A/B，`work\_btb_ab.ps1`，官方 10 张，2026-10-14）：btref（默认关）
+#   80.88 / netL 0.4975；bt1(TOL=4,MAX=30) / bt2(MAX=12) / bt3(TOL=6,MAX=60) **全部 80.88 /
+#   netL 0.4967**（comp 0.9819 / pin 0.7731 / netH 0.7749 逐位不变）。逐案摆动极大且正负相抵：
+#   case 6 +0.211（0.4912→0.7018）、8 +0.267、4 +0.180、5 +0.086；case 1 −0.218（0.6535→0.4356）、
+#   9 −0.203、7 −0.161、3 −0.086、10 −0.083、2 0.000（该案无 c 脚）。
+#   逐边账（`work\_btb_diff.py`，注意 `M.net_hypergraph_f1` 返回的是**下标对**）：只做 c 时
+#   moved 123 / gain 51（inside→exact）/ loss 55（exact→graze）/ **净 −4**；`TYPES=all` 时
+#   moved 306 / gain 52 / loss 128 / **净 −76**。
+#   ★ 为何这条线原理上赢不了（`work\_gtgap.py`）：Δ = GT 线端 − 我方线端（沿 引脚→框边 轴）呈**双峰** ——
+#   「贴框边画法」组中位 **10.1px**、「贴引脚画法」组中位 **1.0px**，两峰间距 10.1 > 2×line_tol(5.0)
+#   ⇒ 任何统一平移都吃不下两种（穷举位移 s：最好只有 s=1.0 的 72/135 = 53%）。三个可得的判别器全否：
+#   骨架端 t（box 组中位 6.7 vs pin 组 6.9，无区分度）、引线墨宽（除 case 1 = 3.5 外全 2.0）、
+#   stage1 端点贴框边计数（case 1 12/24 vs case 4 0/14，方向相反）⇒ 语料缺陷（同类型两种画法、
+#   图上不可分辨，与 §5.72 的框约定同类）。对冲变体（两种位置各发一条边）≈ +0.084 分（123 fp 换 51 tp）
+#   —— **故意不取**。默认 0 保持。
+
+
+def extend_ends_to_box(nets: Dict[str, dict], pins: Dict[str, dict],
+                       comps: Dict[str, dict], tol: float = None,
+                       maxlen: float = None, types=None) -> Dict[str, int]:
+    """把「端点落在引脚上」的自由端沿边方向推进到该引脚的**元件框边**（GT 的电容就是这么画的）。"""
+    tol = END_TO_BOX_TOL if tol is None else tol
+    maxlen = END_TO_BOX_MAX if maxlen is None else maxlen
+    types = END_TO_BOX_TYPES if types is None else types
+    only = None if (not types or "all" in tuple(t.lower() for t in types)) \
+        else set(t.lower() for t in types)
+    st = {"moved": 0, "cand": 0}
+    idx: List[Tuple[float, float, List[float]]] = []
+    for ck, rec in (pins or {}).items():
+        c = (comps or {}).get(ck)
+        bb = c.get("bbox") if isinstance(c, dict) else None
+        if not (bb and len(bb) == 4):
+            continue
+        if only is not None and str(c.get("type") or "").lower() not in only:
+            continue
+        box = [float(v) for v in bb]
+        for _pk, pv in (rec or {}).items():
+            pt = (pv or {}).get("point") or {}
+            x, y = pt.get("x"), pt.get("y")
+            if x is None or y is None:
+                continue
+            idx.append((float(x), float(y), box))
+    if not idx:
+        return st
+    for rec in nets.values():
+        edges = rec.get("edges") or {}
+        segs = {k: _seg_ends(v) for k, v in edges.items()}
+        segs = {k: e for k, e in segs.items() if e is not None}
+        if not segs:
+            continue
+        ends_all = [p for e in segs.values() for p in e]
+        touched = False
+        for k, (p0, p1) in segs.items():
+            L = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+            if L <= 1e-9:
+                continue
+            ux, uy = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
+            new = [tuple(p0), tuple(p1)]
+            for si, (px, py) in enumerate((p0, p1)):
+                # 自由端？（同网别的边端点不在这里）
+                busy = any(math.hypot(qx - px, qy - py) <= END_TO_BOX_FREE
+                           for j, e2 in segs.items() if j != k for qx, qy in e2)
+                if busy:
+                    continue
+                best = None
+                for (cx, cy, box) in idx:
+                    d = math.hypot(cx - px, cy - py)
+                    if d <= tol and (best is None or d < best[0]):
+                        best = (d, cx, cy, box)
+                if best is None:
+                    continue
+                st["cand"] += 1
+                _d, cx, cy, box = best
+                dx, dy = (ux, uy) if si == 1 else (-ux, -uy)   # 朝元件里面走
+                x1, y1, x2, y2 = box
+                lo, hi = 0.0, 1e9
+                ok = True
+                for (o, dd, mn, mx) in ((cx, dx, min(x1, x2), max(x1, x2)),
+                                        (cy, dy, min(y1, y2), max(y1, y2))):
+                    if abs(dd) < 1e-9:
+                        if o < mn or o > mx:
+                            ok = False
+                            break
+                        continue
+                    t1, t2 = (mn - o) / dd, (mx - o) / dd
+                    if t1 > t2:
+                        t1, t2 = t2, t1
+                    lo, hi = max(lo, t1), min(hi, t2)
+                if not ok or hi < lo:
+                    continue
+                t_enter = lo
+                if t_enter <= 0.5 or t_enter > maxlen:
+                    continue
+                new[si] = (cx + t_enter * dx, cy + t_enter * dy)
+                st["moved"] += 1
+                touched = True
+            if touched and (abs(new[0][0] - p0[0]) > 1e-6 or abs(new[0][1] - p0[1]) > 1e-6
+                            or abs(new[1][0] - p1[0]) > 1e-6 or abs(new[1][1] - p1[1]) > 1e-6):
+                edges[k] = [{"x": round(new[0][0], 2), "y": round(new[0][1], 2)},
+                            {"x": round(new[1][0], 2), "y": round(new[1][1], 2)}]
+    return st
+
+
 def trim_free_ends(nets: Dict[str, dict], delta: float = None,
                    jtol: float = 3.0) -> Dict[str, int]:
     """把导线边的**自由端**沿边方向朝内回缩 `delta` px（见上面长注释）。
@@ -2508,6 +2638,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # ★ 自由端吸附到引脚（`STAGE2_PIN_SNAP`）：放在所有外推**之后** —— 否则外推会把
         #   刚吸附好的端点又推走。
         snap_ends_to_pins(out_nets, pins)
+    if END_TO_BOX:
+        # ★ 引脚端推进到元件框边（`STAGE2_END_TO_BOX`，见长注释）：放在**所有回缩/外推之后** ——
+        #   回缩（trim）会把自由端往里收 3px，先推进会被它再收回去；GT 的端点就落在框边上。
+        extend_ends_to_box(out_nets, pins, components)
     if EDGE_OVERLAP > 0:
         # ★ 近共线重叠边合并（`STAGE2_EDGE_OVERLAP`，默认 10 度）：必须最后跑 —— 它会改变边的跨度，
         #   放在切分/回缩之前会把切点与自由端判定带歪。
