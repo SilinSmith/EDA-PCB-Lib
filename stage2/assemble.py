@@ -1206,6 +1206,87 @@ def split_dedup_edges(nets: Dict[str, dict], split_tol: float = None,
     return st
 
 
+# ★★ 引脚切分（`STAGE2_EDGE_SPLIT_PIN`，默认 0 = 关）。
+#
+# 病（导线账本 `work/_netled.py`，官方 10 交付口径）：GT 边 639 / 我方边 874，配对网内
+#   **「GT 边整条落在我方一条更长边内部」有 183 条**（`inside`，各类近失里最大的一类）。
+#   机理：GT 的导线在**引脚处**断开（GT 的 wire 端点 = 引脚点），而我们骨架里那一段是
+#   **一条长边**（引脚本体不算 wire ⇒ 没有分支点可切）⇒ GT 两条边、我们只有一条。
+#   `split_dedup_edges` 的切点只认**邻居边的端点**，对「引脚落在边的内部」无能为力。
+# 药：把每条边的**内部**若有引脚点落在 `tol` 内 ⇒ 在该引脚点处切成两段。放在
+#   `split_dedup_edges` 之后、`trim_free_ends` **之前**：两段在新点处互为端点 ⇒
+#   回缩那一步认得这是结点、不会把它拉走。只动 `edges` ⇒ 元件/引脚/netH 逐位不变。
+#
+# 读数（`work/_spin_ab.ps1`，官方 10 张全交付路径 `fast.py --extra "-vlm-pin off"`，参考臂
+#   `esref` 80.88 / 导线 0.4975 / tp 329）：
+#     `tol=2` **80.80**（导线 0.4894，tp **330**）· `tol=3` **80.81**（0.4903，tp **331**）
+#     · `tol=5` 80.81（0.4903，tp 331）
+#   ⇒ **tp 确实 +2（329→331），但 fp+fn 涨得更多（≈665→688）⇒ F1 −0.0072、总分 −0.07。**
+#   机理：GT 的导线**并不在每个贴上的引脚处断开** —— 引脚搭在一条直导线中间时，GT 的边仍是
+#   整条（GT 切的是**导线—导线**的 T 结点）。所以「在引脚点切」多数是假切分（多出一条 fp）。
+#   **默认 0（关）**：机制留着，等有「哪些引脚真的在 GT 里切」的判据（见 RESULTS §5.75）。
+EDGE_SPLIT_PIN = float(os.environ.get("STAGE2_EDGE_SPLIT_PIN", "0"))  # 引脚切分容差 px，0 = 关
+
+
+def split_edges_at_pins(nets: Dict[str, dict], pins: Dict[str, dict],
+                        tol: float = None) -> Dict[str, int]:
+    """把每条网里**内部穿过引脚点**（≤ `tol`）的边在该引脚处一分为二。
+
+    返回 `{"split": 切点数}`。端点附近（≤ `tol`）的引脚不切（那已经是结点）。
+    """
+    tol = EDGE_SPLIT_PIN if tol is None else tol
+    st = {"split": 0}
+    if tol <= 0:
+        return st
+    ppt: List[Tuple[float, float]] = []
+    for _c, _pn in (pins or {}).items():
+        for _pv in (_pn or {}).values():
+            _p = (_pv or {}).get("point")
+            if isinstance(_p, dict) and "x" in _p and "y" in _p:
+                ppt.append((float(_p["x"]), float(_p["y"])))
+    if not ppt:
+        return st
+    for rec in nets.values():
+        edges = rec.get("edges") or {}
+        segs = [(k, _seg_ends(v)) for k, v in edges.items()]
+        segs = [(k, e) for k, e in segs if e is not None]
+        if not segs:
+            continue
+        out: List[tuple] = []
+        touched = False
+        for _k, ((ax, ay), (bx, by)) in segs:
+            dx, dy = bx - ax, by - ay
+            L2 = dx * dx + dy * dy
+            if L2 <= 1e-9:
+                out.append(((ax, ay), (bx, by)))
+                continue
+            cuts: List[Tuple[float, float, float]] = []
+            for (qx, qy) in ppt:
+                t = ((qx - ax) * dx + (qy - ay) * dy) / L2
+                if t <= 0.0 or t >= 1.0:
+                    continue
+                fx, fy = ax + t * dx, ay + t * dy
+                if math.hypot(qx - fx, qy - fy) > tol:
+                    continue
+                if (math.hypot(qx - ax, qy - ay) <= tol
+                        or math.hypot(qx - bx, qy - by) <= tol):
+                    continue                   # 落在端点附近 ⇒ 已经是结点
+                cuts.append((t, fx, fy))
+            if not cuts:
+                out.append(((ax, ay), (bx, by)))
+                continue
+            cuts.sort()
+            pts = [(ax, ay)] + [(cx, cy) for _t, cx, cy in cuts] + [(bx, by)]
+            for i in range(len(pts) - 1):
+                out.append((pts[i], pts[i + 1]))
+            st["split"] += len(cuts)
+            touched = True
+        rec["edges"] = {"edge_%d" % (i + 1): [
+            {"x": round(p0[0], 2), "y": round(p0[1], 2)},
+            {"x": round(p1[0], 2), "y": round(p1[1], 2)}] for i, (p0, p1) in enumerate(out)}
+    return st
+
+
 def trim_free_ends(nets: Dict[str, dict], delta: float = None,
                    jtol: float = 3.0) -> Dict[str, int]:
     """把导线边的**自由端**沿边方向朝内回缩 `delta` px（见上面长注释）。
@@ -1327,6 +1408,8 @@ PIN_STAMP_SPAN = {"fuse": 21.0}
 PIN_STAMP_DEFAULT_SPAN = 20.0
 # 关掉就退回「用 stage1 的附着点当引脚点位」（旧行为）
 PIN_STAMP_ON = env_on("STAGE2_PIN_STAMP", "1")
+# ★ 竖放 d/led 的 pin_1 在 −SPAN 一侧（默认 0 = 旧行为，见 `stamp_pins` 里的长注释）
+PIN_AXIS_DL = env_on("STAGE2_PIN_AXIS_DL", "0")
 # ★ 两脚二极管/LED 的官方脚名**不是号码**：`pin_1 = "K"`（阴极）、`pin_2 = "A"`（阳极），
 # 只有 r/c/l 才是 `(1→"1", 2→"2")`。依据：400 张训练 GT 的 d/led 元件全量统计
 # （d 192+192、led 177+177，各占该类 100%）与 10GT 全量一致。
@@ -1399,6 +1482,18 @@ def stamp_pins(c: dict, ctype: str, pts_img: Sequence, H: float
     span = PIN_STAMP_SPAN.get(ctype, PIN_STAMP_DEFAULT_SPAN)
     # pin_1 在轴上的投影符号：+1 表示在 +SPAN 一侧
     s1 = 1.0 if ctype in PIN_STAMP_POS else -1.0
+    if PIN_AXIS_DL and ctype in ("d", "led") and axis_y:
+        # ★ 竖放的 d/led：pin_1 在 **−SPAN** 一侧（`STAGE2_PIN_AXIS_DL`，默认 0 = 旧行为）。
+        #   依据：官方语料统计——d/led **竖放时 pin_1(K) 在 −SPAN 89/99、横放 57/84 在 +SPAN**；
+        #   官方 10 张里 `3/D1`、`7/LED1`、`10/LED1` 都是竖放且被统一取 + 的规则判反
+        #   （`work/_ledpin.py` 实测 122 同序 / 3 反序；GT 的 `pin_1` 脚名恒为 `K`）。
+        #   与 `PIN_NAME_ALIAS` 一致：号翻过来以后，编号 1 的那一端才真是 K 端。
+        #   读数（单臂 A/B，官方 10 张、参考臂 80.88）：**80.81（−0.07）**——逐案是
+        #   `3/D1` netH 0.6788→**0.7074**（+2 成员 ✓ 规则对）、但 `7/LED1` 0.7819→0.7579、
+        #   `10/LED1` 0.7975→0.7712（各 −2 成员 ✗ 规则错）。原因：竖放 LED 可以**朝上/朝下**
+        #   两种画法，K 端（横杠）在哪一侧由图决定，与轴无关；语料 89/99 只是多数票。
+        #   ⇒ 默认 0（关）。**要拿这 3 个件，必须从图上读出横杠在哪一端**，不是靠轴。
+        s1 = -s1
     if axis_y:
         p1, p2 = (cx, cy + s1 * span), (cx, cy - s1 * span)
     else:
@@ -2177,6 +2272,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # 必须放在**全部合并/焊接之后**：这时每条网里的边才齐，切点才找得全。
         # 只动 `edges`（首尾两点），`hyperGraph`/引脚一律不碰 ⇒ 元件/引脚/netH 通道逐位不变。
         split_dedup_edges(out_nets)
+    if EDGE_SPLIT_PIN > 0:
+        # ★ 引脚切分（`STAGE2_EDGE_SPLIT_PIN`，见长注释）：必须在切分/去重**之后**、
+        #   自由端回缩**之前** —— 切出来的新端点在回缩那一步才算得上「结点」。
+        split_edges_at_pins(out_nets, pins)
     if EDGE_TRIM > 0:
         # ★ 自由端回缩（`STAGE2_EDGE_TRIM`，默认 3.0 px，见长注释）：必须在切分/去重
         #   **之后**跑 —— 结点是在切分那一步才定下来的，先回缩会把结点也拉动。
