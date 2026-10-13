@@ -6599,6 +6599,14 @@ comp / pin / netH = 0.9819 / 0.7731 / 0.7749 **三项逐位不变**（只动 `ed
 * golden 的 `pin`（测试点）4 / `box`（IC）2 / `bjt` 1：同属「框居引脚锚点」，且未取得可靠核验，**不动**（安全集用 `--types led,r` 固定）。
 * 判据**不收敛**：修正后复扫同一判据仍报 7 例（`r` 4 / `led` 3，残差 10~12px，来自主体块里残余的引线端）⇒ 判据只用于「发现」不用于「收敛」，重复 `--apply` 无意义。
 
-**六、后续**：`yolo_part/prepare_yolo_dataset.py`（YOLO 标签生成入口）若从这批 JSON 出标签，需重跑一次才能让训练吃到修正后的框——**本次未跑**。
+**六、传播到「真正过期的东西」：不是 `prepare_yolo_dataset.py`（2026-10-13 追加）**
 
-**产物/口径**：`work/_gtboxfix.py`（判 + 修：`--pool/--tol/--perp/--types/--maxshift/--include-pseudo/--apply`）、`work/_gtsheet.py`、`work/_gtpick.py`（对照片），均在 gitignore 之外的 `work/`（不入库）。复现：`python -X utf8 work\_gtboxfix.py --pool 10gt --tol 8 --perp 5`（只报；去掉 `--types led,r` 就能看到 `c`/`∅` 的假报族），修正打分 `python -X utf8 eda-pcb\tools\eval\fast.py --score-only --cases 1,2,3,4,5,6,7,8,9,10 --out ex12_10`。
+* 先核对了入口：`eda-pcb/yolo_part/prepare_yolo_dataset.py`（208 行）只读 `--input_dir`（= `Dataset(waitforpreprocess)/200_train_cases`）并写 `yolo_part/training_data` 的 41 类老集；**10GT 的框根本不经过它**，而 `200_train_cases` 在判据扫描里是 **0 例缺陷** ⇒ 重跑它对本次修正毫无作用（会改的只是那份历史训练集，故**未跑**）。
+* 真正过期的是**各训练集 test 划分里的 `10GT-<n>.txt`**：它们由 `eda-pcb/tools/data/build_trainset_v2.py:144-172` 的 `gt_to_yolo()` 从 10GT 的 JSON 转出来后，被 `训练集_v3` / `work/trainset_v4` / `work/trainset_v4_merged` 原样抄走。
+* 用新探针 `work/_retest.py`（复用同一个 `gt_to_yolo()`、**每个训练集读各自的类表**：v3/v4 是 43 类、v4_merged 是 42 类，混用会把类号整体错位）先 dry-run 再 `--apply`：三个集各 **5 个文件、9 行**改变（4 号 1 行、6 号 2 行、7 号 1 行、9 号 2 行、10 号 3 行，全部是 `led`/`r` 那 9 个框），其余**逐行相同**；写完复跑差分为 **0**。逐文件备份 `<file>.txt.bak-bbox`。
+* **硬链接陷阱（已实测并记录）**：`build_trainset_v*.py` 用 `os.link` 组装，`训练集_v3/labels/test/10GT-4.txt` 的链接数是 **4**，同时被 `delete/训练集_v2`、`work/_v4_prev_buggy`、`work/trainset_v4` 指向同一 inode ⇒ `write_text` 一次就把这 4 份一起改了（`--apply` 因此只报 10 个文件而不是 15 个）。回滚时把 `训练集_v3` 的 `.bak-bbox` 拷回去即可同时复原四份。
+* 口径影响：这批 TXT 只喂 **YOLO 检测器的训练/验证**（10GT 是 held-out test），官方 10 张的端到端评分读的是数据集 JSON 本身，所以 §5.72 四的 80.88 不受影响。
+
+**七、后续**：`yolo_part/prepare_yolo_dataset.py` 若确实要刷新（与本次修正无关），说一声再跑；训练侧若要吃到修正后的框，需重跑 `tools/data/build_trainset_v3.py --force`（或 v4 的构建器）——**本次未跑**，只就地更新了 test 标签。
+
+**产物/口径**：`work/_gtboxfix.py`（判 + 修：`--pool/--tol/--perp/--types/--maxshift/--include-pseudo/--apply`）、`work/_retest.py`（YOLO test 标签重生成：默认 dry-run，`--apply` 备份后写回）、`work/_gtsheet.py`、`work/_gtpick.py`、`work/_gtba.py`（对照片），均在 gitignore 之外的 `work/`（不入库）。复现：`python -X utf8 work\_gtboxfix.py --pool 10gt --tol 8 --perp 5`（只报；去掉 `--types led,r` 就能看到 `c`/`∅` 的假报族），`python -X utf8 work\_retest.py`（YOLO 标签差分，应为 0），修正打分 `python -X utf8 eda-pcb\tools\eval\fast.py --score-only --cases 1,2,3,4,5,6,7,8,9,10 --out ex12_10`。
