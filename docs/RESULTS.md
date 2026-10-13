@@ -8148,3 +8148,24 @@ case 8 一分不动（它那两条坏号码本来也没进最终产物，或与�
   不是号轮的接纳规则能修的。
 - 复现：`$env:STAGE2_PINNUM_PXC="14.0"; python -X utf8 tools\eval\fast.py --cases 1,2,3,4,5,6,7,8,9,10 --out pnxc --extra "-vlm-pin off"`。
 
+---
+
+## §5.98 交付态自证（不带任何 env 开关，官方 10 张 = 83.03）
+
+- 动机：担心历轮 A/B 把某个 knob 留在非默认态、或某条通道的默认值没跟着转正。
+- 做法：提交后的树、**不设任何 `FUSION_*`/`STAGE2_*` 环境变量**，按交付口径跑
+  `python -X utf8 tools\eval\fast.py --cases 1,2,3,4,5,6,7,8,9,10 --out finalrd6 --extra "-vlm-pin off"`。
+- 结果：**83.03**（元件 1.0000 / 引脚 0.8166 / 网络 0.7806 / 导线 0.5291，
+  tp 254/103/126/349），**逐案逐位**与交付态一致（1 85.49｜2 83.25｜3 84.92｜4 80.33｜
+  5 81.00｜6 82.63｜7 86.98｜8 69.40｜9 91.14｜10 85.13），无爆 0 分项、退出码 0。
+- 交付开关表（全部按代码默认值，无 env）：
+  `FUSION_VALREAD=1`、`FUSION_PINNAME=1`、`FUSION_COMPDEDUP=1`、`FUSION_PWRCLIP=1`、
+  `FUSION_PINZOOM=0`、`STAGE2_CONFORM_KEY=1`、`STAGE2_TEXT_INK=0`、
+  `STAGE2_PINNUM_PXC=0`、`STAGE2_PINNAME_ROWNEAR=1`、`STAGE2_PINNAME_DUPOV=0.6`。
+- 本目标累计：**81.14 → 83.03**（+1.89）：`e15e106` CONFORM_KEY +0.16、
+  `6039a2a` 值复读 +0.27、`ac926ef` 引脚名复读 +0.34、`3ea19a5` 元件消重 +0.11、
+  `e29ed3e` 器件名框放行 +0.53、`b7ac6fa` 名候选两规则 +0.33、`a688e45` 导线吸附 +0.31；
+  另有五条**封闭线**取证入库：§5.65（引脚位置常数）、§5.90（GT 脚点=标注线端，我方端点仅 24.3%）、
+  §5.95（`∅` 脚号全局计数器，+5.12 不可达）、§5.96（按颜色裁线 −3.86）、§5.97（号轮像素宽闸门 −0.14）。
+- 复现/产物：日志 `work/_finalrd6.log`、产物 `work/_fast_out_finalrd6`。
+
