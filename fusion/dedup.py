@@ -47,6 +47,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -159,10 +160,18 @@ def dedup_doc(doc):
 
 
 def apply_file(src, dst):
-    """读 `src` 的 `<case>_Pred.json`，消重后写 `dst`；失败返回 None（导出退化成原样）。"""
+    """读 `src` 的 `<case>_Pred.json`，消重后写 `dst`；失败返回 None（导出退化成原样）。
+
+    ★ 原子落盘：`dst` 常常**就是** `final_results` 里已经发布的那个 `<case>_Pred.json`
+    （`submission/run.py` 的 `_compdedup_step` 就地改写），而判题机按墙钟硬杀是现实场景 ——
+    直接 `write_text` 被杀在半路就留下半截 JSON、该 case 直接 0 分。先写同目录 `.tmp`
+    再 `os.replace`，任何时刻被读到的都是完整的旧文件或完整的新文件。
+    """
     src, dst = Path(src), Path(dst)
     doc = json.loads(src.read_text(encoding="utf-8"))
     trace = dedup_doc(doc)
     if trace:
-        dst.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+        tmp = dst.with_name(dst.name + ".tmp")
+        tmp.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+        os.replace(str(tmp), str(dst))
     return {"dropped": len(trace), "trace": trace}

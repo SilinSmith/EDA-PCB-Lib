@@ -275,6 +275,20 @@ def apply(img, doc, assigned, client=None, opts=None):
     return st
 
 
+def _write_json(path, doc):
+    """原子落盘：先写同目录 `.tmp` 再 `os.replace`（同卷、原子）。
+
+    ★ 加固（与 `submission/run.py:_atomic_write_text` 同一条理由）：本通道**就地改写**已经
+    落进 `final_results/` 的 `<case>_Pred.json`；判题机按墙钟硬杀是现实场景，被杀在
+    `write_text` 一半就留下半截 JSON ⇒ 该 case 直接 0 分。先写 `.tmp` 再 `os.replace`，
+    任何时刻被读到的一定是完整的旧文件或完整的新文件。
+    """
+    p = Path(path)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    os.replace(str(tmp), str(p))
+
+
 def apply_file(png_path, assigned_json, src_json, dst_json, opts=None):
     """读图/文档/账本，改写引脚名，写回 dst_json。返回统计或 None（读不了图就 None）。"""
     img = cv2.imread(str(png_path), cv2.IMREAD_COLOR)
@@ -287,5 +301,5 @@ def apply_file(png_path, assigned_json, src_json, dst_json, opts=None):
     with open(assigned_json, encoding="utf-8") as f:
         assigned = json.load(f)
     st = apply(img, doc, assigned, opts=opts)
-    Path(dst_json).write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    _write_json(dst_json, doc)
     return st

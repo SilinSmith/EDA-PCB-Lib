@@ -1166,29 +1166,42 @@ def _run(a) -> int:
     #   `runs/fusion/_assigned/<case>.json`（回退 `runs/stage2/`）：每颗元件记着它的值
     #   取自哪个文字框 ⇒ 直接拿那个框 + 只问值的 prompt 复读，采信规则见 `vlm/valread.py` 顶注。
     valread_rows = []
+    _vrmod = None
     try:
         from vlm import valread as _vrmod                      # noqa: PLC0415
-        _valread_on = bool(_vrmod.ON)
+        # ★ 必须挂 `vlm_ok`（= 上面的端点探测结果）：复读通道每槽一次 VLM 调用，端点死了
+        #   也不会报错 —— `ask()` 把失败包成 `"ERR:..."` 字符串返回，于是它**照跑到底**、
+        #   每槽白等 `VLM_RETRY` 次指数退避。实测（case 3、`LLM_BASE_URL` 指向死端口、
+        #   `VLM_TIMEOUT=180`）：预探测 15.2 s 后通道仍然「开」，7 个槽位耗掉 **107 s**
+        #   （≈15 s/槽），整张 144 s（正常 18 s）；官方交付 222 张按 ~30 槽/张外推 ≈ 7.8 h
+        #   纯浪费，且墙钟被 `EDA_WALL_BUDGET_S` 掐掉时**真的会丢分**。
+        _valread_on = bool(_vrmod.ON) and vlm_ok
     except Exception:                                          # noqa: BLE001
         _valread_on = False
     if _valread_on:
         _log(fp, "值重读通道：开（FUSION_VALREAD=1，trigger=%s，guard=%d）"
              % (getattr(_vrmod, "TRIGGER", "?"), int(bool(getattr(_vrmod, "GUARD", 0)))))
+    elif bool(getattr(_vrmod, "ON", False)):
+        _log(fp, "值重读通道：跳过（VLM 端点不可用 ⇒ 复读只会空转重试）")
 
     # §5.86：引脚名「紧框复读」通道（`FUSION_PINNAME`，默认 1）。与值通道同构 —— 槽位来自
     #   管线自己的账 `_assigned`（`comps[*].pins[*].name.{box,text,conf}` 就是 CRNN 读名字用的
     #   那个框），紧框 + 只问「这段文字是什么」；采信规则见 `vlm/pinname.py` 顶注（四条闸门，
     #   其中「不与同元件别的脚重名」用来挡 case 4 那种「两个名字框被归到同一根脚」的误采）。
     pinname_rows = []
+    _pnmod = None
     try:
         from vlm import pinname as _pnmod                      # noqa: PLC0415
-        _pinname_on = bool(_pnmod.ON)
+        # ★ 同值通道：必须挂 `vlm_ok`，否则端点死掉时它每槽白等一次重试退避（实测 ≈15 s/槽）。
+        _pinname_on = bool(_pnmod.ON) and vlm_ok
     except Exception:                                          # noqa: BLE001
         _pinname_on = False
     if _pinname_on:
         _log(fp, "引脚名复读通道：开（FUSION_PINNAME=1，conf<%.2f 或 w<=%.0f，guard=%d）"
              % (getattr(_pnmod, "CONF", 0.0), getattr(_pnmod, "MAXW", 0.0),
                 int(bool(getattr(_pnmod, "GUARD", 0)))))
+    elif bool(getattr(_pnmod, "ON", False)):
+        _log(fp, "引脚名复读通道：跳过（VLM 端点不可用 ⇒ 复读只会空转重试）")
 
     # §5.87：元件「同物重复」消重（`FUSION_COMPDEDUP`，默认 **1** = 开；官方 10 张 A/B
     #   81.75 → 81.86、元件 F1 0.9963 → 1.0000）。官方
@@ -1268,7 +1281,22 @@ def _run(a) -> int:
         except Exception as exc:                               # noqa: BLE001
             _log(fp, "  ⚠️ %s 值重读失败：%s: %s" % (cid, type(exc).__name__, exc))
 
+    _n_seen = 0
     for cid, _p in items:
+        # ★ 熔断：`vlm_ok` 只在开跑前探过一次。复读通道每槽一次调用、失败**不抛异常**
+        #   （`ask()` 返回 `"ERR:..."`），所以端点若在跑批途中死掉（LM Studio 崩、显存爆），
+        #   后面每张图都会白等重试退避（实测 ≈15 s/槽）而整批分数一分不涨。每 20 张重探
+        #   一次，探不通就整批关掉两个复读通道。
+        _n_seen += 1
+        if (_valread_on or _pinname_on) and _n_seen % 5 == 0:
+            try:
+                from vlm import client as _vc2                     # noqa: PLC0415
+                if not _vc2.probe(timeout=30.0):
+                    _valread_on = _pinname_on = False
+                    _log(fp, "⚠️ VLM 端点中途失效 ⇒ 熔断：关闭值/引脚名复读通道（余下 %d 张）"
+                         % (len(items) - _n_seen + 1))
+            except Exception as _e:                                # noqa: BLE001
+                _log(fp, "⚠️ 复读通道熔断探测本身失败：%s: %s" % (type(_e).__name__, _e))
         # 导出优先序：融合层 > VLM 补强 > 阶段三 > 阶段二。
         # 每一层都是「上一步的产物 + 一次受约束的改写」，所以取到哪一层都是完整的
         # 文档；取不到就往下退，保证 220 张里一张都不会因为某一层失败而丢产物。

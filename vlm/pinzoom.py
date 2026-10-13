@@ -416,5 +416,9 @@ def apply_file(png_path, src_json, dst_json, opts=None):
     with open(src_json, encoding="utf-8") as f:
         doc = json.load(f)
     st = apply(img, doc, opts=opts)
-    Path(dst_json).write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    # ★ 原子落盘（同 `valread.py` / `pinname.py`）：先写同目录 `.tmp` 再 `os.replace`，
+    #   避免判题机按墙钟硬杀时留下半截 JSON。
+    _tmp = Path(str(dst_json) + ".tmp")
+    _tmp.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    os.replace(str(_tmp), str(dst_json))
     return st
