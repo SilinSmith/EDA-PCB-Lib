@@ -1162,6 +1162,41 @@ def _run(a) -> int:
         _pinzoom_on = False
     if _pinzoom_on:
         _log(fp, "引脚名重读通道：开（FUSION_PINZOOM=1）")
+    # §5.85：值「紧框重读」通道（`FUSION_VALREAD`，默认 1）。用的是**管线自己的账**
+    #   `runs/fusion/_assigned/<case>.json`（回退 `runs/stage2/`）：每颗元件记着它的值
+    #   取自哪个文字框 ⇒ 直接拿那个框 + 只问值的 prompt 复读，采信规则见 `vlm/valread.py` 顶注。
+    valread_rows = []
+    try:
+        from vlm import valread as _vrmod                      # noqa: PLC0415
+        _valread_on = bool(_vrmod.ON)
+    except Exception:                                          # noqa: BLE001
+        _valread_on = False
+    if _valread_on:
+        _log(fp, "值重读通道：开（FUSION_VALREAD=1，trigger=%s，guard=%d）"
+             % (getattr(_vrmod, "TRIGGER", "?"), int(bool(getattr(_vrmod, "GUARD", 0)))))
+
+    def _valread_step(cid, png):
+        """在**已经落盘**的 `<cid>_Pred.json` 上补一层值重读；失败一律不影响导出。"""
+        if not _valread_on:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            _ap = runs / "fusion" / "_assigned" / ("%s.json" % cid)
+            if not _ap.exists():
+                _ap = runs / "stage2" / "_assigned" / ("%s.json" % cid)
+            _st = _vrmod.apply_file(png, _ap, dst_j, dst_j)
+            if not _st:
+                return
+            valread_rows.append({"case": cid,
+                                 **{k: v for k, v in _st.items() if k != "trace"}})
+            if _st.get("adopted"):
+                _log(fp, "  %-28s 值重读 槽 %d 采用 %d 调用 %d：%s"
+                     % (cid, _st.get("slots", 0), _st.get("adopted", 0), _st.get("calls", 0),
+                        "；".join("%s %s→%s" % (t.get("key"), t.get("cur"), t.get("ans"))
+                                  for t in (_st.get("trace") or []) if t.get("adopted"))))
+        except Exception as exc:                               # noqa: BLE001
+            _log(fp, "  ⚠️ %s 值重读失败：%s: %s" % (cid, type(exc).__name__, exc))
+
     for cid, _p in items:
         # 导出优先序：融合层 > VLM 补强 > 阶段三 > 阶段二。
         # 每一层都是「上一步的产物 + 一次受约束的改写」，所以取到哪一层都是完整的
@@ -1198,12 +1233,14 @@ def _run(a) -> int:
                     exported.add(cid)
                     n_export += 1
                     _log(fp, "  %-28s 引脚名重读 %s" % (cid, pz_note))
+                    _valread_step(cid, _p)
                     continue
             except Exception as exc:                        # noqa: BLE001
                 _log(fp, "  ⚠️ %s 引脚名重读失败：%s: %s" % (cid, type(exc).__name__, exc))
         shutil.copyfile(src, dst)
         exported.add(cid)
         n_export += 1
+        _valread_step(cid, _p)
     _log(fp, "导出 %d 份 <case>_Pred.json%s"
          % (n_export, ("（另有 %d 份空壳兜底）" % n_shell) if n_shell else ""))
 
@@ -1232,6 +1269,11 @@ def _run(a) -> int:
              % (sum(r.get("slots", 0) for r in pinzoom_rows),
                 sum(r.get("adopted", 0) for r in pinzoom_rows),
                 sum(r.get("calls", 0) for r in pinzoom_rows), len(pinzoom_rows)))
+    if valread_rows:
+        _log(fp, "值重读合计：槽 %d 采用 %d 调用 %d（%d 张图）"
+             % (sum(r.get("slots", 0) for r in valread_rows),
+                sum(r.get("adopted", 0) for r in valread_rows),
+                sum(r.get("calls", 0) for r in valread_rows), len(valread_rows)))
     _log(fp, "全部完成，墙钟 %.1fs（%.2f s/张）" % (wall, wall / max(1, len(items))))
     fp.close()
 
@@ -1239,7 +1281,7 @@ def _run(a) -> int:
                     {"n_cases": len(items), "n_stage1_ok": len(ok1),
                      "n_stage2_ok": len(s2_rows), "n_stage3_ok": len(s3_rows),
                      "n_exported": n_export, "n_shell": n_shell, "wall_s": wall,
-                     "pinzoom": pinzoom_rows},
+                     "pinzoom": pinzoom_rows, "valread": valread_rows},
                     cases_log, a, t_start)
     print("产物 -> %s" % final_dir)
     return 0
