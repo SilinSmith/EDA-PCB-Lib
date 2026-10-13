@@ -343,6 +343,23 @@ STUB_MERGE = float(os.environ.get("STAGE2_PIN_STUB_MERGE", "12"))
 # `GNDA`(67x18=3.72) 这类长名判成 `wide` 直接踢出候选池 —— 而它们恰恰
 # 是 `U1` 的合法引脚名。IC 引脚名本来就比位号长，这里单独放宽。
 PINNAME_MAXW = float(os.environ.get("STAGE2_PINNAME_MAXW", "6.0"))
+# ★★ 引脚**名**候选的「**有色墨迹**」闸门（`STAGE2_PINNAME_CFRAC`，单位 px 无关，是占比）。
+#
+# 病（10GT case 5 的 `U3`，见 `docs/RESULTS.md` §5.91）：pin1 名字框那一行有两个候选
+# —— 真名 `ADJ(GND)`（67x13）与**红点引脚标记**（8x8，CRNN 读成 `Q`、conf 0.864）。
+# 名轮把标记绑给了 pin1、把 `ADJ(GND)` 挤到 pin2（`VOUT(TAB)` 再往下挤）⇒ 两条名字都错。
+# **几何分不开**（合法名 `L` = 7x10，红点 = 8x8），**墨迹颜色分得开**：
+# 真名框的 `cfrac`（`text.py::colored_frac`）= 0.000，红点 = 0.48~0.64。
+# 于是名候选池里踢掉 `cfrac > PINNAME_CFRAC` 的框。**只压名轮**：号轮不动。
+# 该属性只在 `STAGE2_TEXT_INK=1` 时才存在 —— 两开关要**一起**开（`cfrac` 缺席时本闸门不生效）。
+PINNAME_CFRAC = float(os.environ.get("STAGE2_PINNAME_CFRAC", "0.20"))
+# ★★ 「器件名框放行回名轮」的高度闸门（`STAGE2_PARTNAME_FREE_H`，px；见 §5.92）。
+# `take()` 原先无条件把器件名框赶出名轮候选池，而 `vlm/enrich.py` 改写器件名**文字**时
+# 保留旧框，于是像 case 5 的 U3 那样「框其实是 `VOUT(TAB)` 名框」的记录会把真名框也赶走。
+# 只放行**高得像一行引脚名**（≤18px）的框：10GT 引脚名行高 10~18px，而 case 4 的 U2
+# 器件名块是 53x22（两行大字块），放行会被读成 `15IO` 抢走 pin2（80.00 → 78.22）。
+# 实测三条该放行的框：case 1 U1 89x18、case 2 U3 26x10、case 5 U3 75x13。
+PARTNAME_FREE_H = float(os.environ.get("STAGE2_PARTNAME_FREE_H", "18.0"))
 # ★★ 2026-10-08：**框外补引脚名**的距离上限（px，`0` = 关闭）。
 # 语义 = 「引脚号那一轮跑完之后，只往**还空着**的名字槽里补框外的名字」，
 # 也就是 late pass。取值是「文字中心到元件框」的距离上限，走 `t["d"]` 那套量。
@@ -1549,10 +1566,39 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         _pcr = (pincol or {}).get(cid) or []
         pinfo = {i: {"number": None, "name": None} for i in range(len(plist))}
         rec["pins"] = pinfo
-        take = lambda t: (t.get("bbox") is not None
-                          and (not rec["designator"]
-                               or list(t["bbox"]) != rec["designator"]["box"])
-                          and (not rec[want] or list(t["bbox"]) != rec[want]["box"]))
+        # ★ 名轮不再排除「器件名（`partname`）框」（RESULTS §5.92）。
+        #   原写法把 `rec[want]` 一并排除，而 IC 的 `want` 就是 `partname`：
+        #   `vlm/enrich.py` 把 U3 的器件名**文字**改写成 `AMS1117-3.3` 时**保留了旧框**，
+        #   那块框其实是 `VOUT(TAB)`（`[559,754,634,767]`）⇒ 真名框进不了名轮候选池，
+        #   pin1 被旁边的红点标记抢走（读成 `Q`）、pin2 空着，两条名字一起错。
+        #   但**不能无条件放行**：自检 c2 就是「框内器件名 `STM32F4` 别被名字抢走」，
+        #   所以只在**记录与框脱节**（这块框自己读不出记录里的器件名）时才放行 ——
+        #   那正是上面这种「文字被改写过、框还是旧的」的形态。
+        def take(t) -> bool:
+            if t.get("bbox") is None:
+                return False
+            b = list(t["bbox"])
+            if rec["designator"] and b == rec["designator"]["box"]:
+                return False
+            if rec["value"] and b == rec["value"]["box"]:
+                return False
+            if rec["partname"] and b == rec["partname"]["box"]:
+                _pn = (t.get("reads") or {}).get("partname")
+                _h = b[3] - b[1]
+                # 放行要同时满足两条（缺一条都有实测的坑）：
+                #   ① 记录与框**脱节** —— 这块框自己读不出记录里的器件名；
+                #      自检 c2「框内器件名 `STM32F4` 别被名字抢走」正是靠它挡住。
+                #   ② 框**高得像一行引脚名**（≤ `PARTNAME_FREE_H`，默认 18px）。
+                #      10GT 上引脚名行高 10~18px，而器件名块可能是 53x22 的两行大字块：
+                #      case 4 的 U2 放行后它被读成 `15IO` 抢走 pin2（80.00 → 78.22）。
+                #      三条**该放行**的框是 case 1 U1 89x18（`VREFA+`）、case 2 U3 26x10
+                #      （`SCL`）、case 5 U3 75x13（`VOUT(TAB)`）⇒ 高度这一条能同时满足
+                #      「该放的三条全放、该挡的一条挡住」（宽/高比做不到：case 2 是 2.6）。
+                if _pn and _pn[0] == rec["partname"]["text"]:
+                    return False
+                if _h > PARTNAME_FREE_H:
+                    return False
+            return True
         taken_box: set = set()      # 同一块文字只能当一次引脚名或引脚号
         for role, want_inside, fit_fn, slot in (
                 ("pin_name", True, fit_pinname, "name"),
@@ -1579,6 +1625,9 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 if not take(t) or id(t) in taken_box:
                     continue
                 if t.get("wide") and (t.get("wratio") or 0.0) > _wlim:
+                    continue
+                # ★ 名候选的有色墨迹闸门（`STAGE2_PINNAME_CFRAC`）：挡掉红点/极性标记
+                if slot == "name" and t.get("cfrac", 0.0) > PINNAME_CFRAC:
                     continue
                 # ★ 「纯数字 = 号」的两个开关（见 `PINNUM_INSIDE` 的长注释）：
                 #   号轮放行「体内但读成纯数字」的框，名轮不再收这类框。
@@ -1737,6 +1786,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 if t["d"] > PINNAME_OUTSIDE:
                     continue
                 if t.get("wide") and (t.get("wratio") or 0.0) > PINNAME_MAXW:
+                    continue
+                if t.get("cfrac", 0.0) > PINNAME_CFRAC:
                     continue
                 got = _best_read(t["reads"], "pin_name", fit_pinname)
                 if not got:

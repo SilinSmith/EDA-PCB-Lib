@@ -100,6 +100,10 @@ def _env_float(name: str, default: float) -> float:
 ON = _env_on("FUSION_PINNAME", "1")
 CONF = _env_float("FUSION_PINNAME_CONF", 0.85)
 MAXW = _env_float("FUSION_PINNAME_MAXW", 10.0)
+# ★ 长框无分隔符规则（`why()` 的第三格，见 RESULTS §5.92 与 `LONG_W`/`LONG_CONF`）
+LONG_W = _env_float("FUSION_PINNAME_LONGW", 40.0)
+LONG_CONF = _env_float("FUSION_PINNAME_LONGCONF", 0.95)
+_SEP = re.compile(r"[()/\-_+.,;:]")
 SCALE = max(1, _env_int("FUSION_PINNAME_SCALE", 4))
 MAX_SLOTS = _env_int("FUSION_PINNAME_MAX", 60)
 MAX_CALLS = _env_int("FUSION_PINNAME_CALLS", 120)
@@ -134,6 +138,13 @@ def why(cur: str, conf, w: float) -> str:
         return "lowconf"
     if w <= MAXW:
         return "narrow"
+    # ★ 长框 + 读数里没有分隔符 + 置信度不到 `LONG_CONF`（RESULTS §5.92）：
+    #   `ADJ(GND)` 被 CRNN 读成 `ADIGND`（conf 0.891、框宽 67px）正落在这一格 ——
+    #   框这么长说明是复合名，读出来却是一整串字母，多半丢了 `()`/`/` 这类分隔符。
+    #   实读面上它与「conf < 0.95」那一批几乎重合（`work/_pinv10.py` 早就测过
+    #   阈值 0.95 时 37 次调用、离线分数中性），所以多问几次是安全的。
+    if w >= LONG_W and cf < LONG_CONF and not _SEP.search(c):
+        return "longnosep"
     return ""
 
 
