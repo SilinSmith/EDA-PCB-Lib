@@ -1190,6 +1190,39 @@ def _run(a) -> int:
              % (getattr(_pnmod, "CONF", 0.0), getattr(_pnmod, "MAXW", 0.0),
                 int(bool(getattr(_pnmod, "GUARD", 0)))))
 
+    # §5.87：元件「同物重复」消重（`FUSION_COMPDEDUP`，默认 **1** = 开；官方 10 张 A/B
+    #   81.75 → 81.86、元件 F1 0.9963 → 1.0000）。官方
+    #   10 张的 `component.extra` 只剩两条，都是**同一颗符号被检出两次**、其中一次只有假键
+    #   `pNNN`（case 4 `p010`(d) 撞 `LED1`；case 10 `p016`(gnd) 撞 `p015`）⇒ 按 bbox 几何删掉
+    #   假键那颗；守卫见 `fusion/dedup.py` 顶注（有脚/被网引用的永不删）。
+    compdedup_rows = []
+    try:
+        from fusion import dedup as _cdmod                       # noqa: PLC0415
+        _compdedup_on = bool(_cdmod.ON)
+    except Exception:                                           # noqa: BLE001
+        _compdedup_on = False
+    if _compdedup_on:
+        _log(fp, "元件消重通道：开（FUSION_COMPDEDUP=1）")
+
+    def _compdedup_step(cid):
+        """在**已经落盘**的 `<cid>_Pred.json` 上消重同物元件；失败一律不影响导出。"""
+        if not _compdedup_on:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            _st = _cdmod.apply_file(dst_j, dst_j)
+            if not _st or not _st.get("dropped"):
+                return
+            compdedup_rows.append({"case": cid,
+                                   **{k: v for k, v in _st.items() if k != "trace"}})
+            _log(fp, "  %-28s 元件消重 删 %d：%s"
+                 % (cid, _st.get("dropped", 0),
+                    "；".join("%s(%s) 与 %s 重复[%s]" % (t.get("drop"), t.get("type"),
+                                                        t.get("keep"), t.get("rule"))
+                              for t in (_st.get("trace") or []))))
+        except Exception as exc:                               # noqa: BLE001
+            _log(fp, "  ⚠️ %s 元件消重失败：%s: %s" % (cid, type(exc).__name__, exc))
+
     def _pinname_step(cid, png):
         """在**已经落盘**的 `<cid>_Pred.json` 上补一层引脚名复读；失败一律不影响导出。"""
         if not _pinname_on:
@@ -1274,6 +1307,7 @@ def _run(a) -> int:
                     _log(fp, "  %-28s 引脚名重读 %s" % (cid, pz_note))
                     _valread_step(cid, _p)
                     _pinname_step(cid, _p)
+                    _compdedup_step(cid)
                     continue
             except Exception as exc:                        # noqa: BLE001
                 _log(fp, "  ⚠️ %s 引脚名重读失败：%s: %s" % (cid, type(exc).__name__, exc))
@@ -1282,6 +1316,7 @@ def _run(a) -> int:
         n_export += 1
         _valread_step(cid, _p)
         _pinname_step(cid, _p)
+        _compdedup_step(cid)
     _log(fp, "导出 %d 份 <case>_Pred.json%s"
          % (n_export, ("（另有 %d 份空壳兜底）" % n_shell) if n_shell else ""))
 
@@ -1320,6 +1355,9 @@ def _run(a) -> int:
              % (sum(r.get("slots", 0) for r in pinname_rows),
                 sum(r.get("adopted", 0) for r in pinname_rows),
                 sum(r.get("calls", 0) for r in pinname_rows), len(pinname_rows)))
+    if compdedup_rows:
+        _log(fp, "元件消重合计：删除 %d 个同物元件（%d 张图）"
+             % (sum(r.get("dropped", 0) for r in compdedup_rows), len(compdedup_rows)))
     _log(fp, "全部完成，墙钟 %.1fs（%.2f s/张）" % (wall, wall / max(1, len(items))))
     fp.close()
 
@@ -1328,7 +1366,7 @@ def _run(a) -> int:
                      "n_stage2_ok": len(s2_rows), "n_stage3_ok": len(s3_rows),
                      "n_exported": n_export, "n_shell": n_shell, "wall_s": wall,
                      "pinzoom": pinzoom_rows, "valread": valread_rows,
-                     "pinname": pinname_rows},
+                     "pinname": pinname_rows, "compdedup": compdedup_rows},
                     cases_log, a, t_start)
     print("产物 -> %s" % final_dir)
     return 0
