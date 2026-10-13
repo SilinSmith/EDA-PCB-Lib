@@ -1236,6 +1236,37 @@ def _run(a) -> int:
         except Exception as exc:                               # noqa: BLE001
             _log(fp, "  ⚠️ %s 元件消重失败：%s: %s" % (cid, type(exc).__name__, exc))
 
+    # §5.95：网线端点吸附到「电源/地符号」的连接点（`FUSION_PWRCLIP`，默认 **1** = 开；
+    #   离线裁定 82.72 → 83.03（+0.31，导线 F1 0.4984 → 0.5291），逐案全部非负）。
+    #   病：我们的网线把电源符号自己那截引线也圈进来，比 GT 多画 ~26px（case 2
+    #   GT `(933,787)-(1021,787)` vs 我方 `(907,785.81)-(1020,786.52)`）；而 GT 的网线
+    #   从符号的连接点起画 —— 连接点 = bbox 四边之一外 10px、居中的点（7 颗 `∅` 全部吻合）。
+    #   守卫：端点必须贴在这颗符号上（到 bbox ≤ `fusion/pwrclip.py` 的 `BOXTOL=8`），
+    #   否则 T 型接头的中段端点会被误吸。只改 `nets[*].edges` 的端点坐标。
+    pwrclip_rows = []
+    try:
+        from fusion import pwrclip as _pcmod                    # noqa: PLC0415
+        _pwrclip_on = bool(_pcmod.ON)
+    except Exception:                                           # noqa: BLE001
+        _pwrclip_on = False
+    if _pwrclip_on:
+        _log(fp, "网线端点吸附通道：开（FUSION_PWRCLIP=1）")
+
+    def _pwrclip_step(cid):
+        """在**已经落盘**的 `<cid>_Pred.json` 上吸网线端点；失败一律不影响导出。"""
+        if not _pwrclip_on:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            _st = _pcmod.apply_file(dst_j, dst_j)
+            if not _st or not _st.get("moved"):
+                return
+            pwrclip_rows.append({"case": cid,
+                                 **{k: v for k, v in _st.items() if k != "trace"}})
+            _log(fp, "  %-28s 网线吸附 吸 %d 个端点" % (cid, _st.get("moved", 0)))
+        except Exception as exc:                               # noqa: BLE001
+            _log(fp, "  ⚠️ %s 网线吸附失败：%s: %s" % (cid, type(exc).__name__, exc))
+
     def _pinname_step(cid, png):
         """在**已经落盘**的 `<cid>_Pred.json` 上补一层引脚名复读；失败一律不影响导出。"""
         if not _pinname_on:
@@ -1336,6 +1367,7 @@ def _run(a) -> int:
                     _valread_step(cid, _p)
                     _pinname_step(cid, _p)
                     _compdedup_step(cid)
+                    _pwrclip_step(cid)
                     continue
             except Exception as exc:                        # noqa: BLE001
                 _log(fp, "  ⚠️ %s 引脚名重读失败：%s: %s" % (cid, type(exc).__name__, exc))
@@ -1345,6 +1377,7 @@ def _run(a) -> int:
         _valread_step(cid, _p)
         _pinname_step(cid, _p)
         _compdedup_step(cid)
+        _pwrclip_step(cid)
     _log(fp, "导出 %d 份 <case>_Pred.json%s"
          % (n_export, ("（另有 %d 份空壳兜底）" % n_shell) if n_shell else ""))
 
@@ -1386,6 +1419,9 @@ def _run(a) -> int:
     if compdedup_rows:
         _log(fp, "元件消重合计：删除 %d 个同物元件（%d 张图）"
              % (sum(r.get("dropped", 0) for r in compdedup_rows), len(compdedup_rows)))
+    if pwrclip_rows:
+        _log(fp, "网线吸附合计：吸 %d 个端点（%d 张图）"
+             % (sum(r.get("moved", 0) for r in pwrclip_rows), len(pwrclip_rows)))
     _log(fp, "全部完成，墙钟 %.1fs（%.2f s/张）" % (wall, wall / max(1, len(items))))
     fp.close()
 
@@ -1394,7 +1430,8 @@ def _run(a) -> int:
                      "n_stage2_ok": len(s2_rows), "n_stage3_ok": len(s3_rows),
                      "n_exported": n_export, "n_shell": n_shell, "wall_s": wall,
                      "pinzoom": pinzoom_rows, "valread": valread_rows,
-                     "pinname": pinname_rows, "compdedup": compdedup_rows},
+                     "pinname": pinname_rows, "compdedup": compdedup_rows,
+                     "pwrclip": pwrclip_rows},
                     cases_log, a, t_start)
     print("产物 -> %s" % final_dir)
     return 0
