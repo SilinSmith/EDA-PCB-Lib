@@ -178,6 +178,31 @@ CROSS_DOT_NEED = int(os.environ.get("STAGE1_CROSS_DOT_NEED", "3"))
 CROSS_WIDE = env_on("STAGE1_CROSS_WIDE", "0")
 CROSS_TAGS = env_on("STAGE1_CROSS_TAGS", "1")
 CROSS_WIDE_MAX = int(os.environ.get("STAGE1_CROSS_WIDE_MAX", "96"))
+# ★ `STAGE1_CROSS_GAP`（默认 0 = 关）：**起簇**半径。骨架在无圆点的十字交叉处给出的
+# 端点常常差 **2~4px**（> `WIRE_TOL=1.5`、也 > `CROSS_WIDE` 摊到的 2.25），只按 `ee`
+# 端点对聚类就永远看不见这个结点 ⇒ 跨轴合并不被拦。实测 case 4 的 (979,320)：
+# 竖直两臂端点差 4.0px、水平长副本从结点中间穿过 ⇒ 规则 (2) 把两轴并成了一个 group 13。
+#
+# **实测（官方 10 张、no-vlm、`work\_xgap_ab.ps1`）⇒ 净负，默认 0 保持关：**
+#
+# | 臂 | 总分 | netH | netL | case 1 | case 4 | case 5 | case 6 | case 8 |
+# |---|---|---|---|---|---|---|---|---|
+# | ref（关） | **80.88** | 0.7749 | 0.4975 | 81.46 | 79.39 | 77.70 | 77.14 | 68.83 |
+# | `=3.0` | 80.56 | 0.7663 | 0.4956 | 81.52 | **80.02** | 76.48 | 76.33 | 66.94 |
+# | `=4.5` | 80.28 | 0.7574 | 0.4989 | 79.06 | 79.71 | 76.48 | 76.33 | 66.94 |
+#
+# 唯一赚到的是 case 4（组 66→68：横轴 {seg16, seg70} 与竖轴 {seg52, seg54}+U3.2 引线
+# {seg53, seg90} 拆开 ⇒ netL 0.3607→0.4098、netH 0.7412→0.7452 = **+0.63 案内分**）；
+# 亏的是四类**误拆**（`work\_xgapbox.py` 逐结点取证 + 拼图
+# `work/preview/_cropat/montage_nodes.png`）：
+# ① case 5 (1772,499) 图上**有红点**、`_has_dot` 漏判（−1.22）；
+# ② case 6 (1736,919) / case 8 (706,449) 是**导线接到引脚引线**的同轴结点，
+#    簇内段端到引脚 **0.0px**（各 −0.81 / −1.89）；
+# ③ case 1 的十个新结点是 GND / 电容符号笔画（gap 4.5 时 −2.40，gap 3.0 时 +0.06 无害）。
+# 加「簇内段端→引脚 ≤2px 就不拆」+「多点圆点判据」两道闸后只剩 case 4 的 +0.63 案内分
+# ⇒ 全局 **+0.07 分**（交付分 = 逐案分平均），在 ±0.05 噪声带内，且要给 `wire_groups`
+# 新增引脚点管道 ⇒ **不实现**（与 §5.80 一致）。
+CROSS_GAP = float(os.environ.get("STAGE1_CROSS_GAP", "0") or 0.0)
 # 诊断计数（`wire_detail` 之外用不到；探针读它看「这次拆了几处交叉」）
 LAST_X = {"n_cross": 0, "n_blocked": 0}
 # ★★ 规则 (5)「端点微越过目标段」的容差（`STAGE1_WIRE_OVER`，0 = 关）。
@@ -529,6 +554,18 @@ def _cross_forbid(segs, ends, own, ee_pairs, ink,
         par.setdefault(m, m)
         par.setdefault(j, j)
         union(m, j)
+    # ★ `STAGE1_CROSS_GAP`：把 1.5~GAP px 的端点对也纳入起簇（见同名旋钮注释）。
+    # 只影响「是否成簇」；是否拆分仍要求 ≥2 条轴都穿过去 + 无圆点，T 型/L 角不受影响。
+    if CROSS_GAP > 0.0 and len(ends) <= 4000:
+        D_gap = np.hypot(ends[:, 0][:, None] - ends[:, 0][None, :],
+                         ends[:, 1][:, None] - ends[:, 1][None, :])
+        for m in range(len(ends)):
+            for j in np.nonzero(D_gap[m] <= CROSS_GAP)[0]:
+                j = int(j)
+                if int(own[m]) != int(own[j]):
+                    par.setdefault(int(m), int(m))
+                    par.setdefault(j, j)
+                    union(int(m), j)
     # ★ 泛化（`STAGE1_CROSS_WIDE`）：聚簇半径从规则 (1) 的 `tol`(1.5) 放宽到 `pass_tol`(2.25)。
     # 骨架在交叉处给出的端点常常差 1.5~2.2px —— 它们**进不了 `ee`**，只按 `ee` 聚类就
     # 永远看不见这个结点（多岔、粗笔画、rdp 抖动都会这样）。放宽只影响「是否成簇」，
@@ -742,7 +779,7 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
     # ★ 十字交叉（无圆点）的**跨轴禁止**：命中的段对在规则 (1)~(5) 里一律不许并；
     # `axis_of` 给出「段 -> [(结点, 轴号)]」，`_u` 用它做**根级**冲突检查（拦传递合并）。
     forbid, n_cross, axis_of = set(), 0, {}
-    if CROSS_SPLIT and ink is not None and ee:
+    if CROSS_SPLIT and ink is not None and (ee or CROSS_GAP > 0.0):
         forbid, n_cross, axis_of = _cross_forbid(segs, ends, own, ee, ink)
     n_blocked = [0]
     LAST_X["n_cross"], LAST_X["n_blocked"] = n_cross, 0
