@@ -6557,3 +6557,13 @@ comp / pin / netH = 0.9819 / 0.7731 / 0.7749 **三项逐位不变**（只动 `ed
 **产物/口径**：探针 `work/_ovl.py`、`work/_thickprobe.py`、`work/_endpin.py`（§5.70 第三族已记）、`work/_edgelab.py` 新增 `op_probe` / `op_splitfoot` / `op_cutnodot` / `op_dedupcont`（CLI `probe:R[,mode]`、`splitfoot:far[,near[,col]]`、`cutnodot:r[,dens[,near]]`、`dedupcont:off[,minfrac]`）；臂 `ex12_10`（交付态基线）、`pb*`、`sf*`、`cnd*`、`dc*`、`d220_dc`。复现：`python -X utf8 work\_edgelab.py --src ex12_10 --out TAG --cases $off10 --ops "dedupcont:12,0.5"` 后 `python -X utf8 eda-pcb\tools\eval\fast.py --score-only --engine protocol2 --cases $off10 --out TAG`；跨池把 `--src` 换 `d220known`、`--cases` 用 `work\_all220.txt`（分组 csv 在 `work\_grp\*.txt`）。
 
 **下一步**：① 「同起点同方向不同长度」的重复边应在**阶段一/`merge_collinear` 源头**治（顺带修好 4 端结点判据，为「无圆点十字拆网」扫清障碍），而不是 stage2 后处理；② 第二问的联合求解实现；③ netH 归网（官方 10 上用性上界 0.8138，现值 0.7749）。
+
+**读数 7（fp 边的成分普查 + 更激进的合并全负 ⇒ netL 后处理这条线到此封口）**：`work/_fpprobe.py`（新探针，永不提交）对交付态臂 `ex12_10`（80.88 / 导线 0.4975；配对网内我们边 633、tp 329、fp **304**、fn 306 ⇒ **我们的边数与 GT 几乎相等**，问题不是「画多了」）逐条 fp 边沿线取 9 个采样点、量到本配对网 GT 边的距离：
+
+| 类别 | 定义 | 条数 | 长度中位 / p90 |
+|---|---|---|---|
+| `covered` | 9/9 采样点都贴在本网 GT 边上（GT 已有这条线，一对一配对没轮到它） | **100** | 80.3 / 160.0 |
+| `partial` | ≥5/9 贴上（一端过冲：如 case1 `net_0 (869.81,232.98)-(939.61,233.62)` hits=8，就是 §5.70 那条钻进 R164 引线的边） | **178** | 89.0 / 161.2 |
+| `alien` | 无采样点贴上（例：case1 `net_1 (137.98,499.02)-(111,499)` d=17.2 L=27.0；case1 `net_6 (80,912)-(50,912)` d=19.4） | **26** | 74.4 / 182.0 |
+
+针对 `covered` 的更激进合并**全部判负**（基线 80.88 / 0.4975）：`overlap:20,6,0.25` **80.86**（0.4954，6 处）、`overlap:30,8,0.2` **80.85**（0.4940，9 处）、`overlap:45,12,0.15` **80.86**（0.4949，18 处）、`dedupcont:25,0.8` **80.82**（0.4916，55 处）、`overlap:30,8,0.2;dedupcont:25,0.8` **80.80**（0.4895）⇒ **合并越激进越亏**（把本该分开配对的边并成一条，两端点反而都落不到 5px 内）。结合 §5.68/§5.70 的结论（`ext`/`extany` 已吃满端点证据、`splitfoot` 中性偏负、墨迹续长判负）⇒ **netL 的后处理几何已被榨干，剩余 306 条 fn 与 304 条 fp 的根因是「GT 的切点与线尾是源图绘制约定」**，要再动只能改阶段一的骨架/切分本身（风险与收益都另算）。
