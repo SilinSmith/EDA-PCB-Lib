@@ -7674,3 +7674,56 @@ case2 连接器的 8px 侧、case4/5/6 的 6~7px 侧）⇒ pin F1 0.7864 → ~0.
 `work/_pinwirestage1.py`（读数 3，`--lats` 可扫侧向窗）、`work/_pinwirelearn.py`（读数 4）。
 全部在 `work/`，不进提交面。
 
+## §5.91 ★新线索：case 5 的两条**引脚名**错误不是识别错，是**名称框归位错**
+
+§5.86 把引脚名名错收在 4 条（case 5 两条、case 6 两条），并记 `5/U3.1` 的裁片是 8×8 的
+「`ADJ(GND)` 8×8 UNCERTAIN」。本轮把 case 5 的 U3（AMS1117-3.3）摊开看，真因是**框归位**：
+
+**证据 1（渲染）**：`work/_u3crop2.png`（case 5 图像 x 520-760 / y 700-800，4× 最近邻，
+每 20px 红线）：符号内左列自上而下是 `1`+红点、`ADJ(GND)`、`2`、`VOUT(TAB)`、`3`、`VIN`，
+右列 `4`+`TAB`。⇒ pin1 名 = `ADJ(GND)`、pin2 名 = `VOUT(TAB)`，两者都是**清楚可读的宽文本**。
+
+**证据 2（我们的槽位，`runs/fusion/_assigned/5.json` 的 `comps['c0002'].pins`，坐标为图像左上原点）**
+
+| 槽位 | 号框 | 名框 | 名读数 | 判读 |
+|---|---|---|---|---|
+| slot4（pin 1） | [545,725,549,735] | **[559,723,567,731]（8×8）** | `Q` 0.864 | **1 脚红点标记**，不是文字 |
+| slot3（pin 2） | [544,745,552,755] | [559,734,626,747]（67×13） | `ADIGND` 0.891 | 其实是 **pin1 的 `ADJ(GND)`** |
+| slot2（pin 3） | [543,764,550,774] | [559,774,582,784] | `VIN` 0.896 | ✓ |
+| slot1（pin 4） | [732,745,739,755] | [696,754,722,764] | `TAB` 0.742 | ✓ |
+
+**证据 3（pin2 的真名框存在但没人认领）**：`runs/stage1/5.stage1.json` 的 `texts`（99 个）里有
+`t0083 bbox_img [560,755,635,768]`（75×13）正落在 pin2 的行上；而 `_assigned/5.json` 是
+`n_texts 134 / n_owned 116 / **n_free 18**` ⇒ 这个框是**自由框**。
+
+**证据 4（直接复读，`Recognizer.load(weights\textrec_best.pt, cpu).read_many`）**：
+
+| 框 | CRNN 读数 | GT |
+|---|---|---|
+| (559,734,626,747) | `ADIGND` 0.832 | pin1 `ADJ(GND)` |
+| (560,755,635,768) | `VOUTOTAD` 0.769 | pin2 `VOUT(TAB)` |
+| (559,723,567,731) | `Q` 0.56 | （红点，无 GT） |
+| (696,754,722,764) | `TAB` 0.851 | pin4 `TAB` ✓ |
+
+**证据 5（行距算术）**：我们发出的脚行（json）pin_1 360.5 / pin_2 341.5 / pin_3 322.0 / pin_4 341.0
+**与 GT 完全一致**；`ADJ` 框 json y 349~362（中心 355.5）⇒ 离 pin_1 只差 **5**、离 pin_2 差 **14**；
+`VOUT` 框 json y 328~341（中心 334.5）⇒ 离 pin_2 差 7.5、离 pin_3 差 12.5。
+⇒ **按「框中心离哪条脚的行最近」归位，两个框都会落到正确的脚上**；现行归位显然不是这个口径
+（否则不会把 `ADJ` 框给 pin2、把红点框给 pin1）。
+
+**修复口径（两条都是零调用纯几何，尚未实现）**：
+1. **名称框候选必须「宽 > 高」**：文字框 w/h ≈ 2~6（本表 67/13、75/13、24/10、8/**8**），
+   1 脚红点标记是 8×8 的方形 ⇒ 加「`w <= 1.3*h` 的名称框一律不认」即可挡掉 `Q`。
+2. **名称框按「框竖直中心到本元件各脚**行**（引脚轴线 y）最近」归位**，而不是按号字框的 y 归位
+   （号字框比行高 ~5px，两脚行距 19px 时正好把相邻脚的框抢过来）。
+
+**预期价值**：`work/_pinnamemin.py` 量过单点 `5/U3.1 Q→ADJ(GND)` = **+1.3889 分**；两条都修 ⇒
+case 5 约 **+2.8 分**、10 张均值约 **+0.28 分**。且两个框修好后都会落进 `vlm/pinname.py` 的触发面
+（conf 0.832 / 0.769 均 < `CONF=0.85`）⇒ 由现成的 VLM 复读拿 `ADJ(GND)` / `VOUT(TAB)`。
+
+**产物/复现**：`work/_u3crop2.png`（带网格渲染）、`work/_u3crop.png`、
+`work/_fast_out_pnon/runs/fusion/_assigned/5.json`、`work/_fast_out_pnon/runs/stage1/5.stage1.json`、
+`work/_fast_out_pnon/final_results/5_Pred.json`。候选改动点（未验证）：
+`stage1/pins.py:599 find_pins(components, segments, texts=None, ...)` 与
+`stage1/pincol.py` 的 `_num_candidates` / `_side_records` / `enumerate_component`。
+
