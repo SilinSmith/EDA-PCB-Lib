@@ -9311,3 +9311,117 @@ python -X utf8 tools/eval/fast.py --score-only --engine harness --out pr3v      
 python -X utf8 ..\work\_pr3shift.py --run work/_fast_out_pr3b --ds "0,4,8,10,12,14,16,20,24"        # 引脚点整体内移扫描
 python -X utf8 ..\work\_pindetail.py --case 9 --run pr3b                                            # 逐脚对照
 ```
+
+## §5.115 整合取证（用户指派）：队友 PR#1/#2/#3 的引脚链能不能并进我方主线 —— 逐条查清「模块关系 + 数据依赖 + 项目历史」
+
+**问题（用户指派，原话意译）**：GitHub 上看到的是早期版本（24.12 / 9.80 / 18.74 / 0.79 的加权定标）；队友开了 3 个 PR，#1 因与本地超前版本不兼容被强关，#2/#3 基于 #1 改进，**只有合起来才达到预期效果**；怀疑本地版本没提供准确的 IO，导致他的数据依赖没被捕捉；要求查清模块间关系与项目历史，得出正确的整合方式。
+
+> ⚠️ **口径纪律（本节差点踩的坑）**：本项目有**两个**常用口径 —— **交付口径** `extra "-vlm-pin off"`（VLM 位号/值/名通道开，引脚通道关）= **84.95**；**确定性口径** `extra "-offline -vlm-pin off"`（无任何 LLM）= **80.48**。跨口径比分会凭空造出 −4.47 的「回归」。本节所有 A/B 都在**同一口径内**成对比较，并标明口径。
+
+### 一、#2 已被 #3 完全包含（「合起来」在代码层面是一个 no-op）
+
+| 事实 | 证据 |
+| --- | --- |
+| `c3d3684`（PR#3 head）⊇ `36a65cf`（PR#2 head） | `git diff --shortstat 36a65cf c3d3684 -- '*.py'`（排除 tests/tools）= 30 files +6878/−118；PR#2 独有符号（`recover_frame_pins`、`_frame_stroke_bands`、`_one_pin`、`_black_ink`、`_text_mask`、`_normal_row`）在 `c3d3684` 的 `stage1/pin_evidence.py` 里**全部存在**；`apply_mono_frame_pins` 只在 `c3d3684` 里有 |
+| 把 PR#2 合进 codex 线 = 内容不变 | `work/_wt_codex`（branch `codex-merge-test`，MERGE_HEAD=`36a65cf`）合并提交 **`3e3099a`**：合并后 `stage1/pin_evidence.py` 等与 `c3d3684` **逐字节相同**；`git diff --numstat c3d3684 36a65cf` 的 89 个文件里，PR#2 独有内容主要是 `docs/metrics/black-pin-geometry-20261011.json`（+24427 行）等文档/数据 |
+| 他们的定标也不是两 PR 叠加 | 他们 `docs/RESULTS.md`：官方 9 张 baseline 56.71 → final 57.54（元件 28.21 / 引脚 9.80 / 网络 18.74 / 导线 0.79），是**单条线**的上限表，不是 #2+#3 两次叠加 |
+
+⇒「只有合起来才有效果」在**代码层不成立**（#3 是 #2 的超集）；在**效果层**也只体现为他们那条线相对他们自己早期版本 +0.83。
+
+### 二、数据依赖缺口（用户怀疑的那一点）—— 已机械列清
+
+新探针 `tools/diag/_depgap.py`（解析他们分支新增/改动 `.py` 的 import，分别在我方树与他们的树里解析本地模块名）：**16 个模块只在他们树里**（`stage2/designator_reading.py` 467、`stage2/fragmented_text.py` 65、`stage2/intact_pin_numbers.py` 59、`stage2/name_fringe.py` 82、`stage2/non_ic_caption_reading.py` 273、`stage1/non_ic_pin_structure.py` 189、`stage1/passive_pins.py` 1400、`stage1/passive_terminal_geometry.py` 907、`stage1/passive_terminal_templates.py` 371、`stage2/pin_identifier.py` 23、`stage2/pin_name_library.py` 294、**`pinmarkers.py` 151（仓根）**、`stage1/rgb_led.py` 216、`stage2/segmented_caption.py` 168、`stage2/vertical_pin_crops.py` 254、`stage2/vertical_pin_reading.py` 265），另有 **116 个同名文件内容不同**。
+
+**其中唯一被「引脚链」需要的**是仓根 `pinmarkers.py`：他们 `stage1/pin_evidence.py:18` 写 `from pinmarkers import hollow_marker_bands`（`stage2/mono_pin_crops.py` 也 import 它），而我方 `eda-pcb` **没有这个文件** ⇒ 他们「黑白框实测引脚校准」整链在我方**静默不可用**。
+
+已补：`eda-pcb/pinmarkers.py`（151 行，逐字搬运）+ `eda-pcb/stage1/pipeline.py` 接入 `apply_mono_frame_pins` / `overlay_mono_evidence` / 产物键 `pin_mono`，开关 `STAGE1_MONO_FRAME_PINS` **默认 0**。
+
+### 三、`pin_evidence.py` 的合并方式：必须**只追加**，不能整文件替换
+
+**根因**：他们的 `_one_pin(ink, point, box, frames, text_boxes, text_mask, *, search_radius=3)` 额外算了
+`frame_outer = _frame_outer(ink, box, edge, frames[edge])`，并用 **`frame_outer`（框线外沿）而不是校准出的 `frame_coord`** 当探针锚点。而 `build_pin_evidence` 也调 `_one_pin` ⇒ 整文件替换会**改掉默认路径的引脚证据语义**。
+
+**处置**：保留我方 `_one_pin` 逐字不动，把他们的存成 **`_one_pin_mono`**（同名同参 + `search_radius`），**只由 `recover_frame_pins` 调用**；追加（不改既有函数）：`_frame_outer` / `_one_pin_mono` / `_black_ink` / `_text_mask` / `_normal_row` / `_frame_stroke_bands` / `recover_frame_pins`（`from pinmarkers import hollow_marker_bands` 放在函数内做**惰性 import**，缺文件也不炸模块导入）。
+
+**结果**：交付口径默认路径**逐位复原** —— `1.0000 / 0.8166 / 0.8210 / 0.5796`，tp `254·103·131·384`，均值 **84.95**（与 §5.112 定标一字不差）。
+
+### 四、A/B：两条臂都**不能**入库（官方 10 张 protocol2，同口径成对）
+
+**交付口径**（`extra "-vlm-pin off"`）：
+
+| 臂 | 总分 | 元件 | 引脚 | 网络 | 导线 | tp（元件/引脚/网络/导线） |
+| --- | --- | --- | --- | --- | --- | --- |
+| 交付基准（本节的树） | **84.95** | 1.0000 | 0.8166 | 0.8210 | 0.5796 | 254 / 103 / 131 / 384 |
+| `STAGE1_MONO_FRAME_PINS=1`（新移植的黑白框臂） | **84.95** | 1.0000 | 0.8166 | 0.8210 | 0.5796 | **逐位相同** |
+| `STAGE1_PIN_COLOR=1`（队友 PR#1 彩色实测，我方本来就有、默认关） | **65.14**（−19.81） | 1.0000 | **0.0953** | 0.7801 | 0.5459 | 254 / 21 / 123 / 364；**引脚爆 0 共 7 张：2 4 6 7 8 9 10** |
+
+**确定性口径**（`extra "-offline -vlm-pin off"`）：
+
+| 臂 | 总分 | 元件 | 引脚 | 网络 | 导线 |
+| --- | --- | --- | --- | --- | --- |
+| 确定性基准 | **80.48** | 0.9355 | 0.7385 | 0.8051 | 0.5780 |
+| `STAGE1_PIN_COLOR=1` | **65.72**（−14.76） | 0.9355 | 0.1464 | 0.8141 | 0.5499；引脚爆 0 共 6 张：2 4 5 6 7 9 |
+
+case 8 单张（唯一彩色臂更亮眼的图，两种口径结果相反）：
+
+| 口径 | 基准 | 彩色臂 |
+| --- | --- | --- |
+| 确定性 | 66.70 / 引脚 0.1935 | **74.05 / 引脚 0.4000（+7.35）** |
+| 交付 | 70.87 / 引脚 0.3030 | 55.19 / 引脚 **0.0000** |
+
+**黑白框臂为何 0 变化**：`_black_ink` 的判据是 `(gray<170)&(chroma<30)`；官方 10 张的框是彩色的（黑掩码 775~5224 px vs 彩色掩码 2.3万~3.7万 px，约 1:20），`frame_confirmed` 全为 False（抽查 case 2/3/5/7/8/10 覆盖率全 0.000）⇒ `skipped_sides` 四边全跳、`added/calibrated` 全 0。这个臂需要「黑白框 IC」以外的数据分布才有意义。
+
+### 五、为什么彩色实测臂在两种口径下都崩（行/法向的物理口径对不上）
+
+新探针 `tools/diag/_colrows.py`（**全部换算到图像坐标**后重出，GT 行 136）：
+
+| 口径 | 行命中 | 法向中位绝对差 |
+| --- | --- | --- |
+| 我方交付预测 | **123/136 = 90.4%** | **2.40 px**（n=123） |
+| 队友彩色实测 `pincolor.extract_color_pins` | **68/136 = 50.0%** | **8.50 px**（n=68） |
+
+逐案（行命中 我方/实测）：case 1 = 26/26 vs **0/26**；case 3 = 6/6 vs 2/6；case 5 = 18/18 vs 10/18；case 9 = 6/6 vs **0/6**；case 10 = 11/12 vs 10/12；**case 8 = 9/16 vs 15/16（唯一实测明显更好）**；case 4-U2 = 2/4 vs 3/4、case 6-U1 = 2/3 vs 3/3（略好）。与 §5.29 的历史定标（`pev2` 引脚 0.0725）方向一致。
+
+**机制**：我方猜测的法向约定（恒 12px）与 GT 中位差 2.40px；他们的实测法向是「红→绿跳变中点」，与 GT 中位差 8.50px；而 `apply_color_pins` 的既有策略是「某边 `frame_confirmed` 为真就**丢掉该边全部猜测**」（`stage1/pipeline.py` 里 `covered = confirmed`）⇒ 实测一偏，整边引脚归零，7 张爆 0 正是这么来的。
+
+### 六、为什么他们 15 个新模块进不了我方引脚通道（口径事实）
+
+我方 `pin_f1` 只统计 GT `type=box` 的元件（`pin_box_only=True`）⇒ 他们的 `passive_pins.py`(1400)、`passive_terminal_geometry.py`(907)、`passive_terminal_templates.py`、`rgb_led.py`、`vertical_pin_*`、`non_ic_caption_reading.py` 等**非 IC 端子/被动件**工作，**不可能**改善我方引脚通道；它们只能通过「非 box 引脚号字面比较」影响网络通道，而这一段我方已全对（§5.112：`pin_pos_ok_num_diff 0`）。同理他们的 `stage2` 位号/引脚号读取器（`designator_reading.py`、`pin_name_library.py`、`intact_pin_numbers.py`）只可能修「位置对但号错」，而这个槽在我方为 0。
+
+### 七、逐条回答用户指令
+
+1. **「#2/#3 只有合起来才达到预期效果」**：代码层 #3 ⊇ #2（合并 `3e3099a` 是 no-op superset）；他们自己的定标也是单线 56.71→57.54。整条线相对**我方**口径全面落后（官方 10 交付口径：他们 51.51 / 我方 84.95；池子 10 张：他们 14.86 / 我方 18.52）。
+2. **「本地 IO 没提供准确支持、他的数据依赖没被捕捉」**：**这一条成立且已定位** —— 缺 `pinmarkers.py`（＋15 个模块、116 个同名文件内容不同），缺的正是「黑白框实测引脚校准」链的入口。已补齐并通过契约/单测；但真跑起来 0 收益（官方图的框不是黑的）。
+3. **「pin 满分逻辑」**：在我方判分器下不存在。他们自己 `docs/RESULTS.md` 把它写成「上限 25 分里的 9.80 分，且受限于 CRNN 单字混淆」；`docs/pin-recognition-integration.md:80-83` 明说**本地旧判分器早于新规则、历史网络分不是现行官方分**。
+
+### 八、状态与下一步
+
+- 本次落地（`eda-pcb`）：新增 `pinmarkers.py`；`stage1/pin_evidence.py` **只追加**他们的 7 个函数（`_one_pin_mono` 隔离）；`stage1/pipeline.py` 接 `apply_mono_frame_pins` / `overlay_mono_evidence` / `pin_mono`，开关 `STAGE1_MONO_FRAME_PINS` **默认 0**。
+- 机械检查：`compileall` 退出 0；`tools/dev/pinread_contract.py` **16/16 PASS**；`python -m unittest discover -s tests -p "test_mono_pin*.py"` **33 ran / OK (skipped=2)**；**交付 84.95 逐位未变**。
+- codex 侧合并提交 `3e3099a` 在 `Y:\workspace\EDA\work\_wt_codex`（branch `codex-merge-test`），**未推送**。
+- 若要继续榨取彩色实测：方向是把实测点当**增量**（保留我方猜测 + 追加实测，而不是 `apply_color_pins` 的「确认边丢光猜测」）。按交付口径上限只可能在 case 8 一带有动作，且该图在交付口径下彩色臂反而归零，性价比低；真正能动的仍是「我方行命中 90.4% 里剩下的 13 行」与「法向约定」。
+
+### 复现
+
+```
+# 交付口径（VLM 位号/值/名开，引脚通道关）：基准
+python -X utf8 tools/eval/fast.py --cases "1,2,3,4,5,6,7,8,9,10" --out del_chk --extra "-vlm-pin off"      # 84.95
+# 黑白框臂（默认关）
+$env:STAGE1_MONO_FRAME_PINS='1'; python -X utf8 tools/eval/fast.py --cases "1,2,3,4,5,6,7,8,9,10" --out del_mono --extra "-vlm-pin off"; Remove-Item Env:STAGE1_MONO_FRAME_PINS   # 84.95 逐位相同
+# 彩色实测臂（队友 PR#1，我方默认关）
+$env:STAGE1_PIN_COLOR='1';      python -X utf8 tools/eval/fast.py --cases "1,2,3,4,5,6,7,8,9,10" --out del_col  --extra "-vlm-pin off"; Remove-Item Env:STAGE1_PIN_COLOR    # 65.14
+# 确定性口径（无 LLM）：基准 80.48 / 彩色臂 65.72
+python -X utf8 tools/eval/fast.py --cases "1,2,3,4,5,6,7,8,9,10" --out sjdef3  --extra "-offline -vlm-pin off"  # 80.48
+# 单张回放（同一输出目录重打分，不重跑流水线）
+python -X utf8 tools/eval/fast.py --score-only --cases 8 --out del_col
+# 依赖缺口清单（我方树 vs 队友 worktree）
+python -X utf8 ..\work\_depgap.py --theirs work\_wt_pr3 --ours . --symbols
+# 行/法向对齐表（GT 行 136：我方 90.4%/2.40px vs 实测 50.0%/8.50px）
+python -X utf8 ..\work\_colrows.py --run sjndef --detail
+# 引脚点几何最近邻（不按键匹配）
+python -X utf8 ..\work\_nnpin.py --runs sjndef,pr3b,pr3v
+# 他们的 stage1 产物（pin_color / pin_mono / replaced_guesses）
+python -X utf8 ..\work\_pr3stage.py --case 8
+# 本次的最小增量合并（可重放；幂等）
+python -X utf8 ..\work\_pinmono_patch.py
+```
