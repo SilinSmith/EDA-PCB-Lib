@@ -77,7 +77,8 @@ class MonoPinPipelineTests(unittest.TestCase):
         with ExitStack() as stack:
             stack.enter_context(patch.multiple(run, PINCOL_WIN_TEXTS=False,
                 COLOR_NUMBER_CROP=False, PIN_TEXT_CROP=False, PIN_LANE_CROP=False,
-                PIN_NUMBER_REPAIR=False, PIN_NAME_OCR="off", MONO_PIN_OCR=mode))
+                PIN_NUMBER_REPAIR=False, PIN_NAME_OCR="off", MONO_PIN_OCR=mode,
+                DESIGNATOR_OCR="off"))
             loader = stack.enter_context(patch.object(mono_pin_reading, "get_pin_name_ocr", return_value=None))
             arguments = ({"wraps": mono_pin_reading.read_mono_pin_texts} if real_reader
                          else {"return_value": copy.deepcopy(extras or [])})
@@ -151,6 +152,29 @@ class MonoPinPipelineTests(unittest.TestCase):
         physical = assigned["comps"]["ic"]["pins"]["0"]
         self.assertEqual((physical["name"]["text"], physical["number"]["text"]), ("VBA1", "13"))
         self.assertEqual(set(final["pins"]["U1"]), {"pin_13"})
+
+    def test_complete_long_mono_name_reaches_binding_and_export(self):
+        name = targeted("pin_name", "PA24/USB_DM", [111, 174, 261, 188])
+        final, assigned, index, _, _, _, _ = self.pipeline(extras=[name])
+        self.assertEqual(assigned["comps"]["ic"]["pins"]["0"]["name"]["text"], "PA24/USB_DM")
+        self.assertEqual(final["pins"]["U1"]["pin_13"]["pinname"], "PA24/USB_DM")
+        self.assertEqual(index, {"ic": {"0": "pin_13"}})
+
+    def test_unqualified_long_name_cannot_displace_existing_name(self):
+        name = targeted("pin_name", "PA24/USB_DM", [111, 174, 261, 188])
+        held = copy.deepcopy(name)
+        held["mono_pin_ocr"].update(accepted=False, held_reason="glyph_integrity_unresolved")
+        stale = copy.deepcopy(name)
+        stale["pin_target"]["anchor_img"] = [101, 180]
+        crossing = copy.deepcopy(name)
+        crossing["bbox"] = crossing["geometry_bbox"] = [99, 174, 261, 188]
+        ordinary = {"bbox": name["bbox"], "name_only": True,
+                    "reads": {"pin_name": ("PA24/USB_DM", .99)}}
+        for proposed in (held, stale, crossing, ordinary):
+            with self.subTest(proposed=proposed):
+                final, assigned, _, _, _, _, _ = self.pipeline(extras=[proposed])
+                self.assertEqual(assigned["comps"]["ic"]["pins"]["0"]["name"]["text"], "VBA1")
+                self.assertEqual(final["pins"]["U1"]["pin_13"]["pinname"], "VBA1")
 
     def test_auto_missing_optional_dependency_keeps_real_legacy_pipeline(self):
         expected, _, expected_index, _, _, _, _ = self.pipeline(mode="off")

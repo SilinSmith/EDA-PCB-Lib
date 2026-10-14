@@ -149,6 +149,42 @@ class MonoPinBindingTests(unittest.TestCase):
         self.assertIsNone(physical["number_selection_name"])
         self.assertEqual(final["__pin_index"], {"ic": {"1": "pin_113"}})
 
+    def test_name_and_number_keep_the_same_measured_row_despite_a_frame_fringe_duplicate(self):
+        self.pins['ic']=[[90,176.5],[90,180]]
+        self.evidence['ic']=[contact(p) for p in self.pins['ic']]
+        name=provider('pin_name','READY',[111,174,151,188],1,180)
+        number=provider('pin_number','A2',[78,168,96,177],1,180)
+        for observation in (name,number):
+            observation['mono_pin_ocr']['cleanup_evidence']={
+                'stroke_probe':{'stroke_top':179,'stroke_bottom':182}}
+        before=copy.deepcopy((self.pins,self.evidence,name,number))
+        reads=[dict(bbox=[111,72,132,85],reads={'designator':('U1',.99)}),name,number,
+               dict(bbox=[111,174,151,188],reads={'pin_name':('READY',.99)})]
+        assigned=assign(self.comps,self.pins,reads,pin_evidence=self.evidence)
+        pair=assigned['comps']['ic']['pins'][1]
+        self.assertEqual(pair['name']['text'],'READY')
+        self.assertEqual(pair['number']['text'],'A2')
+        self.assertIsNone(assigned['comps']['ic']['pins'][0]['name'])
+        self.assertEqual((self.pins,self.evidence,name,number),before)
+        stage=dict(image={'w':350,'h':330},components=self.comps,pins=self.pins,pin_evidence=self.evidence,
+                   wire_detail={'segments':[[[90,180],[50,180]]]},nets=[{'pins':[['ic',1]],'seg_index':[0]}])
+        final=build_doc(stage,assigned,'synthetic')
+        self.assertEqual(final['pins']['U1']['pin_A2']['pinname'],'READY')
+        self.assertEqual(final['__pin_index']['ic'],{'1':'pin_A2'})
+        self.assertEqual(next(iter(final['nets'].values()))['hyperGraph'],'(U1.A2)')
+
+    def test_missing_stroke_measurement_or_another_real_row_cannot_bypass_name_ambiguity(self):
+        for other_row,stroke in [(176.5,{}),(174,{'stroke_top':179,'stroke_bottom':182}),
+                                 (180.5,{'stroke_top':179,'stroke_bottom':182}),
+                                 (176.5,{'stroke_top':185,'stroke_bottom':188})]:
+            with self.subTest(other_row=other_row,stroke=stroke):
+                self.pins['ic']=[[90,other_row],[90,180]]
+                self.evidence['ic']=[contact(p) for p in self.pins['ic']]
+                name=provider('pin_name','READY',[111,170,151,188],1,180)
+                name['mono_pin_ocr']['cleanup_evidence']={'stroke_probe':stroke}
+                result=self.bind([name])['pins']
+                self.assertIsNone(result[1]['name'])
+
 
 if __name__ == "__main__":
     unittest.main()

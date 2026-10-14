@@ -45,8 +45,11 @@ PIN_TEXT_CROP = env_on("STAGE2_PIN_TEXT_CROP", "1")
 PIN_LANE_CROP = env_on("STAGE2_PIN_LANE_CROP", "1")
 PIN_LANE_CLEANUP = os.environ.get("STAGE2_PIN_LANE_CLEANUP", "light")
 PIN_NAME_OCR = os.environ.get("STAGE2_PIN_NAME_OCR", "auto").strip().lower()
+DESIGNATOR_OCR = os.environ.get("STAGE2_DESIGNATOR_OCR", PIN_NAME_OCR).strip().lower()
 MONO_PIN_OCR = os.environ.get("STAGE2_MONO_PIN_OCR", PIN_NAME_OCR).strip().lower()
+NON_IC_CAPTION_OCR = os.environ.get("STAGE2_NON_IC_CAPTION_OCR", "auto").strip().lower()
 PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "1")
+PIN_NAME_LIBRARY = env_on("STAGE2_PIN_NAME_LIBRARY", "1")
 # 这些是「参数」类元件，它们旁边没有长器件名，不参与生长
 _VALUE_TYPES = {"r", "c", "l", "fuse", "crystal", "crystal_2pin",
                 "crystal_3pin", "crystal_4pin"}
@@ -226,6 +229,13 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         reads = engine.read(bgr, boxes) if roles is None else engine.read(bgr, boxes, roles)
     else:
         reads = [{"bbox": b, "reads": {}} for b in boxes]
+    designator_audit = []
+    if do_ocr and DESIGNATOR_OCR != "off" and (roles is None or "designator" in roles):
+        from .designator_reading import read_designator_captions
+        extra, designator_audit = read_designator_captions(
+            bgr, doc.get("components") or [], reads, mode=DESIGNATOR_OCR,
+            pin_evidence=doc.get("pin_evidence"),pins=doc.get("pins"))
+        reads = list(reads) + extra
     if do_ocr and COLOR_NUMBER_CROP and (roles is None or "pin_number" in roles):
         from .color_crops import read_color_numbers
         reads = list(reads) + read_color_numbers(doc,reads,engine,bgr)
@@ -266,6 +276,15 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
 
     a = assign(doc.get("components") or [], doc.get("pins") or {}, reads,
                pincol=doc.get("pincol"), pin_evidence=doc.get("pin_evidence"))
+    caption_audit = []
+    if do_ocr and NON_IC_CAPTION_OCR != "off" and (roles is None or "designator" in roles):
+        from .non_ic_caption_reading import read_non_ic_captions
+        extra, caption_audit = read_non_ic_captions(doc, a, bgr, min_conf=min_conf, mode=NON_IC_CAPTION_OCR)
+        if extra:
+            reads = list(reads) + extra
+            a = assign(doc.get("components") or [], doc.get("pins") or {}, reads,
+                       pincol=doc.get("pincol"), pin_evidence=doc.get("pin_evidence"))
+    a["designator_ocr_audit"] = designator_audit
     if recut in ("expect", "grow", "both") and do_ocr:
         extra = []
         if recut in ("expect", "both"):
@@ -280,6 +299,12 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
             reads = list(reads) + list(extra)
             a = assign(doc.get("components") or [], doc.get("pins") or {}, reads,
                        pincol=doc.get("pincol"), pin_evidence=doc.get("pin_evidence"))
+    a["designator_ocr_audit"] = designator_audit
+    if caption_audit:
+        a['non_ic_caption_ocr'] = caption_audit
+    if do_ocr and PIN_NAME_LIBRARY and (roles is None or "pin_name" in roles):
+        from .pin_name_library import normalize_assigned_pin_names
+        a = normalize_assigned_pin_names(doc, a, reads)
     pred = build_doc(doc, a, case)
     pin_index = pred.pop("__pin_index", None)
     t3 = time.time()

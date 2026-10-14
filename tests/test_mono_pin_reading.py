@@ -21,7 +21,7 @@ class Provider:
 
 
 class MonoPinReadingTests(unittest.TestCase):
-    def run_reader(self, values=None, role="pin_number", flags=None, provider_missing=False, **kwargs):
+    def run_reader(self, values=None, role="pin_number", flags=None, provider_missing=False, exclusions=None, **kwargs):
         gray = np.full((80, 90), 255, np.uint8)
         gray[26:35, 12:18] = np.arange(54, dtype=np.uint8).reshape(9, 6)
         bgr = np.repeat(gray[:, :, None], 3, axis=2)
@@ -30,6 +30,8 @@ class MonoPinReadingTests(unittest.TestCase):
         candidate = {"bbox": [12, 26, 18, 35], "role": role, "vertical": False,
                      "region": [10, 24, 20, 37], "pin_target": target,
                      "flags": flags or [], "cleanup_evidence": {"black_pixels_removed": 0}}
+        if exclusions is not None:
+            candidate["cleanup_evidence"]["known_line_exclusions"] = exclusions
         reads, doc = [{"bbox": [12, 26, 18, 35], "reads": {"pin_number": ("13", .999)}}], {"pins": {"ic": [[10, 30]]}}
         old_reads, old_doc, old_candidate = copy.deepcopy(reads), copy.deepcopy(doc), copy.deepcopy(candidate)
         provider = Provider(values or [("113", .98), ("113", .96)])
@@ -62,14 +64,35 @@ class MonoPinReadingTests(unittest.TestCase):
         out, _, _, _ = self.run_reader([("VBA1", .99), ("VBAT", .99)], role="pin_name")
         self.assertEqual(out[0]["reads"], {})
 
+    def test_only_recorded_measured_line_pixels_are_whitened_in_recognition_copy(self):
+        exclusions = [[12, 26], [13, 27], [1, 1], [90, 80]]
+        _, provider, _, gray = self.run_reader(exclusions=exclusions)
+        expected = gray[26:35, 12:18].copy()
+        expected[0, 0] = 255
+        expected[1, 1] = 255
+        for padding, sample in zip((2, 4), provider.inputs):
+            np.testing.assert_array_equal(sample, np.pad(expected, padding, constant_values=255))
+        # The shared grayscale/source and untouched numeral pixels keep their
+        # exact values; cleanup is confined to the independent provider copy.
+        self.assertEqual(int(gray[26, 12]), 0)
+        self.assertEqual(int(gray[27, 13]), 7)
+
     def test_both_agreed_views_must_pass_fixed_legal_and_confidence_gate(self):
         for values in ([("113", .999), ("13", .99)], [("113", .99), ("113", .89)],
                        [("0", .99), ("0", .99)], [("1000", .99), ("1000", .99)],
-                       [("1o", .99), ("1o", .99)], [("113", float("nan")), ("113", .99)]):
+                       [("1o!", .99), ("1o!", .99)], [("113", float("nan")), ("113", .99)]):
             with self.subTest(values=values):
                 out, _, _, _ = self.run_reader(values)
                 self.assertEqual(out[0]["reads"], {})
                 self.assertFalse(out[0]["mono_pin_ocr"]["accepted"])
+
+    def test_agreed_complete_alphanumeric_identifier_keeps_all_observed_characters(self):
+        for value in ("P9", "U18", "A01", "12B", "b3"):
+            with self.subTest(value=value):
+                out, _, _, _ = self.run_reader([(value, .99), (value, .98)])
+                self.assertEqual(out[0]["reads"], {"pin_number": (value, .98)})
+        out, _, _, _ = self.run_reader([("P9", .99), ("R9", .99)])
+        self.assertFalse(out[0]["reads"])
 
     def test_incomplete_crop_is_recorded_without_ocr(self):
         out, provider, _, _ = self.run_reader(flags=["glyph_integrity_unresolved"])

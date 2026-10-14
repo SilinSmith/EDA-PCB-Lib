@@ -56,6 +56,10 @@ GAP_SCORE = float(os.environ.get("FUSION_GAP_SCORE", "0.90"))
 from envflag import env_on                       # noqa: E402  (唯一权威假值词表)
 # ★ 同 `fusion\run.py`：手写短词表 ⇒ `FUSION_GAP_FILL=off` 被当成开。统一。
 GAP_FILL = env_on("FUSION_GAP_FILL", "1")
+# A weaker duplicate read must not move an observed non-IC designator to a
+# synthetic alternative. 10GT non-coordinate validation on 2026-10-14 found
+# eight previously correct names displaced by this augmentation path.
+NONIC_READ_OWNERSHIP = env_on("FUSION_NONIC_READ_OWNERSHIP", "1")
 # 每个槽位最多留几个候选进匹配（含合成的）
 MAX_CANDS = int(os.environ.get("FUSION_MAX_CANDS", "8"))
 
@@ -132,7 +136,7 @@ def _taken_by(cands: Dict[str, List[Tuple[str, float, str]]],
 def _assign(slot: str, val: str, score: float, src: str,
             cand_idx: Dict[str, List[Tuple[str, float, str]]],
             taken: Dict[str, str], assign: Dict[str, Tuple[str, float, str]],
-            seen: set) -> bool:
+            seen: set, protected: Optional[set] = None) -> bool:
     """把 `val` 给 `slot`；若已被占，沿增广路给占用者换一个可用值。"""
     cur = taken.get(val)
     if cur is None:
@@ -141,11 +145,16 @@ def _assign(slot: str, val: str, score: float, src: str,
         return True
     if cur in seen or cur == slot:
         return False
+    old = assign.get(cur)
+    if (cur in (protected or ()) and old is not None
+            and (_is_read(old[2]) or old[2] == "geo:axis")
+            and score <= old[1]):
+        return False
     seen.add(cur)
     for v2, s2, src2 in cand_idx.get(cur, []):
         if v2 == val:
             continue
-        if _assign(cur, v2, s2, src2, cand_idx, taken, assign, seen):
+        if _assign(cur, v2, s2, src2, cand_idx, taken, assign, seen, protected):
             taken[val] = slot
             assign[slot] = (val, score, src)
             return True
@@ -153,11 +162,21 @@ def _assign(slot: str, val: str, score: float, src: str,
 
 
 def match(cands: Dict[str, List[Tuple[str, float, str]]],
-          family_of) -> Tuple[Dict[str, Tuple[str, float, str]], Dict[str, list]]:
+          family_of, protected: Optional[set] = None,
+          read_owners: Optional[Dict[str, str]] = None
+          ) -> Tuple[Dict[str, Tuple[str, float, str]], Dict[str, list]]:
     """对每个唯一族各跑一次「贪心 + 增广路」。返回 (选定表, 每族的冲突记录)。"""
     assign: Dict[str, Tuple[str, float, str]] = {}
     conflicts: Dict[str, list] = defaultdict(list)
     fams: Dict[str, List[str]] = defaultdict(list)
+    if read_owners:
+        # Reserve a best direct read before sorting synthetic/axis offers.
+        # Otherwise a stronger derived score can occupy a still-unprocessed
+        # negative OCR read and bypass the augmentation ownership guard.
+        cands = {sid: [row for row in rows
+                       if sid not in (protected or ()) or row[0] not in read_owners
+                       or read_owners[row[0]] == sid]
+                 for sid, rows in cands.items()}
     for sid in cands:
         fam = family_of(sid)
         if fam:
@@ -176,7 +195,7 @@ def match(cands: Dict[str, List[Tuple[str, float, str]]],
                 continue
             if v in taken:
                 conflicts[fam].append({"value": v, "winner": taken[v], "loser": sid})
-            if _assign(sid, v, s, src, cands, taken, assign, set()):
+            if _assign(sid, v, s, src, cands, taken, assign, set(), protected):
                 continue
         # 兜底：族里没被匹配到的槽位（候选全被抢走）先留空，后面 gap_fill 再补
     return assign, dict(conflicts)
@@ -257,6 +276,9 @@ def gap_fill(pool, cands, assign, stats=None) -> int:
             b = pool.best(sid)
             own = _f(b.score) if b else 0.0
             own_read = bool(b) and _is_read(str(getattr(b, "source", "") or ""))
+            if (NONIC_READ_OWNERSHIP and (pool.meta.get(sid) or {}).get("type")
+                    not in (None, "", "box", "ic", "boxic")):
+                own_read = own_read or bool(b and b.source == "geo:axis")
             sc = min(base, own - 0.01) if own_read else base
             if sc <= 0.0:
                 continue
@@ -296,7 +318,18 @@ def solve(pool, do_gap: bool = True) -> dict:
         if rows:
             assign[sid] = rows[0]
 
-    a1, c1 = match(cands, unique_family)
+    protected = {s for s in keys if DESIG_SLOT_RE.match(s)
+                 and (pool.meta.get(s) or {}).get("type")
+                 not in (None, "", "box", "ic", "boxic")} if NONIC_READ_OWNERSHIP else set()
+    read_owners, read_scores = {}, {}
+    for sid in sorted(protected):
+        best = pool.best(sid)
+        if best is None or not _is_read(best.source):
+            continue
+        value, score = str(best.value), _f(best.score)
+        if value not in read_scores or score > read_scores[value]:
+            read_owners[value], read_scores[value] = sid, score
+    a1, c1 = match(cands, unique_family, protected, read_owners)
     assign.update(a1)
     stats["n_unique"] = len(a1)
     stats["n_free"] = len(assign) - len(a1)
@@ -304,7 +337,7 @@ def solve(pool, do_gap: bool = True) -> dict:
     added = gap_fill(pool, cands, assign, stats) if do_gap else 0
     stats["gap_candidates"] = added
     if added:
-        a2, c2 = match(cands, unique_family)
+        a2, c2 = match(cands, unique_family, protected, read_owners)
         # 补洞后的解只在**族内**替换（自由槽位不动）
         assign.update(a2)
         for fam, rows in c2.items():

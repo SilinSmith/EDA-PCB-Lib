@@ -221,6 +221,19 @@ def _cap(pool, sid: str, want: str, sc: float) -> float:
     补号，不能把已经读出来的号改掉。
     """
     b = pool.best(sid)
+    # Preserve independent width/axis evidence as well as OCR evidence for
+    # non-IC names. When the axis raises a negative OCR score, multiplying
+    # that new score by 0.90 can otherwise put a different pure prior above it.
+    # This guard is scoped to non-IC designators; IC decisions keep their path.
+    if (sid.startswith("comp.") and sid.endswith(".key")
+            and (pool.meta.get(sid) or {}).get("type")
+            not in (None, "", "box", "ic", "boxic")):
+        observed = [a for a in pool.alts(sid)
+                    if _is_read(a.source) or a.source == "geo:axis"]
+        if observed:
+            anchor = max(observed, key=lambda a: _f(a.score))
+            if str(anchor.value) != str(want):
+                return min(sc, _f(anchor.score) - 0.01)
     if b is None:
         return sc
     if _is_read(getattr(b, "source", "")) and str(b.value) != str(want):

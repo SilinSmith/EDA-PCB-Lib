@@ -29,6 +29,7 @@ engine = TextEngine(device='cpu', allow_missing=False)
 real_read = engine.read
 current = None
 calls = 0
+input_checks = []
 def controlled_read(image, boxes, roles=None):
     global calls
     calls += 1
@@ -39,6 +40,11 @@ def controlled_read(image, boxes, roles=None):
         (args.initial / f'{current}.json').write_text(json.dumps(records, ensure_ascii=False), encoding='utf-8')
     else:
         records = json.loads((args.initial / f'{current}.json').read_text(encoding='utf-8'))
+        expected = [[float(v) for v in b] for b in boxes]
+        frozen = [[float(v) for v in r['bbox']] for r in records]
+        if expected != frozen:
+            raise AssertionError(f'{current}: initial OCR boxes changed; capture fresh reads')
+        input_checks.append(dict(case=current, boxes=len(expected), exact_box_order_verified=True))
         if roles is not None:
             wanted = set(roles)
             for r in records:
@@ -58,3 +64,5 @@ assert all(Path(v).is_relative_to(args.source.resolve()) for v in origins.values
 (args.out / 'inference-verification.json').write_text(json.dumps(dict(
     source=str(args.source.resolve()), mono=args.mono, stats=stats, module_origins=origins,
     initial_capture=args.capture, gt_used_in_inference=False), ensure_ascii=False, indent=2), encoding='utf-8')
+(args.out / 'initial-input-verification.json').write_text(json.dumps(
+    input_checks, ensure_ascii=False, indent=2), encoding='utf-8')

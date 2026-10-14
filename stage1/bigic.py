@@ -178,6 +178,75 @@ def _straddles_body_boundary(box, body, margin=3.0):
             or (overlap_y > 2 * margin and any(bx0 + margin < x < bx1 - margin for x in (x0, x1))))
 
 
+def _complete_detected_body(bgr, comps, rect):
+    """Repair one truncated semantic IC only when three real sides agree.
+
+    A full closed contour alone cannot prove a component. The existing YOLO IC
+    must cover at least one third of it, share three sides, and have no actual
+    closed fourth side at its truncated detector boundary. Other overlapping
+    components, ambiguous owners and colored outlines prevent the correction.
+    """
+    box = [rect[k] for k in ("x1", "y1", "x2", "y2")]
+    if min(rect.get("border") or [0]) < BORDER_MIN or rect.get("stub",0) < STUB_MIN:
+        return False
+    candidates = []
+    area = (box[2]-box[0])*(box[3]-box[1])
+    for c in comps:
+        old = c["bbox_img"]
+        if c.get("type") != "box" or c.get("source") != "yolo" or c.get("bbox_completion"):
+            continue
+        oa = (old[2]-old[0])*(old[3]-old[1])
+        if oa <= 0:
+            continue
+        aligned = [i for i in range(4) if abs(old[i]-box[i]) <= 6]
+        missing = None
+        nearby = (all(abs(old[i]-box[i]) <= 12 for i in range(4))
+                  and .9 <= area/oa <= 1.1 and _iou(box,old) >= .85)
+        if not nearby:
+            if not 1.15 <= area/oa <= 3.0 or len(aligned) != 3:
+                continue
+            missing = next(i for i in range(4) if i not in aligned)
+            outward = -1 if missing in (0,1) else 1
+            old_length = old[2]-old[0] if missing in (0,2) else old[3]-old[1]
+            if outward*(box[missing]-old[missing]) < max(16,old_length*.2):
+                continue
+            if old[0] < box[0]-6 or old[1] < box[1]-6 or old[2] > box[2]+6 or old[3] > box[3]+6:
+                continue
+        if any(min(box[2],other["bbox_img"][2])-max(box[0],other["bbox_img"][0]) > 3
+               and min(box[3],other["bbox_img"][3])-max(box[1],other["bbox_img"][1]) > 3
+               for other in comps if other is not c):
+            continue
+        candidates.append((c,missing))
+    if len(candidates) != 1:
+        return False
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    black = (gray < INK) & ((bgr.max(axis=2).astype(np.int16)-bgr.min(axis=2)) < 30)
+    if min(_border_support(black, box)) < BORDER_MIN:
+        return False
+    c,missing=candidates[0]
+    old=c["bbox_img"]
+    old_support = _border_support(black, [int(round(v)) for v in old])
+    if missing is not None:
+        # Border support order is top, right, bottom, left.
+        support_index = {0:3,1:0,2:1,3:2}[missing]
+        if old_support[support_index] > .25:
+            return False
+    elif min(old_support) >= BORDER_MIN:
+        # Already follows real closed sides; keep the detector's precision.
+        return False
+    from stage1.detect import to_json_box
+    c["bbox_completion"] = dict(method=("three_sides_and_open_detector_boundary" if missing is not None
+                                      else "four_nearby_measured_sides"),
+        previous_bbox_img=list(c["bbox_img"]), measured_bbox_img=box,
+        expanded_side=("left","top","right","bottom")[missing] if missing is not None else None,
+        original_border_support=old_support, measured_border_support=rect["border"],
+        measured_stub_count=rect["stub"])
+    c["bbox_img"] = [round(v,2) for v in box]
+    c["bbox_json"] = [round(float(v),2) for v in to_json_box(box,bgr.shape[0])]
+    c["center_img"] = [round((box[0]+box[2])/2,2),round((box[1]+box[3])/2,2)]
+    return True
+
+
 def add_components(bgr, comps, hyps, iou_skip=0.35) -> list:
     """把找到的大 IC 追加进 `comps`（同时登记一个假设槽位）。
 
@@ -190,6 +259,9 @@ def add_components(bgr, comps, hyps, iou_skip=0.35) -> list:
     added = []
     for r in detect_rects(bgr):
         box = [r["x1"], r["y1"], r["x2"], r["y2"]]
+        if _complete_detected_body(bgr, comps, r):
+            have = [c["bbox_img"] for c in comps]
+            continue
         if any(_iou(box, hb) >= iou_skip for hb in have):
             continue
         # Low border coverage alone cannot reject a pad-interrupted real IC.

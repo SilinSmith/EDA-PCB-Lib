@@ -65,9 +65,9 @@ DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "0")
 # pin number不参与评分」），所以这等于把唯一算分的引脚全扔掉 —— 实测读到率
 # 只有 0.272，344 个键命中的 box 元件里 GT 4064 个引脚我们只对 1046 个（0.257）。
 #
-# 新行为（=1，默认）逐引脚采信：某个号是 1..999 的整数、且没跟同一颗 IC 里别的
-# 采信号撞，就用它；否则用位置号补，并避开已经用掉的号。**严格弱于全对**（全对时
-# 两者输出相同），但把「71 对 1 错」从「全错」救回「71 对」。
+# 新行为（=1，默认）逐引脚采信：某个号是 1..999 的整数或经独立验证的字母数字编号、且没跟同一颗 IC 里别的
+# 采信号撞，就用它。未读/无效/重复落选的号默认不发布，也不进入网络引用。
+# 内部位置号回退仅供下述显式 legacy 模式使用，不是默认输出的真实编号。
 BOX_PIN_PARTIAL = env_on("STAGE2_BOX_PIN_PARTIAL", "1")
 BOX_PIN_DUPLICATE_BEST = env_on("STAGE2_BOX_PIN_DUPLICATE_BEST", "1")
 
@@ -81,21 +81,20 @@ BOX_PIN_DUPLICATE_BEST = env_on("STAGE2_BOX_PIN_DUPLICATE_BEST", "1")
 # 10GT 的 `pin.extra` = 69（占我们交出的 188 个引脚的三分之一），`pin.missing` 只有 17。
 #
 # 取值：
-#   * `0`/`off`    = 老行为（位置号补满）；
-#   * `1`/`all`    = 一律丢；
-#   * `mixed`（**默认**）= **只在「这颗 IC 至少读懂了一个号」时才丢**。一个都没读懂的
-#     那些，位置号 `1..N` 本身是个有用的先验（多数 IC 真是 1..N），丢了会伤召回。
-#   * `cap`        = **上限版**：发明出来的号只要 **≤ 这颗 IC 真正读到过的最大号** 就留，
-#     超过就丢。既砍掉「12 脚封装硬补到 12 个号」这种洪水，又保留「读到 {1,2,3,5,7} 时
-#     把 4、6 补出来」这种**填洞**（洞里的号猜中和 GT 撞上的机会不小）。
+#   * `1`/`all`（**默认**）= 一律不发布没读到的 IC 号；全无读数也不补 1..N。
+#   * `0`/`off`    = 显式 legacy 行为（位置号补满）；
+#   * `mixed`      = 显式 legacy 行为：只有至少读懂一个号时才丢未知号，
+#     全无读数时仍按位置补 1..N。这种兼容模式会猜号，不能作为默认真实读数。
+#   * `cap`        = 显式 legacy 上限行为：允许猜出不超过最大已读号的缺号。
+#     仅为旧实验/调用保留，不能把补出的缺号视为图上识别的编号。
 #
-# A/B（`python work\tools\eval\fast.py --no-vlm …`）：
+# 历史 A/B（旧默认 mixed，不能代替当前新数据验证）：
 #   10GT(9)：老 44.70(pin 0.1881/netH 0.4746) → `1` **47.67**(pin **0.2720**/netH **0.4971**)
 #            → `mixed` **47.67**（与 `1` 逐位相同）
 #   19 张  ：老 26.46(pin 0.0935) → `1` **28.31**(pin **0.1320**) → `mixed` **28.31**（同 `1`）
 #   220 张 ：老 25.0109(pin 0.0619/netH 0.2078) → `1` 25.0035(pin 0.0657/netH 0.2048)
 #            → **`mixed` 25.0117**(pin 0.0649/netH 0.2059) ⇒ 只有 `mixed` 端到端不降。
-_DROP_MODE = os.environ.get("STAGE2_BOX_PIN_DROP_UNREAD", "mixed").strip().lower()
+_DROP_MODE = os.environ.get("STAGE2_BOX_PIN_DROP_UNREAD", "all").strip().lower()
 BOX_PIN_DROP_UNREAD = _DROP_MODE not in ("", "0", "false", "off", "none")
 BOX_PIN_DROP_MIXED_ONLY = _DROP_MODE in ("mixed", "mix", "partial")
 BOX_PIN_DROP_CAP = _DROP_MODE in ("cap", "max", "ceiling")
@@ -131,6 +130,9 @@ FKEY_RE = re.compile(r"^p\d{3,4}$")
 # `net_line` 0.0172 → 0.0195；而 component / pin 两项**一个数都没动**。
 # 剪掉的正好是 `DROP_UNKEYED=0` 换 component 时多出来的那 14000 个假引用。
 NET_DROP_UNKEYED = env_on("STAGE2_NET_DROP_UNKEYED", "1")
+# Retain anonymous power/ground members when the image establishes exactly
+# one terminal. Arbitrary GT numbering must not remove a real graph member.
+KEEP_CONFIRMED_POWER_PINS = env_on("STAGE2_KEEP_CONFIRMED_POWER_PINS", "1")
 
 # ★ 电源/地符号（GT 里键为 `∅NNN`）**只用来合并网络，不写进 hyperGraph**。
 #
@@ -283,7 +285,7 @@ PIN_STAMP_ON = env_on("STAGE2_PIN_STAMP", "1")
 
 
 def stamp_pins(c: dict, ctype: str, pts_img: Sequence,
-               H: float) -> Optional[List[Tuple[str, Tuple[float, float]]]]:
+               H: float, *, axis_y: Optional[bool] = None) -> Optional[List[Tuple[str, Tuple[float, float]]]]:
     """两脚贴章元件的官方引脚点位。
 
     返回 `[(引脚号, (x, y)), ...]`，顺序与 `pts_img` 一一对应（图像坐标入参，
@@ -293,7 +295,8 @@ def stamp_pins(c: dict, ctype: str, pts_img: Sequence,
     我们自己的附着点落在哪一侧，就继承那个号 —— 这一步决定了 net 超图里
     `(元件键, 引脚号)` 的对不对得上。
     """
-    if not PIN_STAMP_ON or ctype not in PIN_STAMP_TYPES or not len(pts_img):
+    if (not PIN_STAMP_ON or ctype not in PIN_STAMP_TYPES or not len(pts_img)
+            or c.get('terminal_group') == 'rgb_led'):
         return None
     bbox = c.get("bbox_json") or []
     if len(bbox) != 4:
@@ -304,7 +307,8 @@ def stamp_pins(c: dict, ctype: str, pts_img: Sequence,
         tall = (raw[3] - raw[1]) >= (raw[2] - raw[0])
     else:
         tall = (bbox[3] - bbox[1]) >= (bbox[2] - bbox[0])
-    axis_y = (not tall) if ctype in PIN_STAMP_PERP else tall
+    if axis_y is None:
+        axis_y = (not tall) if ctype in PIN_STAMP_PERP else tall
     span = PIN_STAMP_SPAN.get(ctype, PIN_STAMP_DEFAULT_SPAN)
     # pin_1 在轴上的投影符号：+1 表示在 +SPAN 一侧
     s1 = 1.0 if ctype in PIN_STAMP_POS else -1.0
@@ -327,6 +331,58 @@ def stamp_pins(c: dict, ctype: str, pts_img: Sequence,
 
 
 # ---------------------------------------------------------------------------
+def _measured_passive_points(stage1, cid, ctype, points):
+    """Current colour evidence overrides the legacy coordinate stamp, never ICs."""
+    if ctype not in PIN_STAMP_TYPES:
+        return {}
+    record = (stage1.get("passive_pin_report") or {}).get(cid) or {}
+    if record.get("type") != ctype or record.get("coordinate_rule") not in {
+            "red_green_pixel_boundary", "image_color_terminal_rules"}:
+        return {}
+    after = record.get("after") or []
+    sources = record.get("sources") or []
+    try:
+        if len(after) != len(points) or len(sources) != len(points):
+            return {}
+        for observed, current in zip(after, points):
+            distance = math.dist(observed, current)
+            if not math.isfinite(distance) or distance > 0.15:
+                return {}
+    except (TypeError, ValueError):
+        return {}
+    return {i: point for i, point in enumerate(points)
+            if sources[i] in {"body_attached_red_green_transition", "shared_single_green_pixel", "first_red_junction_center", "mixed_colour_span_boundary",
+                              "first_filled_junction_center", "lead_wire_colour_boundary",
+                              "symmetric_opposed_terminal", "peer_shared_terminal",
+                              "direct_pin_corner", "same_symbol_terminal_length"}}
+
+
+def _confirmed_power_terminal(stage1, cid, ctype, points) -> bool:
+    """Only current, single-terminal image evidence can exempt a fallback key.
+
+    Multiple grayscale guesses, stale reports, and unconfirmed detections keep
+    the established filtering policy. No external annotation IDs are invented.
+    """
+    if not KEEP_CONFIRMED_POWER_PINS or ctype not in {"gnd", "v"} or len(points) != 1:
+        return False
+    rec = (stage1.get("passive_pin_report") or {}).get(cid) or {}
+    if rec.get("type") != ctype or rec.get("coordinate_rule") not in {
+            "red_green_pixel_boundary", "image_color_terminal_rules"}:
+        return False
+    after, sources = rec.get("after") or [], rec.get("sources") or []
+    if len(after) != 1 or len(sources) != 1 or sources[0] not in {
+            "body_attached_red_green_transition", "shared_single_green_pixel",
+            "first_red_junction_center", "mixed_colour_span_boundary",
+            "first_filled_junction_center", "lead_wire_colour_boundary",
+            "peer_shared_terminal", "direct_pin_corner", "same_symbol_terminal_length"}:
+        return False
+    try:
+        distance = math.dist(after[0], points[0])
+        return math.isfinite(distance) and distance <= 0.15
+    except (TypeError, ValueError):
+        return False
+
+
 def _free_ends(segs: Sequence[Sequence[Sequence[float]]],
                tol: float = FREE_TOL) -> List[Tuple[float, float]]:
     """一段走线的「自由端」：该端点附近没有别的段的端点。"""
@@ -542,7 +598,7 @@ def _pin_contact_rank(evidence: dict, point: Sequence[float]) -> Optional[int]:
             if isinstance(trust, str) else None)
 
 
-def _box_number_winners(raw: Sequence[dict]) -> Dict[int, int]:
+def _box_number_winners(raw: Sequence[dict]) -> Dict[int | str, int]:
     """Choose one existing contact per read number without joining their nets.
 
     Check actual output eligibility before confidence ranking. A complete read
@@ -552,11 +608,12 @@ def _box_number_winners(raw: Sequence[dict]) -> Dict[int, int]:
     evidence so later name-only OCR does not silently switch physical contacts.
     Numbers, names, points and nets stay on the selected contact.
     """
-    winners: Dict[int, int] = {}
+    from .pin_identifier import pin_identifier_key
+    winners: Dict[int | str, int] = {}
     for i, r in enumerate(raw):
         n = r["num"]
-        v = int(n) if n and n.isdigit() else 0
-        if not 1 <= v <= 999:
+        v = pin_identifier_key(n, allow_alphanumeric=r.get("identifier_validated") is True)
+        if v is None:
             continue
         prev = winners.get(v)
         if prev is None:
@@ -623,6 +680,9 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     # `<case>.pinindex.json`，交付文档本身保持逐字节不变。
     pin_pk: Dict[Tuple[str, int], str] = {}
     ct_by_cid: Dict[str, str] = {c["id"]: (c.get("type") or "other") for c in comps}
+    confirmed_power = {c["id"] for c in comps
+                       if _confirmed_power_terminal(stage1, c["id"], c.get("type"),
+                                                    st1_pins.get(c["id"]) or [])}
 
     for i, c in enumerate(comps):
         cid = c["id"]
@@ -659,12 +719,22 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         pts = st1_pins.get(cid) or []
         if not pts:
             continue
-        # 两脚贴章元件：官方点位是「中心 ±SPAN」的理想图章点，不是走线接点。
-        # 直接照图章生成，顺便把 1/2 号按官方约定摆正（见 `stamp_pins` 的长注释）。
-        _st = stamp_pins(c, ctype, pts, H)
+        # Keep the established 1/2 numbering, publishing measured colour
+        # boundaries when available. Two aligned measured terminals also
+        # resolve the axis of a near-square or offset detector box.
+        observed = _measured_passive_points(stage1, cid, ctype, pts)
+        measured_axis = None
+        if len(pts) == len(observed) == 2:
+            dx = abs(float(pts[1][0]) - float(pts[0][0]))
+            dy = abs(float(pts[1][1]) - float(pts[0][1]))
+            if min(dx, dy) <= 2.5 and max(dx, dy) >= 8:
+                measured_axis = dy > dx
+        _st = stamp_pins(c, ctype, pts, H, axis_y=measured_axis)
         if _st is not None:
             _g: Dict[str, dict] = {}
             for k, (num, xy) in enumerate(_st):
+                if k in observed:
+                    xy = (float(observed[k][0]), H - float(observed[k][1]))
                 _g["pin_%s" % num] = {
                     "pinname": num,
                     "point": {"x": round(float(xy[0]), 2),
@@ -693,6 +763,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             frame_contact = structmatch.trusted_frame_pin_evidence(
                 evidence, c.get("bbox_img"), pts[k])
             raw.append({"num": num, "nm": nm, "quality": _pin_read_quality(rec),
+                        "identifier_validated": (rec.get("number_independently_read") is True
+                                                 and (frame_contact or (contact_rank == 2
+                                                      and isinstance(evidence, dict)
+                                                      and evidence.get("source") in COLOR_PIN_SOURCES))),
                         "selection_name": ((selection_name or {}).get("text") or "").strip(),
                         "contact_rank": contact_rank,
                         "color_contact": (contact_rank == 2 and isinstance(evidence, dict)
@@ -716,21 +790,17 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # `key_miss 1391 / num_miss 537 / name_bad 185 / ok 3`，n=2132）。
         #
         # 所以现在**按类型分开**：
-        #   * `box`：OCR 读出的号只要都是 1..999 的**互不相同**整数就采信
-        #     （真实引脚号是 1..400 左右的小整数，撞号/越界就说明读废了）；
+        #   * `box`：保留互不相同的 1..999 整数；字母数字编号还须具备
+        #     独立双视图读取及当前真实框接点的验证。重复号仍只保留一个物理行。
         #   * 其余：仍要求完整的 1..N 排列 —— 它们的引脚号不进 pinF1，但会进
         #     `net_hyperGraph`，保守的先验在那里仍然更稳。
         nums = [r["num"] for r in raw]
         if ctype == "box":
-            ok = bool(nums) and all(n.isdigit() for n in nums)
-            if ok:
-                try:
-                    iv = [int(n) for n in nums]
-                except ValueError:
-                    ok = False
-                else:
-                    ok = (len(set(iv)) == len(iv)
-                          and all(1 <= v <= 999 for v in iv))
+            from .pin_identifier import pin_identifier_key
+            identities = [pin_identifier_key(r["num"], allow_alphanumeric=r["identifier_validated"])
+                          for r in raw]
+            ok = bool(identities) and all(v is not None for v in identities)
+            ok = ok and len(set(identities)) == len(identities)
         else:
             ok = bool(nums) and all(n.isdigit() for n in nums)
             if ok:
@@ -756,8 +826,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 kept = [False] * len(tmp)
                 winners = _box_number_winners(raw)
                 for i, n in enumerate(tmp):
-                    v = int(n) if (n and n.isdigit()) else 0
-                    if 1 <= v <= 999 and winners.get(v) == i:
+                    v = pin_identifier_key(n, allow_alphanumeric=raw[i]["identifier_validated"])
+                    if v is not None and winners.get(v) == i:
                         used.add(v)
                         kept[i] = True
                     else:
@@ -787,8 +857,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             # ★ `STAGE2_BOX_PIN_DROP_UNREAD`：把「没读出号、靠位置补出来的」引脚桩
             # **既不写进引脚表、也不进网络**。它只可能变成 `pin.extra`（纯 fp），
             # 而且会把假引脚塞进网络（10GT 实测 netH 0.4746 → 0.4971）。
-            # 取值 `1`/`all` = 一律丢；`mixed` = **只在「这颗 IC 至少读懂了一个号」
-            # 时才丢**（一个都没读懂的那些，位置号 1..N 本身是个有用的先验）。
+            # 默认 `1`/`all` 一律丢，包括全无读数的 IC。`mixed` 是显式 legacy
+            # 兼容：至少读懂一个号时才丢，全无读数仍补位置号；默认不采用它。
             if (not r.get("kept", True)) and BOX_PIN_DROP_UNREAD \
                     and (not BOX_PIN_DROP_MIXED_ONLY or _anykept):
                 continue
@@ -845,8 +915,9 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 # （它的引脚号是随机内部号，写进去必然 FP）。详见 `SYM_MERGE` 的长注释。
                 if SYM_MERGE:
                     syms_here.add(k)
-                    continue
-            if NET_DROP_UNKEYED and FKEY_RE.match(k):
+                    if cid not in confirmed_power:
+                        continue
+            if NET_DROP_UNKEYED and FKEY_RE.match(k) and cid not in confirmed_power:
                 continue
             t = (k, num_of[(cid, idx)])
             if t not in seen:

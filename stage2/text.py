@@ -269,6 +269,13 @@ def merge_boxes_both(base: List[Box], det: List[Box]) -> List[Box]:
     for b in base:
         if not any(_iou(b, o) >= tol for o in out):
             out.append(b)
+    # A complete word can be several times larger than EACH old fragment,
+    # although it adds almost no space beyond their shared row. Keep those
+    # independently grouped detector words without widening the area gate.
+    from .fragmented_text import recover_fragmented_boxes
+    for b in recover_fragmented_boxes(base, det):
+        if not any(_iou(b, o) >= .85 for o in out):
+            out.append(b)
     return out
 
 

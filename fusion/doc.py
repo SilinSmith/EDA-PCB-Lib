@@ -66,6 +66,15 @@ def rename_keys(doc: dict, renames: Dict[str, str]) -> Dict[str, str]:
         if old not in comps or new in taken or new in keep.values():
             continue
         keep[old] = new
+    # A rejected move leaves its source key occupied. Prune moves into those
+    # keys as well, otherwise the dictionary comprehension drops a component.
+    while keep:
+        occupied = set(comps) - set(keep)
+        blocked = [old for old, new in keep.items() if new in occupied]
+        if not blocked:
+            break
+        for old in blocked:
+            del keep[old]
     if not keep:
         return {}
     for old, new in keep.items():
@@ -75,13 +84,14 @@ def rename_keys(doc: dict, renames: Dict[str, str]) -> Dict[str, str]:
     doc["components"] = {keep.get(k, k): v for k, v in comps.items()}
     if pins:
         doc["pins"] = {keep.get(k, k): v for k, v in pins.items()}
+    # Resolve each original token once. Sequential substitutions turn A->B,
+    # B->C into A->C and corrupt swaps even when the component table is right.
+    pattern = re.compile(r"(?<![0-9A-Za-z_])(" +
+                         "|".join(re.escape(k) for k in sorted(keep, key=len, reverse=True)) + r")\.")
     for net in (doc.get("nets") or {}).values():
         hg = net.get("hyperGraph")
         if isinstance(hg, str) and hg:
-            for old, new in keep.items():
-                hg = re.sub(r"(?<![0-9A-Za-z_])%s\." % re.escape(old),
-                            "%s." % new, hg)
-            net["hyperGraph"] = hg
+            net["hyperGraph"] = pattern.sub(lambda match: keep[match.group(1)] + ".", hg)
     return keep
 
 
@@ -96,7 +106,13 @@ def invert_keymap(base_doc: dict, stage1_doc: dict, assigned: dict) -> Dict[str,
     out: Dict[str, str] = {}
     for vkey, vc in (base_doc.get("components") or {}).items():
         vkey = str(vkey)
-        cid = km.get(vkey) or (_by_bbox(vc, stage1_doc) if isinstance(vc, dict) else None)
+        if isinstance(vc, dict) and str(vc.get("type") or "").lower() not in BOX_TYPES:
+            # A rebuilt non-IC document already contains the solved names.
+            # An old name can now belong to a different component, so identify
+            # that component by its unchanged body before consulting old keys.
+            cid = _by_bbox(vc, stage1_doc) or km.get(vkey)
+        else:
+            cid = km.get(vkey) or (_by_bbox(vc, stage1_doc) if isinstance(vc, dict) else None)
         if cid:
             out[cid] = vkey
     return out

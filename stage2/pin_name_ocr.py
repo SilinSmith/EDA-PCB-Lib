@@ -34,6 +34,30 @@ class PinNameOCRError(RuntimeError):
     """The explicitly requested optional name recognizer is unavailable."""
 
 
+def _ctc_token_reads(predictions, decoder, text):
+    """Report the decoder's unchanged greedy tokens, or no token evidence.
+
+    Injected/non-CTC recognizers keep their old result; their token evidence
+    cannot authorize a segmented caption recovery.
+    """
+    chars = getattr(decoder, "character", None)
+    ignored_tokens = getattr(decoder, "get_ignored_tokens", None)
+    raw = np.asarray(predictions)
+    if (chars is None or not callable(ignored_tokens) or raw.ndim != 3
+            or raw.shape[0] != 1 or raw.shape[2] != len(chars)):
+        return []
+    indices, probabilities = raw.argmax(axis=2)[0], raw.max(axis=2)[0]
+    ignored = set(ignored_tokens())
+    tokens = [{"text": chars[int(index)], "confidence": float(probabilities[position])}
+              for position, index in enumerate(indices)
+              if int(index) not in ignored
+              and (position == 0 or index != indices[position - 1])]
+    if ("".join(token["text"] for token in tokens) != text
+            or any(not 0 <= token["confidence"] <= 1 for token in tokens)):
+        return []
+    return tokens
+
+
 def _sha(value):
     return hashlib.sha256(np.ascontiguousarray(value).tobytes()).hexdigest()
 
@@ -135,9 +159,15 @@ class PinNameOCR:
             raise ValueError("PP-OCR returned an invalid recognition result") from exc
         if not isinstance(text, str) or not math.isfinite(confidence) or not 0 <= confidence <= 1:
             raise ValueError("PP-OCR text/confidence must be finite and valid")
+        # Keep the same greedy CTC tokens used by the recognizer. A weak
+        # trailing glyph must not hide whether the printed prefix's case was
+        # independently read with high confidence. These probabilities are
+        # evidence only; no token is corrected or replaced here.
+        tokens = _ctc_token_reads(preds, self.recognizer.postprocess_op, text)
         return {
             "text": text,
             "confidence": confidence,
+            "ctc_tokens": tokens,
             "sampling": {
                 "version": version,
                 "strategy": "single",

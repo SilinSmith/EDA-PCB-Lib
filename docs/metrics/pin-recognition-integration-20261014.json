@@ -1,0 +1,77 @@
+{
+  "date": "2026-10-14",
+  "integration": {
+    "IC": "v53",
+    "non_IC": "R21"
+  },
+  "tested_python_source_count": 704,
+  "tested_python_source_manifest_sha256": "313009869bed962281f6274ac9502adf7de23c3b2295120ccc619b6d450d0adf",
+  "unit_tests": {
+    "run": 948,
+    "result": "OK"
+  },
+  "fresh_10GT": {
+    "cases": 10,
+    "image_inputs_only": true,
+    "LLM_VLM_enabled": false,
+    "stage1_error_free": true,
+    "IC_designators_models_numbers_names_preserved": true,
+    "non_IC_components_and_all_pin_fields_preserved": true,
+    "non_IC_identity_type_and_count_exact": {
+      "correct": 229,
+      "total": 233
+    },
+    "non_IC_count_exact_given_physical_match": {
+      "correct": 233,
+      "total": 233
+    },
+    "non_IC_historical_pin_membership_F1": 0.8873038516405135,
+    "metrics_identical_to_R21": true
+  },
+  "IC_frozen_stage1_replay": {
+    "color": {
+      "case_count": 20,
+      "components_all_pin_fields_and_indices_preserved": true,
+      "initial_CRNN_cache_reused": true,
+      "supplementary_glyph_OCR_run": true
+    },
+    "official": {
+      "case_count": 10,
+      "components_all_pin_fields_and_indices_preserved": true,
+      "initial_CRNN_cache_reused": false,
+      "supplementary_glyph_OCR_run": true
+    },
+    "bw": {
+      "case_count": 17,
+      "components_all_pin_fields_and_indices_preserved": true,
+      "initial_CRNN_cache_reused": false,
+      "supplementary_glyph_OCR_run": true
+    }
+  },
+  "non_IC_fresh_color_geometry": {
+    "cases": [
+      "0111-jlc",
+      "0193-jlc",
+      "0043-Altium Designer"
+    ],
+    "measured_points_preserved": 270,
+    "RGB_external_channels": 4
+  },
+  "integrity": {
+    "tested_sources_unchanged_at_commit_preparation": true,
+    "IC_source_checkout_unchanged": true,
+    "official_data_unchanged": true,
+    "weights_unchanged": true,
+    "no_reference_annotations_used_for_inference": true
+  },
+  "limits": [
+    "Regression preservation does not independently establish coordinate accuracy.",
+    "Local network diagnostics predate the new component-level and power-symbol evaluation rules.",
+    "These results are not an official contest total or an evaluation of the new scorer.",
+    "Power and ground value fields remain empty.",
+    "Eight grayscale power and ground net references remain omitted in 10GT image 1.",
+    "Four non-IC identity/type differences involve LEDs; official exemptions must be applied by the scorer.",
+    "Unread or ambiguous IC identifiers are omitted by default rather than guessed.",
+    "Precise monochrome non-IC coordinates remain outside this integration scope."
+  ]
+}

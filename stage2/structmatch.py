@@ -320,10 +320,23 @@ def trusted_frame_pin_evidence(rec: dict, bbox: Optional[Sequence[float]] = None
     """
     if (not isinstance(rec, dict) or rec.get("trust") != "trusted"
             or rec.get("frame_confirmed") is not True
-            or rec.get("reason") not in ("frame_attached_normal_stroke",
-                                          "frame_normal_stroke_with_small_gap")
-            or rec.get("source") not in (None, "", "frame_normal_stroke")
             or rec.get("edge") not in EDGES):
+        return False
+    if rec.get("source") == "frame_hollow_marker":
+        from pinmarkers import valid_hollow_marker_evidence
+        try:
+            observed,anchor=rec["point_img"],rec["anchor_img"]
+            sign=-1 if rec["edge"]=="left" else 1
+            return (valid_hollow_marker_evidence(rec) and len(observed)==2
+                    and all(math.isfinite(float(v)) for v in observed)
+                    and abs(observed[1]-anchor[1])<=3.1
+                    and sign*(observed[0]-anchor[0])>=-1
+                    and (point is None or (len(point)==2 and math.dist(observed,point)<=1e-3))
+                    and (bbox is None or _frame_anchor_usable(rec,bbox)))
+        except (KeyError,TypeError,ValueError,OverflowError):
+            return False
+    if (rec.get("reason") not in ("frame_attached_normal_stroke", "frame_normal_stroke_with_small_gap")
+            or rec.get("source") not in (None, "", "frame_normal_stroke")):
         return False
     try:
         observed, anchor = rec["point_img"], rec["anchor_img"]
@@ -520,8 +533,10 @@ def rebind_numbers(bbox: Sequence[float], pins: Sequence[Sequence[float]],
         owners = {}
         for ci in remaining:
             cand = pool[ci]
-            value = num_of(value_of(cand))
-            if value is None or not 1 <= value <= 999:
+            from .pin_identifier import pin_identifier_key
+            value = pin_identifier_key(value_of(cand),
+                                       allow_alphanumeric="preferred_number_pin" in cand)
+            if value is None:
                 continue
             for pi in active:
                 if cand.get("target_pin") is not None and cand["target_pin"] != pi:

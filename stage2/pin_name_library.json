@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "revision": "common-ic-v1",
+  "confusion_pairs": [["O", "0"], ["I", "1"], ["B", "8"]],
+  "fixed_names": {
+    "power": ["VCC", "VDD", "VSS", "GND", "AGND", "DGND", "PGND", "AVCC", "AVDD", "DVDD", "VDDIO", "VIO", "VREF", "VREFP", "VREFN", "VBAT", "VBUS", "VCONN", "VIN", "VOUT"],
+    "control": ["EN", "ENABLE", "OE", "CE", "CS", "RST", "RESET", "NRST", "NRESET", "BOOT", "BOOTSEL", "BUSY", "RDY", "READY", "INT", "IRQ", "WAKE", "WKUP", "NC", "EP", "PAD", "TAB", "SEL", "FAULT", "PG", "PWRGOOD", "STDBY", "STANDBY", "SHDN"],
+    "spi": ["SCK", "SCLK", "MOSI", "MISO", "SDI", "SDO", "SIO", "NSS", "SS"],
+    "i2c": ["SCL", "SDA"],
+    "uart": ["RX", "TX", "RXD", "TXD", "RXDO", "TXDO", "CTS", "RTS", "DTR", "DSR"],
+    "debug": ["TCK", "TMS", "TDI", "TDO", "TRST", "SWCLK", "SWDIO", "SWO"],
+    "clock": ["CLK", "CLOCK", "CLKIN", "CLKOUT", "OSCIN", "OSCOUT", "OSCI", "OSCO", "OSC_IN", "OSC_OUT", "XI", "XO", "XTAL", "XIN", "XOUT"],
+    "analog": ["IN", "OUT", "AIN", "AOUT", "ADC", "DAC", "REF", "COMP", "COM", "FB", "ISENSE", "VSENSE", "ILIM", "ISET", "SW", "BAT", "KEY"],
+    "usb": ["DP", "DM", "DN", "SBU", "CC", "USB_DP", "USB_DM", "USB_DN", "SHELL"],
+    "data": ["DIN", "DOUT", "DI", "DO", "IO", "DIO", "GPIO", "PWM"]
+  },
+  "families": [
+    {"stems": ["GPIO"], "suffix": "required", "group": "gpio", "repair": "gpio_format"},
+    {"stems": ["ADBUS", "ACBUS"], "suffix": "required", "group": "bus", "repair": "numeric_context"},
+    {"stems": ["PA", "PB", "PC", "PD", "PE", "PF", "PG", "PH", "PI", "PJ", "PK"], "suffix": "required", "group": "ports", "repair": "visual_context"},
+    {"stems": ["RXD", "TXD", "CTS", "RTS", "DTR", "DSR"], "suffix": "optional", "group": "uart", "repair": "visual_context"},
+    {"stems": ["SDA", "SCL"], "suffix": "optional", "group": "i2c", "repair": "visual_context"},
+    {"stems": ["CH", "CC", "SBU", "DP", "DM", "DN", "RX", "TX"], "suffix": "required", "group": "channels", "repair": "visual_context"},
+    {"stems": ["ADC", "DAC", "AIN", "AOUT", "DIN", "DOUT", "PWM", "INT", "IRQ", "LED", "IO", "DIO"], "suffix": "optional", "group": "numeric_io", "repair": "visual_context"},
+    {"stems": ["A", "D", "Q"], "suffix": "required", "group": "bus", "repair": "visual_context"},
+    {"stems": ["XTAL", "OSC", "CLK", "CS"], "suffix": "optional", "group": "clock", "repair": "visual_context"}
+  ],
+  "policy": {
+    "max_character_changes": 2,
+    "minimum_original_confidence": 0.85,
+    "minimum_context_confidence": 0.90,
+    "minimum_visual_confidence": 0.90,
+    "ambiguous_exact_names": ["RXDO", "TXDO"],
+    "read_only_groups": ["power"],
+    "notes": "Generic names and numeric grammars only. No image identifiers, component models, expected pin numbers, or reference labels. No insertion, deletion, punctuation removal, or numeric-to-numeric substitution."
+  }
+}

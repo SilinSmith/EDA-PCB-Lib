@@ -141,6 +141,10 @@ PIN_TRUST_BIND = env_on("STAGE2_PIN_TRUST_BIND", "1")
 PIN_NUMBER_TRUST_BIND = env_on("STAGE2_PIN_NUMBER_TRUST_BIND", "1")
 PIN_TEXT_ROLE_GUARD = env_on("STAGE2_PIN_TEXT_ROLE_GUARD", "1")
 PIN_DIGIT_ENTITY = env_on("STAGE2_PIN_DIGIT_ENTITY", "1")
+# Reclaim only the number role from a nearer non-IC symbol when a current
+# measured IC row and the whole external text rectangle support that role.
+# Name/value/designator ownership and existing IC-to-IC ownership stay intact.
+PIN_NUMBER_ROLE_OWNER = env_on("STAGE2_PIN_NUMBER_ROLE_OWNER", "1")
 MAX_ALTS = 6         # 每个元件最多保留几个位号候选（交给阶段三仲裁）
 # 结构化重绑定时「每配上一对」的固定加分（`stage2\\structmatch.py` 的 `cover`）：
 # 它让「一条自洽、把整排引脚都配上、每对都稍远」的方案压过「只配最近的那几对」。
@@ -349,7 +353,7 @@ def _digitize(tail: str) -> str:
     return d if d.isdigit() else ""
 
 
-def canon_designator(text: str, ctype: str):
+def canon_designator(text: str, ctype: str, *, literal: bool = False):
     """把读出的串规范成位号，返回 `(位号, 前缀保真度)`；认不出返回 `("", 0.0)`。
 
     CRNN 在位号上最常见的错就是**首字母**（`R14` -> `Rl4` / `R?4` / `Bl4`），
@@ -365,10 +369,40 @@ def canon_designator(text: str, ctype: str):
     现在加一档：前缀**贪心对不上时**，退一步用 `_digitize` 把尾部当数字重解
     （`Rl4` -> `R`+`14`），置信度给 0.9（是纠错，比干净读法低一档）。
     """
-    u = re.sub(r"[^0-9A-Za-z]", "", text or "").upper()
+    observed = (text or "").strip()
+    raw = observed.upper()
+    allow = [a.upper() for a in TYPE_PREFIX.get(ctype, ())]
+    if literal:
+        # Only qualified, independent caption observations enter this path.
+        # Keep printed case, separators and unit suffixes; do not reinterpret
+        # a letter as a digit. IC is an observed alternative to the U prefix.
+        literal_allow = set(allow)
+        if ctype in ("box", "bigic"):
+            literal_allow.add("IC")
+        found = re.fullmatch(
+            r"([A-Za-z]{1,4})(?:[0-9]{1,4}[A-Za-z]?|[0-9]{0,4}_[A-Za-z0-9]{1,4})",
+            observed)
+        if not found:
+            return "", 0.0
+        prefix = found[1].upper()
+        if not literal_allow or PREFIX_MODE == "off" or prefix in literal_allow:
+            return observed, 1.0 if prefix in literal_allow else 0.5
+        return "", 0.0
+    # A visibly printed separator is part of the identity, not noise. Do not
+    # digitize an alphabetical unit suffix (U_B -> U8), or invent a separator
+    # in a letter-only OCR observation (UB).
+    if "_" in raw:
+        separated = re.fullmatch(r"([A-Z]{1,3})([0-9]{0,4})_([A-Z0-9]{1,4})", raw)
+        if separated and (not allow or PREFIX_MODE == "off" or separated[1] in allow):
+            return raw, 1.0 if separated[1] in allow else 0.5
+        return "", 0.0
+    # An explicitly printed suffix after numeric identity is also literal.
+    suffixed = re.fullmatch(r"([A-Z]{1,3})([0-9]{1,4})([A-Z])", raw)
+    if literal and suffixed and (not allow or PREFIX_MODE == "off" or suffixed[1] in allow):
+        return raw, 1.0 if suffixed[1] in allow else 0.5
+    u = re.sub(r"[^0-9A-Za-z]", "", raw)
     if not u:
         return "", 0.0
-    allow = [a.upper() for a in TYPE_PREFIX.get(ctype, ())]
     if not allow or PREFIX_MODE == "off":
         m = re.match(r"^([A-Z]{1,3})(\d{1,4})$", u)
         return (m.group(1) + m.group(2), 0.5) if m else ("", 0.0)
@@ -418,6 +452,56 @@ def canon_designator(text: str, ctype: str):
 
 def fit_designator(text: str, ctype: str) -> float:
     return canon_designator(text, ctype)[1]
+
+
+def _caption_consensus(t, cid):
+    """Qualified direct caption reread; confidence is not a cross-model rank."""
+    meta = t.get("designator_ocr")
+    reads = t.get("reads") or {}
+    ambiguous_rejection = (isinstance(meta,dict)
+        and meta.get("rejection_only") is True
+        and meta.get("rejected_designator_prefix") is True
+        and meta.get("conflicting_existing_identity") is True
+        and isinstance(meta.get("owner_candidates"),list)
+        and len(meta["owner_candidates"])>1
+        and cid == meta["owner_candidates"][0])
+    if (t.get("source") != "ic_caption_ppocr" or not t.get("designator_only")
+            or t.get("designator_target") != cid or set(reads) != {"designator"}
+            or not isinstance(meta, dict) or meta.get("accepted") is not True
+            or meta.get("unchanged_source_pixels") is not True
+            or (meta.get("owner_candidates") != [cid] and not ambiguous_rejection)
+            or meta.get("bbox") != t.get("bbox")):
+        return None
+    try:
+        text, confidence = reads["designator"]
+        confidence = float(confidence)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not isinstance(text, str) or not math.isfinite(confidence) or not .90 <= confidence <= 1:
+        return None
+    if meta.get('segmented_caption') is not None:
+        from .segmented_caption import qualified_segmented_caption
+        return qualified_segmented_caption(meta, text, confidence)
+    if meta.get('font_relative_caption') is not None:
+        from .designator_reading import qualified_small_caption
+        return qualified_small_caption(meta,text,confidence)
+    variants = meta.get("raw_reads")
+    if not isinstance(variants, list) or len(variants) != 2:
+        return None
+    paddings = meta.get("paddings", [2,4])
+    if paddings not in ([2,4],[4,6]):
+        return None
+    for padding, view in zip(paddings, variants):
+        if not isinstance(view, dict):
+            return None
+        try:
+            certainty = float(view.get("confidence", 0))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if (view.get("padding") != padding or view.get("text") != text
+                or not math.isfinite(certainty) or not .90 <= certainty <= 1):
+            return None
+    return text
 
 
 def canon_value(text: str) -> str:
@@ -637,7 +721,14 @@ def _qualified_mono_views(candidate, role):
     variants = meta.get("selected_views")
     if not isinstance(variants, list) or len(variants) != 2:
         return None
-    for padding, view in zip((2, 4), variants):
+    paddings = meta.get('paddings', [2, 4])
+    if paddings == [0, 2]:
+        from .name_fringe import qualified_fringe_view
+        if role != 'pin_name' or not qualified_fringe_view(meta, candidate.get('bbox')):
+            return None
+    elif paddings != [2, 4]:
+        return None
+    for padding, view in zip(paddings, variants):
         if not isinstance(view, dict):
             return None
         try:
@@ -711,6 +802,28 @@ def _name_reservation(candidate, box, pins, evidence):
     return False
 
 
+def _same_mono_stroke_duplicate(meta, pins, index, other, edge):
+    """A nearby old point on the fringe of this measured physical stroke.
+
+    This does not merge pin identities. It only keeps that raster duplicate
+    from vetoing a complete, independently read word for the actual stroke.
+    A separate physical row or missing current stroke measurement stays held.
+    """
+    stroke=(meta.get("cleanup_evidence") or {}).get("stroke_probe") or {}
+    tangent = 1 if edge in ("left", "right") else 0
+    if edge not in ("left", "right") and not (
+            edge in ("top", "bottom") and meta.get("rotation") == 90
+            and stroke.get("tangent_axis") == "x" and stroke.get("rotation") == 90):
+        return False
+    top,bottom=stroke.get("stroke_top"),stroke.get("stroke_bottom")
+    if (not isinstance(top,int) or not isinstance(bottom,int)
+            or not 1<=bottom-top<=6 or not top<=pins[index][tangent]<bottom):
+        return False
+    point=pins[other]
+    gap=max(top-point[tangent],point[tangent]-(bottom-1),0)
+    return 0<gap<=3 and abs(point[1-tangent]-pins[index][1-tangent])<=2
+
+
 def _preferred_name_observation(candidate, cid, box, pins, evidence):
     """Qualify an independent name read without comparing model confidence.
 
@@ -750,6 +863,7 @@ def _preferred_name_observation(candidate, cid, box, pins, evidence):
         if (other != index and ev.get("trust") == "trusted"
                 and ev.get("frame_confirmed") is True and ev.get("edge") == target["edge"]
                 and _trusted_text_contact(ev, box, pins[other])
+                and not (mono and _same_mono_stroke_duplicate(meta,pins,index,other,target["edge"]))
                 and rect[tangent] < ev["anchor_img"][tangent] < rect[tangent + 2]):
             return None
     return index
@@ -772,8 +886,9 @@ def _preferred_number_observation(candidate, cid, box, pins, evidence):
             or "glyph_integrity_unresolved" in meta.get("flags", [])):
         return None
     got = _best_read(reads, "pin_number", fit_pinnum)
-    if (not got or not got[1].isascii() or not got[1].isdigit()
-            or not 1 <= int(got[1]) <= 999 or not math.isfinite(got[2]) or got[2] < .90):
+    from .pin_identifier import pin_identifier_key
+    if (not got or pin_identifier_key(got[1], allow_alphanumeric=mono) is None
+            or not math.isfinite(got[2]) or got[2] < .90):
         return None
     variants = meta.get("selected_views")
     if not isinstance(variants, list) or len(variants) != 2:
@@ -815,13 +930,64 @@ def _preferred_number_observation(candidate, cid, box, pins, evidence):
                "top": rect[3] <= anchor[1] + .001,
                "bottom": rect[1] >= anchor[1] - .001}
     if not outside[edge]:
-        return None
+        from .vertical_pin_crops import qualified_crossing_vertical_number
+        if not mono or not qualified_crossing_vertical_number(meta,rect,target):
+            return None
     tangent = 1 if edge in ("left", "right") else 0
     if any(other != index and ev.get("trust") == "trusted" and ev.get("edge") == edge
+           and not (mono and _same_mono_stroke_duplicate(meta,pins,index,other,edge))
            and rect[tangent] < pins[other][tangent] < rect[tangent + 2]
            for other, ev in enumerate(normalized)):
         return None
     return index
+
+
+def _reserve_mono_glyphs(pool, slot):
+    """A verified complete glyph has one owner, including its old OCR fragments.
+
+    A fragment can disagree with the full read (P9 read as 17) and therefore
+    evade text-based deduplication. Reserve only strongly overlapping, same-
+    height original observations; neighboring words and qualified observations
+    stay separate. The pool already verified the owner's current row and views.
+    """
+    preferred_key="preferred_"+slot+"_pin"
+    source="mono_pin_"+slot+"_ppocr"
+    rectangle=(structmatch._number_rectangle if slot=='number' else structmatch._candidate_rectangle)
+    owners = [c for c in pool if preferred_key in c and c["rec"].get("source") == source]
+    held, result = [], []
+    for c in pool:
+        box = rectangle(c)
+        if box is None or preferred_key in c:
+            result.append(c)
+            continue
+        matches = []
+        for owner in owners:
+            target = rectangle(owner)
+            if target is None:
+                continue
+            w, h = box[2]-box[0], box[3]-box[1]
+            tw, th = target[2]-target[0], target[3]-target[1]
+            ix = min(box[2],target[2])-max(box[0],target[0])
+            iy = min(box[3],target[3])-max(box[1],target[1])
+            union_height = max(box[3],target[3])-min(box[1],target[1])
+            nearby_rectangle = max(abs(box[i]-target[i]) for i in range(4)) <= 2
+            if (ix > 0 and iy > 0 and min(w*h,tw*th) > 0
+                    and (ix*iy/min(w*h,tw*th) >= .80
+                         or (nearby_rectangle and ix*iy/min(w*h,tw*th) >= .70))
+                    and union_height <= 1.6*th):
+                matches.append(owner)
+        if len(matches) == 1:
+            held.append(dict(text=c["text"], bbox=list(box),
+                             owner_pin=matches[0][preferred_key],
+                             owner_text=matches[0]["text"],
+                             owner_bbox=list(rectangle(matches[0]))))
+        else:
+            result.append(c)
+    return result, held
+
+
+def _reserve_mono_number_glyphs(pool):
+    return _reserve_mono_glyphs(pool,"number")
 
 
 def _digit_entities(cands, cid, box, pins, evidence):
@@ -956,6 +1122,71 @@ def _global_match(cands: Sequence[Tuple[str, str, float, dict]],
     return [(cid, v[1]) for cid, v in best.items()]
 
 
+def _number_role_owner(text, comps, pins, pin_evidence, default, far):
+    """Reclaim a numeral role, never the entire multi-role text observation.
+
+    A calibrated external rectangle aligned with a fresh trusted wire row can
+    beat a non-IC symbol's centre distance. It must also be strictly nearer by
+    rectangle distance; ambiguous ties and all IC-to-IC choices stay legacy.
+    Explicit targets are validated by the caller and are never overridden.
+    """
+    if (not PIN_NUMBER_ROLE_OWNER or not PIN_TRUST_BIND or not PIN_NUMBER_TRUST_BIND
+            or text.get("pin_target") is not None or text.get("name_only")
+            or comps[default]["type"] == "box"):
+        return None
+    observed = (text.get("reads") or {}).get("pin_number")
+    try:
+        value, confidence = observed[0], float(observed[1])
+    except (TypeError, IndexError, ValueError, OverflowError):
+        return None
+    if (not isinstance(value, str) or not value.isascii() or not value.isdigit()
+            or not 1 <= int(value) <= 999 or not math.isfinite(confidence)
+            or not 0 < confidence <= 1):
+        return None
+    rect = structmatch._number_rectangle(text)
+    if rect is None:
+        return None
+    height = max(1.0, rect[3] - rect[1])
+    if (rect[2] - rect[0]) / height > MAX_BOX_W:
+        return None
+    old_distance = dist_rect_to_rect(rect, comps[default]["bbox"])
+    choices = []
+    for j, comp in enumerate(comps):
+        if comp["type"] != "box":
+            continue
+        distance = dist_rect_to_rect(rect, comp["bbox"])
+        if distance > far or distance >= old_distance - 1e-6:
+            continue
+        cid, box = comp["id"], comp["bbox"]
+        points = pins.get(cid) or []
+        checked = structmatch.normalize_pin_evidence(points, (pin_evidence or {}).get(cid))
+        sides = structmatch.confirmed_frame_sides(box, checked)
+        for index, evidence in enumerate(checked):
+            if not _trusted_text_contact(evidence, box, points[index]):
+                continue
+            edge = evidence.get("edge")
+            if edge not in sides:
+                continue
+            boundary = sides[edge]
+            wholly_outside = {"left": rect[2] <= boundary, "right": rect[0] >= boundary,
+                             "top": rect[3] <= boundary, "bottom": rect[1] >= boundary}[edge]
+            gap = structmatch._number_axis_gap(text, edge, points[index])
+            if (not wholly_outside or gap > structmatch._number_axis_tolerance(text, edge)
+                    or not structmatch._number_faces_edge(text, box, edge, sides)):
+                continue
+            choices.append((distance, gap, j, index))
+    if not choices:
+        return None
+    choices.sort()
+    best = choices[0]
+    # A shared label equally close to two confirmed IC bodies is not an owner
+    # decision. Avoid using input component order as evidence for such ties.
+    if any(j != best[2] and abs(distance - best[0]) <= 1e-6
+           for distance, gap, j, index in choices[1:]):
+        return None
+    return best[2]
+
+
 def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[dict],
            near: float = NEAR, far: float = FAR,
            global_match: bool = None, pincol: Dict[str, List] = None,
@@ -984,6 +1215,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
 
     # ---- 每个文字框归属到最近的元件 ----
     owned: Dict[str, List[dict]] = {c["id"]: [] for c in comps}
+    number_owned: Dict[str, List[dict]] = {c["id"]: [] for c in comps}
     free: List[dict] = []
     for _i, t in enumerate(texts):
         b = t["bbox"]
@@ -996,6 +1228,14 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             continue
         ds = [dist_to_rect(cx, cy, c["bbox"]) for c in comps]
         j = min(range(len(ds)), key=lambda i: ds[i])
+        if t.get("designator_only"):
+            choices = [i for i, c in enumerate(comps)
+                       if c["id"] == t.get("designator_target")]
+            if not choices:
+                continue
+            j = choices[0]
+            t = dict(t, reads={k: v for k, v in (t.get("reads") or {}).items()
+                              if k == "designator"})
         target = t.get("pin_target")
         if target is not None:
             choices = [i for i, c in enumerate(comps)
@@ -1013,16 +1253,48 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         d_own = dist_rect_to_rect(b, comps[j]["bbox"]) if OWN_BBOX else d
         rec = dict(t, d=d, own=d_own, inside=ins, wide=wide, wratio=wratio,
                    center=(cx, cy), _i=_i)
+        number_j = _number_role_owner(t, comps, pins, pin_evidence, j, far)
+        if number_j is not None:
+            rec["number_role_owner"] = comps[number_j]["id"]
+            number_owned[comps[number_j]["id"]].append(dict(
+                rec, d=ds[number_j], own=dist_rect_to_rect(b, comps[number_j]["bbox"]),
+                inside=inside(cx, cy, comps[number_j]["bbox"])))
         if d_own <= far:
             owned[comps[j]["id"]].append(rec)
         else:
             free.append(rec)
+
+    # One physical caption cannot acquire a second identity when the old
+    # conflicting read is stolen by another IC. Scope the qualified channel
+    # globally by its original rectangle and its unique target.
+    caption_channels = {}
+    types_by_id = {c["id"]: c["type"] for c in comps}
+    for rs in list(owned.values()) + [free]:
+        for t in rs:
+            target_id = t.get("designator_target")
+            if target_id not in types_by_id:
+                continue
+            observed = _caption_consensus(t, target_id)
+            meta = t.get("designator_ocr") or {}
+            valid_caption = (observed is not None and not meta.get("rejection_only") and
+                canon_designator(observed, types_by_id[target_id], literal=True)[0])
+            # A duplicated old identity may be a confident read of another
+            # component's caption. Two unchanged views can reject that old
+            # prefix without creating an identity of the wrong component type.
+            rejected_prefix = (observed is not None
+                and meta.get("conflicting_existing_identity") is True
+                and meta.get("rejected_designator_prefix") is True
+                and re.fullmatch(r"[A-Za-z]{1,4}[0-9]{1,4}[A-Za-z]?", observed))
+            if valid_caption or rejected_prefix:
+                caption_channels.setdefault(tuple(t["bbox"]), set()).add((target_id, observed))
 
     # ---- 「抢读」名单：别人名下、但离自己 <= STEAL_R 的框（只给位号用） ----
     steal: Dict[str, List[dict]] = {c["id"]: [] for c in comps}
     if STEAL_R > 0:
         for owner_id, rs in owned.items():
             for rec in rs:
+                if rec.get("designator_only"):
+                    continue
                 if _too_wide(rec, DESIG_MAXW):
                     continue
                 cx, cy = rec["center"]
@@ -1050,6 +1322,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 continue
             cx, cy = rec["center"]
             for c in comps:
+                if rec.get("designator_only") and c["id"] != rec.get("designator_target"):
+                    continue
                 d = dist_to_rect(cx, cy, c["bbox"])
                 if d <= STEAL_R:
                     steal[c["id"]].append(dict(
@@ -1085,6 +1359,23 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         # 故对这些 type 直接不给位号候选（`desig_slots` 也一并清空，阶段三没有可仲裁的东西）。
         dcands = [] if ctype in NO_DESIGNATOR else (
             cands if STEAL_R <= 0 else list(cands) + steal.get(cid, []))
+        # The same original glyph now has an agreed direct observation.
+        # Replace its entire old designation channel, including borrowed
+        # role reads, rather than comparing two models' confidence scales.
+        def same_caption_word(a,b):
+            ix=max(0,min(a[2],b[2])-max(a[0],b[0]))
+            iy=max(0,min(a[3],b[3])-max(a[1],b[1]))
+            area=min((a[2]-a[0])*(a[3]-a[1]),(b[2]-b[0])*(b[3]-b[1]))
+            if area<=0:return False
+            return (ix*iy/area>=.90 or
+                    (max(abs(a[i]-b[i]) for i in range(4))<=2 and ix*iy/area>=.70))
+        clean_captions=[]
+        for t in dcands:
+            channels=set().union(*(values for rect,values in caption_channels.items()
+                                  if same_caption_word(t["bbox"],rect)))
+            if not channels or (len(channels)==1 and (cid,_caption_consensus(t,cid)) in channels):
+                clean_captions.append(t)
+        dcands=clean_captions
         if os.environ.get("STAGE2_DBG_CID") == cid:
             print("[dbg-D] cid=%s type=%s bbox=%s owned=%d steal=%d"
                   % (cid, ctype, c.get("bbox"), len(cands), len(steal.get(cid, []))))
@@ -1095,13 +1386,19 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         for t in dcands:
             if _too_wide(t, DESIG_MAXW):
                 continue
+            literal = _caption_consensus(t, cid) is not None
             got = _best_read(t["reads"], "designator",
-                             lambda s, ty=ctype: canon_designator(s, ty)[1])
+                             lambda s, ty=ctype, lit=literal: canon_designator(s, ty, literal=lit)[1])
             if not got:
                 continue
             _s, txt, conf, _f = got
-            can, fid = canon_designator(txt, ctype)
+            can, fid = canon_designator(txt, ctype, literal=literal)
             if not can:
+                continue
+            if (t['inside'] and fid<1 and any(_caption_consensus(other,cid) is not None
+                    and not (other.get('designator_ocr') or {}).get('rejection_only') for other in dcands)):
+                # A printed, independently verified outside caption outranks
+                # an internal pin label whose letters had to become digits.
                 continue
             # ★ 距离项必须放宽到 `STEAL_R`（见 `_score` 的 docstring）：位号候选池里
             # 有一大半是 `d > FAR` 的抢读候选，用 `FAR` 截断会让它们全部同分。
@@ -1113,9 +1410,10 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         # A nearby observed digit is stronger than inventing one from letters
         # (for example an internal UD pin label digitized into U0).
         if any(sc >= 0.02 and info["d"] <= near
-               and any(ch.isdigit() for ch in info["text"]) for sc, info in alts):
+               and ("_" in info["text"] or any(ch.isdigit() for ch in info["text"]))
+               for sc, info in alts):
             alts = [(sc, info) for sc, info in alts
-                    if any(ch.isdigit() for ch in info["text"])]
+                    if "_" in info["text"] or any(ch.isdigit() for ch in info["text"])]
         alts.sort(key=lambda x: -x[0])
         if os.environ.get("STAGE2_DBG_CID") == cid:
             print("[dbg-alts] cid=%s -> %s" % (cid, [
@@ -1154,7 +1452,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
     # 参数 / 器件名 / 引脚号 / 引脚名
     for c in comps:
         cid, ctype = c["id"], c["type"]
-        cands = owned.get(cid, [])
+        cands = [t for t in owned.get(cid, []) if not t.get("designator_only")]
         rec = out[cid]
         plist = pins.get(cid, [])
         _pe = (structmatch.normalize_name_evidence(
@@ -1197,6 +1495,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             bx = c["bbox"]
             ccx, ccy = (bx[0] + bx[2]) / 2.0, (bx[1] + bx[3]) / 2.0
             for t in texts:
+                if t.get("designator_only"):
+                    continue
                 tb = t.get("bbox")
                 if not tb or len(tb) != 4:
                     continue
@@ -1258,10 +1558,11 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             _wlim = PINNAME_MAXW if slot == "name" else MAX_BOX_W
             _dlim = PINNUM_NEAR if slot == "number" else NEAR
             _dw = PINNUM_DISTW if slot == "number" else 0.035
-            for t in cands:
-                if not take(t) or id(t) in taken_box:
+            slot_cands = cands if slot == "name" else list(cands) + number_owned[cid]
+            for t in slot_cands:
+                if slot == "number" and t.get("number_role_owner", cid) != cid:
                     continue
-                if t.get("wide") and (t.get("wratio") or 0.0) > _wlim:
+                if not take(t) or id(t) in taken_box:
                     continue
                 if want_inside and not t["inside"]:
                     continue
@@ -1280,6 +1581,26 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     preferred = (_preferred_number_observation(t, cid, c["bbox"], plist, _pe)
                                  if c["type"] == "box" else None)
                     if preferred is None:
+                        continue
+                # A complete name such as PA24/USB_DM can exceed the legacy
+                # aspect limit after its real suffix is restored. Only the
+                # independently agreed mono read with a fresh, single-row
+                # target and a wholly internal frame rectangle can bypass
+                # that heuristic; ordinary wide text and numbers keep it.
+                complete_mono_name = (slot == "name"
+                                      and t.get("source") == "mono_pin_name_ppocr"
+                                      and preferred is not None)
+                if t.get("wide") and (t.get("wratio") or 0.0) > _wlim:
+                    if not complete_mono_name:
+                        continue
+                    # Ordinary OCR rectangles allow a small border halo.
+                    # A longer independent glyph gets no such exception.
+                    sides = structmatch.confirmed_frame_sides(c["bbox"], _pe)
+                    bounds = [sides.get(side, c["bbox"][i])
+                              for i, side in enumerate(("left", "top", "right", "bottom"))]
+                    rect = t["bbox"]
+                    if (rect[0] < bounds[0] or rect[1] < bounds[1]
+                            or rect[2] > bounds[2] or rect[3] > bounds[3]):
                         continue
                 entity = digit_entities.get(tuple(t["bbox"])) if _number_guard else None
                 geometry = (t.get("geometry_bbox") or (entity or {}).get("geometry_bbox")) if _number_guard else None
@@ -1322,10 +1643,16 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             if not pool:
                 continue
             if _number_guard:
+                pool, held_aliases = _reserve_mono_number_glyphs(pool)
+                if held_aliases:
+                    rec["number_glyph_aliases_held"] = held_aliases
                 pool = structmatch.deduplicate_number_candidates(pool)
             # Qualified targeted names replace only the observation for their
             # own pin. Old reads stay available to every other role/contact.
             if slot == "name":
+                pool,held_aliases=_reserve_mono_glyphs(pool,"name")
+                if held_aliases:
+                    rec["name_glyph_aliases_held"]=held_aliases
                 pool.sort(key=lambda cc: "preferred_name_pin" not in cc)
             elif _number_guard:
                 pool.sort(key=lambda cc: "preferred_number_pin" not in cc)
@@ -1470,12 +1797,14 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     meta = cc["rec"].get("mono_pin_ocr" if cc["rec"].get("source") == "mono_pin_name_ppocr"
                                           else "pin_name_ocr", {})
                     if "previous_name" in meta and not pinfo[pi].get("number_independently_read"):
-                        pinfo[pi]["number_selection_name"] = meta["previous_name"]
+                        pinfo[pi]["number_selection_name"] = meta.get("previous_number_selection_name", meta["previous_name"])
                 taken_box.add(id(cc["rec"]))
 
     # ---- 网络标签：离所有元件都远、且不在元件框里的文字 ----
     net_labels = []
     for t in free:
+        if t.get("designator_only"):
+            continue
         if t.get("wide"):
             continue
         bx = t["bbox"]

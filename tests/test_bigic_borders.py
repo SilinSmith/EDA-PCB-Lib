@@ -72,6 +72,41 @@ class BigICBorderTests(unittest.TestCase):
         self.assertFalse(bigic._straddles_body_boundary([100, 100, 300, 200], [180, 130, 260, 170]))
         self.assertTrue(bigic._straddles_body_boundary([100, 100, 300, 200], [180, 180, 260, 240]))
 
+    def completion(self, *, closed_half=False, neighbor=False, source="yolo", colored=False, shifted=False):
+        bgr=np.full((500,600,3),255,np.uint8)
+        cv2.rectangle(bgr,(100,50),(300,450),(0,0,255) if colored else (0,0,0),1)
+        for row in (100,170,260,340,410):
+            cv2.line(bgr,(80,row),(100,row),(0,0,0),1)
+        old=[108.,47.,308.,449.] if shifted else [100.,50.,301.,251.]
+        if closed_half:cv2.line(bgr,(100,250),(300,250),(0,0,0),1)
+        component=dict(id="ic",type="box",source=source,bbox_img=old,bbox_raw_img=list(old))
+        comps=[component]
+        if neighbor:comps.append(dict(id="other",type="r",source="yolo",bbox_img=[180,330,200,350]))
+        rect=dict(x1=100.,y1=50.,x2=301.,y2=451.,border=[1.]*4,stub=5)
+        return bigic._complete_detected_body(bgr,comps,rect),component,old
+
+    def test_truncated_semantic_body_is_completed_without_changing_identity_or_raw_detector_box(self):
+        corrected,c,old=self.completion()
+        self.assertTrue(corrected)
+        self.assertEqual(c["bbox_img"],[100.,50.,301.,451.])
+        self.assertEqual(c["bbox_raw_img"],old)
+        self.assertEqual((c["id"],c["source"]),("ic","yolo"))
+        self.assertEqual(c["bbox_json"],[100.,49.,301.,450.])
+        self.assertEqual(c["bbox_completion"]["expanded_side"],"bottom")
+
+    def test_closed_real_half_neighbor_or_shape_only_and_color_context_prevent_expansion(self):
+        for kwargs in (dict(closed_half=True),dict(neighbor=True),dict(source="cv:bigic"),dict(colored=True)):
+            with self.subTest(kwargs=kwargs):
+                corrected,c,old=self.completion(**kwargs)
+                self.assertFalse(corrected)
+                self.assertEqual(c["bbox_img"],old)
+
+    def test_nearby_shifted_semantic_frame_can_follow_all_four_measured_sides(self):
+        corrected,c,old=self.completion(shifted=True)
+        self.assertTrue(corrected)
+        self.assertEqual(c["bbox_raw_img"],old)
+        self.assertEqual(c["bbox_completion"]["method"],"four_nearby_measured_sides")
+
 
 if __name__ == "__main__":
     unittest.main()
