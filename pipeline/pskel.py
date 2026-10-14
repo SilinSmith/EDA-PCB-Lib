@@ -661,6 +661,19 @@ class WireExtractor:
             # repair the 1px gaps thinning leaves at stroke crossings --
             # a closing keeps a pixel only when its whole 3x3 neighbourhood is set
             thin = cv2.morphologyEx(thin, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+        # `STAGE1_WIRE_CLOSE_K`：3x3 只补得动 1px 缝，而**交叉处的洞是 5~10px** ——
+        # `thin_stroke_mask` 在十字芯处 dt 大（那里墨迹最宽），整块被当粗线剔掉，
+        # 于是每条线在交叉处断开、骨架碎成 5~10px 的片（现场 case 1 x≈843：
+        # GT 是 13 条 29~30px 首尾相接的边，我方只出 9 条、缺 [115,144]/[173,203]/
+        # [380,410]/[438,468]）。用可调核把交叉芯补回来，十字复原成真结点，
+        # `STAGE1_SPLIT_JUNCTIONS`/`_JUNC_NODES` 才有结点可切。默认 0 = 不动（= 旧行为）。
+        try:
+            _ck = int(os.environ.get("STAGE1_WIRE_CLOSE_K", "3" if self.close_thin else "0") or 0)
+        except ValueError:
+            _ck = 0
+        if _ck >= 3:
+            _ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (_ck, _ck))
+            thin = cv2.morphologyEx(thin, cv2.MORPH_CLOSE, _ker)
         if self.dilate_to:
             # conservative "shell" tolerance: a pixel that has a thin-stroke pixel nearby is
             # kept as a wire pixel too, which also repairs the gaps
