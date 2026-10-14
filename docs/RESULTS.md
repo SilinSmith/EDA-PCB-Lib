@@ -9627,3 +9627,65 @@ $env:STAGE1_MONO_FRAME_PINS="1"; python -X utf8 tools/eval/fast.py --cases $pool
 python -X utf8 tools/eval/fast.py --score-only --out poolD0 --cases $pool
 python -X utf8 tools/diag/_poolmono.py --run poolD1 --cmp poolD0
 ```
+
+## §5.117 回退评估：队友代码在主线里到底值多少（可回退性 + 回退代价）
+
+> 承接 §5.115/§5.116 引出的两问：「那是不是意味着其实队友引入的逻辑是没有必要的，
+> 那我们现在还能回退吗」。本节给可回退性与**逐提交的回退代价**（今天实测，官方 10 张）。
+
+### 一·结论
+
+1. **完全可回退**：`main` 领先 `origin/main` **170** 个提交、**什么都没推**；
+   队友代码是以**普通提交**（不是 merge）进来的（`git log --merges` 为空），
+   所以 `git revert <sha>` 或 `git checkout <sha>~1 -- <file>` 都能干净落地，`git reflog` 兜底。
+2. **回退代价分两层**：
+   - 本轮移植的两个闸（`aed4460` 的 mono 臂、`5723f66` 的 `STAGE1_PIN_COLOR_CAP`）：
+     **代价 0.00**（默认都关；`colcap0` = 80.48 与 `sjdef3` 逐位相同；池子 `poolD0` = `poolD1` = 13.95）。
+   - 主线里**活着**的那部分（`ebabf5d` + `aeacc46` 的引脚读数链，`STAGE2_PIN_LANE_CROP=1`
+     + `STAGE2_PIN_GREY_EVIDENCE=1`）：**回退掉 0.87 分**（交付 84.95 → 84.08）。
+3. 所以「队友引入的逻辑没必要」只对**他们自以为的贡献**（引脚识别质量：彩色实测几何、
+   黑白框恢复）成立；对我们**实际在用的那部分**（读数/裁片插装 + 我方的灰底放宽门）**不成立**。
+
+### 二·实测（官方 10 张，`tools/eval/fast.py`）
+
+| 口径 | 配置 | 总分 | 元件 | 引脚 | 网络 | 导线 | tp 合计 |
+|---|---|---|---|---|---|---|---|
+| 确定性 `-offline -vlm-pin off` | 基准（两个都开） | **80.48** | 0.9355 | 0.7385 | 0.8051 | 0.5780 | 237·90·127·382 |
+| 确定性 | `STAGE2_PIN_LANE_CROP=0` | 80.10 | 0.9390 | 0.7200 | 0.8031 | 0.5823 | 238·87·127·385 |
+| 确定性 | `STAGE2_PIN_GREY_EVIDENCE=0` | 80.10 | 与上一行**逐位相同** | | | | |
+| 确定性 | 两个都关 | 80.10 | 同上 | | | | |
+| 交付 `-vlm-pin off` | 基准 | **84.95** | 1.0000 | 0.8166 | 0.8210 | 0.5796 | 254·103·131·384 |
+| 交付 | 两个都关 | 84.08 | 1.0000 | 0.7856 | 0.8176 | 0.5822 | 254·99·130·386 |
+
+- 确定性口径下「关车道裁片」与「关灰底证据」**逐位相同** ⇒ 与 §5.59 的 `tok_grey0` = no-op 一致：
+  灰底门只通过车道读数器起作用（这两个旋钮在当前代码里等于同一个开关）。
+- 交付口径下 −0.87 **全在引脚列**（0.8166 → 0.7856，少 4 个引脚 tp），其余三列只动 ±0.003。
+- 交付口径只测了「两个都关」；由确定性口径的逐位相同推断 −0.87 同样来自车道读数器。
+- 与历史对账：§5.59 当年同一个开关在 `--no-vlm` 口径下值 **+1.98**，今天只剩 **+0.38**
+  （其余通道大幅改善后，这条读数链的相对价值被摊薄），但**仍为正**。
+
+### 三·回退地图（哪个提交值多少）
+
+| 提交 | 引入的东西 | 默认装载 | 回退代价 | 备注 |
+|---|---|---|---|---|
+| `ebabf5d` | 队友引脚证据/读数链：`stage2/{pin_lane_crops,pin_lane_reading,pin_text_crops,pin_name_reading,pin_number_reading}.py`、`stage1/pincolor.py`、`stage1/pin_evidence.py` | 读数器挂 `PIN_READERS`，多数默认关 | **−0.87**（交付口径） | 队友代码在主线里唯一「活着」的部分 |
+| `0cc7fdc` | 统一读数器/裁片器接口 + `PIN_READERS` 注册表 + `tools/dev/pinread_contract.py` | 结构性 | 分数 0.00 | 回退会拆掉契约检查器与注册表 |
+| `aeacc46` | `STAGE2_PIN_GREY_EVIDENCE`（我方放宽门，后来默认翻 1） | 开 | 0.00（与车道读数器同源） | 让**我方**灰度证据能进**他们**的读取器 |
+| `aed4460` | `pinmarkers.py` + `pin_evidence.py` 的 mono 追加 + mono 臂接线 | **关** | 0.00 | 官方 10 张无输入、池子有输入但零位移（§5.116·九） |
+| `5723f66` | `STAGE1_PIN_COLOR_CAP` | **关** | 0.00 | 只在他们树上有效（+8.33） |
+| `41c138f` | `docs/KNOBS.md` / `docs/TOOLS.md` 重生成 | 文档 | 0.00 | |
+
+⇒ 若只想让树「瘦回」队友那部分：回退 `aed4460` + `5723f66`（以及可选的 `41c138f`）**零代价**；
+但**不要**回退 `ebabf5d`/`aeacc46` 的那条读数链——它今天仍值 0.87。
+
+### 四·复现
+
+```powershell
+cd Y:\workspace\EDA\eda-pcb
+$cs = "1,2,3,4,5,6,7,8,9,10"
+python -X utf8 tools/eval/fast.py --cases $cs --out rb_d0 --extra "-offline -vlm-pin off"
+$env:STAGE2_PIN_LANE_CROP="0"; python -X utf8 tools/eval/fast.py --cases $cs --out rb_d_nolane --extra "-offline -vlm-pin off"; Remove-Item Env:STAGE2_PIN_LANE_CROP
+$env:STAGE2_PIN_GREY_EVIDENCE="0"; python -X utf8 tools/eval/fast.py --cases $cs --out rb_d_nogrey --extra "-offline -vlm-pin off"; Remove-Item Env:STAGE2_PIN_GREY_EVIDENCE
+python -X utf8 tools/eval/fast.py --cases $cs --out rb_v0 --extra "-vlm-pin off"
+$env:STAGE2_PIN_LANE_CROP="0"; $env:STAGE2_PIN_GREY_EVIDENCE="0"; python -X utf8 tools/eval/fast.py --cases $cs --out rb_v_noboth --extra "-vlm-pin off"; Remove-Item Env:STAGE2_PIN_LANE_CROP,Env:STAGE2_PIN_GREY_EVIDENCE
+```
