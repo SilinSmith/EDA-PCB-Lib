@@ -918,11 +918,14 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
         segments, n_split = _split_at_nodes(
             segments, tol=float(os.environ.get("STAGE1_SPLIT_TOL", "1.5")))
 
-    # --- 在 pskel 的真结点处切段（`STAGE1_SPLIT_JUNC_NODES=1`）---
+    # --- 在 pskel 的真结点处切段（`STAGE1_SPLIT_JUNC_NODES=1`，**默认开**，§5.112）---
     # 与上面那条的区别：切点来自**骨架结点**（degree≥3 的像素簇），不是「别的线段端点」。
     # 骨架结点才是图上的 T/十 分叉，GT 的边正是在那里断开的。
+    # 2026-10-2x A/B（官方 10 张交付口径）：84.81 → **84.95（+0.14）**，增益全在 case 2 的
+    # 网络 F1（0.7376 → 0.7778 = 该 case 的「抹掉电源引用」天花板上界），引脚/元件逐位不变；
+    # 同日池子 10 张（`--no-vlm`）14.21 → **14.27（+0.06）** ⇒ 两个口径同号，落默认。
     n_jsplit = 0
-    if env_on("STAGE1_SPLIT_JUNC_NODES", "0") and jnodes:
+    if env_on("STAGE1_SPLIT_JUNC_NODES", "1") and jnodes:
         segments, n_jsplit = _split_at_points(
             segments, jnodes, tol=float(os.environ.get("STAGE1_SPLIT_JUNC_TOL", "2.5")))
 

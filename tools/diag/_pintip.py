@@ -1,209 +1,174 @@
 # -*- coding: utf-8 -*-
-"""_pintip.py — 引脚点几何体检：**tip vs base** 与 **邻脚错位** 两个假设的纯 CPU 判据。
+"""§5.111 取证（六）：**桩尖**是不是比「框边 + 常数」更好的引脚点预测器？
 
-背景（2026-10，见 docs\\COMPETITION_RULES.md §3 / DIAGNOSTICS 引脚节）：
-  * 官方附录三说元件有 outerbbox/bodybbox，**pin tip 在外侧框边缘、base 连内侧框**；
-  * 我们 `_pinpos.py` 量到超差引脚的误差中位数里，20~50 px 桶是 `dx +2.0, dy +29.0`
-    ⇒ 两种解释：(H1) 我们发的是符号内侧的 base 点；(H2) 我们发的点其实是**隔壁脚**
-    （号绑对了、几何绑错位）。
+对每个（键名都对上的）框元件引脚，沿外法线方向量「暗红（符号桩）」段的**外端**：
+从框边外 3px 起扫（跳过框线本身），允许 ≤2px 间断，连续 6px 无桩则停。然后比较三个数：
+  d_gt  = GT 点到框边的距离      tip = 桩尖到框边的距离      d_pr = 我方点到框边的距离
+统计 |d_gt−tip| 与 |d_gt−12|（当前常数策略）的均值与 ≤5px 命中率。
 
-本脚本用「匹配上的 box 元件 + 名字相同的引脚」逐条量：
-  sG = GT 点到 **GT bbox** 的有符号距离（>0 在框内、≈0 在框边缘、<0 在框外）
-  sP = 我们的点到同一个 GT bbox 的有符号距离
-  proj = (我们的点 − GT 点) 在「该 GT 点最近框边的**内法向**」上的投影（>0 = 我们更靠里）
-  adj  = 我们的点是否落在**同元件另一个 GT 引脚点**的 5 px 内（H2 的直接证据）
-
-用法（**从仓库根跑**）：
-    python -X utf8 work\\tools\\diag\\_pintip.py --pred work\\_fnew
-    python -X utf8 work\\tools\\diag\\_pintip.py --pred work\\_libpins_cpu_verify\\off
+用法：python -X utf8 work\\_pintip.py [--run gsd9] [--all] [--case 8] [--show 24]
 """
 from __future__ import annotations
 
 import argparse
 import json
-import math
-import pathlib
-import re
-import statistics
 import sys
+from pathlib import Path
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]
+import cv2
+import numpy as np
+
+ROOT = Path(r"Y:\workspace\EDA")
 sys.path.insert(0, str(ROOT / "eda-pcb"))
 
-from schematic_parser.data import DEFAULT_DATA_ROOT, SPLITS, discover, load_json  # noqa: E402
-from schematic_parser.metrics import (EvalConfig, IC_TYPES, _box, _point,  # noqa: E402
-                                      assign_components, canon_type, pin_f1,
-                                      pin_key_to_number, rewrite_keys)
-
-CASES = ["1", "2", "3", "4", "5", "7", "8", "9", "10"]
-_IN = {"l": (1.0, 0.0), "r": (-1.0, 0.0), "b": (0.0, 1.0), "t": (0.0, -1.0)}
+from schematic_parser.data import (DEFAULT_DATA_ROOT, IC_TYPES, discover,      # noqa: E402
+                                   normalise_doc)
+from schematic_parser.metrics import (EvalConfig, assign_components,          # noqa: E402
+                                      canon_type, rewrite_keys)
 
 
-def build_index(data_root):
-    exact, digits = {}, {}
-    for c in discover(data_root, SPLITS):
-        if not c.json_path:
+def _pt(raw):
+    if isinstance(raw, dict):
+        raw = (raw.get('x'), raw.get('y'))
+    if not isinstance(raw, (list, tuple)) or len(raw) < 2:
+        return None
+    return float(raw[0]), float(raw[1])
+
+
+def outward(bbox, pt):
+    x0, y0, x1, y1 = [float(v) for v in bbox]
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    ux, uy = pt[0] - cx, pt[1] - cy
+    wx, wy = max(x1 - x0, 1e-6), max(y1 - y0, 1e-6)
+    if abs(ux) / wx >= abs(uy) / wy:
+        return "r" if ux > 0 else "l"
+    return "b" if uy > 0 else "t"
+
+
+def stub_tip(mask, x0, y0, x1, y1, edge, e, H, limit=45, skip=3, gap=2, need=6):
+    """返回 (桩尖距离, 桩起距离, 桩长)；找不到桩返回 None。"""
+    if edge == 'l':
+        sx, sy, dx, dy = x0 - 1.0 - skip, e[1], -1.0, 0.0
+    elif edge == 'r':
+        sx, sy, dx, dy = x1 + 1.0 + skip, e[1], 1.0, 0.0
+    elif edge == 't':
+        sx, sy, dx, dy = e[0], (H - y1) + 1.0 + skip, 0.0, -1.0
+    else:
+        sx, sy, dx, dy = e[0], (H - y0) - 1.0 - skip, 0.0, 1.0
+    first = None
+    last = None
+    miss = 0
+    start_off = skip
+    for d in range(limit):
+        xi = int(round(sx + dx * d))
+        yi = int(round(sy + dy * d))
+        if not (0 <= yi < mask.shape[0] and 0 <= xi < mask.shape[1]):
+            break
+        if mask[yi, xi]:
+            if first is None:
+                first = start_off + d
+            last = start_off + d
+            miss = 0
+        else:
+            miss += 1
+            if miss > gap:
+                break
+    if first is None or (last - first + 1) < need:
+        return None
+    return last, first, last - first + 1
+
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--run", default="gsd9")
+ap.add_argument("--case", default="")
+ap.add_argument("--all", action="store_true")
+ap.add_argument("--show", type=int, default=24)
+args = ap.parse_args()
+
+cases = {}
+for c in discover(DEFAULT_DATA_ROOT):
+    cid = str(getattr(c, "case_id", "") or Path(getattr(c, "json_path", "")).parent.name)
+    cases[cid] = c
+cfg = EvalConfig()
+agg_tip, agg_const, agg_pr = [], [], []
+per = {}
+print("case comp pin     edge  d_gt  d_pr   tip   起  长  |gt-tip| |gt-12| |gt-pr|")
+print("-" * 88)
+for cid in sorted(cases, key=lambda s: (len(s), s)):
+    if not args.all and args.case and cid != args.case:
+        continue
+    pred_p = (ROOT / "work" / ("_fast_out_%s" % args.run) / "final_results"
+              / ("%s_Pred.json" % cid))
+    if not pred_p.exists():
+        continue
+    gt_doc = json.load(open(str(cases[cid].json_path), encoding="utf-8"))
+    pred_doc = json.load(open(str(pred_p), encoding="utf-8"))
+    gt, pred = normalise_doc(gt_doc), normalise_doc(pred_doc)
+    comp, keymap = assign_components(gt, pred, cfg, {})
+    pred2 = rewrite_keys(pred, keymap)
+    img = cv2.imread(str(cases[cid].png_path), cv2.IMREAD_COLOR)
+    if img is None:
+        continue
+    H = img.shape[0]
+    r = img[:, :, 2].astype(np.int16)
+    g = img[:, :, 1].astype(np.int16)
+    b = img[:, :, 0].astype(np.int16)
+    maroon = ((r > 90) & (g < 115) & (b < 115) &
+              (r - np.maximum(g, b) > 20)).astype(np.uint8)
+    shown = 0
+    for c in sorted(gt['components']):
+        if canon_type((gt['components'][c] or {}).get('type')) not in IC_TYPES:
             continue
-        exact.setdefault(c.case_id, c)
-        d = re.sub(r"\D", "", c.case_id)
-        if d:
-            digits.setdefault(d, []).append(c)
-    return exact, digits
-
-
-def resolve(stem, exact, digits):
-    if stem in exact:
-        return exact[stem]
-    d = re.sub(r"\D", "", stem) or stem
-    cands = digits.get(d) or []
-    if len(cands) == 1:
-        return cands[0]
-    pure = [c for c in cands if c.case_id.isdigit()]
-    return pure[0] if len(pure) == 1 else None
-
-
-def box_signed(pt, b):
-    """>0 = 点在框内（值是到最近边的距离）；≈0 = 在框上；<0 = 在框外（值是到框的距离取负）。"""
-    x, y = pt
-    x1, y1, x2, y2 = b
-    if x1 <= x <= x2 and y1 <= y <= y2:
-        return min(x - x1, x2 - x, y - y1, y2 - y)
-    dx = max(x1 - x, 0.0, x - x2)
-    dy = max(y1 - y, 0.0, y - y2)
-    return -math.hypot(dx, dy)
-
-
-def inward_at(pt, b):
-    """返回 (内法向单位向量, 到最近边的距离, 边名) —— 以 pt 相对框 b 计。"""
-    x, y = pt
-    x1, y1, x2, y2 = b
-    d = {"l": x - x1, "r": x2 - x, "b": y - y1, "t": y2 - y}
-    k = min(d, key=lambda s: d[s])
-    return _IN[k], d[k], k
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--pred", required=True, help="预测目录（含 <case>.json 或 <case>_Pred.json）")
-    ap.add_argument("--cases", default=",".join(CASES))
-    ap.add_argument("--rows", type=int, default=30, help="最多打印多少行 >5px 的明细")
-    a = ap.parse_args()
-    preddir = pathlib.Path(a.pred)
-    if not preddir.is_absolute():
-        preddir = ROOT / preddir
-    cfg = EvalConfig()
-    exact, digits = build_index(DEFAULT_DATA_ROOT)
-
-    rows, miss_file = [], []
-    agg = {"pairs": 0, "name_ok": 0, "dist_le5": 0, "buckets": {}, "adj": 0, "inward": 0,
-           "sG": [], "sP": [], "cases": 0}
-
-    for cid in [c.strip() for c in a.cases.split(",") if c.strip()]:
-        case = resolve(cid, exact, digits)
-        if case is None:
-            miss_file.append(cid)
+        gb = (gt['components'][c] or {}).get('bbox')
+        if not gb:
             continue
-        f = preddir / ("%s.json" % cid)
-        if not f.exists():
-            f = preddir / ("%s_Pred.json" % cid)
-        if not f.exists():
-            miss_file.append(cid)
-            continue
-        gt = load_json(case.json_path)
-        pred = json.loads(f.read_text(encoding="utf-8"))
-        _f1, keymap = assign_components(gt, pred, cfg)
-        pred2 = rewrite_keys(pred, keymap)
-        pf = pin_f1(gt, pred2, cfg)                       # 自检：应与 stage2_eval 一致
-        box = {k for k, v in gt["components"].items()
-               if canon_type((v or {}).get("type")) in IC_TYPES}
-        agg["cases"] += 1
-        n_le5 = n_bad = 0
-        for comp in sorted(box):
-            gb = _box((gt["components"].get(comp) or {}).get("bbox"))
-            ggrp = (gt.get("pins") or {}).get(comp) or {}
-            pgrp = (pred2.get("pins") or {}).get(comp) or {}
-            gtpts = {}
-            for pk, info in ggrp.items():
-                p = _point((info or {}).get("point"))
-                if p is not None:
-                    gtpts[pin_key_to_number(pk)] = (p, (info or {}).get("pinname"))
-            for pk, info in pgrp.items():
-                n = pin_key_to_number(pk)
-                if n not in gtpts:
-                    continue
-                p = _point((info or {}).get("point"))
-                gpt, gname = gtpts[n]
-                nm = (info or {}).get("pinname")
-                if p is None or nm != gname:               # 只体检「名字对」的那些（号对已由 key 保证）
-                    continue
-                dist = math.hypot(p[0] - gpt[0], p[1] - gpt[1])
-                agg["pairs"] += 1
-                if dist <= cfg.pin_tol:
-                    n_le5 += 1
-                    agg["dist_le5"] += 1
-                else:
-                    n_bad += 1
-                sG = sP = proj = tan = None
-                side = ""
-                if gb:
-                    sG, sP = box_signed(gpt, gb), box_signed(p, gb)
-                    inw, _de, side = inward_at(gpt, gb)
-                    d = (p[0] - gpt[0], p[1] - gpt[1])
-                    proj = d[0] * inw[0] + d[1] * inw[1]
-                    tan = math.hypot(d[0] - proj * inw[0], d[1] - proj * inw[1])
-                    agg["sG"].append(sG)
-                    agg["sP"].append(sP)
-                adj = None
-                for n2, (g2, gname2) in sorted(gtpts.items()):
-                    if n2 == n:
-                        continue
-                    d2 = math.hypot(p[0] - g2[0], p[1] - g2[1])
-                    if d2 <= cfg.pin_tol and (adj is None or d2 < adj[3]):
-                        adj = (n2, gname2, gname2 == nm, d2)
-                if dist > cfg.pin_tol:
-                    b = ("5-10" if dist <= 10 else "10-20" if dist <= 20
-                         else "20-50" if dist <= 50 else ">50")
-                    agg["buckets"][b] = agg["buckets"].get(b, 0) + 1
-                    if adj:
-                        agg["adj"] += 1
-                    if proj is not None and dist > 0 and proj >= 0.7 * dist:
-                        agg["inward"] += 1
-                    rows.append((cid, comp, n, nm, dist, sG, sP, proj, tan, side, adj))
-        print("case %-3s matched_name_ok=%d  <=5px %d  超差 %d   [自检 pin_f1 tp=%d fp=%d fn=%d %s]"
-              % (cid, n_le5 + n_bad, n_le5, n_bad, pf.tp, pf.fp, pf.fn,
-                 json.dumps(pf.detail, ensure_ascii=False) if pf.detail else ""))
-
-    print("\n=== 超差明细（我们的点 − GT 点）===")
-    print("%-4s %-6s %-5s %-10s %-6s %-7s %-7s %-7s %-6s %-4s %s"
-          % ("case", "comp", "pin", "pinname", "|d|", "sG", "sP", "proj", "tan", "边", "adj(点落在别的GT脚上)"))
-    for r in rows[: a.rows]:
-        cid, comp, n, nm, dist, sG, sP, proj, tan, side, adj = r
-        fmt = lambda v: ("%7.1f" % v) if v is not None else "      -"
-        print("%-4s %-6s %-5s %-10s %6.1f %s %s %s %s %-4s %s"
-              % (cid, comp, n, nm, dist, fmt(sG), fmt(sP), fmt(proj), fmt(tan), side or "-",
-                 ("pin_%s(%s)%s |d|=%.1f" % (adj[0], adj[1], "同名" if adj[2] else "异名", adj[3]))
-                 if adj else "-"))
-
-    t = agg
-    print("\n=== 汇总 ===")
-    print("案例 %d 个；名字相同且号相同的引脚对 %d 个（<=5px %d，超差 %d）"
-          % (t["cases"], t["pairs"], t["dist_le5"], t["pairs"] - t["dist_le5"]))
-    print("超差分桶: %s" % json.dumps(t["buckets"], ensure_ascii=False))
-    print("H2 邻脚证据（我们的点落在同元件另一个 GT 脚 5px 内）: %d" % t["adj"])
-    print("H1 内法向证据（位移 ≥70%% 落在框的内法向上）: %d" % t["inward"])
-    if t["sG"]:
-        print("sG（GT 点到 GT bbox 的有符号距离）: 中位 %.1f 均值 %.1f  |sG|<=3 占 %d/%d"
-              % (statistics.median(t["sG"]), statistics.mean(t["sG"]),
-                 sum(1 for v in t["sG"] if abs(v) <= 3), len(t["sG"])))
-        print("sP（我们的点到同一 GT bbox）      : 中位 %.1f 均值 %.1f  |sP|<=3 占 %d/%d"
-              % (statistics.median(t["sP"]), statistics.mean(t["sP"]),
-                 sum(1 for v in t["sP"] if abs(v) <= 3), len(t["sP"])))
-        d = [p - g for p, g in zip(t["sP"], t["sG"])]
-        print("sP − sG（我们比 GT 更靠里多少）    : 中位 %+.1f 均值 %+.1f   >0 占 %d/%d"
-              % (statistics.median(d), statistics.mean(d), sum(1 for v in d if v > 0), len(d)))
-    if miss_file:
-        print("⚠️ 缺文件/配不上 GT 的案例: %s" % miss_file)
-
-
-if __name__ == "__main__":
-    main()
+        x0, y0, x1, y1 = [float(v) for v in gb]
+        gpins = gt['pins'].get(c) or {}
+        ppins = pred2['pins'].get(c) or {}
+        for pk in sorted(gpins, key=lambda s: (len(str(s)), str(s))):
+            a = _pt((gpins[pk] or {}).get('point'))
+            if not a:
+                continue
+            p = ppins.get(pk)
+            bb = _pt((p or {}).get('point')) if isinstance(p, dict) else None
+            if bb is None or (p or {}).get('pinname') != (gpins[pk] or {}).get('pinname'):
+                continue
+            edge = outward(gb, a)
+            e = (a[0], H - a[1])
+            d_gt = {"l": x0 - a[0], "r": a[0] - x1, "t": y0 - a[1], "b": a[1] - y1}[edge]
+            d_pr = {"l": x0 - bb[0], "r": bb[0] - x1,
+                    "t": y0 - bb[1], "b": bb[1] - y1}[edge]
+            tip = stub_tip(maroon, x0, y0, x1, y1, edge, e, H)
+            agg_const.append(abs(d_gt - 12.0))
+            agg_pr.append(abs(d_gt - d_pr))
+            d = per.setdefault(cid, [0, 0.0, 0, 0.0, 0, 0.0])
+            d[0] += 1
+            d[1] += abs(d_gt - d_pr)
+            if tip:
+                agg_tip.append(abs(d_gt - tip[0]))
+                d[2] += 1
+                d[3] += abs(d_gt - tip[0])
+            if args.show and (args.case or args.all) and shown < args.show:
+                print("%-4s %-4s %-7s %-5s %5.1f %5.1f %6s %4s %3s %8s %6.1f %6.1f"
+                      % (cid, c, pk, edge, d_gt, d_pr,
+                         ("%.1f" % tip[0]) if tip else "-",
+                         tip[1] if tip else "-", tip[2] if tip else "-",
+                         ("%.1f" % abs(d_gt - tip[0])) if tip else "-",
+                         abs(d_gt - 12.0), abs(d_gt - d_pr)))
+                shown += 1
+print("-" * 88)
+print("GT 点预测误差（全 10 张、键名都对上的脚）")
+print("  当前（常数 12 / 我方实际点）: |gt-12| 均值 %.2f   |gt-pr| 均值 %.2f  n=%d"
+      % (float(np.mean(agg_const)), float(np.mean(agg_pr)), len(agg_pr)))
+if agg_tip:
+    arr = np.asarray(agg_tip)
+    print("  桩尖预测器                  : |gt-tip| 均值 %.2f  ≤5px 命中 %.1f%%  n=%d"
+          % (float(arr.mean()), 100.0 * float((arr <= 5).mean()), arr.size))
+    print("  常数 12 在同一子集上        : ≤5px 命中 %.1f%%"
+          % (100.0 * float((np.asarray(agg_const[:arr.size]) <= 5).mean())))
+print("  逐案（n, |gt-pr| 均值, 有桩尖 n, |gt-tip| 均值）：")
+for cid in sorted(per, key=lambda s: (len(s), s)):
+    d = per[cid]
+    print("    case %-3s n=%-3d |gt-pr|=%.2f   n_tip=%-3d |gt-tip|=%s"
+          % (cid, d[0], d[1] / d[0], d[2],
+             ("%.2f" % (d[3] / d[2])) if d[2] else "-"))
