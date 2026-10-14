@@ -81,7 +81,7 @@ class MonoPinPipelineTests(unittest.TestCase):
 
         engine = SimpleNamespace(read=Mock(side_effect=read))
         out = self.base / ("output-%d" % len(list(self.base.glob("output-*"))))
-        # 0cc7fdc/§5.29：main 把「调用点现读模块全局」的七段 if 换成了**import 时求值**的
+        # c411361/§5.29：main 把「调用点现读模块全局」的七段 if 换成了**import 时求值**的
         # `run.PIN_READERS` 注册表（stage2/run.py:110-129、:412-431），所以
         # `patch.multiple(run, ...)` 只改全局、改不到注册表里已固化的 `_on`/`_kw`。
         # 这里按被 patch 的全局重建同一张表 —— 分发语义与断言都不动，只让桩真的被调到。

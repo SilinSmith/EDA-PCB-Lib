@@ -2,7 +2,12 @@
 
 > 面向两件事：**把仓库推上 GitHub**，以及**只把判题机交给队友自评**。
 > 判题机的用法细节见 `docs/JUDGE.md`；分数轨迹见 `docs/RESULTS.md`。
-> 本文写于 2026-10-14，仓库状态：`main` 领先 `origin/main` **178** 个提交，远端 `https://github.com/SilinSmith/eda-pcb.git`（**private**）。
+> 本文写于 2026-10-14，仓库状态：`main` 领先 `origin/main` **181** 个提交，远端 `https://github.com/SilinSmith/eda-pcb.git`（**private**）。
+>
+> ⚠️ **2026-10-14 对未推送区间做过一次历史重写**（清除 Dockerfile 里的硬编码密钥，见 §3）：
+> `git filter-repo --replace-text` 把 `a6cac45..HEAD` 这 178 个提交整体重写，**147 个 SHA 全变**
+> （本文件与 `docs/RESULTS.md`、`tests/`、`tools/dev/mkreport.py` 里的 7 位 SHA 引用已按新历史重映射）。
+> 旧 SHA 仍可在远端 `codex/*` 分支上找到（那些分支不在重写范围内）。
 
 ---
 
@@ -84,37 +89,51 @@ mean_score   84.945
 
 ---
 
-## 3. ⚠️ 密钥红线（**push 前必须先做掉**）
+## 3. ⚠️ 密钥红线（2026-10-14 已处理，处理方式与复核手段如下）
 
-**事实**：`packaging/Dockerfile:20-21` 曾**硬编码**一枚 DashScope key
+**发生过什么**：`packaging/Dockerfile:20-21` 曾**硬编码**一枚 DashScope key
 （`ENV LLM_API_KEY="sk-ws-…"` / `ENV DASHSCOPE_API_KEY="sk-ws-…"`），由**未推送**提交
-`a6cac45`（"fix: 打包链本机可修项…"）带进来。2026-10-14 已从工作树清掉（改成空默认值 + 注释），
-`git grep sk-ws origin/main` 为空 ⇒ **远端树从未出现过密钥**。
+`f5d0d33`（"fix: 打包链本机可修项…"，重写前的旧 SHA 是 `a6cac45`）带进来。
+`git grep sk-ws origin/main` 始终为空 ⇒ **远端树从未出现过密钥**。
 
-**旧值仍活着（实测，不是推测）**：`work/_keyprobe.py` 把 `a6cac45` 里的 key 抽出来打
+**已经做了两件事**：
+
+1. **工作树清理**：改成空默认值 + 注释（`ENV LLM_API_KEY=""` / `ENV DASHSCOPE_API_KEY=""`）。
+2. **未推送区间整体重写**：`git filter-repo --force --refs main pr3-on-main pr3-port
+   --replace-text <规则文件>`，把该 key 字面量替换成 `REDACTED-DASHSCOPE-KEY`；
+   `a6cac45..HEAD` 这 178 个提交里 **147 个 SHA 全变**，本文件、`docs/RESULTS.md`、`tests/`、
+   `tools/dev/mkreport.py` 里的 7 位 SHA 引用已自动重映射（映射表 `.git/filter-repo/commit-map`，
+   不随仓库提交）。旧 SHA 只还能在远端 `codex/*` 分支上找到（那些分支不在重写范围内）。
+   重写不影响推送方式：远端 `origin/main` = `a6d06f0` 仍是本地 main 的祖先 ⇒ `git push` 依旧 fast-forward。
+
+**复核手段（谁都能重跑，两条都对 `main` 生效）**：
+
+```powershell
+# ① 全路径 pickaxe：main 历史里没有任何提交增删过该 key 字面量（预期无输出）
+git log --no-textconv --oneline -S 'sk-ws-H.PIHXMRE' main
+# ② 该文件在 main 历史里的每个版本逐个查（预期 0 命中）
+git log -p --no-textconv main -- packaging/Dockerfile | Select-String 'sk-ws-H\.PIHXMRE'
+git rev-list --objects main -- packaging/Dockerfile   # 3 个 blob 版本，逐个 cat-file 也应 0 命中
+```
+
+实测：① 无输出、② 命中 **0** 行、blob 版本 **3** 个全部干净；对 `backup/pre-scrub`（重写前的本地
+备份分支，**不推送**）用同样两条能命中 4 行 ⇒ 校验本身有效，不是"扫了个寂寞"。
+
+**仍然建议做的一步（唯一真正的补救）**：这枚 key 在泄漏期间是**活的** —— `work/_keyprobe.py`
+把 `f5d0d33` 里的 key 抽出来打
 `GET https://dashscope.aliyuncs.com/compatible-mode/v1/models` ⇒ **HTTP 200**；
 对照组 `work/_keyprobe_control.py` 用伪造 key ⇒ **401** `Incorrect API key provided`，
-空 key ⇒ 401 `You didn't provide an API key` ⇒ 端点确实鉴权，泄漏的那枚确实可用。
+空 key ⇒ 401 `You didn't provide an API key` ⇒ 端点确实鉴权，200 不是假象。所以**应当作废并重发**：
 
-**它还在 178 个未推送提交里**：一旦 `git push`，旧值就永久进入远端历史（仓库是 private，
-但协作者可见、且日后可能公开）。两条路，**先做掉再推**：
-
-1. **作废并重发该 key**（推荐，唯一真正的补救）：百炼控制台
-   <https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key> ——
-   注意**右上角要选对地域**（每个地域的 API Key 与 endpoint 域名独立、不能混用），
-   并确认 key 的**归属**（主账号 / RAM 用户、哪个业务空间）；删除**立即失效且不可恢复**，
-   API Key 本身没有有效期；单账号+单地域上限 50 个。也可用 OpenAPI
-   `DeleteApiKey`（ModelStudio `2026-02-10`，
-   <https://api.aliyun.com/meta/v1/products/ModelStudio/versions/2026-02-10/apis/DeleteApiKey/api>），
-   但需要阿里云 **AK/SK**（本机没有：无 `aliyun` CLI、`ALIBABA_CLOUD_ACCESS_KEY_ID` 为空、
-   `~/.aliyun/config.json` 与 `~/.alibabacloud/credentials` 均不存在 ⇒ **只能由有控制台权限的人做**）。
-   作废后直接 `git push`，历史里留着旧字符串也无害。
-2. **首次 push 前重写历史**（只有在该 key 无法作废时才考虑）：`git filter-repo --replace-text
-   <规则文件>` —— 代价：`git rev-list --count a6cac45..HEAD` = **146**，连同 `a6cac45` 共
-   **147 个 SHA 会变**，其中 **18 个被文档以 7 位 SHA 引用**（`docs/RESULTS.md` §5.x、
-   `docs/reports/官方评测机_第5次提交归因.md:108` 与 `:192` 直接引用 `a6cac45`），要逐条改文档；
-   而且 **`git filter-repo` 本机未安装**（既非 git 子命令也无 python 模块），得先 `pip install
-   git-filter-repo`，或退回内置 `git filter-branch`（更慢更易错）。**不推荐。**
+- 百炼控制台 <https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key> ——
+  右上角先选**地域**（每个地域的 API Key 与 endpoint 域名独立、不能混用），并确认 key 的
+  **归属**（主账号 / RAM 用户 / 哪个业务空间）；列表里对着**前缀 `sk-ws-H.PIHX…`、末 6 位
+  `…mPOeEo`、长度 116** 找那一枚。删除**立即失效且不可恢复**；API Key 本身没有有效期；
+  单账号+单地域上限 50 个。
+- 或用 OpenAPI `DeleteApiKey`（ModelStudio `2026-02-10`，
+  <https://api.aliyun.com/meta/v1/products/ModelStudio/versions/2026-02-10/apis/DeleteApiKey/api>），
+  需要阿里云 **AK/SK**（本机没有：无 `aliyun` CLI、`ALIBABA_CLOUD_ACCESS_KEY_ID` 为空、
+  `~/.aliyun/config.json` 与 `~/.alibabacloud/credentials` 均不存在 ⇒ 只能由有控制台权限的人做）。
 
 **顺带**：`.lmstudio_key`、`*.key`、`.env` 均未被跟踪；全树（排除 `docs/RESULTS.md` 与 GT 数据）
 用 `(api[_-]?key|token|password|secret)\s*[:=]\s*["'][A-Za-z0-9_\-\.]{16,}` 扫过，零命中。

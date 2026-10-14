@@ -1835,9 +1835,9 @@ matching within Hungarian-matched nets"`，**只比首尾两点**。10GT 实测�
 | 20（旧默认） | ≈58.5 | 0.2496~0.2545 | ≈64.3 | 0.25 级 |
 
 **comp / pin / connectivity 三通道逐位不变**，全部增益都来自 `wire_f1`（权重 0.10）。
-⇒ **默认由 20 改成 10**（`fe81436`）；0 会塌，>12 会吸到隔壁枝。
+⇒ **默认由 20 改成 10**（`6e07d66`）；0 会塌，>12 会吸到隔壁枝。
 
-配套（同一天，`02de140`）：`d`/`led` 的 `pinname` 必须写 `K`/`A`（不是脚号）——
+配套（同一天，`8c89286`）：`d`/`led` 的 `pinname` 必须写 `K`/`A`（不是脚号）——
 官方 `pin_match` 要求 `pinname exact`，10GT 实测 `K→1`/`A→2` 共 8 个脚，改完
 no-vlm 58.15 → **58.51**、tp 引脚 +6、无回归。
 
@@ -3222,7 +3222,7 @@ python -X utf8 stage2\assemble.py
 
 ### 5.28 队友分支 `codex/improve-pin-network-parsing` 的并入判据（2026-10-16）：读法链**中性**、彩色臂**判负**、证据硬闸门**判负**，但证据的**分辨力**保留（并行线）
 
-**并入范围**（commit `ebabf5d`）：13 个新模块 + 49 个 scaffold + 25 篇队友文档整文件拷入（在 main 上全部不存在 ⇒ 零冲突）；共享文件**只并**可独立 A/B 的三件 —— `stage1/pipeline.py` 的 `apply_color_pins` / `overlay_color_evidence`、`stage2/assign.py` 的 `_best_number_read`，以及 13 个模块 import 必需的 5 个符号（`structmatch.normalize_pin_evidence` / `_frame_anchor_usable` / `trusted_frame_pin_evidence`、`assign._same_image_point` / `_trusted_text_contact` / `_target_index`）。队友 `stage2/assign.py` 的 **507 行绑定主体**与 `stage2/structmatch.py` 的 **879 行**（三方合并后 5 / 7 处冲突，冲突文本存 `work\_tm_conf_*.txt`）**未并** —— 它们是互斥的另一条绑定路径，不是可增量吸收的小件。
+**并入范围**（commit `29b22b1`）：13 个新模块 + 49 个 scaffold + 25 篇队友文档整文件拷入（在 main 上全部不存在 ⇒ 零冲突）；共享文件**只并**可独立 A/B 的三件 —— `stage1/pipeline.py` 的 `apply_color_pins` / `overlay_color_evidence`、`stage2/assign.py` 的 `_best_number_read`，以及 13 个模块 import 必需的 5 个符号（`structmatch.normalize_pin_evidence` / `_frame_anchor_usable` / `trusted_frame_pin_evidence`、`assign._same_image_point` / `_trusted_text_contact` / `_target_index`）。队友 `stage2/assign.py` 的 **507 行绑定主体**与 `stage2/structmatch.py` 的 **879 行**（三方合并后 5 / 7 处冲突，冲突文本存 `work\_tm_conf_*.txt`）**未并** —— 它们是互斥的另一条绑定路径，不是可增量吸收的小件。
 
 | 臂（官方 10 张 `--no-vlm`） | 开关 | 总分 | 元件 / 引脚 / 网络 / 导线 |
 |---|---|---|---|
@@ -5972,7 +5972,7 @@ tp 250/96/125/321，与串行 `tok_retry_lean` 的 10 份产物 **sha256 10/10 �
 **症状**：全量 `python -X utf8 -m unittest discover -s tests -p "test_*.py"` ⇒ **446 例 / 35 失败 / 332 错误**。
 §5.60 末尾把这批红写成「本机夹具环境问题」——**误判**。
 
-**真因（机械证据）**：这 22 个红色模块的**测试文件全部来自同一个提交** `ebabf5d`（并入队友分支
+**真因（机械证据）**：这 22 个红色模块的**测试文件全部来自同一个提交** `29b22b1`（并入队友分支
 `codex/improve-pin-network-parsing`，96 个文件里 36 个是测试）；而它们要打的产品那一半**按 §5.28 有意未并**。
 `docs/RESULTS.md:3225` 原文：「队友 `stage2/assign.py` 的 **507 行绑定主体**与 `stage2/structmatch.py` 的
 **879 行** …… **未并** —— 它们是互斥的另一条绑定路径，不是可增量吸收的小件」（§5.28 已判其负收益：
@@ -5991,7 +5991,7 @@ tp 250/96/125/321，与串行 `tok_retry_lean` 的 10 份产物 **sha256 10/10 �
 `build_nets()` 多个 kwarg 19、`sample_segments()` 多 `return_directions` 8）；④ 期望值/夹具漂移 52。
 
 **处置（用户裁决：按缺失前置条件跳过）**：新增 `tests/_unmerged_gate.py` —— 常量 `BRANCH` /
-`MERGE_COMMIT = "ebabf5d"` / `WHY`（含上面 §5.28 的摘要）、`missing(checks)` 用 `importlib.import_module`
+`MERGE_COMMIT = "29b22b1"` / `WHY`（含上面 §5.28 的摘要）、`missing(checks)` 用 `importlib.import_module`
 逐「(模块, 名字序列)」探测、`gate(checks, note="")` 有缺失即 `raise unittest.SkipTest(...)`；各文件
 `def setUpModule(): import _unmerged_gate; _unmerged_gate.gate([...])`。
 **20 个模块加门**（断言一字未弱化、文件未删）：test_bigic_borders、test_black_frame_binding、
@@ -8162,9 +8162,9 @@ case 8 一分不动（它那两条坏号码本来也没进最终产物，或与�
   `FUSION_VALREAD=1`、`FUSION_PINNAME=1`、`FUSION_COMPDEDUP=1`、`FUSION_PWRCLIP=1`、
   `FUSION_PINZOOM=0`、`STAGE2_CONFORM_KEY=1`、`STAGE2_TEXT_INK=0`、
   `STAGE2_PINNUM_PXC=0`、`STAGE2_PINNAME_ROWNEAR=1`、`STAGE2_PINNAME_DUPOV=0.6`。
-- 本目标累计：**81.14 → 83.03**（+1.89）：`e15e106` CONFORM_KEY +0.16、
-  `6039a2a` 值复读 +0.27、`ac926ef` 引脚名复读 +0.34、`3ea19a5` 元件消重 +0.11、
-  `e29ed3e` 器件名框放行 +0.53、`b7ac6fa` 名候选两规则 +0.33、`a688e45` 导线吸附 +0.31；
+- 本目标累计：**81.14 → 83.03**（+1.89）：`e90531d` CONFORM_KEY +0.16、
+  `687e148` 值复读 +0.27、`07f4ca2` 引脚名复读 +0.34、`794412f` 元件消重 +0.11、
+  `0a7ebfb` 器件名框放行 +0.53、`4c73319` 名候选两规则 +0.33、`f419303` 导线吸附 +0.31；
   另有五条**封闭线**取证入库：§5.65（引脚位置常数）、§5.90（GT 脚点=标注线端，我方端点仅 24.3%）、
   §5.95（`∅` 脚号全局计数器，+5.12 不可达）、§5.96（按颜色裁线 −3.86）、§5.97（号轮像素宽闸门 −0.14）。
 - 复现/产物：日志 `work/_finalrd6.log`、产物 `work/_fast_out_finalrd6`。
@@ -8175,20 +8175,20 @@ case 8 一分不动（它那两条坏号码本来也没进最终产物，或与�
 
 ### 一、达成情况
 - 目标里的**具体子目标**（落地 §5.84 值 VLM 复读通道）在第 1 轮即完成并 A/B 取证
-  （`6039a2a`）；随后 6 轮继续把交付分从 **81.14 推到 83.03（+1.89）**。
+  （`687e148`）；随后 6 轮继续把交付分从 **81.14 推到 83.03（+1.89）**。
 - 每步都满足「A/B 取证 + 写 RESULTS + 提交」：7 个提分提交、5 个封闭线提交，
   最终交付态由**无 env 的干净跑**自证（§5.98，10 张逐案逐位一致）。
 
 ### 二、7 个提分提交（官方 10 张）
 | 提交 | 内容 | Δ |
 |---|---|---|
-| `e15e106` | `STAGE2_CONFORM_KEY` 转正（协议尺 `component_text_ok` 不比 d/led 的 `Name`） | +0.16 |
-| `6039a2a` | 值「紧框复读」（`FUSION_VALREAD`，117 槽位 / 2 处错值 / 0 误伤） | +0.27 |
-| `ac926ef` | 引脚名「紧框复读」（`FUSION_PINNAME`，槽 20 / 采用 1） | +0.34 |
-| `3ea19a5` | 元件「同物重复」消重（`FUSION_COMPDEDUP`，comp F1 → 1.0000） | +0.11 |
-| `e29ed3e` | 引脚名轮放行「被改写的器件名框」（+ `longnosep` 触发格） | +0.53 |
-| `b7ac6fa` | 名候选「跨行抢读」+「窄副本顶掉完整名」两条几何规则 | +0.33 |
-| `a688e45` | 电源/地符号「导线吸附」（`FUSION_PWRCLIP`，93 个端点） | +0.31 |
+| `e90531d` | `STAGE2_CONFORM_KEY` 转正（协议尺 `component_text_ok` 不比 d/led 的 `Name`） | +0.16 |
+| `687e148` | 值「紧框复读」（`FUSION_VALREAD`，117 槽位 / 2 处错值 / 0 误伤） | +0.27 |
+| `07f4ca2` | 引脚名「紧框复读」（`FUSION_PINNAME`，槽 20 / 采用 1） | +0.34 |
+| `794412f` | 元件「同物重复」消重（`FUSION_COMPDEDUP`，comp F1 → 1.0000） | +0.11 |
+| `0a7ebfb` | 引脚名轮放行「被改写的器件名框」（+ `longnosep` 触发格） | +0.53 |
+| `4c73319` | 名候选「跨行抢读」+「窄副本顶掉完整名」两条几何规则 | +0.33 |
+| `f419303` | 电源/地符号「导线吸附」（`FUSION_PWRCLIP`，93 个端点） | +0.31 |
 
 ### 三、5 条封闭线（取证入库，避免重复投入）
 1. **§5.65 引脚位置**：常数 `PIN_OUT_BOX=12.0` 已 82.4%，红桩长度不含 GT 偏移信息。
@@ -8272,7 +8272,7 @@ case 8 一分不动（它那两条坏号码本来也没进最终产物，或与�
 | 臂 | 总分 | 元件 | 引脚 | 网络 | 导线 | 导线 tp | 日志 |
 |---|---|---|---|---|---|---|---|
 | 交付态（无本通道） | 83.03 | 1.0000 | 0.8166 | 0.7806 | 0.5291 | 349 | — |
-| 均匀 1.0px（`75d2768`） | 83.16（+0.13） | 1.0000 | 0.8166 | 0.7806 | 0.5427 | 355 | `work/_ec1.log` |
+| 均匀 1.0px（`0d53240`） | 83.16（+0.13） | 1.0000 | 0.8166 | 0.7806 | 0.5427 | 355 | `work/_ec1.log` |
 | **逐端条件（本实现）** | **83.23（+0.20）** | 1.0000 | 0.8166 | 0.7806 | **0.5490** | **362** | `work/_ec2.log` |
 
 两端到端读数与离线试算**逐位一致**；只动 `nets[*].edges` 端点 ⇒ 元件 / 引脚 / netH 三通道逐位不变。
@@ -8283,7 +8283,7 @@ case 8 一分不动（它那两条坏号码本来也没进最终产物，或与�
 对照两条上游外推开关（同一批）：`STAGE2_EDGE_EXT_ANY=0` ⇒ **82.78**（导线 0.5042）、
 `STAGE2_EDGE_EXT_FREE=5` ⇒ **82.91**（导线 0.5170）⇒ 外推本身是赚的，
 但它在 GT 视角下**往外多留了 ~1px**，本校正正好抵消；两者叠加才是 83.16。
-提交 `75d2768`。交付口径 = **83.16**。
+提交 `0d53240`。交付口径 = **83.16**。
 
 ### 五、残余
 netL 0.5427 仍是最低的一项：578 条失败边里只有 202 条属「近失」（≤15px），
@@ -8391,9 +8391,9 @@ VLM 段 61.7 s；按 §5.41 的账（`FinalScore = 0.95·准确率 + 0.05·(m/M)
 token 项至多 5 分）⇒ 本通道组**零额外调用**的三条（消重 / 吸附 / 内收）
 合计占本轮增益的 **+0.31 分**（§5.95 的 0.31 与 §5.100 的 0.20 中，消重与吸附/内收都是零调用）。
 
-本轮提分提交链：`a688e45`（导线吸附 +0.31）→ `75d2768`（端点 1px 校正 +0.13）
-→ `6bba454`（逐端条件升级 +0.07）→ `e1a6535`（§5.101 三条支线封闭）。
-当前交付 = **83.23**；相对 goal 起步（`e15e106` 的 81.14）净 **+2.09**。
+本轮提分提交链：`f419303`（导线吸附 +0.31）→ `0d53240`（端点 1px 校正 +0.13）
+→ `cfe0dd3`（逐端条件升级 +0.07）→ `566cf3c`（§5.101 三条支线封闭）。
+当前交付 = **83.23**；相对 goal 起步（`e90531d` 的 81.14）净 **+2.09**。
 
 ---
 
@@ -9223,8 +9223,8 @@ python -X utf8 ..\work\_whatis.py --case 2 --x 576 --y 690 --pad 45             
 - 关系：**PR#3 = PR#1 + c3d3684**（已含 PR#1）；PR#2 与 PR#3 是**兄弟**（互不包含）。
   `git diff --numstat c3d3684 36a65cf`：89 个文件，PR#2 独有的主要是 `docs/metrics/black-pin-geometry-20261011.json`（+24427 行）
   与 README/`fusion/*`/`bigic.py`/`non_ic_pin_structure.py` 的小改；PR#3 独有的是一大批新模块（见 §5.104 记录的那次并入）。
-- 我方 main **早已并入 PR#1**（`ebabf5d` 引脚证据/读数链，默认关 + workflow 节点；`0cc7fdc` 统一 reader/crop 接口 + `PIN_READERS` 注册表；
-  `aeacc46` `STAGE2_PIN_GREY_EVIDENCE` 默认 0：官方 10 张 `--no-vlm` +1.98）。判据与留档见 §5.28 / §5.29 / §5.30 / §5.63 / §5.104。
+- 我方 main **早已并入 PR#1**（`29b22b1` 引脚证据/读数链，默认关 + workflow 节点；`c411361` 统一 reader/crop 接口 + `PIN_READERS` 注册表；
+  `1e9bbfa` `STAGE2_PIN_GREY_EVIDENCE` 默认 0：官方 10 张 `--no-vlm` +1.98）。判据与留档见 §5.28 / §5.29 / §5.30 / §5.63 / §5.104。
 
 ### 二、定标（同判分器：我方 `tools/eval/fast.py`，`protocol2` = 官方书面口径）
 
@@ -9575,7 +9575,7 @@ python -X utf8 ..\work\_poolmono.py --run poolA1 --cmp poolA0
 - **给队友的补丁**（未推送、未改他们分支）：`work/_pr3_colorcap.patch`（14 行，仅 CAP 钳位，可直接 `git apply`）；
   `work/_pr3_allfix.patch`（17 行，另含三处环境硬编码 + `import traceback` 修复）。
 - **未并**：他们的 12 个 stage2 模块、`pin_name_library.json`、`assign`/`structmatch` 的绑定主体
-  （我方 `ebabf5d` 有意未并）、`STAGE1_PIN_COLOR` 默认仍是 `0`。
+  （我方 `29b22b1` 有意未并）、`STAGE1_PIN_COLOR` 默认仍是 `0`。
 
 ### 八·复现
 
@@ -9639,9 +9639,9 @@ python -X utf8 tools/diag/_poolmono.py --run poolD1 --cmp poolD0
    队友代码是以**普通提交**（不是 merge）进来的（`git log --merges` 为空），
    所以 `git revert <sha>` 或 `git checkout <sha>~1 -- <file>` 都能干净落地，`git reflog` 兜底。
 2. **回退代价分两层**：
-   - 本轮移植的两个闸（`aed4460` 的 mono 臂、`5723f66` 的 `STAGE1_PIN_COLOR_CAP`）：
+   - 本轮移植的两个闸（`c19cfa2` 的 mono 臂、`8aa1fc1` 的 `STAGE1_PIN_COLOR_CAP`）：
      **代价 0.00**（默认都关；`colcap0` = 80.48 与 `sjdef3` 逐位相同；池子 `poolD0` = `poolD1` = 13.95）。
-   - 主线里**活着**的那部分（`ebabf5d` + `aeacc46` 的引脚读数链，`STAGE2_PIN_LANE_CROP=1`
+   - 主线里**活着**的那部分（`29b22b1` + `1e9bbfa` 的引脚读数链，`STAGE2_PIN_LANE_CROP=1`
      + `STAGE2_PIN_GREY_EVIDENCE=1`）：**回退掉 0.87 分**（交付 84.95 → 84.08）。
 3. 所以「队友引入的逻辑没必要」只对**他们自以为的贡献**（引脚识别质量：彩色实测几何、
    黑白框恢复）成立；对我们**实际在用的那部分**（读数/裁片插装 + 我方的灰底放宽门）**不成立**。
@@ -9668,15 +9668,15 @@ python -X utf8 tools/diag/_poolmono.py --run poolD1 --cmp poolD0
 
 | 提交 | 引入的东西 | 默认装载 | 回退代价 | 备注 |
 |---|---|---|---|---|
-| `ebabf5d` | 队友引脚证据/读数链：`stage2/{pin_lane_crops,pin_lane_reading,pin_text_crops,pin_name_reading,pin_number_reading}.py`、`stage1/pincolor.py`、`stage1/pin_evidence.py` | 读数器挂 `PIN_READERS`，多数默认关 | **−0.87**（交付口径） | 队友代码在主线里唯一「活着」的部分 |
-| `0cc7fdc` | 统一读数器/裁片器接口 + `PIN_READERS` 注册表 + `tools/dev/pinread_contract.py` | 结构性 | 分数 0.00 | 回退会拆掉契约检查器与注册表 |
-| `aeacc46` | `STAGE2_PIN_GREY_EVIDENCE`（我方放宽门，后来默认翻 1） | 开 | 0.00（与车道读数器同源） | 让**我方**灰度证据能进**他们**的读取器 |
-| `aed4460` | `pinmarkers.py` + `pin_evidence.py` 的 mono 追加 + mono 臂接线 | **关** | 0.00 | 官方 10 张无输入、池子有输入但零位移（§5.116·九） |
-| `5723f66` | `STAGE1_PIN_COLOR_CAP` | **关** | 0.00 | 只在他们树上有效（+8.33） |
-| `41c138f` | `docs/KNOBS.md` / `docs/TOOLS.md` 重生成 | 文档 | 0.00 | |
+| `29b22b1` | 队友引脚证据/读数链：`stage2/{pin_lane_crops,pin_lane_reading,pin_text_crops,pin_name_reading,pin_number_reading}.py`、`stage1/pincolor.py`、`stage1/pin_evidence.py` | 读数器挂 `PIN_READERS`，多数默认关 | **−0.87**（交付口径） | 队友代码在主线里唯一「活着」的部分 |
+| `c411361` | 统一读数器/裁片器接口 + `PIN_READERS` 注册表 + `tools/dev/pinread_contract.py` | 结构性 | 分数 0.00 | 回退会拆掉契约检查器与注册表 |
+| `1e9bbfa` | `STAGE2_PIN_GREY_EVIDENCE`（我方放宽门，后来默认翻 1） | 开 | 0.00（与车道读数器同源） | 让**我方**灰度证据能进**他们**的读取器 |
+| `c19cfa2` | `pinmarkers.py` + `pin_evidence.py` 的 mono 追加 + mono 臂接线 | **关** | 0.00 | 官方 10 张无输入、池子有输入但零位移（§5.116·九） |
+| `8aa1fc1` | `STAGE1_PIN_COLOR_CAP` | **关** | 0.00 | 只在他们树上有效（+8.33） |
+| `3afe41d` | `docs/KNOBS.md` / `docs/TOOLS.md` 重生成 | 文档 | 0.00 | |
 
-⇒ 若只想让树「瘦回」队友那部分：回退 `aed4460` + `5723f66`（以及可选的 `41c138f`）**零代价**；
-但**不要**回退 `ebabf5d`/`aeacc46` 的那条读数链——它今天仍值 0.87。
+⇒ 若只想让树「瘦回」队友那部分：回退 `c19cfa2` + `8aa1fc1`（以及可选的 `3afe41d`）**零代价**；
+但**不要**回退 `29b22b1`/`1e9bbfa` 的那条读数链——它今天仍值 0.87。
 
 ### 四·复现
 
@@ -9699,9 +9699,9 @@ $env:STAGE2_PIN_LANE_CROP="0"; $env:STAGE2_PIN_GREY_EVIDENCE="0"; python -X utf8
 
 ### 一·收官决策（按上一节的建议执行）
 
-- **不回退**。队友代码在主线里分两层：**读数/裁片插装**（`ebabf5d` + `aeacc46`，
+- **不回退**。队友代码在主线里分两层：**读数/裁片插装**（`29b22b1` + `1e9bbfa`，
   `STAGE2_PIN_LANE_CROP=1` + `STAGE2_PIN_GREY_EVIDENCE=1`）今天仍值 **+0.87**（交付口径）；
-  两个默认关的移植闸（`aed4460` mono 臂、`5723f66` `STAGE1_PIN_COLOR_CAP`）回退代价 **0.00**，
+  两个默认关的移植闸（`c19cfa2` mono 臂、`8aa1fc1` `STAGE1_PIN_COLOR_CAP`）回退代价 **0.00**，
   但保留它们能保住 A/B 能力与 §5.114/§5.116 的证据链。
 - 这条线的结账口径：**队友的「引脚几何/识别质量」值 0（图里取不到或取到就亏），
   他的「读数插装」值 +0.87（交付）/ +0.38（确定性）**。此后不再按引脚方向并线，

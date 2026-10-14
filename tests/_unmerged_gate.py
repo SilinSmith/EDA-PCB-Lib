@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """main 上的「未并入路径」前置条件门（§5.28）。
 
-**为什么需要它**：commit `ebabf5d`（并入队友分支 `codex/improve-pin-network-parsing`）
+**为什么需要它**：commit `29b22b1`（并入队友分支 `codex/improve-pin-network-parsing`）
 把队友的 **36 个测试文件整文件拷进 main**，但队友的**产品绑定主体**按 §5.28 的判据
 **有意未并** —— `stage2/assign.py` 的 507 行绑定主体、`stage2/structmatch.py` 的 879 行
 （`docs/RESULTS.md:3225`：「它们是互斥的另一条绑定路径，不是可增量吸收的小件」）。
@@ -40,7 +40,7 @@ import os
 import unittest
 
 BRANCH = "improve-pin-network-parsing"
-MERGE_COMMIT = "ebabf5d"
+MERGE_COMMIT = "29b22b1"
 WHY = ("§5.28（docs/RESULTS.md:3225）：队友分支 %s 的引脚证据/读数链并入 %s 时，"
        "**只并了证据采集**，产品绑定主体（assign 507 行 + structmatch 879 行）"
        "**有意未并** —— 判据是「互斥的另一条绑定路径，不是可增量吸收的小件」。"

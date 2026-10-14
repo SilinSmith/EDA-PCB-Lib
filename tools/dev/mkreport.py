@@ -206,7 +206,7 @@ def build():
          13, False, HEAD_FONT, WD_ALIGN_PARAGRAPH.CENTER, 60)
     info = [
         ("报告类型", "技术方案 / 实验结果 / 实验总结"),
-        ("代码版本", "eda-pcb @ 33defd3（2026-10-21）"),
+        ("代码版本", "eda-pcb @ 75568d4（2026-10-21）"),
         ("读数口径", "判题机复刻尺 `schematic_parser/official.py`（bbox/pin 阈值 5 px）"),
         ("档位覆盖", "默认 VLM 档 / 精简档 / 极限省档 / 纯 CV 离线档（0 次外部调用）"),
     ]
