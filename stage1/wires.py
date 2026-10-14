@@ -943,6 +943,24 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
             mode=os.environ.get("STAGE1_WIRE_SNAP_GAPS_MODE", "short"),
             min_ratio=float(os.environ.get("STAGE1_WIRE_SNAP_GAPS_RATIO", "0.9")))
 
+    # --- 抹字断口对接（`STAGE1_WIRE_SNAP_TEXT=1`，§5.110）---
+    # 病：`erase=texts` 把盖在导线上的文字**连同导线像素**一起抹掉 ⇒ 导线在每个文本框处断成
+    # 两截（10GT case 1 x≈1432：`erase=[]` 出 GT 对齐的 30px 段，`erase=texts` 只剩 11px 碎片，
+    # 缺口中点与 GT 切点差 ≤1.5px）。规则：共线相向两端、缺口被**同一个被抹文本框**覆盖 ⇒
+    # 两端都挪到缺口中点。判据与 `build_nets(bridges=texts)`（`STAGE1_TEXT_BRIDGE`）同源。
+    n_tsnap = 0
+    if env_on("STAGE1_WIRE_SNAP_TEXT", "0") and erase:
+        from pipeline.pskel import snap_text_gaps
+        segments, n_tsnap = snap_text_gaps(
+            segments, erase,
+            max_gap=float(os.environ.get("STAGE1_WIRE_SNAP_TEXT_MAX", "30")),
+            max_angle_deg=float(os.environ.get("STAGE1_WIRE_SNAP_TEXT_ANG", "25")),
+            k=int(os.environ.get("STAGE1_WIRE_SNAP_TEXT_K", "4")),
+            pad=float(os.environ.get("STAGE1_WIRE_SNAP_TEXT_PAD", "2")),
+            cover=float(os.environ.get("STAGE1_WIRE_SNAP_TEXT_COVER", "0.6")),
+            max_short=float(os.environ.get("STAGE1_WIRE_SNAP_TEXT_SHORT", "0")),
+            long_gap=float(os.environ.get("STAGE1_WIRE_SNAP_TEXT_LONG", "0")))
+
     endpoints, junctions = _rebuild_nodes(segments, tol=1.0)
     if not segments:
         endpoints, junctions = [], []
@@ -964,6 +982,7 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
         "junction_nodes": jnodes,
         "n_gap_bridges": int(getattr(r, "n_gap_bridges", 0)),
         "n_gap_snaps": n_gsnap,
+        "n_text_snaps": n_tsnap,
         "n_bridges": len(bridges),
         "bridges": bridges,
         "bridge_info": b_info,

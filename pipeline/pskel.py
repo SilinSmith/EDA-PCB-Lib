@@ -624,6 +624,111 @@ def bridge_skeleton_gaps(skel: np.ndarray, max_gap: float = 12.0,
     return out, len(bridges), bridges
 
 
+def snap_text_gaps(segs, boxes, max_gap: float = 30.0, max_angle_deg: float = 25.0,
+                   k: int = 4, pad: float = 2.0, cover: float = 0.6,
+                   max_short: float = 0.0, long_gap: float = 0.0):
+    """抹字断口对接（§5.110）。
+
+    病（§5.109 之后的下一步取证）：`extract_wires(erase=texts)` 把**盖在导线上的文字连同
+    导线像素一起抹掉**，于是导线在每个文本框处断成两截。10GT case 1 x≈1432 实证（同一个
+    窗口、同一份 stage1 输入、只切 `erase`）：
+      `erase=[]`        出 GT 对齐的 6 条 [174,202]/[202,232]/[232,261]/[261,291]/[291,321]/[321,379]；
+      `erase=texts`     出 [195,223]/[242,253]/[271,283]/[301,311]/[330,389] —— 中间三条 10~12px
+                        的碎片夹在缺口里，而缺口**中点** 232.5/262/292/320.5 与 GT 的切点
+                        232/261/291/320 相差 ≤1.5px。
+    （`occlude` 元件框不背这个锅：`erase=[]` + `occlude=comps` 与完全不涂逐段相同。）
+
+    规则：两个**共线相向**的端点，若其缺口被**同一个被抹掉的文本框**覆盖（两端都贴住该框、
+    缺口上多数采样点落在框内），就把**两端都挪到缺口中点**（两端都变长，不会缩短任何一段）。
+    与 `snap_collinear_gaps` 的区别：不看长度比 —— 抹字断口两侧常常**一样短**，长度比判据
+    会整批拒绝；这里改看**抹字证据**，也正是 `pipeline.build_nets(bridges=texts)`
+    （`STAGE1_TEXT_BRIDGE`）已经在用的判据：「只认两个线端各贴住同一个被擦除文本框的缺口」。
+
+    `boxes` = `erase` 传来的文本框 `(x1,y1,x2,y2)`（原图像素）。返回 `(new_segs, n_moved)`。
+    """
+    cos_lim = math.cos(math.radians(max_angle_deg))
+    nb = []
+    for bx in boxes or []:
+        try:
+            x1, y1, x2, y2 = (float(v) for v in bx[:4])
+        except (TypeError, ValueError):
+            continue
+        nb.append((min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)))
+    if not nb or len(segs) < 2:
+        return segs, 0
+
+    def _near(p, bx, pad_):
+        return (bx[0] - pad_ <= p[0] <= bx[2] + pad_) and (bx[1] - pad_ <= p[1] <= bx[3] + pad_)
+
+    work = [[[float(p[0]), float(p[1])] for p in s] for s in segs]
+    ends = []
+    for i, s in enumerate(work):
+        if len(s) < 2:
+            continue
+        L = sum(math.hypot(s[j + 1][0] - s[j][0], s[j + 1][1] - s[j][1])
+                for j in range(len(s) - 1))
+        for e in (0, 1):
+            p = s[0] if e == 0 else s[-1]
+            j = min(k, len(s) - 1)
+            q = s[j] if e == 0 else s[-1 - j]
+            vy, vx = p[1] - q[1], p[0] - q[0]
+            n = math.hypot(vx, vy)
+            if n < 1e-6:
+                continue
+            ends.append((i, e, p, (vx / n, vy / n), L))
+
+    cands = []
+    for a in range(len(ends)):
+        ia, ea, pa, da, la = ends[a]
+        for b in range(a + 1, len(ends)):
+            ib, eb, pb, db, lb = ends[b]
+            if ia == ib:
+                continue
+            # 「至少一侧是碎片」（`max_short>0` 时）：抹字断口是**导线被挖掉一小段**，
+            # 因而至少一侧剩下的是 10~15px 的碎片；两条都长的缺口多半是两条真导线
+            # 各自终止在同一个文本框旁（case 4/6/9 的反例），不该焊在一起。
+            if max_short > 0 and min(la, lb) > max_short:
+                # 两侧都不是碎片：只有「缺口本身很短」才可能是**单个引脚号/文字**压在线上
+                # 挖出的一个小口子（长-长、缺口 ≤ `long_gap`）；缺口一大就是两条真导线
+                # 各自终止在同一个文本框旁（case 4/6/9 的反例），不该焊在一起。
+                if not (long_gap > 0 and math.hypot(pb[0] - pa[0], pb[1] - pa[1]) <= long_gap):
+                    continue
+            vx, vy = pb[0] - pa[0], pb[1] - pa[1]
+            d = math.hypot(vx, vy)
+            if d < 1e-6 or d > max_gap:
+                continue
+            ux, uy = vx / d, vy / d
+            if da[0] * ux + da[1] * uy < cos_lim:            # a 的外指方向要指向缺口
+                continue
+            if -db[0] * ux - db[1] * uy < cos_lim:           # b 同理（两者共线相向）
+                continue
+            mid = ((pa[0] + pb[0]) / 2.0, (pa[1] + pb[1]) / 2.0)
+            # 缺口的**多数采样点**要落在「被抹掉的文本框」里（并集覆盖，允许缺口跨两个相邻
+            # 文本框 —— 引脚号常常上下两行，中间只隔 2~3px 的缝）
+            ts = (0.12, 0.3, 0.5, 0.7, 0.88)
+            pts = [(pa[0] + vx * t, pa[1] + vy * t) for t in ts]
+            hit = sum(1 for q in pts if any(_near(q, bx, pad) for bx in nb))
+            if hit < cover * len(ts):
+                continue
+            # 端点不必贴在框上（骨架常在框边又缩 3~5px），只要「中点在框内、两端离该框不远」
+            if not any(_near(mid, bx, pad + 1.0) and _near(pa, bx, pad + 8.0)
+                       and _near(pb, bx, pad + 8.0) for bx in nb):
+                continue
+            cands.append((d, a, b, mid))
+    cands.sort(key=lambda t: t[0])
+
+    used, n = set(), 0
+    for _d, a, b, mid in cands:
+        if a in used or b in used:
+            continue
+        ia, ea = ends[a][0], ends[a][1]
+        ib, eb = ends[b][0], ends[b][1]
+        work[ia][0 if ea == 0 else -1] = [mid[0], mid[1]]
+        work[ib][0 if eb == 0 else -1] = [mid[0], mid[1]]
+        used.add(a); used.add(b); n += 1
+    return work, n
+
+
 def snap_collinear_gaps(segs, max_gap: float = 18.0, max_angle_deg: float = 25.0,
                         k: int = 4, mode: str = "short", min_ratio: float = 0.9):
     """把「同一条走线在交叉处被切碎」的碎片接回相邻的长段（§5.109）。
