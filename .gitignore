@@ -157,6 +157,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# 本机 LM Studio 的 API token（`vlm/client.py` 的 key 文件来源之一，见 §5.103）
+.lmstudio_key
+
 # Spyder project settings
 .spyderproject
 .spyproject

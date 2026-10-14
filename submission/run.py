@@ -864,14 +864,24 @@ def _run(a) -> int:
     #   引脚 +0.0033 但网络 −0.0101：修好的引脚名会参与电源轨挂标签）⇒ 只在引脚通道
     #   不会跑时自动打开。显式设了 `STAGE2_PINROT` 的人优先，不覆盖。
     vlm_ok = (a.vlm == "on")
+    _vlm_why = "显式 -vlm on" if a.vlm == "on" else ""
     if a.vlm == "auto":
         try:
             from vlm import client as _vc
             _t0 = time.time()
-            vlm_ok = bool(_vc.probe())
-            _log(fp, "VLM 端点预探测（%s，%.1fs）：%s"
-                 % (_vc.BASE, time.time() - _t0,
-                    "可用" if vlm_ok else "不支持图片，跳过补强"))
+            # ★ 用 `preflight(strict=False)` 而不是 `probe()`（2026-10-27，§5.103）：
+            #   `probe()` 只回 bool，日志里一律写成「不支持图片」，而**鉴权失败（401）**
+            #   与「模型不吃图（400）」在这句话里长得一样 —— token 轮换那天整跑真的
+            #   按「不支持图片」记了一笔，排查方向被带偏。detail 里才有 401 / 400 / EMPTY。
+            vlm_ok, _why = _vc.preflight(strict=False)
+            _why = str(_why or "").replace("\n", " ")[:220]
+            _vlm_why = _why or "预探测回 False（无 detail）"
+            _log(fp, "VLM 端点预探测（%s，%.1fs，key 来源 %s）：%s"
+                 % (_vc.BASE, time.time() - _t0, getattr(_vc, "KEY_SOURCE", "?"),
+                    "可用" if vlm_ok else "不可用 ⇒ 跳过补强｜%s" % _why))
+            if not vlm_ok and any(t in _why for t in ("401", "Unauthorized", "header")):
+                _log(fp, "  ⚠️ 这是**鉴权**问题，不是「模型不支持图片」：设 LLM_API_KEY，"
+                         "或把 LM Studio 的 token 写进 eda-pcb/.lmstudio_key（见 RESULTS §5.103）")
         except Exception as _e:                                     # noqa: BLE001
             vlm_ok = False
             _log(fp, "VLM 预探测失败（%s: %s）⇒ 按不可用处理"
@@ -981,7 +991,8 @@ def _run(a) -> int:
                 # 补强却因为端点挂了没跑」的空档）。
                 on = vlm_ok
                 _log(fp, "VLM 端点探测（%s，复用预探测结果）：%s"
-                     % (vlm_client.BASE, "可用" if on else "不支持图片，跳过"))
+                     % (vlm_client.BASE,
+                        "可用" if on else "不可用，跳过补强｜%s" % (_vlm_why or "未探")))
             if on:
                 png_of = {cid: str(p) for cid, p in items}
                 s3v = s3v_dir

@@ -57,7 +57,52 @@ import time
 import cv2
 
 BASE = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:1234/v1").rstrip("/")
-KEY = os.environ.get("LLM_API_KEY", "")
+
+
+def _resolve_key() -> "tuple[str, str]":
+    """按顺序解析 API token，返回 `(key, 来源)`。
+
+    为什么要有（§5.103）：本机 LM Studio 的 HTTP 服务器**开着鉴权**，token 会在
+    Developer 页被轮换，而环境变量是**另一处**状态 —— 以前只有 `LLM_API_KEY` 一个来源，
+    轮换后忘同步环境变量就会 `probe()` 判 False，让**所有 VLM 通道静默降级**
+    （`submission/run.py` 的 `vlm_ok` 闸门 + §5.85/§5.86 的复读闸门一起跳过，
+    官方 10 张会从 83 掉到 ~70，日志里只有一行「跳过」）。多给几个文件来源，
+    轮换时只改一个文件即可，不必碰任何 env。
+
+    顺序：`LLM_API_KEY` 环境变量 → `LLM_API_KEY_FILE` 指定的文件 →
+    仓库根 `eda-pcb/.lmstudio_key`（已 gitignore）→ 用户目录 `~/.lmstudio/api_key`。
+    文件内容允许是裸 token 或 `LLM_API_KEY=...` 一行。
+    """
+    env = os.environ.get("LLM_API_KEY", "").strip()
+    if env:
+        return env, "env:LLM_API_KEY"
+    cands = []
+    explicit = os.environ.get("LLM_API_KEY_FILE", "").strip()
+    if explicit:
+        cands.append((explicit, "file:LLM_API_KEY_FILE"))
+    here = os.path.dirname(os.path.abspath(__file__))
+    cands.append((os.path.join(os.path.dirname(here), ".lmstudio_key"), "file:.lmstudio_key"))
+    cands.append((os.path.join(os.path.expanduser("~"), ".lmstudio", "api_key"),
+                  "file:~/.lmstudio/api_key"))
+    for path, src in cands:
+        try:
+            if not os.path.isfile(path):
+                continue
+            txt = open(path, "r", encoding="utf-8-sig", errors="ignore").read().strip()
+        except Exception:                                        # noqa: BLE001
+            continue
+        for line in txt.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                line = line.split("=", 1)[1].strip().strip('"').strip("'")
+            if line:
+                return line, src
+    return "", "none"
+
+
+KEY, KEY_SOURCE = _resolve_key()
 MODEL = os.environ.get("LLM_MODEL", "qwen3.5-9b")
 SCALE = int(os.environ.get("VLM_SCALE", "4"))
 MAXTOK = int(os.environ.get("VLM_MAX_TOKENS", "2048"))
@@ -161,7 +206,7 @@ def preflight(strict: bool = True, timeout: float = 90.0):
     而 `enrich_dir` 只累加 `desig_calls/grid_calls/value_calls` —— 于是整条 VLM 链路可以
     **「1 秒跑完、产物与输入逐位相同」**地静默空转。已经栽过两次：
 
-    1. `LLM_API_KEY` 为空 ⇒ 客户端发出空的 `Authorization: Bearer ` ⇒ 401；
+    1. `LLM_API_KEY` 为空且**没有 key 文件** ⇒ 客户端发出空的 `Authorization: Bearer ` ⇒ 401；
     2. 端点换了模型、不支持图片 ⇒ HTTP 400「does not support image inputs」。
 
     两者在 `enrich` 的统计里长得**一模一样**（三个 set 全 0），所以必须在开跑前就问一次。
@@ -185,10 +230,11 @@ def preflight(strict: bool = True, timeout: float = 90.0):
         raise RuntimeError(
             "VLM 预检失败：%s\n  端点 %s｜模型 %s｜KEY %s\n"
             "  · 401 / 'header ... not in the expected form' ⇒ 设好 LLM_API_KEY（LM Studio "
-            "Developer 页的 token，形如 sk-lm-XXXXXXXX:YYYYYYYYYYYYYYYYYYYY）\n"
+            "Developer 页的 token，形如 sk-lm-XXXXXXXX:YYYYYYYYYYYYYYYYYYYY），"
+            "或写进 eda-pcb/.lmstudio_key（当前来源：%s）\n"
             "  · 400 'does not support image inputs' ⇒ 换视觉模型（LLM_MODEL）\n"
             "  · EMPTY ⇒ 端点不吃 `reasoning_effort: none`，调大 VLM_MAX_TOKENS 或换模型"
-            % (detail, BASE, MODEL, "已设" if KEY else "**未设**"))
+            % (detail, BASE, MODEL, KEY_SOURCE if KEY else "**未设**"))
     return False, detail
 
 

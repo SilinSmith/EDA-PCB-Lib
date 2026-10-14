@@ -8394,3 +8394,63 @@ token 项至多 5 分）⇒ 本通道组**零额外调用**的三条（消重 / 
 本轮提分提交链：`a688e45`（导线吸附 +0.31）→ `75d2768`（端点 1px 校正 +0.13）
 → `6bba454`（逐端条件升级 +0.07）→ `e1a6535`（§5.101 三条支线封闭）。
 当前交付 = **83.23**；相对 goal 起步（`e15e106` 的 81.14）净 **+2.09**。
+
+---
+
+## §5.103 ★ 端点鉴权轮换的静默降级与「key 文件来源」（2026-10-27 现场）
+
+**现场**：本机 LM Studio 的 HTTP 服务器**开着鉴权**，token 在 Developer 页被轮换成新的
+`sk-lm-L74IBwPJ:...` 之后，旧 token（`tools/dev_env.ps1` 里那一行、以及几个 diag 探针的
+默认值）失效 ⇒ `GET /v1/models` 不带 token 回 **401**，`vlm.client.probe()` 直接判 **False**。
+
+**为什么这是交付级风险**：`submission/run.py` 用 `vlm_ok`（预检结果）当闸门
+（§5.89 加固），一旦判 False：
+
+- VLM 补强段整段跳过（并自动 `STAGE2_PINROT=1`）；
+- §5.85 值「紧框复读」、§5.86 引脚名「紧框复读」两个通道一起跳过；
+- 日志里只有几行「跳过（VLM 端点不可用 ⇒ 复读只会空转重试）」——
+  产物依旧完整、退出码 0，**分数从 83.23 掉到与 `-vlm off` 同档**（§5.41 记的旧档位是 71.15）。
+
+**修法（`vlm/client.py`）**：token 不再只有环境变量一个来源，改成 `_resolve_key()` 顺序解析：
+
+1. `LLM_API_KEY` 环境变量；
+2. `LLM_API_KEY_FILE` 指定的文件；
+3. **`eda-pcb/.lmstudio_key`**（已加进 `.gitignore`，本机当前用它）；
+4. `~/.lmstudio/api_key`。
+
+文件内容允许是裸 token，也允许 `LLM_API_KEY=...` 一行；模块级导出 `KEY_SOURCE`
+（`env:LLM_API_KEY` / `file:.lmstudio_key` / …），预检失败信息里会打印**当前来源**，
+不会再出现「不知道 key 从哪来」的情形。
+
+**验证**（不设任何 env）：
+
+- `python -c "from vlm import client; print(client.KEY_SOURCE, client.probe())"`
+  ⇒ `file:.lmstudio_key`｜**True**；
+- 官方 10 张干净跑（`work/_keyok.log`）⇒ **83.23**，逐分项与 §5.102 逐位相同，
+  通道账「值重读 73/2、引脚名 24/3、消重 2、吸附 93、内收 532」全部照常，
+  外部推理 **172 次 / 120 372 token / 失败 0**。
+
+**附带清点**：`tools/dev_env.ps1` 已换成新 token 并注明轮换事实；
+`tools/diag/_llmprobe.py`、`tools/diag/_vlmread.py` 里硬编码的旧 token 仍是旧值
+（只影响这两个开发探针，不影响交付链；要跑它们时设 `LLM_API_KEY` 即可）。
+
+**降级代价实测（不是估算）**：把 `.lmstudio_key` 临时改名、其余一切不变，官方 10 张
+（`work/_nokey.log`）⇒ **76.03**（元件 0.9390 / 引脚 0.7851 / 网络 0.6785 / 导线 0.4486），
+即 **−7.20 分**；单张对照 case 3：**84.92 → 73.18（−11.74）**，且通道账里
+「值重读 / 引脚名复读」两条整段消失、`STAGE2_PINROT=1` 被自动打开。
+所以「没配 key」不是小事故，是**交付级 −7**。
+
+**顺手修掉了那句会误导人的日志（`submission/run.py`）**：
+
+- 预探测改用 `client.preflight(strict=False)`（返回 `(ok, detail)`），日志从一句含糊的
+  「不支持图片」变成
+  `VLM 端点预探测（http://127.0.0.1:1234/v1，0.0s，key 来源 none）：不可用 ⇒ 跳过补强｜ERR:<HTTPError 401: 'Unauthorized'>`，
+  并在命中 401 / Unauthorized / header 时补一行
+  「⚠️ 这是**鉴权**问题，不是「模型不支持图片」：设 LLM_API_KEY，或把 LM Studio 的 token
+  写进 eda-pcb/.lmstudio_key」；
+- 融合层那句「复用预探测结果」也不再硬编码「不支持图片，跳过」，改为回显同一个 `detail`
+  （`run.py:1002` 附近，`_vlm_why` 从预探测段带过来）。
+- **语义安全性**：`preflight(strict=False)` 与 `probe()` 的成功判据**逐字一致**
+  （`txt` 非空且不以 `ERR:` 开头，见 `vlm/client.py:185-199` 与 `:202-238`），
+  唯一区别是超时更宽（90 s vs 60 s）⇒ 这次替换**只可能把 False 翻成 True，
+  不可能把健康端点判成不可用**，不会引入新的静默降级。
