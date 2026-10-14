@@ -1267,6 +1267,38 @@ def _run(a) -> int:
         except Exception as exc:                               # noqa: BLE001
             _log(fp, "  ⚠️ %s 网线吸附失败：%s: %s" % (cid, type(exc).__name__, exc))
 
+    # ★ `FUSION_EDGECAL`（网线端点偏置校正，默认 0 = 先 A/B）
+    #   病：`work/_netl2.py` 逐边归因显示配对网里未配上的 288 fp / 290 fn 中，
+    #   端点纵向差在 **+2px 处一个尖峰（118 个）**、超出 310 / 短了 87
+    #   ⇒ 上游外推（`stage2/assemble.py:694 EDGE_EXT=20`、`:788 EDGE_EXT_ANY=25`）
+    #   让我们的端点整体比 GT 多伸 ~1px。药：两端沿自身轴内收 `TRIM` px。
+    #   离线裁定（`work/_edgetrimx.py` + `fast.py --score-only`，官方 10 张）：见 `fusion/edgecal.py` 顶注。
+    #   必须排在 `pwrclip` **之后**（吸附会重新移动端点）。
+    edgecal_rows = []
+    try:
+        from fusion import edgecal as _ecmod                    # noqa: PLC0415
+        _edgecal_on = bool(_ecmod.ON)
+    except Exception:                                           # noqa: BLE001
+        _edgecal_on = False
+    if _edgecal_on:
+        _log(fp, "网线端点偏置校正：开（FUSION_EDGECAL=1，内收 %.1fpx）"
+             % float(getattr(_ecmod, "TRIM", 0.0)))
+
+    def _edgecal_step(cid):
+        """在**已经落盘**的 `<cid>_Pred.json` 上内收网线两端；失败一律不影响导出。"""
+        if not _edgecal_on:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            _st = _ecmod.apply_file(dst_j, dst_j)
+            if not _st or not _st.get("moved"):
+                return
+            edgecal_rows.append({"case": cid,
+                                 **{k: v for k, v in _st.items() if k != "trace"}})
+            _log(fp, "  %-28s 端点内收 %d 条边" % (cid, _st.get("moved", 0)))
+        except Exception as exc:                               # noqa: BLE001
+            _log(fp, "  ⚠️ %s 端点内收失败：%s: %s" % (cid, type(exc).__name__, exc))
+
     def _pinname_step(cid, png):
         """在**已经落盘**的 `<cid>_Pred.json` 上补一层引脚名复读；失败一律不影响导出。"""
         if not _pinname_on:
@@ -1368,6 +1400,7 @@ def _run(a) -> int:
                     _pinname_step(cid, _p)
                     _compdedup_step(cid)
                     _pwrclip_step(cid)
+                    _edgecal_step(cid)
                     continue
             except Exception as exc:                        # noqa: BLE001
                 _log(fp, "  ⚠️ %s 引脚名重读失败：%s: %s" % (cid, type(exc).__name__, exc))
@@ -1378,6 +1411,7 @@ def _run(a) -> int:
         _pinname_step(cid, _p)
         _compdedup_step(cid)
         _pwrclip_step(cid)
+        _edgecal_step(cid)
     _log(fp, "导出 %d 份 <case>_Pred.json%s"
          % (n_export, ("（另有 %d 份空壳兜底）" % n_shell) if n_shell else ""))
 
@@ -1422,6 +1456,9 @@ def _run(a) -> int:
     if pwrclip_rows:
         _log(fp, "网线吸附合计：吸 %d 个端点（%d 张图）"
              % (sum(r.get("moved", 0) for r in pwrclip_rows), len(pwrclip_rows)))
+    if edgecal_rows:
+        _log(fp, "端点内收合计：%d 条边（%d 张图）"
+             % (sum(r.get("moved", 0) for r in edgecal_rows), len(edgecal_rows)))
     _log(fp, "全部完成，墙钟 %.1fs（%.2f s/张）" % (wall, wall / max(1, len(items))))
     fp.close()
 
@@ -1431,7 +1468,7 @@ def _run(a) -> int:
                      "n_exported": n_export, "n_shell": n_shell, "wall_s": wall,
                      "pinzoom": pinzoom_rows, "valread": valread_rows,
                      "pinname": pinname_rows, "compdedup": compdedup_rows,
-                     "pwrclip": pwrclip_rows},
+                     "pwrclip": pwrclip_rows, "edgecal": edgecal_rows},
                     cases_log, a, t_start)
     print("产物 -> %s" % final_dir)
     return 0
