@@ -9205,3 +9205,109 @@ python -X utf8 ..\work\_pinext.py --run work/_fast_out_gsd9 --cases 2,1,5       
 python -X utf8 ..\work\_bbtrim.py --run work/_fast_out_gsd9 --maxspans 60,0 --insets 0,2,4            # 框内端点拉回边框
 python -X utf8 ..\work\_whatis.py --case 2 --x 576 --y 690 --pad 45                                   # 某个坐标附近有什么
 ```
+
+---
+
+## §5.113 第三方分支（队友 PR#1/#2/#3）用**我方判分器**定标：没有任何一条通道超过我方 ⇒ 该支里不存在「pin 满分逻辑」
+
+用户 m14630 指派：把队友刚 push 的 **PR #3**（`github.com/SilinSmith/eda-pcb/pull/3`）并入原来的 codex/ 线，
+并把「有贡献的逻辑」（**pin 的满分逻辑必须合并**）合进主线。本节先把「有什么贡献」量出来，再谈合并。
+
+### 一、分支图与事实（git 为准；本机 `web_fetch` 拿不到 github.com，Hindsight 401）
+
+- `origin = https://github.com/SilinSmith/eda-pcb.git`；`origin/main = a6d06f0`（「完整推理管线 + 文档，官方 10GT 9 张 57.54」）
+  是**我方 main 的祖先**；我方 `main` 已领先 `origin/main` **166 个提交**（从未 push）。
+- `git ls-remote origin 'refs/pull/*'`：**PR#1 head = bd0a529 = `origin/codex/improve-pin-network-parsing`**；
+  **PR#2 head = 36a65cf = `origin/codex/improve-monochrome-pin-geometry`**；
+  **PR#3 head = c3d3684 = `origin/codex/combined-pin-recognition`**（`Integrate IC v53 and non-IC R21 pin recognition`，2026-10-14）。
+- 关系：**PR#3 = PR#1 + c3d3684**（已含 PR#1）；PR#2 与 PR#3 是**兄弟**（互不包含）。
+  `git diff --numstat c3d3684 36a65cf`：89 个文件，PR#2 独有的主要是 `docs/metrics/black-pin-geometry-20261011.json`（+24427 行）
+  与 README/`fusion/*`/`bigic.py`/`non_ic_pin_structure.py` 的小改；PR#3 独有的是一大批新模块（见 §5.104 记录的那次并入）。
+- 我方 main **早已并入 PR#1**（`ebabf5d` 引脚证据/读数链，默认关 + workflow 节点；`0cc7fdc` 统一 reader/crop 接口 + `PIN_READERS` 注册表；
+  `aeacc46` `STAGE2_PIN_GREY_EVIDENCE` 默认 0：官方 10 张 `--no-vlm` +1.98）。判据与留档见 §5.28 / §5.29 / §5.30 / §5.63 / §5.104。
+
+### 二、定标（同判分器：我方 `tools/eval/fast.py`，`protocol2` = 官方书面口径）
+
+用他们分支自己的管线跑官方 10 张、再用**我方判分器**打分（`submission/run.py -mode off -fusion on`，输入 = `work/_pr3_in`）：
+
+| 臂（官方 10 张） | 总分 | 元件 | **引脚** | 网络 | 导线 | 产物 |
+|---|---:|---:|---:|---:|---:|---|
+| 我方交付（`-vlm-pin off`，= §5.112 的 84.95） | **84.95** | 1.0000 | **0.8166** | 0.8210 | 0.5796 | `work/_fast_out_sjndef` |
+| 我方（`-vlm-pin on`） | 84.62 | 1.0000 | 0.8033 | 0.8213 | 0.5796 | `work/_fast_out_vlmpin1` |
+| 队友 PR#3（`-vlm off`） | 49.39 | 0.8147 | **0.1332** | 0.5923 | 0.0888 | `work/_fast_out_pr3b` |
+| 队友 PR#3（`-vlm auto`，VLM 可用） | 51.51 | 0.9422 | **0.0912** | 0.5732 | 0.0901 | `work/_fast_out_pr3v` |
+| 队友 PR#2（`-vlm off`） | 46.42 | 0.7613 | **0.1332** | 0.5559 | 0.0797 | `work/_fast_out_pr2` |
+
+- **PR#2 与 PR#3 的引脚通道逐案完全相同**（case 1 0.4800、2 0、3 0.1818、4 0.2500、5 0、6 0、7 0、8 0.3333、9 0、10 0.0870）
+  ⇒ PR#3 这次「pin recognition integration」在官方 10 张上对引脚通道**零改动**；它赚的分全在元件/网络/导线（VLM 补强把元件 0.8147→0.9422）。
+- VLM 补强自报「**改写引脚 0 个**」（`work/_pr3v.log`：位号调用 36 次、写值 105/117、写型号 21/21，引脚 0）⇒ 他们的 VLM 不碰引脚通道。
+- 池子 10 张（`0092,0048,0019,0024,0075,0086,0002,0001,0042,0103`，同样是 VLM 可用档）：
+  **我方 18.52**（0.3948 / 0.0570 / 0.1350 / 0.0521，`work/_fast_out_poolctl`）vs **队友 14.86**（0.3854 / **0.0000** / 0.0924 / 0.0067，`work/_fast_out_pr3p`）；
+  我方确定性档 `--no-vlm` 14.27（§5.112）。
+- 换判分引擎 `--engine harness`（旧判题机）复核同一批产物：**我方 69.85（引脚 0.7780）vs 队友 36.85（引脚 0.0565）** ⇒ 结论与引擎选择无关。
+
+**⇒ 两个数据集（官方 10 + 池子 10）× 两个引擎（protocol2 / harness）下，队友这支没有任何一条通道超过我方。**
+他们的 `docs/RESULTS.md` 自己也写着引脚「当前 9.80 / 满分 25 / 剩余 15.20」、原始 F1 0.3920（官方 9 张）——
+即**他们文档里也没有「引脚满分」的记录**；「pin 满分」是转述中的说法，不是产物事实。
+
+### 三、他们引脚通道为什么低（诊断，`work/_pr3shift.py` / `work/_pindetail.py`）
+
+- 键名对得上（case 2 U1..U4 的 `pin_1..pin_4` 两边都有），但**点位置**差 **12~30px** > `pin_tol=5` ⇒ 全判 `position_mismatch`：
+  case 2 `U1.pin_1` GT (621,800) vs 他们 (609,800)；case 9 `U2` GT 左 x=829 / 右 x=967 vs 他们 799 / 998（差 30px）。
+  他们是按**实测端子长度**放点（框外 12px 或 30px 随符号而变），GT（与我方 12px 常数约定）不同。
+- 把他们的点沿「框中心→点」整体内移 d px 后重打分（`work/_pr3shift.py --run pr3b --ds 0,4,8,10,12,14,16,20,24`）：
+  d=0 **0.1332** → d=8 **0.3983（最好）** → d=20 0.0000；逐案最优 d 各不相同（0~10），且 **case 1/5/8/9 怎么移都回不来**
+  （case 9 我方 1.0000 vs 他们 0.0000；case 1 我方 0.7308 vs 他们 0.4800；只有 case 8 他们 0.3333 略高于我方 0.3030）。
+  ⇒ 不是单纯的常数偏移，读数本身在若干 case 上也不如我方。
+- 我方自己的 VLM 引脚通道同样是**负**的：`-vlm-pin off` 84.95 → `-vlm-pin on` **84.62**（引脚 0.8166 → 0.8033，case 7 0.9333 → 0.8000）。
+
+### 四、codex 侧合并可行性（用户问的「能不能并入原来的 codex/ 那个仓库」）
+
+- **并入 `codex/improve-pin-network-parsing` = fast-forward**（PR#3 已含 PR#1 的 head）。
+- 要与 PR#2 合一（`improve-monochrome-pin-geometry`）需真正合并：在 worktree `work\_wt_codex`（分支 `codex-merge-test` @ c3d3684）实测
+  **冲突 8 处**：`stage1/pin_evidence.py`(9 hunks)、`stage1/pipeline.py`(5)、`stage2/assemble.py`(1)、`stage2/mono_pin_crops.py`(15)、
+  `stage2/mono_pin_reading.py`(1)、`tests/test_mono_pin_crops.py`(1) + 双方同名新增 `tests/test_mono_pin_geometry.py`、`docs/第十一轮黑白引脚笔画与裁片修复.md`。
+- **实测结论：这些冲突几乎全部「取 c3d3684 即可」** —— PR#3 已把 PR#2 触到的每个 helper 重写为**带更多参数的超集**
+  （`_stroke_top(mask, observation, marker_mask=None)`、`_regions(..., light_mask, marker_mask, stroke_mask)`、
+  `_known_external_lines(..., gray=None)`、`_complete_group(..., stroke, line_evidence)`、`mono_pin_boxes` 彩色双掩膜 等），
+  逐行清点 PR#2 新增的 235 行只有 13 行不在 PR#3 里（都在 `_frame_stroke_bands` 内被 `_frame_outer` 重构掉了）。
+  合并结果 = **c3d3684 + 一处文档并集**（`docs/第十一轮黑白引脚笔画与裁片修复.md`）+ PR#2 独有的
+  `docs/metrics/black-pin-geometry-20261011.json`。已在 `work\_wt_codex` 解完并 `git add`（**未提交、未 push**）。
+- 遗留：`tests/test_mono_pin_geometry.py::test_same_raster_stroke_uses_one_role_crop_owner_without_deleting_old_contacts`
+  在 **c3d3684 上本来就失败**（`AssertionError: 2 != 1`），不是合并引入的（本机无 pytest，用 `unittest discover` 跑：crops 33 passed / geometry 18 ran 1 failed）。
+
+### 五、他们分支里三个会**静默毁掉整批**的 bug（未改，只记录）
+
+1. `stage1/pintrace.py:35` / `:399` 硬编码 `sys.path.insert(0, r"Y:\workspace\EDA\eda-pcb")`（还有 `pipeline/config.py:20` 的 `REPO = ...`）——
+   **库模块**写死绝对路径 ⇒ 在别的 checkout 里跑（比赛机路径不同）时，`import stage2.run` 之类会**静默加载另一个仓库的模块**。
+   本机第一次跑就是这样：他们的 worktree 里跑到了我方 `stage2/run.py:477`、`stage2/libpins.py:223`、`stage2/assemble.py:2392`，
+   报 `ImportError: cannot import name 'libraries' from 'assets'`。
+2. `submission/run.py:331` 函数内 `import traceback` ⇒ `traceback` 变成局部名，第 240/263/387/393 行 `traceback.format_exc()` 抛 `UnboundLocalError`，
+   **第一张图失败就整批终止**（与注释里「整批失败都不会少产物」相反）。
+3. 无（VLM 缺 key 时他们会自动降级，这点是对的：`VLM 端点探测…不可用` 会跳过补强而不是崩）。
+
+### 六、状态与下一步
+
+- 我方交付**未变 84.95**（本节只做第三方定标，未动任何默认值）。
+- 主线并轨方案（如要做）：保留 ours + 只并他们**我方没有的文件/函数**（`stage1/passive_pins.py`、`passive_terminal_geometry.py`、
+  `rgb_led.py`、`stage2/vertical_pin_*`、`designator_reading.py`、`pin_name_library.py`、`intact_pin_numbers.py`、
+  `segmented_caption.py`、`non_ic_caption_reading.py` 等 70 个我方没有的新模块）+ 我方自 PR#1 并入后**没动过**的文件
+  （`stage1/pin_evidence.py`、`bigic.py`、`pipeline.py`、`nets.py`、`stage2/structmatch.py`、`mono_pin_crops.py`、
+  `pin_name_ocr.py`、`fusion/solve.py`），全部按 §5.107 判据（默认关 + 两口径 A/B）决定是否翻默认。
+  注意：`pin_f1` 只统计 GT 里 `type=box` 的元件（`pin_box_only=True`）⇒ 他们的**非 IC 端子/被动件**那一批**不可能**改善引脚通道，
+  只能通过「非 box 引脚号字面比」影响网络通道，而这一段我方已全对（§5.112：`pin_pos_ok_num_diff 0`）。
+
+### 复现
+
+```
+# 队友分支跑官方 10 张（先修掉 §五 的硬编码路径与 traceback，否则会串到我方模块）
+Set-Location work\_wt_pr3
+$env:LLM_API_KEY = (Get-Content Y:\workspace\EDA\eda-pcb\.lmstudio_key -Raw).Trim()
+python -X utf8 -m submission.run -input Y:\workspace\EDA\work\_pr3_in -output Y:\workspace\EDA\work\_fast_out_pr3v `
+       -cases "1,2,3,4,5,6,7,8,9,10" -mode off -vlm auto -fusion on        # VLM off 版把 -vlm auto 换成 -vlm off
+# 用我方判分器打分（cwd = eda-pcb）
+python -X utf8 tools/eval/fast.py --score-only --cases "1,2,3,4,5,6,7,8,9,10" --out pr3v            # 51.51（引脚 0.0912）
+python -X utf8 tools/eval/fast.py --score-only --engine harness --out pr3v                          # 36.85（引脚 0.0565）
+python -X utf8 ..\work\_pr3shift.py --run work/_fast_out_pr3b --ds "0,4,8,10,12,14,16,20,24"        # 引脚点整体内移扫描
+python -X utf8 ..\work\_pindetail.py --case 9 --run pr3b                                            # 逐脚对照
+```
