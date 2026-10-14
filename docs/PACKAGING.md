@@ -84,15 +84,42 @@ mean_score   84.945
 
 ---
 
-## 3. ⚠️ 密钥红线（本轮已处理，但看一眼再推）
+## 3. ⚠️ 密钥红线（**push 前必须先做掉**）
 
-- `packaging/Dockerfile` 曾经**硬编码** DashScope key（两条 `ENV LLM_API_KEY="sk-ws-…"` / `ENV DASHSCOPE_API_KEY="sk-ws-…"`），是**未推送**提交 `a6cac45`（"fix: 打包链本机可修项…"）带进来的。
-- 本轮已改成空默认值 + 注释（`# ★ 密钥不入库：本地调试用 docker run -e LLM_API_KEY=... 注入`）。
-- `git grep sk-ws origin/main` 为空 ⇒ **远端树从未出现过密钥**。
-- 但 `a6cac45` 仍在这 178 个未推送提交里：**一旦 push，旧值就永久进入远端历史**。两个选择：
-  1. **轮换 DashScope key**（推荐，成本最低）：旧值随轮换作废，历史里留着也无害，直接 `git push`。
-  2. 首次 push 前重写历史：`git filter-repo --replace-text <把旧 key 替换成 REDACTED 的规则文件>`——代价是 178+ 个提交 SHA 全变，而 `docs/RESULTS.md` §5.x 引用了其中十几个 SHA（需逐条改文档），且 codex 侧分支要重取。**不推荐**，除非该 key 无法轮换。
-- 另外：`.lmstudio_key`、`*.key`、`.env` 均未被跟踪；全树（排除 `docs/RESULTS.md` 与 GT 数据）用 `(api[_-]?key|token|password|secret)\s*[:=]\s*["'][A-Za-z0-9_\-\.]{16,}` 扫过，零命中。
+**事实**：`packaging/Dockerfile:20-21` 曾**硬编码**一枚 DashScope key
+（`ENV LLM_API_KEY="sk-ws-…"` / `ENV DASHSCOPE_API_KEY="sk-ws-…"`），由**未推送**提交
+`a6cac45`（"fix: 打包链本机可修项…"）带进来。2026-10-14 已从工作树清掉（改成空默认值 + 注释），
+`git grep sk-ws origin/main` 为空 ⇒ **远端树从未出现过密钥**。
+
+**旧值仍活着（实测，不是推测）**：`work/_keyprobe.py` 把 `a6cac45` 里的 key 抽出来打
+`GET https://dashscope.aliyuncs.com/compatible-mode/v1/models` ⇒ **HTTP 200**；
+对照组 `work/_keyprobe_control.py` 用伪造 key ⇒ **401** `Incorrect API key provided`，
+空 key ⇒ 401 `You didn't provide an API key` ⇒ 端点确实鉴权，泄漏的那枚确实可用。
+
+**它还在 178 个未推送提交里**：一旦 `git push`，旧值就永久进入远端历史（仓库是 private，
+但协作者可见、且日后可能公开）。两条路，**先做掉再推**：
+
+1. **作废并重发该 key**（推荐，唯一真正的补救）：百炼控制台
+   <https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key> ——
+   注意**右上角要选对地域**（每个地域的 API Key 与 endpoint 域名独立、不能混用），
+   并确认 key 的**归属**（主账号 / RAM 用户、哪个业务空间）；删除**立即失效且不可恢复**，
+   API Key 本身没有有效期；单账号+单地域上限 50 个。也可用 OpenAPI
+   `DeleteApiKey`（ModelStudio `2026-02-10`，
+   <https://api.aliyun.com/meta/v1/products/ModelStudio/versions/2026-02-10/apis/DeleteApiKey/api>），
+   但需要阿里云 **AK/SK**（本机没有：无 `aliyun` CLI、`ALIBABA_CLOUD_ACCESS_KEY_ID` 为空、
+   `~/.aliyun/config.json` 与 `~/.alibabacloud/credentials` 均不存在 ⇒ **只能由有控制台权限的人做**）。
+   作废后直接 `git push`，历史里留着旧字符串也无害。
+2. **首次 push 前重写历史**（只有在该 key 无法作废时才考虑）：`git filter-repo --replace-text
+   <规则文件>` —— 代价：`git rev-list --count a6cac45..HEAD` = **146**，连同 `a6cac45` 共
+   **147 个 SHA 会变**，其中 **18 个被文档以 7 位 SHA 引用**（`docs/RESULTS.md` §5.x、
+   `docs/reports/官方评测机_第5次提交归因.md:108` 与 `:192` 直接引用 `a6cac45`），要逐条改文档；
+   而且 **`git filter-repo` 本机未安装**（既非 git 子命令也无 python 模块），得先 `pip install
+   git-filter-repo`，或退回内置 `git filter-branch`（更慢更易错）。**不推荐。**
+
+**顺带**：`.lmstudio_key`、`*.key`、`.env` 均未被跟踪；全树（排除 `docs/RESULTS.md` 与 GT 数据）
+用 `(api[_-]?key|token|password|secret)\s*[:=]\s*["'][A-Za-z0-9_\-\.]{16,}` 扫过，零命中。
+**队友自填项**见 `README.md` §3.1；容器注入时注意官方示例给的是 `DASHSCOPE_API_KEY` 而本仓库代码读
+`LLM_API_KEY`，`packaging/run.sh` 已加别名兜底（只在 `LLM_API_KEY` 为空时映射，不覆盖显式值）。
 
 ---
 

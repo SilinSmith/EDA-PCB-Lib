@@ -24,6 +24,19 @@ fi
 
 mkdir -p "$OUTPUT_DIR/final_results" "$OUTPUT_DIR/runs"
 
+# ---------------------------------------------------------------------------
+# 密钥别名兜底：官方示例注入的是 `DASHSCOPE_API_KEY`，而本仓库代码读的是
+# `LLM_API_KEY`（`vlm/client.py:76`、`stage1/llm.py:141`）。平台只会给其中一个名字，
+# 所以这里映射一次，否则会出现「平台给了 key 但代码读不到」→ 所有 VLM 通道静默降级
+# （官方 10 张 84.95 → ~70，日志里只有一行「跳过」）。
+# 只在 `LLM_API_KEY` 为空时映射，**不覆盖**调用方显式设置的值。
+# ---------------------------------------------------------------------------
+if [ -z "${LLM_API_KEY:-}" ] && [ -n "${DASHSCOPE_API_KEY:-}" ]; then
+  LLM_API_KEY="$DASHSCOPE_API_KEY"
+  export LLM_API_KEY
+  echo "LLM_API_KEY <- DASHSCOPE_API_KEY（别名兜底）"
+fi
+
 echo "=== run.sh ==="
 echo "INPUT_DIR  = $INPUT_DIR"
 echo "OUTPUT_DIR = $OUTPUT_DIR"

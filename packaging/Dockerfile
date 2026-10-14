@@ -17,8 +17,12 @@ FROM edarace-agent-base:ubuntu24
 
 ENV LLM_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 ENV LLM_MODEL="qwen3.7-plus"
-# ★ 密钥不入库：本地调试用 docker run -e LLM_API_KEY=... -e DASHSCOPE_API_KEY=... 注入；
-#   平台会自带密钥，仓库里只保留空默认值。
+# ★ 密钥不入库（仓库里没有、也不该有真 key）：本地调试用
+#     docker run -e LLM_API_KEY=... -e DASHSCOPE_API_KEY=... <镜像>
+#   注入；正式评测由平台注入。两个都留空默认值。
+#   ⚠️ 空值不是"没设置"：`os.environ.get(K, d)` 在 K 存在但为空串时返回空串，
+#      所以 vlm/client.py 的取 key 分支必须是 `if env:` 这种真值判断（已是如此）。
+#   ⚠️ run.sh 里有别名兜底：LLM_API_KEY 为空而 DASHSCOPE_API_KEY 有值时互相映射。
 ENV LLM_API_KEY=""
 ENV DASHSCOPE_API_KEY=""
 

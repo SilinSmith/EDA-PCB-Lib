@@ -187,6 +187,40 @@ python assets.py
 `requirements.txt` 只列**直接依赖**；完整冻结版本（本机实测跑通的那一套）在
 `requirements.lock.txt`。
 
+### 3.1 ★ 你必须自己填的东西（仓库里不含任何密钥）
+
+克隆下来就能跑判题机（§4.3），但要跑出 84.95 那条链路，**大模型 API key 必须你自己提供** ——
+仓库里没有、也不会有。漏填的失败方式很安静：VLM 通道整体跳过，官方 10 张从 **84.95 掉到 ~70**，
+日志里只有一行「跳过」。
+
+| 要填的 | 变量 / 位置 | 怎么填 | 漏填后果 |
+| --- | --- | --- | --- |
+| 大模型 API key | `LLM_API_KEY`（`vlm/client.py:62-102` 四级回退） | ① 环境变量 `LLM_API_KEY`；② `LLM_API_KEY_FILE=<文件路径>`；③ 仓库根 `eda-pcb/.lmstudio_key`（已 gitignore）；④ `~/.lmstudio/api_key`。文件内容可裸 token，也可写 `LLM_API_KEY=...` 一行 | VLM 通道静默降级：84.95 → ~70 |
+| 接口地址 | `LLM_BASE_URL`，默认 `http://127.0.0.1:1234/v1`（`vlm/client.py:59`） | 用官方 API 时设 `https://dashscope.aliyuncs.com/compatible-mode/v1` | 连不上端点 → 同上 |
+| 模型名 | `LLM_MODEL`，默认 `qwen3.5-9b`（`vlm/client.py:106`） | 改成你账号下可用的模型（例如平台给的 `qwen3.8-flash`） | 模型不存在 → 同上 |
+| scipy | `pip install "scipy>=1.11"` | 判题机 `schematic_parser/metrics.py:42` 的三处匈牙利匹配要用；`requirements.txt` 已列 | 判题机 import 失败 |
+| torch | 按 CUDA 版本自选 index | `requirements.txt` **故意不列** torch（见文件头注释） | 装错 CUDA → 检测链路跑不动 |
+
+**已经随仓库提交、不用你准备**：三个权重（`weights/pcb43_v2_from_best.pt` 38.8 MB、
+`weights/textrec_best.pt` 29.6 MB、`yolo_part/weights/yolo11m.pt` 38.8 MB，合计约 68 MB）与
+**221 个 GT 标注 json**（220 个用例 + `10GT/type_list.md`，11.5 MB）。
+**没有入库**：GT 的 PNG、训练数据（见 §七）。
+
+两条最小验证（在 `eda-pcb/` 目录下跑）：
+
+```powershell
+# ① key 到底读到了没有：期望打印的不是 none、不是空串
+python -X utf8 -c "from vlm import client as c; print(c.KEY_SOURCE, '|', c.BASE, '|', c.MODEL)"
+# ② 判题机环境是否完整（220 例自检，不需要 key）
+python -X utf8 -m schematic_parser.evaluate --self-test
+```
+
+纪律：**不要把 key 写进任何被 git 跟踪的文件**（`.lmstudio_key`、`*.key` 已在 `.gitignore`，
+但别把 key 贴进 README、脚本或 Dockerfile）。容器里用
+`docker run -e LLM_API_KEY=... -e DASHSCOPE_API_KEY=...` 注入：官方示例注入的是
+`DASHSCOPE_API_KEY`，本仓库代码读的是 `LLM_API_KEY`，`packaging/run.sh` 已加别名兜底
+（只在 `LLM_API_KEY` 为空时映射，不覆盖显式设置）。
+
 ---
 
 ## 四、快速开始
