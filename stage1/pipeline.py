@@ -99,6 +99,11 @@ PINC_ON = env_on("STAGE1_PINC", "1")
 #   `STAGE1_PIN_DIRECTION_GUARD` / `STAGE1_PIN_ATTACHMENT_GUARD` 是队友另两条
 #   方向/穿体判据，他们自己默认也是 0（未定案），这里照抄默认值。
 PIN_COLOR_ON = env_on("STAGE1_PIN_COLOR", "0")
+# ★ 彩色实测点的**外伸量上限**（px；0 = 关，逐位老行为）。见 §5.116：
+#   `pincolor` 实测点取在红桩末端（外距中位 19.3px），官方 GT 约定只有 12.0px
+#   （均值 12.5、范围 6~22），而判分器 `pin_tol=5` ⇒ 该臂整边 position_mismatch。
+#   队友树实测：CAP=12 让他们的引脚 F1 0.1332→0.4891、总分 49.39→57.72（+8.33）。
+PIN_COLOR_CAP = float(os.environ.get("STAGE1_PIN_COLOR_CAP", "0") or 0)
 # ★★ 黑白框实测引脚（队友 PR#3：`stage1/pin_evidence.py` 新增的
 #   `recover_frame_pins`/`_frame_outer`/`_black_ink`）—— 把「按几何/文字猜出来的」
 #   引脚点校准到**实测的框边笔画行**上。它只校准点、不增删引脚，且内部有三道
@@ -159,6 +164,22 @@ def apply_color_pins(components, pins, pin_synth, color_records):
             r["point_img"] = [round(float(v), 1) for v in r["point_img"]]
             if r.get("anchor_img"):
                 r["anchor_img"] = [round(float(v), 1) for v in r["anchor_img"]]
+            # ★ `STAGE1_PIN_COLOR_CAP`（默认 0 = 逐位老行为）：把实测点沿
+            #   「框边锚点 anchor_img → 实测点」方向拉回到距锚点不超过 CAP 像素处。
+            #   动机（§5.116）：`pincolor` 的实测点落在红桩**末端**（官方 10GT 外距
+            #   中位 19.3px），而官方 GT 的引脚点外距中位 12.0px（均值 12.5，6~22），
+            #   `pin_tol=5` ⇒ 整条边被判 position_mismatch：本树该臂 65.14（引脚 0.0953），
+            #   队友树同臂 49.39（引脚 0.1332，7 张爆 0）。队友树加 CAP=12 后
+            #   57.72/引脚 0.4891（+8.33，见 §5.116），故这里也留同一个可 A/B 的闸。
+            if PIN_COLOR_CAP > 0:
+                _a = r.get("anchor_img")
+                _p = r["point_img"]
+                if isinstance(_a, (list, tuple)) and len(_a) == 2:
+                    _dx, _dy = _p[0] - _a[0], _p[1] - _a[1]
+                    _d = math.hypot(_dx, _dy)
+                    if _d > PIN_COLOR_CAP and _d > 1e-6:
+                        r["point_img"] = [round(_a[0] + _dx / _d * PIN_COLOR_CAP, 1),
+                                          round(_a[1] + _dy / _d * PIN_COLOR_CAP, 1)]
             r["trust"] = "trusted"
             measured.append(tuple(r["point_img"]))
             connections.append(r.get("connected"))

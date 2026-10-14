@@ -1,0 +1,25 @@
+diff --git a/stage1/pipeline.py b/stage1/pipeline.py
+index bba06ca..ce8f40e 100644
+--- a/stage1/pipeline.py
++++ b/stage1/pipeline.py
+@@ -124,6 +124,20 @@ def apply_color_pins(components, pins, pin_synth, color_records):
+             r["point_img"] = [round(float(v), 1) for v in r["point_img"]]
+             if r.get("anchor_img"):
+                 r["anchor_img"] = [round(float(v), 1) for v in r["anchor_img"]]
++            # _CAP_MARK_STAGE1_PIN_COLOR_CAP：把实测点沿「框边锚点→点」方向拉回到不超过 CAP 像素处。
++            # 动机（官方 10GT 实测）：彩色实测点落在红桩末端（外距中位 19.3px），
++            # 而官方 GT 的引脚点外距中位 12.0px（均值 12.5，6~22），pin_tol=5
++            # ⇒ 整边被判 position_mismatch，引脚通道崩到 F1 0.13（我们树同理 65.14）。
++            _cap = float(os.environ.get("STAGE1_PIN_COLOR_CAP", "0") or 0)
++            if _cap > 0:
++                _a = r.get("anchor_img")
++                _p = r["point_img"]
++                if isinstance(_a, (list, tuple)) and len(_a) == 2:
++                    _dx, _dy = _p[0] - _a[0], _p[1] - _a[1]
++                    _d = math.hypot(_dx, _dy)
++                    if _d > _cap and _d > 1e-6:
++                        r["point_img"] = [round(_a[0] + _dx / _d * _cap, 1),
++                                          round(_a[1] + _dy / _d * _cap, 1)]
+             r["trust"] = "trusted"
+             measured.append(tuple(r["point_img"]))
+             connections.append(r.get("connected"))

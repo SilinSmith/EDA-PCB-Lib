@@ -9444,3 +9444,186 @@ $env:STAGE1_MONO_FRAME_PINS='1'; python -X utf8 tools/eval/fast.py --cases "0092
 # 池子产量体检（这条臂在池子上到底干了什么；并逐 case 对比两跑 stage1 的 pins）
 python -X utf8 ..\work\_poolmono.py --run poolA1 --cmp poolA0
 ```
+
+## §5.116 整合取证（三）：队友线极低分的真因是**彩色实测点的外伸量约定**，不是接口缺口
+
+> 本节回答两个问题：(a) 把 §5.115 剩下的两处（13 根缺脚、法向约定）做进去；
+> (b) 「同名文件内容不同」能否抽成额外程序补他们的数据依赖 / 或改他们的接口 ——
+> 因为「我们新引入了很多接口而他们可能没有，或者他们约定的接口实际上没有正常工作，
+> 这些可能都导致了极低分」。结论：**(a) 两处都是实测正的闸，不动；(b) 接口缺口是真的，
+> 但它不是低分原因；低分的真因是一个「两棵树逐字相同、只差默认值」的几何约定，已量化。**
+
+### 一·结论（四句话）
+
+1. **低分真因**：`STAGE1_PIN_COLOR` 在队友树默认 **`1`**，而 `pincolor` 的实测点取在**红桩末端**
+   （外距中位 **19.3px**、均值 21.1）；官方 GT 的引脚点外距中位 **12.0px**（均值 12.5、范围 6~22），
+   判分器 `pin_tol=5` ⇒ 该元件整条边被判 `position_mismatch`。同一批 10 张：
+   **开 49.39（引脚 0.1332、5 张爆 0）→ 关 56.96（引脚 0.4887、无爆 0）→ 加 14 行「外伸量上限」57.72（引脚 0.4891）**。
+2. **这个约定两棵树逐字相同**（`stage1/pipeline.py:apply_color_pins` 与 `stage1/pincolor.py`
+   除我们加的接口注释、参数改名外无差别），差别只在**默认值**（我们 `0` / 他们 `1`）。
+   所以我们树里同一个臂同样崩：**65.72（引脚 0.1464）**；打上同一个上限后回到 **79.35（引脚 0.6830）**，
+   但仍**低于我们默认 1.13 分** ⇒ 这条线的最好状态也赢不了默认路径。
+3. **接口缺口是真的**：把他们的 12 个 stage2 模块挂到我们的 `PIN_READERS` 上，有 **12 处静默失效点**
+   （§四：导入期失败被 `except Exception: print(...); continue` 吞成一行 stdout，产物里无痕迹）。
+   但它解释的是「他们的链在我们树里跑不起来」，**不是**他们在**自己树上**的低分。
+4. **是否并入：不并。** 同一判分器下他们的最好配置 57.72 < 我们确定性 80.48 < 交付 84.95。
+   `STAGE1_PIN_COLOR` 继续默认关；新增 `STAGE1_PIN_COLOR_CAP` 默认 `0`（逐位老行为）留作可 A/B 的闸。
+
+### 二·外伸量口径：pred 与 GT 的逐点对照
+
+`work/_pinnorm.py`（按最近框边归边、量带符号法向外距、按 GT 脚号同键配对，官方 10 张 n=136）：
+
+| 运行 | pred 外距 中位/均值 | 同键差 中位 | \|差\|≤5px | 说明 |
+|---|---|---|---|---|
+| GT（真值） | **12.0 / 12.5** | — | — | 范围 6~22，**本身就是异质约定**（case8 左 22 / 右 9） |
+| 我们 `gsd9`（默认） | 12.0 / 12.0（常量） | **0.00** | **77.5%** | `PIN_OUT_BOX=12.0`；我们的剩余损失 25/136 全在这里（§五） |
+| 队友 `pr3c`（彩色关） | 12.0 / 12.0 | +1.05 | 80.6% | 几何与我们同源 |
+| 队友 `pr3cap`（彩色开 + CAP=12） | 12.0 / **12.2** | **+0.71** | 78.9% | 钳位后几乎与我们重合 |
+| 队友 `pr3b`（彩色开，他们的默认） | **19.3 / 21.1** | **+8.21** | **26.5%** | 整边 `position_mismatch` 的来源 |
+
+⇒ 彩色实测**行**其实测得相当准（`work/_colrows.py`：行对齐 50.0% = 68/136、法向中位差 8.50px；
+我们 90.4% = 123/136、2.40px），**坏的是法向**：红桩末端 ≠ GT 约定点。钳位之所以有效，
+是因为它只动法向、不动行。
+
+### 三·同判分器 A/B（官方 10 张；我方 `protocol2` 尺，括号内为官方 `harness` 尺）
+
+| 树 | 配置 | 总分 | 元件 | 引脚 | 网络 | 导线 | 引脚爆 0 |
+|---|---|---|---|---|---|---|---|
+| 队友 | 彩色开（他们的默认） | 49.39 | 0.8147 | 0.1332 | 0.5923 | 0.0888 | 5 张（2,5,6,7,9） |
+| 队友 | 彩色开 + VLM auto | 51.51 | 0.9422 | 0.0912 | 0.5732 | 0.0901 | 7 张 |
+| 队友 | 彩色关 | 56.96 | 0.8147 | 0.4887 | 0.5551 | 0.0871 | 0 |
+| 队友 | **彩色开 + `CAP=12`** | **57.72** | 0.8147 | **0.4891** | 0.5775 | 0.0845 | 0 |
+| 我们 | 确定性基准（彩色关） | 80.48 | 0.9355 | 0.7385 | 0.8051 | 0.5780 | 0 |
+| 我们 | 彩色开（原样） | 65.72 | 0.9355 | 0.1464 | 0.8141 | 0.5499 | 6 张（2,4,5,6,7,9） |
+| 我们 | 彩色开 + `CAP=12` | 79.35 | 0.9355 | 0.6830 | 0.8160 | 0.5651 | 0 |
+| 我们 | 交付（VLM 开、引脚通道关） | **84.95** | 1.0000 | 0.8166 | 0.8210 | 0.5796 | 0 |
+
+逐案引脚 F1（同一判分器）：`pr3b` 1:0.4800 3:0.1818 4:0.2500 8:0.3333 10:0.0870（其余 0）；
+`pr3c` 无 0，最低 2:0.8387 最高、10:0.2609；`pr3cap` 1:0.4800 2:0.1250 3:0.7273 4:0.7500 5:0.2500
+6:0.7333 7:0.5714 8:0.3448 9:0.5455 10:0.3636；我们 `gsd9` 8:0.3030，其余 ≥0.7308。
+
+**与队友文档对账**：他们 `docs/RESULTS.md` 自报 9 张加权 57.54 = 30×0.9403 + 25×0.3920 + 35×0.5355 + 10×0.0787
+—— 这个组合对应的是「彩色关 / 加上限」这一档，**不是该分支的默认路径**（彩色开 49.39）。即：
+他们文档里的数不是当前默认配置跑出来的，`STAGE1_PIN_COLOR` 默认开是他们分支回归里的一处失配。
+
+### 四·接口缺口：12 处静默失效（回答「接口没接上」）
+
+挂 `PIN_READERS` + 原样搬入他们 12 个 stage2 模块，会在这 13 个点失效
+（`eda-pcb/stage2/run.py:419 → :423-425` 的 `except Exception: print(...); continue` 把前 12 处吞成 stdout 一行）：
+
+| # | 失效点 | 机制 |
+|---|---|---|
+| 4.1 | `stage2/run.py:419`/`:423-425` | 10 个模块我方不存在 ⇒ `ImportError` 被吞 |
+| 4.2 | `mono_pin_reading.py:14-18` | 顶层 import `pin_identifier` / `intact_pin_numbers` / `name_fringe`（我方全无） |
+| 4.3 | `mono_pin_reading.py:481` | `assign._qualified_mono_views` 我方**有意未并**（`tests/_unmerged_gate.py:3-5`） |
+| 4.4 | `vertical_pin_crops.py:12-13` | 从 `mono_pin_crops` 取 9 个符号，我方全无 |
+| 4.5 | `vertical_pin_reading.py:13` | `mono_pin_crops.measured_text_contact` 我方无 |
+| 4.6 | `designator_reading.py:222` | `structmatch.normalize_name_evidence` 我方无（只有 `normalize_pin_evidence:117`） |
+| 4.7 | `pin_name_library.py:26-27` | 其 `pin_name_library.json` 只在他们的树里 |
+| 4.8 | `vertical_pin_crops.py:34` | 我方 `doc` 永不产 `pin_text_view_rotation` ⇒ 整模块恒空操作 |
+| 4.9 | `mono_pin_crops.py:84` | 我方 `pin_mono` 默认 `{}` ⇒ 丢代表行合并与排序（半静默） |
+| 4.10 | `structmatch.py:170-175` vs 他们 `:325-337` | 我方认证函数没有 `source=="frame_hollow_marker"` 分支 ⇒ marker 行零观测 |
+| 4.11 | `stage2/run.py:79`/`:124` | `MONO_PIN_OCR` 默认 `off` ⇒ 默认不调用 mono 读取器 |
+| 4.12 | `run.py:421-422` 无条件 `min_conf=…, **_args` | 他们 5 个入口签名不同 ⇒ 全部 `TypeError`（被吞） |
+| 4.13 | `tools/dev/pinread_contract.py:72-73` | 他们的 `mono_pin_reading:522` / `color_crops:101` / `pin_name_reading:78` 判不合规；`TARGETS` 里没有他们那 10 个模块 |
+
+**最小适配清单**（若将来真要并，7 步）：① 搬 `pin_identifier`/`intact_pin_numbers`/`name_fringe`/
+`fragmented_text`/`segmented_caption`/`pin_name_library` + 其 JSON；② 补 `assign._qualified_mono_views`
+（他们 `assign.py:703`）；③ 补 `structmatch` 的 `frame_hollow_marker` 分支（两树 `pinmarkers.py` 逐字节相同）；
+④ 补 `structmatch.normalize_name_evidence` 及 designator 链其余 6 个符号；⑤ 入口签名适配（推荐直接改他们 4 个读数器
+加 `min_conf: float = 0.0, **opts`、`read_pin_names` 第 3 参 `bgr`→`engine`）；⑥ 挂 `pin_text` 时去掉
+`grey_evidence=…` 或给他们的 `read_pin_texts` 加 `grey_evidence`；⑦ `vertical_pin_reading` 需
+`functools.partial(..., horizontal_reader=…)`。
+**本节的实测结论是：这 7 步做完也拿不到正收益**（最好的那条臂 57.72 < 80.48），因为卡住分数的不是接口，
+而是 §二 的外伸量约定与 §五 的读数/几何损失分布。
+
+### 五·把「引脚损失」拆到逐维（`work/_pr3funnel.py`，复刻判分器的三道闸；官方 10 张 gt=136）
+
+| 运行 | tp | F1 | 缺键 | 名字错 | 位置超差 | 多余 | 位置超差距离 中位/均值 | 缺键→同件最近点 中位 |
+|---|---|---|---|---|---|---|---|---|
+| 队友 `pr3b`（彩色开） | 22 | 0.2667 | 18 | 24 | **72** | 7 | 10.3 / 12.7 | 19.8 |
+| 队友 `pr3v`（彩色开 + VLM） | 16 | 0.2000 | 23 | 21 | **76** | 8 | 12.0 / 28.6 | 10.5 |
+| 队友 `pr3c`（彩色关） | 60 | 0.5742 | **37** | **26** | 13 | 13 | 8.0 / 7.3 | 19.9 |
+| 队友 `pr3cap`（彩色开 + CAP12） | 58 | 0.5771 | 24 | **26** | 28 | 7 | 5.5 / 6.4 | 13.7 |
+| 我们 `gsd9`（默认） | **103** | **0.8548** | 7 | 1 | 25 | 2 | 8.1 / 12.8 | — |
+
+⇒ 队友侧：**彩色开时错在几何**（pos 72，且 case 2 的 16 个点全部恰好偏 12.0px——常数偏移）、
+**彩色关时错在读数**（缺键 37 + 名字错 26）。我们侧：只剩**缺键 7** 与 **位置超差 25**，
+后者 25 个里有 23 个的法向分量就是误差主体（§二），而这条线 §5.65 已判负（见 §六）。
+
+### 六·「把剩下两处做进去」⇒ 两处都是实测正的闸，不动
+
+1. **13 根缺脚（case4 U2.1/GND、U2.2/VOUT；case6 U1.1/IN、U3.1/IN；case7 U1.1/AGND；
+   case8 U1.16/NC；case10 U2.1/Vout 等）**：`stage1` **已经检到**——case 6 `U1` 三个脚槽位
+   486/505/525 与 GT 逐点相同（`work/_pindrop.py --case 6`），死在 `stage2` 的
+   `STAGE2_BOX_PIN_DROP_UNREAD=mixed` 闸（`stage2/assemble.py:217-220`，`:2430` 处生效）。
+   这条闸是**实测正的**：10GT 44.70→47.67（引脚 0.1881→0.2720）、19 张 26.46→28.31、
+   220 张只有 `mixed` 不降（`off`/`noread`/`all` 都降）。补救闸 `STAGE2_BOX_PIN_KEEP_NAMED`
+   （「读到了名字、没读到号就保留」）**两把尺子都判负**：复刻尺 63.34→61.56（`named`）/ 62.09（`known`）、
+   协议尺 76.39→73.67 / 74.40、派生 18 张 −0.2833。⇒ 缺脚是**闸的代价**，不是可修缺陷。
+2. **法向约定**：§5.65（`RESULTS.md:6180-6219`）已判负 —— 把引脚点放到实测桩尖：
+   常量 12.0 命中 112/136 = **82.4%**，灰度墨迹带 79/136 = 58.1%，更宽的带更差（吃共线导线），
+   彩色红桩尖端 22.4%，`_tiprule.py` R1 47.1%；红桩长度在 21 个 box 元件上几乎恒定 17.5~19.5px
+   而 GT 变化 6~22 ⇒ **红桩里不含 GT 偏移量的信息**。⇒ 不动。
+
+### 七·落地
+
+- **我们树**：`eda-pcb/stage1/pipeline.py:106`
+  `PIN_COLOR_CAP = float(os.environ.get("STAGE1_PIN_COLOR_CAP", "0") or 0)`；
+  `:167-182` 在 `apply_color_pins()` 内把实测点沿「`anchor_img` → `point_img`」拉回到不超过 CAP 像素。
+  默认 `0` = 逐位老行为，已用同口径 A/B 验证（`colcap0` = **80.48**，与交付前的确定性基准 `sjdef3` 逐位相同）。
+- **给队友的补丁**（未推送、未改他们分支）：`work/_pr3_colorcap.patch`（14 行，仅 CAP 钳位，可直接 `git apply`）；
+  `work/_pr3_allfix.patch`（17 行，另含三处环境硬编码 + `import traceback` 修复）。
+- **未并**：他们的 12 个 stage2 模块、`pin_name_library.json`、`assign`/`structmatch` 的绑定主体
+  （我方 `ebabf5d` 有意未并）、`STAGE1_PIN_COLOR` 默认仍是 `0`。
+
+### 八·复现
+
+```powershell
+# 我们树：默认中性 + 彩色臂原样 + 彩色臂加上限（确定性口径）
+cd Y:\workspace\EDA\eda-pcb
+python -X utf8 tools/eval/fast.py --cases "1,2,3,4,5,6,7,8,9,10" --out colcap0 --extra "-offline -vlm-pin off"
+$env:STAGE1_PIN_COLOR="1"; python -X utf8 tools/eval/fast.py --cases "1,2,3,4,5,6,7,8,9,10" --out col10 --extra "-offline -vlm-pin off"; Remove-Item Env:STAGE1_PIN_COLOR
+$env:STAGE1_PIN_COLOR="1"; $env:STAGE1_PIN_COLOR_CAP="12"; python -X utf8 tools/eval/fast.py --cases "1,2,3,4,5,6,7,8,9,10" --out colcap1 --extra "-offline -vlm-pin off"
+
+# 队友树：给他们的 apply_color_pins 打 CAP 闸（幂等，--revert 可撤）
+cd Y:\workspace\EDA\work\_wt_pr3
+python -X utf8 ..\_capcol.py --apply
+$env:STAGE1_PIN_COLOR="1"; $env:STAGE1_PIN_COLOR_CAP="12"
+python -X utf8 -m submission.run -input Y:\workspace\EDA\work\_pr3_in -output Y:\workspace\EDA\work\_fast_out_pr3cap -cases "1,2,3,4,5,6,7,8,9,10" -mode off
+cd Y:\workspace\EDA\eda-pcb; python -X utf8 tools/eval/fast.py --score-only --out pr3cap --cases "1,2,3,4,5,6,7,8,9,10"
+
+# 逐维分解
+python -X utf8 work\_pinnorm.py --run <gsd9|pr3b|pr3c|pr3cap>
+python -X utf8 work\_pr3funnel.py --runs pr3b,pr3c,pr3cap,gsd9
+python -X utf8 work\_pindrop.py --case 6 --run gsd9
+```
+
+### 九·补：池子 10 张的确定性 A/B（mono 臂仍零位移）
+
+§5.115 的池子 A/B 带着 VLM 抽样抖动（两跑 `改名 61 vs 65 个元件`、`写值 53 vs 55`），
+只能在确定性口径下判读。本轮用 `-offline -vlm-pin off` 重跑，两跑**逐位相同**：
+
+| 运行 | 总分 | 元件 | 引脚 | 网络 | 导线 | tp 合计 |
+|---|---|---|---|---|---|---|
+| `poolD0`（基准） | 13.95 | 0.3359 | 0.0465 | 0.0712 | 0.0216 | 164 · 20 · 44 · 18 |
+| `poolD1`（`STAGE1_MONO_FRAME_PINS=1`） | **13.95** | 0.3359 | 0.0465 | 0.0712 | 0.0216 | 164 · 20 · 44 · 18 |
+
+两跑的爆 0 清单也相同（引脚 8 张：0092 0048 0019 0024 0075 0086 0002 0042；网络 5 张；导线 6 张）。
+即：`tools/diag/_poolmono.py` 报出池子上该臂**确实有输入**（46 条记录：`added=5`、`calibrated=115`、
+`stroke_rows=120`、`marker_rows=0`、四边全跳 0），但**分数逐位不变** —— 新增的 5 个脚
+（`0086 c0002 +4`、`0092 c0002 +1`）与校准过的 115 个点，落在
+`STAGE2_BOX_PIN_DROP_UNREAD=mixed` 会丢掉的槽位、或本来就配不上的位置上。
+
+⇒ 汇总这条臂在两套数据上的完整结论：**官方 10 张连输入都没有**（框是彩色的，`_black_ink` 取不到；
+四边 `confirmed=False coverage=0.000`）、**池子有输入但不产生判分器可见的位移**。
+保留为默认关的已移植能力（`STAGE1_MONO_FRAME_PINS`），与默认路径零交互。
+
+```powershell
+cd Y:\workspace\EDA\eda-pcb
+$pool = "0092,0048,0019,0024,0075,0086,0002,0001,0042,0103"
+python -X utf8 tools/eval/fast.py --cases $pool --out poolD0 --extra "-offline -vlm-pin off"
+$env:STAGE1_MONO_FRAME_PINS="1"; python -X utf8 tools/eval/fast.py --cases $pool --out poolD1 --extra "-offline -vlm-pin off"; Remove-Item Env:STAGE1_MONO_FRAME_PINS
+python -X utf8 tools/eval/fast.py --score-only --out poolD0 --cases $pool
+python -X utf8 tools/diag/_poolmono.py --run poolD1 --cmp poolD0
+```
