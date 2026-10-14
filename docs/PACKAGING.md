@@ -106,14 +106,24 @@ $dst = "..\work\_judge_pkg"
 Remove-Item -Recurse -Force $dst -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $dst | Out-Null
 
-Copy-Item -Recurse -Force schematic_parser $dst
-Copy-Item -Recurse -Force "yolo_part\Dataset(waitforpreprocess)\10GT"          $dst
-Copy-Item -Recurse -Force "yolo_part\Dataset(waitforpreprocess)\10_GTcase"     $dst
-Copy-Item -Recurse -Force "yolo_part\Dataset(waitforpreprocess)\200_train_cases" $dst
+Copy-Item -Recurse -Force schematic_parser $dst          # 0.19 MB
 Copy-Item -Force docs\JUDGE.md $dst
 
+# ⚠️ 只拷 *.json：数据集目录里同时躺着 PNG（200_train_cases 光 png 就 44 MB），
+#    整目录 Copy-Item 会把它们一起打进交付包。robocopy /S 保持用例目录结构。
+$src = "yolo_part\Dataset(waitforpreprocess)"
+foreach ($s in @("10GT","10_GTcase","200_train_cases")) {
+  robocopy "$src\$s" "$dst\$s" *.json /S /NFL /NDL /NJH /NJS /NP | Out-Null
+}
+Copy-Item -Force "$src\10GT\type_list.md" "$dst\10GT\"
+
+# 顺手清掉字节码缓存，别打进包
+Get-ChildItem -Recurse -Directory -Filter __pycache__ $dst | Remove-Item -Recurse -Force
+
 Compress-Archive -Path "$dst\*" -DestinationPath ..\work\eda_judge.zip -Force
-# ⇒ 产物约 12 MB（220 个 GT json 共 11.5 MB，最大单文件 212,777 B）
+# ⇒ 产物 ≈1.0 MB（220 个 GT json 未压缩 11.45 MB，json 压得很狠，最大单文件 212,777 B）
+# ⇒ 解压后：10GT 11 文件 / 10_GTcase 10 / 200_train_cases 200 / schematic_parser 6 / JUDGE.md，
+#   **0 张 png**；用 84.95 那版预测从解压包跑 `--data-root <解压目录>` 复现出同样的 84.945。
 ```
 
 **队友侧三步跑通：**
