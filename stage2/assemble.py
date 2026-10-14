@@ -2692,8 +2692,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # ★ 近共线重叠边合并（`STAGE2_EDGE_OVERLAP`，默认 10 度）：必须最后跑 —— 它会改变边的跨度，
         #   放在切分/回缩之前会把切点与自由端判定带歪。
         merge_overlapping_edges(out_nets)
-    if PIN_LEAD_ATTACH:
-        # ★ 2-pin 符号的「引脚引线」吸附：必须放在**最末尾** —— 离线取证就是在
+    if PIN_LEAD_ATTACH or PIN_LEAD_MOVE:
+        # ★ 2-pin 符号的「引脚引线」吸附/迁移：必须放在**最末尾** —— 离线取证就是在
         #   出口文档（几何全部定型）上做的，落在这里才能与离线读数逐位一致。
         #   只写 `hyperGraph`，`edges`/引脚一律不碰 ⇒ 元件/引脚/导线三通道逐位不变。
         attach_stamped_leads(out_nets, pins, components)
@@ -2731,8 +2731,24 @@ RAIL_ATTACH = env_on("STAGE2_RAIL_ATTACH", "1")
 # 阈值取自现成常量、不是拟合：`PIN_LEAD_R = PIN_STAMP_DEFAULT_SPAN(20) + cfg.line_tol(5)`；
 # `PIN_LEAD_DEG` 只要求「导线大致沿引脚外指方向离开」。
 # `=0` 关掉做对照。
+#
+# ★★ 2026-10-16 扩展（§5.106）：同一套「冲压引线」几何还解释第二种错误 ——
+# **纯无线网**（`edges` 为空的网络）里的脚。`LED1.1`/`LED1.2`/`R2.1`/`R1.2`/`R5.2`
+# 这类脚被测出来挂在一条**一条边都没有**的网上（上游的导线追踪没给这条网任何几何），
+# 而它的冲压引线离**别的**网的导线只有 24~42px ⇒ 成员判定错网。修法有两半：
+#   ① `PIN_LEAD_MOVE`：源网络**没有任何边**且脚离别网导线 ≤ `PIN_LEAD_MOVE_R`（夹角同上）
+#      ⇒ 把引用搬过去（搬空的无线网随后被删掉）；
+#   ② `PIN_LEAD_R` 从 25 提到 40：冲压跨度 20px + 导线缩短 ~20px，三个「无线网的脚」
+#      之外还漏着 3 个 27~33px 的悬空脚（`R2.1` case 6、`LED1.2` case 7/10）。
+# 离线读数（`tools/diag/_pinattach.py --mode move`，官方 10 张、交付态 83.33）：
+#   只搬 6 条（r=25/move_r=50）⇒ **84.00**；再把那 3 个悬空脚按 R=45 吸上 ⇒ **84.18**；
+#   `--deg 35` 与 `--deg 999` 逐位相同（6 条搬移的夹角都 ≤35°）；R 从 45 放到 80
+#   一条新的都不加（搬移距离上界就是 42.0px）⇒ 阈值不敏感。
+# `=0` 各自关掉做对照。
 PIN_LEAD_ATTACH = env_on("STAGE2_PIN_LEAD_ATTACH", "1")
-PIN_LEAD_R = float(os.environ.get("STAGE2_PIN_LEAD_R", "25.0"))
+PIN_LEAD_MOVE = env_on("STAGE2_PIN_LEAD_MOVE", "1")
+PIN_LEAD_R = float(os.environ.get("STAGE2_PIN_LEAD_R", "40.0"))
+PIN_LEAD_MOVE_R = float(os.environ.get("STAGE2_PIN_LEAD_MOVE_R", "50.0"))
 PIN_LEAD_DEG = float(os.environ.get("STAGE2_PIN_LEAD_DEG", "35.0"))
 # ★ 「地分模式」守卫（`STAGE2_RAIL_SPLIT`，默认开）：owner m23945/m02404 的要求是
 # **内部按本质模式把 GND 家族拆开跑，输出时再折叠回 `gnd`**（交付 JSON 的 type 一个
@@ -3001,27 +3017,70 @@ def _hg_refs(hg: str):
     return out
 
 
+def _nearest_lead_seg(px: float, py: float, segs: Dict[str, list],
+                      limit: float):
+    """`(px,py)` 到 `segs`（`{网络名: [((x,y),(x,y)), ...]}`）里最近线段的距离与落点。
+
+    返回 `(d, 网络名, 落点x, 落点y)`；`limit` 内一条都没有就返回 `None`。
+    与离线探针 `tools/diag/_pinattach.py` 的 `seg_closest` + 取最小同式。
+    """
+    best = None
+    for nm, seg in segs.items():
+        for p0, p1 in seg:
+            vx, vy = p1[0] - p0[0], p1[1] - p0[1]
+            l2 = vx * vx + vy * vy
+            if l2 <= 1e-9:
+                qx, qy = p0
+            else:
+                t = ((px - p0[0]) * vx + (py - p0[1]) * vy) / l2
+                t = max(0.0, min(1.0, t))
+                qx, qy = p0[0] + t * vx, p0[1] + t * vy
+            d = math.hypot(px - qx, py - qy)
+            if d > limit:
+                continue
+            if best is None or d < best[0]:
+                best = (d, nm, qx, qy)
+    return best
+
+
+def _lead_axis_deg(ox: float, oy: float, on: float,
+                   px: float, py: float, qx: float, qy: float) -> float:
+    """引脚**外指**方向 `(ox,oy)` 与「引脚 -> 导线落点」方向的夹角（度）。
+
+    退化情形（框心与脚重合、落点与脚重合）返回 `-1.0`：与历史实现一样**放行**。
+    """
+    if on <= 1e-6:
+        return -1.0
+    wn = math.hypot(qx - px, qy - py)
+    if wn <= 1e-6:
+        return -1.0
+    cos = (ox * (qx - px) + oy * (qy - py)) / (on * wn)
+    return math.degrees(math.acos(max(-1.0, min(1.0, cos))))
+
+
 def attach_stamped_leads(nets: Dict[str, dict], pins: Dict[str, dict],
                          components: Dict[str, dict]) -> int:
-    """把**冲压引脚**（2-pin 符号，见 `PIN_STAMP_TYPES`）里「不属于任何网络」的脚，
-    按「沿引脚外指方向、最近的同图导线 ≤ `PIN_LEAD_R`」挂到那条网络上。
+    """把**冲压引脚**（2-pin 符号，见 `PIN_STAMP_TYPES`）按「冲压引线」挂/搬到最近的网络。
 
-    见模块常量 `PIN_LEAD_ATTACH` 的注释：这类符号的引脚点是按 bbox 轴冲压出来的
-    （框外 20px），而导线追踪会把元件框挖空、导线停在框边，两者差 15~20px；
-    装配层要求几何**接触**才把引脚算进网络 ⇒ 这种脚一个网都不进。
+    两半（长注释见模块常量 `PIN_LEAD_ATTACH` / `PIN_LEAD_MOVE`）：
+      ① **迁移**：脚挂在一条**一条边都没有**的网上，而它离别网的导线 ≤ `PIN_LEAD_MOVE_R`
+         ⇒ 把引用搬过去；被搬空的无线网随后删掉（它本来就是个空预测）。
+      ② **吸附**：脚**不属于任何网络**，最近导线 ≤ `PIN_LEAD_R` ⇒ 挂上去。
+    两半都要求导线大致沿引脚**外指**方向离开（夹角 ≤ `PIN_LEAD_DEG`）。
     **只写 `hyperGraph`**：`edges`、引脚坐标一律不碰。
 
-    返回挂上去的脚数。
+    返回处理过的脚数（迁移 + 吸附）。
     """
-    if not nets or not pins or PIN_LEAD_R <= 0:
+    if not nets or not pins or (PIN_LEAD_R <= 0 and PIN_LEAD_MOVE_R <= 0):
         return 0
-    in_nets = set()
-    for rec in nets.values():
-        in_nets |= set(_hg_refs(rec.get("hyperGraph", "")))
+    member: Dict[tuple, str] = {}
+    for nm, rec in nets.items():
+        for ref in _hg_refs((rec or {}).get("hyperGraph", "")):
+            member[ref] = nm
     segs: Dict[str, list] = {}
     for nm, rec in nets.items():
         seg = []
-        for _k, e in (rec.get("edges") or {}).items():
+        for _k, e in ((rec or {}).get("edges") or {}).items():
             if isinstance(e, (list, tuple)) and len(e) == 2:
                 try:
                     seg.append(((float(e[0]["x"]), float(e[0]["y"])),
@@ -3032,68 +3091,102 @@ def attach_stamped_leads(nets: Dict[str, dict], pins: Dict[str, dict],
             segs[nm] = seg
     if not segs:
         return 0
-    added = 0
-    _dbg = []
-    for comp, group in (pins or {}).items():
-        if not isinstance(group, dict):
-            continue
-        ctype = str((components.get(comp) or {}).get("type") or "").strip().lower()
-        if ctype not in PIN_STAMP_TYPES:
-            continue
-        box = (components.get(comp) or {}).get("bbox")
-        if not (isinstance(box, (list, tuple)) and len(box) == 4):
-            continue
-        try:
-            cx = (float(box[0]) + float(box[2])) / 2.0
-            cy = (float(box[1]) + float(box[3])) / 2.0
-        except (TypeError, ValueError):
-            continue
-        for pk, pr in group.items():
-            num = str(pk).replace("pin_", "")
-            if (comp, num) in in_nets:
+
+    def _stamped() -> Iterator[Tuple[str, str, float, float, float, float]]:
+        """产出 `(元件, 引脚号, 脚x, 脚y, 框心x, 框心y)`。"""
+        for comp, group in (pins or {}).items():
+            if not isinstance(group, dict):
                 continue
-            pt = (pr or {}).get("point") or {}
-            if pt.get("x") is None or pt.get("y") is None:
+            ctype = str((components.get(comp) or {}).get("type") or "").strip().lower()
+            if ctype not in PIN_STAMP_TYPES:
+                continue
+            box = (components.get(comp) or {}).get("bbox")
+            if not (isinstance(box, (list, tuple)) and len(box) == 4):
                 continue
             try:
-                px, py = float(pt["x"]), float(pt["y"])
+                cx = (float(box[0]) + float(box[2])) / 2.0
+                cy = (float(box[1]) + float(box[3])) / 2.0
             except (TypeError, ValueError):
                 continue
-            ox, oy = px - cx, py - cy          # 引脚**外指**方向
-            on = math.hypot(ox, oy)
-            best = None
-            _deg = -1.0
-            for nm, seg in segs.items():
-                for p0, p1 in seg:
-                    vx, vy = p1[0] - p0[0], p1[1] - p0[1]
-                    l2 = vx * vx + vy * vy
-                    if l2 <= 1e-9:
-                        qx, qy = p0
-                    else:
-                        t = ((px - p0[0]) * vx + (py - p0[1]) * vy) / l2
-                        t = max(0.0, min(1.0, t))
-                        qx, qy = p0[0] + t * vx, p0[1] + t * vy
-                    d = math.hypot(px - qx, py - qy)
-                    if d > PIN_LEAD_R or (best is not None and d >= best[0]):
-                        continue
-                    deg = -1.0
-                    if on > 1e-6:
-                        wn = math.hypot(qx - px, qy - py)
-                        if wn > 1e-6:
-                            cos = (ox * (qx - px) + oy * (qy - py)) / (on * wn)
-                            deg = math.degrees(math.acos(max(-1.0, min(1.0, cos))))
-                            if deg > PIN_LEAD_DEG:
-                                continue
-                    best = (d, nm)
-                    _deg = deg
-            if best is None:
+            for pk, pr in group.items():
+                pt = (pr or {}).get("point") or {}
+                if pt.get("x") is None or pt.get("y") is None:
+                    continue
+                try:
+                    px, py = float(pt["x"]), float(pt["y"])
+                except (TypeError, ValueError):
+                    continue
+                yield (comp, str(pk).replace("pin_", ""), px, py, cx, cy)
+
+    def _write(nm: str, refs) -> None:
+        nets[nm]["hyperGraph"] = "(" + ",".join("%s.%s" % t for t in refs) + ")"
+
+    # ① 迁移：源网络没有任何边（纯无线网）⇒ 成员判定没有几何依据
+    moved = 0
+    dropped = 0
+    _mdbg = []
+    if PIN_LEAD_MOVE_R > 0:
+        emptied = set()
+        for comp, num, px, py, cx, cy in _stamped():
+            ref = (comp, num)
+            cur = member.get(ref)
+            if cur is None or cur in segs:
+                continue                        # 不属任何网（交给 ②）／本网有导线 ⇒ 不动
+            hit = _nearest_lead_seg(px, py, segs, PIN_LEAD_MOVE_R)
+            if hit is None:
                 continue
-            rec = nets[best[1]]
-            refs = _hg_refs(rec.get("hyperGraph", ""))
-            refs.append((comp, num))
-            rec["hyperGraph"] = "(" + ",".join("%s.%s" % t for t in refs) + ")"
-            in_nets.add((comp, num))
-            _dbg.append((comp, num, best[0], _deg, best[1]))
+            d, tgt, qx, qy = hit
+            on = math.hypot(px - cx, py - cy)
+            deg = _lead_axis_deg(px - cx, py - cy, on, px, py, qx, qy)
+            if deg > PIN_LEAD_DEG:
+                continue
+            old = _hg_refs(nets[cur].get("hyperGraph", ""))
+            if ref in old:
+                old.remove(ref)
+            _write(cur, old)
+            refs = _hg_refs(nets[tgt].get("hyperGraph", ""))
+            refs.append(ref)
+            _write(tgt, refs)
+            member[ref] = tgt
+            emptied.add(cur)
+            moved += 1
+            _mdbg.append((comp, num, cur, tgt, d, deg))
+        for nm in list(emptied):
+            rec = nets.get(nm) or {}
+            if _hg_refs(rec.get("hyperGraph", "")) or (rec.get("edges") or {}):
+                continue
+            nets.pop(nm, None)
+            dropped += 1
+        if moved:
+            try:
+                print("[assemble] 引脚引线迁移：%d 个 2-pin 引脚离开了「没有边的网络」"
+                      "（删掉 %d 个被搬空的网）：%s"
+                      % (moved, dropped,
+                         "  ".join("%s.%s %s->%s d=%.1f deg=%.1f" % t for t in _mdbg[:6])))
+            except Exception:
+                pass
+
+    # ② 吸附：不属于任何网络的冲压脚
+    added = 0
+    _dbg = []
+    if PIN_LEAD_R > 0:
+        for comp, num, px, py, cx, cy in _stamped():
+            ref = (comp, num)
+            if ref in member:
+                continue
+            hit = _nearest_lead_seg(px, py, segs, PIN_LEAD_R)
+            if hit is None:
+                continue
+            d, tgt, qx, qy = hit
+            on = math.hypot(px - cx, py - cy)
+            deg = _lead_axis_deg(px - cx, py - cy, on, px, py, qx, qy)
+            if deg > PIN_LEAD_DEG:
+                continue
+            refs = _hg_refs(nets[tgt].get("hyperGraph", ""))
+            refs.append(ref)
+            _write(tgt, refs)
+            member[ref] = tgt
+            _dbg.append((comp, num, d, deg, tgt))
             added += 1
     if added:
         try:
@@ -3101,7 +3194,7 @@ def attach_stamped_leads(nets: Dict[str, dict], pins: Dict[str, dict],
                   % (added, "  ".join("%s.%s d=%.1f deg=%.1f -> %s" % t for t in _dbg[:6])))
         except Exception:
             pass
-    return added
+    return moved + added
 
 
 def merge_shared_pins(nets: Dict[str, dict]) -> Dict[str, dict]:

@@ -120,10 +120,14 @@ def main():
     ap.add_argument("--r", type=float, default=20.0)
     ap.add_argument("--deg", type=float, default=999.0)
     ap.add_argument("--min-gain", type=float, default=8.0)
+    # move branch may need a longer reach than the orphan branch: an unsupported
+    # pin can sit 24..42px away from the nearest wire (see RESULTS 5.106)
+    ap.add_argument("--move-r", type=float, default=0.0)
     ap.add_argument("--only-stamp", action="store_true")
     ap.add_argument("--report", action="store_true")
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args()
+    mr = a.move_r if a.move_r > 0 else a.r
 
     src = Path(a.pred)
     dst = ROOT / "work" / ("_fast_out_" + a.out)
@@ -197,7 +201,7 @@ def main():
                 elif a.mode == "move" and cur is not None and cur != best:
                     dcur = min([seg_closest(px, py, p0, p1)[0]
                                 for _ek, p0, p1 in segs.get(cur, [])] or [1e9])
-                    if dist <= a.r and dcur - dist >= a.min_gain:
+                    if dist <= mr and dcur - dist >= a.min_gain:
                         old = M.parse_hypergraph(nets[cur].get("hyperGraph", ""))
                         if ref in old:
                             old.remove(ref)
@@ -222,8 +226,8 @@ def main():
         tot["stamp"] += n_s
         tot["nets"] += len(nets)
 
-    print("[pinattach] mode=%s r=%.1f deg=%.0f min_gain=%.1f only_stamp=%s -> %s"
-          % (a.mode, a.r, a.deg, a.min_gain, a.only_stamp, dst))
+    print("[pinattach] mode=%s r=%.1f move_r=%.1f deg=%.0f min_gain=%.1f only_stamp=%s -> %s"
+          % (a.mode, a.r, mr, a.deg, a.min_gain, a.only_stamp, dst))
     print("[pinattach] 新增 %d 条（其中 2-pin 符号 %d 条）、迁移 %d 条，网数 %d"
           % (tot["orphan"], tot["stamp"], tot["move"], tot["nets"]))
     return 0
