@@ -10036,3 +10036,18 @@ python -X utf8 ..\work\_wirecut.py --mode both                :: 切点后处理
 ```
 
 探针已归档：`tools/diag/_endstruct.py`、`_edgepts.py`、`_wiresplit.py`、`_wirecut.py`；工具新增 `tools/eval/gt_retest.py`。
+
+### 五·补：交付口径基线行（**84.95**）与两种口径的区分
+
+用户 m16487 问「之前有 84 分，现在怎么变成 80 了」——**没有回归，是我上一张表只列了确定性口径**。
+两种口径的官方 10 张基线（本轮用 `tools/eval/gt_retest.py` 现场重跑，GT 逐案哈希与 `_gt_index.json` 一致、未换）：
+
+| 口径 | 命令里的 `--extra` | 总分 | 元件 | 引脚 | 网络 | 导线 | 引脚 tp |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **交付口径**（VLM 位号/值/名开、引脚通道关） | `-vlm-pin off` | **84.95** | 1.0000 | 0.8166 | 0.8210 | 0.5796 | 103 |
+| 确定性口径（全部 LLM 关） | `-offline -vlm-pin off` | **80.48** | 0.9355 | 0.7385 | 0.8051 | 0.5780 | 90 |
+
+- 差 **4.47 分全部来自 VLM 通道**（元件 0.9355→1.0000、引脚 0.7385→0.8166 是位号/脚名被读对带来的），不是机制回归。
+- §5.115 的「口径纪律」已经记过同一次混淆（当时把确定性口径的 80.47 当成「移植回归」）；**跨口径比数字永远先看 `--extra`**。
+- 复现：`python -X utf8 tools/eval/gt_retest.py --rulers delivery --arms default --tag delchk`
+  ⇒ `work/_gt_retest/delchk/report.md`（墙钟 157s）。

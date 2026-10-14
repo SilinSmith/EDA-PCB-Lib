@@ -36,11 +36,11 @@ def main(argv=None):
     if dup and not a.force:
         print("！已经存在以 %r 开头的行，未追加（--force 可强行追加）" % head)
         return 1
-    if not text.endswith("\n"):
-        text += "\n"
-    if not text.endswith("\n\n"):
-        text += "\n"
-    text += body.rstrip("\n") + "\n"
+    if not text.endswith("\r\n"):
+        text = text.rstrip("\r\n") + "\r\n"
+    if not text.endswith("\r\n\r\n"):
+        text += "\r\n"
+    text += body.rstrip("\r\n") + "\r\n"
     with io.open(a.target, "w", encoding="utf-8", newline="") as fh:
         fh.write(text)
     after = open(a.target, "rb").read()
