@@ -926,6 +926,23 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
         segments, n_jsplit = _split_at_points(
             segments, jnodes, tol=float(os.environ.get("STAGE1_SPLIT_JUNC_TOL", "2.5")))
 
+    # --- 共线缺口对接（`STAGE1_WIRE_SNAP_GAPS=1`，§5.109）---
+    # 病：交叉处被挖掉十字芯 ⇒ 骨架绕行/断开 ⇒ 留下 5~15px 的碎片夹在两条 27~30px 的长段
+    # 之间；`MIN_EDGE_LEN=20`（stage2）再把碎片丢掉 ⇒ 我们的边在**每个交叉**处留 ~11px 的洞，
+    # 而 GT 是「线连续、恰在交叉处切开、首尾相接」（case 1 x≈843：GT 13 条 29~30px 相接，
+    # 我们只出 9 条）。这里把短碎片的端点**撑到**相邻长段的端点上（不动长段：长段的位置
+    # 已经与 GT 对齐；按「两端挪到缺口中点」实测会把长段推歪 5.5px，反而更差）。
+    n_gsnap = 0
+    if env_on("STAGE1_WIRE_SNAP_GAPS", "1"):
+        from pipeline.pskel import snap_collinear_gaps
+        segments, n_gsnap = snap_collinear_gaps(
+            segments,
+            max_gap=float(os.environ.get("STAGE1_WIRE_SNAP_GAPS_MAX", "18")),
+            max_angle_deg=float(os.environ.get("STAGE1_WIRE_SNAP_GAPS_ANG", "25")),
+            k=int(os.environ.get("STAGE1_WIRE_SNAP_GAPS_K", "4")),
+            mode=os.environ.get("STAGE1_WIRE_SNAP_GAPS_MODE", "short"),
+            min_ratio=float(os.environ.get("STAGE1_WIRE_SNAP_GAPS_RATIO", "0.9")))
+
     endpoints, junctions = _rebuild_nodes(segments, tol=1.0)
     if not segments:
         endpoints, junctions = [], []
@@ -946,6 +963,7 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
         "n_segments_junc_split": n_jsplit,
         "junction_nodes": jnodes,
         "n_gap_bridges": int(getattr(r, "n_gap_bridges", 0)),
+        "n_gap_snaps": n_gsnap,
         "n_bridges": len(bridges),
         "bridges": bridges,
         "bridge_info": b_info,

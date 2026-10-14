@@ -624,6 +624,91 @@ def bridge_skeleton_gaps(skel: np.ndarray, max_gap: float = 12.0,
     return out, len(bridges), bridges
 
 
+def snap_collinear_gaps(segs, max_gap: float = 18.0, max_angle_deg: float = 25.0,
+                        k: int = 4, mode: str = "short", min_ratio: float = 0.9):
+    """把「同一条走线在交叉处被切碎」的碎片接回相邻的长段（§5.109）。
+
+    病（§5.107 取证、§5.109 复核）：`thin_stroke_mask` 在两条线的交叉处挖掉**十字芯**
+    （那里到墨迹边界的距离最大）⇒ 骨架在交叉处**绕行**（旁移 5~6px 再回来）或断开 ⇒
+    `snap_polyline`/`split_segments` 把绕行段切掉、只留下一条 5~15px 的碎片夹在两条
+    27~30px 的长段之间 ⇒ stage2 的 `MIN_EDGE_LEN=20` 再把碎片丢掉 ⇒ 我们的边在**每个
+    交叉**处留一个 ~11px 的洞。GT 是「线连续、恰在交叉处切开、首尾相接」：case 1 x≈843
+    上 GT 有 13 条 29~30px 的边（115→497 首尾相接），我们只出 9 条。
+
+    规则：两条共线碎片**相向**的端点距离 ≤ `max_gap`，且较短那条的长度 ≤ `min_ratio` ×
+    较长那条，就把**短的那条的端点挪到长的那条的端点上**（不动长段）。
+    为什么不按「两端都挪到缺口中点」：缺口不是以交叉中心对称的（骨架在交叉下方多丢
+    11px），中点会把已经很准的长段推歪 5.5px（实测反而把 tp 变成 fp）——不动长段、
+    只把碎片「撑」到相邻长段的端点上，长段的位置与 GT 对齐这一事实就保住了。
+
+    `segs` 是 `[[x, y], ...]` 的折线列表（图像帧、y 向下，见 `stage1/wires.py`）。
+    返回 `(new_segs, n_snapped)`；`mode="mid"` 是「两端都挪到中点」的对照臂。
+    """
+    cos_lim = math.cos(math.radians(max_angle_deg))
+
+    def _plen(s):
+        return sum(math.hypot(s[i + 1][0] - s[i][0], s[i + 1][1] - s[i][1])
+                   for i in range(len(s) - 1))
+
+    work = [[[float(p[0]), float(p[1])] for p in s] for s in segs]
+    ends = []          # (idx, end, point, outward_dir, seg_len)
+    for i, s in enumerate(work):
+        if len(s) < 2:
+            continue
+        L = _plen(s)
+        for e in (0, 1):
+            p = s[0] if e == 0 else s[-1]
+            j = min(k, len(s) - 1)
+            q = s[j] if e == 0 else s[-1 - j]
+            vy, vx = p[1] - q[1], p[0] - q[0]
+            n = math.hypot(vx, vy)
+            if n < 1e-6:
+                continue
+            ends.append((i, e, p, (vx / n, vy / n), L))
+
+    cands = []
+    for a in range(len(ends)):
+        ia, ea, pa, da, la = ends[a]
+        for b in range(a + 1, len(ends)):
+            ib, eb, pb, db, lb = ends[b]
+            if ia == ib:
+                continue
+            vx, vy = pb[0] - pa[0], pb[1] - pa[1]
+            d = math.hypot(vx, vy)
+            if d < 1e-6 or d > max_gap:
+                continue
+            ux, uy = vx / d, vy / d
+            if da[0] * ux + da[1] * uy < cos_lim:            # a 的外指方向要指向缺口
+                continue
+            if -db[0] * ux - db[1] * uy < cos_lim:           # b 同理
+                continue
+            cands.append((d, a, b, la, lb))
+    cands.sort(key=lambda t: t[0])
+
+    used, n = set(), 0
+    for _d, a, b, la, lb in cands:
+        if a in used or b in used:
+            continue
+        ia, ea, pa, _da, la = ends[a]
+        ib, eb, pb, _db, lb = ends[b]
+        if mode == "mid":
+            mx, my = (pa[0] + pb[0]) / 2.0, (pa[1] + pb[1]) / 2.0
+            work[ia][0 if ea == 0 else -1] = [mx, my]
+            work[ib][0 if eb == 0 else -1] = [mx, my]
+            used.add(a); used.add(b); n += 1
+            continue
+        short_is_a = la <= lb * min_ratio
+        short_is_b = lb <= la * min_ratio
+        if not (short_is_a or short_is_b):
+            continue                                          # 长度相当 ⇒ 不动（可能是两条真边）
+        if short_is_a:
+            work[ia][0 if ea == 0 else -1] = [pb[0], pb[1]]
+        else:
+            work[ib][0 if eb == 0 else -1] = [pa[0], pa[1]]
+        used.add(a); used.add(b); n += 1
+    return work, n
+
+
 def _dir_at(walk: Sequence[Tuple[int, int]], from_end: int, k: int = 7):
     """Unit direction *leaving* the path: from_end=0 -> leaving walk[0]."""
     w = walk if from_end == 0 else list(reversed(walk))
