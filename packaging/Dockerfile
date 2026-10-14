@@ -17,8 +17,10 @@ FROM edarace-agent-base:ubuntu24
 
 ENV LLM_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 ENV LLM_MODEL="qwen3.7-plus"
-ENV LLM_API_KEY="REDACTED-DASHSCOPE-KEY"
-ENV DASHSCOPE_API_KEY="REDACTED-DASHSCOPE-KEY"
+# ★ 密钥不入库：本地调试用 docker run -e LLM_API_KEY=... -e DASHSCOPE_API_KEY=... 注入；
+#   平台会自带密钥，仓库里只保留空默认值。
+ENV LLM_API_KEY=""
+ENV DASHSCOPE_API_KEY=""
 
 # ----------------------------------------------------------------------------
 # ★ 这一行是必须的，别删。

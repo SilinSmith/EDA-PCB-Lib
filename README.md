@@ -229,18 +229,27 @@ $env:STAGE1_LLM_BASE='http://127.0.0.1:1234/v1'
 > 所有开关都是 `STAGE1_* / STAGE2_* / FUSION_*` 环境变量，假值词表统一在 `envflag.py`。
 > 注意：`$env:STAGE1_DROP_TYPES=''` 在 PowerShell 里是**删除**变量，要关功能请写具体假值。
 
-### 4.3 官方口径自评
+### 4.3 官方口径自评（判题机）
 
 ```powershell
-# 单 case 打分（用仓库自带的逆向评测器）
-python -m schematic_parser.metrics --gt <GT目录> --pred <预测目录>
+# 官方 10 张 GT 一对一打分 —— 只需要 numpy + scipy，不要 GPU / 图片 / 权重
+python -X utf8 -m schematic_parser.evaluate --pred submission\final_results --split 10GT
 
-# 批量 A/B（tools/eval/fast.py，带结果归档）
+# 逐案 JSON 落盘
+python -X utf8 -m schematic_parser.evaluate --pred <目录> --split 10GT --out scores.json
+
+# 判题机自检（不需要预测）
+python -X utf8 -m schematic_parser.evaluate --self-test
+
+# 端到端「跑 + 判分」（tools/eval/fast.py，带结果归档）
 python tools\eval\fast.py --cases 1,2,3,4,5,7,8,9,10 --save off9_base
 python tools\eval\fast.py --list                # 列出可用 case
 ```
 
 `fast.py` 打开关请用 `$env:X='1'`，**不要**用 `--extra`（该参数会把多词参数按字符拆开）。
+
+> 完整说明书（口径开关、已知性质、参考分、给队友的最短路径）见 **`docs/JUDGE.md`**。
+> GT 标注已随仓库提交（只有 `*.json`，没有 PNG），clone 下来就能直接跑分。
 
 ---
 
@@ -320,16 +329,21 @@ GND 互证先验（官方 GT 不这么编码）、自由读数压分（`FUSION_F
 `assets.py` 按**相对路径**解析，可用环境变量覆盖：`YOLO_WEIGHTS` / `STAGE2_CKPT`。
 源码里**没有功能性绝对路径**（仅少数 docstring 示例保留本机路径）。
 
-### 数据集（**不在仓库内**）
+### 数据集（图片不在仓库内，**GT 标注在**）
 
-图片与标注体积过大，已 gitignore，需要另行准备：
+图片体积过大已 gitignore；**GT 标注 `*.json` 随仓库提交**（判题机只读标注，不读图）：
 
-| 名称 | 用途 |
-|---|---|
-| `yolo_part/training_data/` | YOLO 元件检测训练集（41 类，`data.yaml` 已入库） |
-| `yolo_part/Dataset(waitforpreprocess)/` | 原始 PNG（评测脚本按此目录找图） |
-| `textrec/data/manifest.jsonl` | CRNN 训练清单（85 MB，未入库） |
-| 官方 `10GT` | 公开 GT，评测基准 |
+| 名称 | 是否入库 | 用途 |
+|---|---|---|
+| `yolo_part/Dataset(waitforpreprocess)/10GT/**/*.json` | ✅ 入库 | 10 张官方公开 GT（评测基准）+ `type_list.md`（34 类） |
+| `yolo_part/Dataset(waitforpreprocess)/10_GTcase/**/*.json` | ✅ 入库 | 10 张 |
+| `yolo_part/Dataset(waitforpreprocess)/200_train_cases/**/*.json` | ✅ 入库 | 200 张派生 |
+| `yolo_part/Dataset(waitforpreprocess)/**/*.png` | ❌ 未入库 | 原始图（跑流水线才需要） |
+| `yolo_part/training_data/` | ❌ 未入库 | YOLO 元件检测训练集（41 类，`data.yaml` 已入库） |
+| `textrec/data/manifest.jsonl` | ❌ 未入库 | CRNN 训练清单（85 MB） |
+
+只想跑判题机的话，把图片准备到 `yolo_part/Dataset(waitforpreprocess)/<split>/<case>/<case>.png` 即可
+（也可以 `--data-root` 指向别处）。
 
 重新生成合成数据：`python -m synth.make_demo --n 24 --out <目录>`。
 
@@ -382,12 +396,14 @@ GND 互证先验（官方 GT 不这么编码）、自由读数压分（`FUSION_F
 | 文档 | 内容 |
 |---|---|
 | `docs/ARCHITECTURE.md` | 分层架构、模块职责、四条关键约定 |
+| `docs/JUDGE.md` | **判题机说明书**：怎么用 `schematic_parser.evaluate` 打分、口径开关、已知性质、参考分、给队友的最短路径 |
 | `docs/RESULTS.md` | 分数轨迹、全部 A/B 表、负结果归档 |
 | `docs/DIAGNOSTICS.md` | 怎么做测量：诊断尺子、五步工作流、复现命令 |
-| `docs/KNOBS.md` | **全部 279 个环境开关**（自动生成，带默认值与 `文件:行号`） |
-| `docs/TOOLS.md` | **全部 548 个工具脚本**按用途分组（自动生成） |
+| `docs/KNOBS.md` | **全部 458 个环境开关**（自动生成，带默认值与 `文件:行号`） |
+| `docs/TOOLS.md` | **全部 720 个工具脚本**按用途分组（自动生成） |
 | `docs/TRAINING.md` | **怎么重训**：数据集重建（`trainset_v4[_merged]` 的开关与默认值）、YOLO 训练、CRNN 混合清单与热启动微调、训练后必跑的两把尺子 |
-| `docs/workflow.html` | 交互式流程图（31 节点 / 65 连线，含每个节点的实测笔记） |
+| `docs/workflow.html` | 交互式流程图（**37 节点 / 86 连线**，含每个节点的实测笔记；判题机节点已画进去） |
+| `docs/PACKAGING.md` | **怎么打包 / 上传 GitHub / 把判题机单独交给队友**（含上传前自检清单与密钥红线） |
 | `docs/导线workflow.html` | **导线识别专页**（14 阶段图 + 「容差 vs tp」主图 + 网级配对口径 + 空网抢配对 + 6 张爆 0），由 `tools/diag/_wirepage.py --write-docs` 生成 |
 | `docs/reports/*.md` | 逐主题诊断报告（引脚号、并网、位号上限、尺度归一、GT 保真度…） |
 

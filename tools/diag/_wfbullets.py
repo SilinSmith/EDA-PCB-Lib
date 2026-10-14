@@ -230,13 +230,27 @@ BULLETS = {
  "⚠ **这层是「静默降级」**：某层缺产物就自动往下一层退，**导出成功的张数不区分来自哪一层** ⇒ `_submit_out220r36` 就这样交了纯 stage2（25.9861）而看不出问题",
  "⛔ **不要在阶段三之前接补强** —— 阶段三不是拷贝阶段二产物，而是从 `_assigned` + stage1 **重建**，接早了会被冲掉",
 ],
+"judge": [
+ "一键：`python -X utf8 -m schematic_parser.evaluate --pred <输出>\\final_results --split 10GT` —— **只依赖 numpy + scipy**，不要 GPU / 图片 / 权重",
+ "★ **GT 标注随仓库提交**（`10GT` / `10_GTcase` / `200_train_cases` 的 `*.json` + `type_list.md`）：`discover()` 已放宽为「只要有 json」，clone 下来就能判分（PNG 仍不入库）",
+ "产物布局两种都认：扁平 `<case_id>.json`（如 `final_results/1_Pred.json`）或每案一个子目录；case id 取文件名的**第一个数字串**",
+ "★ 连通性通道（`net_soft=True`）已用**官方判分机产物**标定：case 1/7/2/3 的 `soft_tp`/`f1` 与官方**逐位相同**；同一批标定证明官方**不**折算非 box 脚号（折算会虚高 7.4 分）",
+ "已知性质：**空产物在「GT 没有 IC 元件」的 case 上 pin F1 = 1.0（白拿 25 分）** —— 220 案里 7 个，**官方 10 张一个都没有**；GT 自评 216/220 满分",
+ "⚠ 2026-10-13 新 Q&A：`10GT` **会再更新**（引脚坐标改成红绿交接处）、最终评分**不设黑白图**、平台 `∅` 键名 bug 会修 ⇒ 本地分是本地口径",
+ "参考分：官方 10 张 交付 **84.95** / 确定性 **80.48**；配套 `tools/eval/gt_retest.py`（一键复测矩阵 + GT 指纹）、`tools/eval/fast.py`（端到端跑分）",
+ "说明书：`docs/JUDGE.md`（口径开关、四指标判定要点、给队友的最短路径）",
+],
+
 "metrics": [
  "`schematic_parser/metrics.py:42`：`WEIGHTS = {component:0.30, pin:0.25, net_hypergraph:0.35, net_line:0.10}`",
  "参数：`bbox_tol=20.0` ｜ `pin_tol=5.0` ｜ `line_tol=5.0` ｜ `unkeyed_match=gt` ｜ `net_mode=micro`",
  "★ **它不在管线里，只是尺子**；是**加权 F1 之和，不是正确率**，每项 F1 都整张图算 ⇒ 图上物品越多、错几个越致命",
  "★ `type_mismatch` / `bbox_mismatch` / `text_mismatch` **三者都是 tp 不加、fp +1、fn +1（一笔亏三处）**",
  "调试：`python work\\tools\\debug\\dbg.py --case 0001`；总览 `work\\debug\\index.html`",
- "**口径表（必须连 case 集一起说）**：220 张 stage2-only **25.9861** ｜ 220 张端到端带 VLM 27.9843（外扩改默认前）｜ 10GT(9) 无 VLM 48.5981 → **49.3516**（带 VLM 59.35）｜ 19 张 28.9338 → **29.4111**",
+ "**分数（2026-10-14 · 官方 10 张）**：交付口径 **84.95**（1.0000 / 0.8166 / 0.8210 / 0.5796）｜确定性口径 **80.48**（0.9355 / 0.7385 / 0.8051 / 0.5780）｜池子 10 张（非官方）18.59",
+ "⚠ **跨口径比数字会凭空造出 4.47 分的「回归」**（84.95 与 80.48 只差 VLM 通道）⇒ 报分数必须带「case 集 + 跑法 + 提交号」",
+ "▶ 判题机已随包交付：`python -X utf8 -m schematic_parser.evaluate --pred <目录> --split 10GT`（见 `docs/JUDGE.md`；GT 标注 `*.json` 已入库，不需要图片）",
+ "历史口径（外扩改默认**之前**，勿与新数混用）：220 张 stage2-only 25.9861 ｜ 220 张端到端带 VLM 27.9843 ｜ 10GT(9) 无 VLM 48.5981 → 49.3516（带 VLM 59.35）｜ 19 张 28.9338 → 29.4111",
  "⚠ 两个 220 张数字都是**改外扩之前**跑的 ⇒ 换生产默认前应复核 220 张",
 ],
 "cropfix": [

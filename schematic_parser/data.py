@@ -66,12 +66,17 @@ def discover(data_root: str = DEFAULT_DATA_ROOT,
                           if f.lower().endswith('.png'))
             jsons = sorted(f for f in os.listdir(case_dir)
                            if f.lower().endswith('.json'))
-            if not pngs:
+            # A case with **only** the ground-truth JSON is a valid case for the
+            # scorer: ``schematic_parser.evaluate`` never reads the image.  The
+            # repository therefore ships ``*.json`` without the PNGs (see
+            # ``.gitignore``), and a fresh clone can score predictions straight
+            # away.  Pipelines that need the raster must check ``png_path``.
+            if not pngs and not jsons:
                 continue
             cases.append(Case(
                 split=split,
                 case_id=name,
-                png_path=os.path.join(case_dir, pngs[0]),
+                png_path=os.path.join(case_dir, pngs[0]) if pngs else None,
                 json_path=os.path.join(case_dir, jsons[0]) if jsons else None,
             ))
     return cases
