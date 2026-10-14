@@ -104,6 +104,12 @@ PIN_COLOR_ON = env_on("STAGE1_PIN_COLOR", "0")
 #   （均值 12.5、范围 6~22），而判分器 `pin_tol=5` ⇒ 该臂整边 position_mismatch。
 #   队友树实测：CAP=12 让他们的引脚 F1 0.1332→0.4891、总分 49.39→57.72（+8.33）。
 PIN_COLOR_CAP = float(os.environ.get("STAGE1_PIN_COLOR_CAP", "0") or 0)
+# ★ 四边全 confirm 时，**没有实测记录**的边是否也一并丢掉（队友原语义 = 丢）。
+#   动机（§5.119）：新 QA 承认现有 10GT 的引脚坐标不合 PDF 附件三（红绿交接处）并将更新，
+#   届时「彩色实测」是候选正解；但 `apply_color_pins` 在四边全 confirm 时把**整件**旧猜测丢掉，
+#   是它今天引脚 F1 爆 0 的直接原因。设 1 ⇒ 只丢**真有实测记录**的边，
+#   把「测量带来的收益」与「丢掉猜测造成的损失」分开评估（默认 0 = 逐位老行为）。
+PIN_COLOR_KEEP_MISS = env_on("STAGE1_PIN_COLOR_KEEP_MISS", "0")
 # ★★ 黑白框实测引脚（队友 PR#3：`stage1/pin_evidence.py` 新增的
 #   `recover_frame_pins`/`_frame_outer`/`_black_ink`）—— 把「按几何/文字猜出来的」
 #   引脚点校准到**实测的框边笔画行**上。它只校准点、不增删引脚，且内部有三道
@@ -145,7 +151,7 @@ def apply_color_pins(components, pins, pin_synth, color_records):
             continue
         confirmed = {e for r in recs for e in r.get("confirmed_edges", [])}
         covered = {r["edge"] for r in recs}
-        if confirmed == {"top", "right", "bottom", "left"}:
+        if confirmed == {"top", "right", "bottom", "left"} and not PIN_COLOR_KEEP_MISS:
             covered = confirmed
         old = result.get(cid) or []
         old_flags = synth.get(cid) or []
