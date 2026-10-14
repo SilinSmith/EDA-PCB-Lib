@@ -239,6 +239,57 @@ def thin_stroke_mask(bgr: np.ndarray, ink: np.ndarray, max_half_width: float = 1
     return (thin.astype(np.uint8) * 255), dt
 
 
+def _shift_mask(m: np.ndarray, dy: int, dx: int):
+    """把布尔掩膜整体平移 (dy, dx)，越界部分按 0 补（不环绕）。"""
+    h, w = m.shape
+    out = np.zeros_like(m)
+    ys = slice(max(0, -dy), h - max(0, dy))
+    yd = slice(max(0, dy), h - max(0, -dy))
+    xs = slice(max(0, -dx), w - max(0, dx))
+    xd = slice(max(0, dx), w - max(0, -dx))
+    out[yd, xd] = m[ys, xs]
+    return out
+
+
+def cross_core_fill(thin: np.ndarray, dt: np.ndarray, max_half_width: float = 2.6,
+                    r: float = 8.0, min_axes: int = 2):
+    """把「两条细线十字相交」处被 `thin_stroke_mask` 挖掉的**十字芯**补回来。
+
+    病（§5.107 的图像级取证，现场 case 1 x≈843、y≈173）：`thin_stroke_mask` 按「到墨迹
+    边界的距离 ≤ max_half_width」留像素，两条线相交处十字芯的 dt 最大（实测 4~6 > 2.6）
+    ⇒ 整块被当粗线剔掉；骨架只好**绕着芯走**（旁移 5~6px 再回来），段提取把这段绕行丢掉
+    ⇒ 出口边在每个交叉处留 ~11px 的洞（我方 case 1 x≈843 出 9 条 25~33px，GT 是 13 条
+    29~30px 首尾相接）。
+
+    药：只补「**两个轴向**上都夹着细笔画」的胖像素 —— 上下有细笔画（竖线穿过）且左右也有
+    （横线穿过）才是十字芯。粗导线的芯只在法向两侧有细笔画（只有一个轴向），不被补；
+    元件框/文字/照片底纹内部附近没有细笔画，也不被补（`STAGE1_WIRE_CLOSE_K` 那种无差别
+    闭运算做不到这个区分，池子回归 −0.47）。`r` 是找细笔画的最大距离（十字芯的 dt 最大
+    约 6，细笔画自己再占 2px ⇒ 8px 够）。返回新的 uint8(0/255) 掩膜，未命中时原样返回。
+    """
+    th = np.asarray(thin) > 0
+    if not th.any():
+        return thin
+    thick = np.asarray(dt) > float(max_half_width)
+    if not thick.any():
+        return thin
+    R = max(1, int(round(float(r))))
+    dirs = ((1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1))
+    ev = []
+    for dy, dx in dirs:
+        acc = th.copy()
+        for k in range(1, R + 1):
+            acc |= _shift_mask(th, dy * k, dx * k)
+        ev.append(acc)
+    both = np.zeros(th.shape, np.int16)
+    for i in range(4):
+        both += (ev[i] & ev[i + 4]).astype(np.int16)
+    keep = thick & (both >= int(min_axes))
+    if not keep.any():
+        return thin
+    return ((th | keep).astype(np.uint8) * 255)
+
+
 def _palette_estimate(bgr: np.ndarray, ink: np.ndarray):
     """`pipeline/palette.py` 的懒加载入口（唯一颜色接口）；不可用时退化成「无彩」。"""
     try:
@@ -455,6 +506,124 @@ def build_graph(skel: np.ndarray):
     return pts, deg, node_px, raw
 
 
+# ---------------------------------------------------------------- 定向接线（交叉处的洞）
+#
+# 病（§5.107 的图像级取证）：`thin_stroke_mask` 只留「到墨迹边界距离 ≤ thin_w」的像素，
+# 两条 4px 线相交处的**十字芯** dt 最大（~5px）⇒ 整块被当粗线剔掉 ⇒ 骨架在**每一个交叉**
+# 处断 5~10px ⇒ 我们的边在交叉处留洞（GT 是「线连续、恰在交叉处切开、首尾相接」，case 1
+# x≈843 上 GT 有 14 条 29~30px 的边，我们只出 9 条）。
+#
+# 为什么不用全图形态学闭运算：`STAGE1_WIRE_CLOSE_K=9` 官方 10 张 +0.08，但池子 10 张 −0.47
+# （确定性 `--no-vlm` 口径）—— 9x9 椭圆核在照片类图纸上会把邻近笔画焊在一起。
+# 这里改成**定向**接线：只补「两个骨架端点相向 + 缺口处两侧都有横穿骨架」的位置，
+# 后者是交叉的特征，单纯断线/文字残渣没有，所以池子上不会乱焊。
+
+
+def _endpoint_dirs(pts, k: int = 7):
+    """骨架端点 → 指向**缺口**那一侧的单位向量。
+
+    坐标沿用 `build_graph` 的约定：集合元素是 `(row, col)`。端点 = 8 邻域里只有 1 个骨架
+    像素的点；方向 = 端点减去「沿线朝内走 k 步的那个点」，因此朝线外。
+    """
+    out = {}
+    for p in pts:
+        nb = [q for q in neighbours(pts, p) if q in pts]
+        if len(nb) != 1:
+            continue
+        walk = [p, nb[0]]
+        prev, cur = p, nb[0]
+        while len(walk) <= k:
+            nxt = [r for r in neighbours(pts, cur) if r in pts and r != prev]
+            if not nxt:
+                break
+            n2 = nxt[0]
+            walk.append(n2)
+            prev, cur = cur, n2
+        p0 = np.asarray(walk[0], dtype=float)
+        p1 = np.asarray(walk[-1], dtype=float)
+        v = p0 - p1
+        n = float(np.hypot(float(v[0]), float(v[1])))
+        if n <= 0.0:
+            continue
+        out[p] = (float(v[0]) / n, float(v[1]) / n)
+    return out
+
+
+def _has_perp_evidence(pts, my: float, mx: float, u, r: float) -> bool:
+    """缺口两侧是否都有**横穿**方向的骨架像素（= 这里是交叉，不是单纯断线）。"""
+    rr = max(4.0, float(r))
+    left = right = False
+    for (y, x) in pts:
+        dy, dx = float(y) - my, float(x) - mx
+        d = float(np.hypot(dy, dx))
+        if d <= 0.0 or d > rr:
+            continue
+        along = (dy * u[0] + dx * u[1]) / d
+        if abs(along) > 0.45:          # 与桥线同向 ⇒ 那是桥自己的两端，不算横穿
+            continue
+        side = dy * (-u[1]) + dx * u[0]
+        if side > 0:
+            left = True
+        elif side < 0:
+            right = True
+        if left and right:
+            return True
+    return False
+
+
+def _draw_seg_px(img: np.ndarray, p0, p1) -> None:
+    y0, x0 = int(p0[0]), int(p0[1])
+    y1, x1 = int(p1[0]), int(p1[1])
+    n = int(max(abs(y1 - y0), abs(x1 - x0))) + 1
+    ys = np.rint(np.linspace(y0, y1, n)).astype(int)
+    xs = np.rint(np.linspace(x0, x1, n)).astype(int)
+    np.clip(ys, 0, img.shape[0] - 1, out=ys)
+    np.clip(xs, 0, img.shape[1] - 1, out=xs)
+    img[ys, xs] = 255
+
+
+def bridge_skeleton_gaps(skel: np.ndarray, max_gap: float = 12.0,
+                         max_angle_deg: float = 35.0, require_cross: bool = True):
+    """返回 `(new_skel, n_bridges, bridges)`；`bridges` 里是 `(端点1, 端点2, 缺口长度)`。"""
+    pts = {(int(y), int(x)) for y, x in zip(*np.nonzero(skel))}
+    dirs = _endpoint_dirs(pts)
+    eps = list(dirs.keys())
+    cos_lim = float(np.cos(np.radians(max_angle_deg)))
+    cands = []
+    for i in range(len(eps)):
+        y1, x1 = eps[i]
+        d1 = dirs[eps[i]]
+        for j in range(i + 1, len(eps)):
+            y2, x2 = eps[j]
+            d2 = dirs[eps[j]]
+            dy, dx = float(y2 - y1), float(x2 - x1)
+            g = float(np.hypot(dy, dx))
+            if g <= 0.0 or g > max_gap:
+                continue
+            u = (dy / g, dx / g)
+            if d1[0] * u[0] + d1[1] * u[1] < cos_lim:        # 端 1 的外指方向要指向缺口
+                continue
+            if d2[0] * -u[0] + d2[1] * -u[1] < cos_lim:      # 端 2 同理
+                continue
+            if require_cross and not _has_perp_evidence(
+                    pts, (y1 + y2) / 2.0, (x1 + x2) / 2.0, u, max(4.0, max_gap * 0.8)):
+                continue
+            cands.append((g, eps[i], eps[j]))
+    cands.sort()
+    used, bridges = set(), []
+    for _g, e1, e2 in cands:
+        if e1 in used or e2 in used:
+            continue
+        used.add(e1); used.add(e2)
+        bridges.append((e1, e2, _g))
+    if not bridges:
+        return skel, 0, []
+    out = skel.copy()
+    for e1, e2, _g in bridges:
+        _draw_seg_px(out, e1, e2)
+    return out, len(bridges), bridges
+
+
 def _dir_at(walk: Sequence[Tuple[int, int]], from_end: int, k: int = 7):
     """Unit direction *leaving* the path: from_end=0 -> leaving walk[0]."""
     w = walk if from_end == 0 else list(reversed(walk))
@@ -550,6 +719,7 @@ class SkeletonResult:
     n_nodes: int = 0
     n_branch_paths: int = 0
     has_chroma: bool = False
+    n_gap_bridges: int = 0
 
 
 class WireExtractor:
@@ -581,6 +751,35 @@ class WireExtractor:
         self.max_thin_iter = max_thin_iter
         self.last_colour_drop = 0
         self.last_colour_keep = 0
+        # ★ 定向接线（`STAGE1_WIRE_GAPBRIDGE`，默认 0 = 关）。见 `bridge_skeleton_gaps`
+        #   上面的长注释：补交叉处的洞，但只补「端点相向 + 缺口处有横穿骨架」的位置。
+        _on = ("1", "true", "on", "yes")
+        self.gap_bridge = os.environ.get("STAGE1_WIRE_GAPBRIDGE", "0").strip().lower() in _on
+        try:
+            self.gap_bridge_max = float(os.environ.get("STAGE1_WIRE_GAPBRIDGE_MAX", "12.0") or 12.0)
+        except ValueError:
+            self.gap_bridge_max = 12.0
+        try:
+            self.gap_bridge_ang = float(os.environ.get("STAGE1_WIRE_GAPBRIDGE_ANG", "35.0") or 35.0)
+        except ValueError:
+            self.gap_bridge_ang = 35.0
+        self.gap_bridge_cross = os.environ.get(
+            "STAGE1_WIRE_GAPBRIDGE_CROSS", "1").strip().lower() in _on
+        self.last_gap_bridges = 0
+        # ★ 十字芯定向补全（`STAGE1_WIRE_CROSS_FILL`，**默认 1 = 开**，2026-10-11 §5.108）。
+        #   见 `cross_core_fill` 的 docstring：只补「两个轴向都夹着细笔画」的胖像素（真十字
+        #   芯），补回后交叉处重新成为真结点。交付口径官方 10 张 84.13 → **84.38（+0.25）**
+        #   （元件/引脚两通道逐位不变），池子 10 张 18.69 → 18.82（+0.13）；`_R` 默认 8.0
+        #   （r=6 与基线打平 ⇒ 阈在 6~8 之间，诚实记录）。
+        self.cross_fill = os.environ.get("STAGE1_WIRE_CROSS_FILL", "1").strip().lower() in _on
+        try:
+            self.cross_fill_r = float(os.environ.get("STAGE1_WIRE_CROSS_FILL_R", "8.0") or 8.0)
+        except ValueError:
+            self.cross_fill_r = 8.0
+        try:
+            self.cross_fill_axes = int(os.environ.get("STAGE1_WIRE_CROSS_FILL_AXES", "2") or 2)
+        except ValueError:
+            self.cross_fill_axes = 2
 
     def foreground(self, bgr: np.ndarray):
         if self.scale and self.scale != 1.0:
@@ -674,6 +873,12 @@ class WireExtractor:
         if _ck >= 3:
             _ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (_ck, _ck))
             thin = cv2.morphologyEx(thin, cv2.MORPH_CLOSE, _ker)
+        # `STAGE1_WIRE_CROSS_FILL`：闭运算是无差别膨胀-腐蚀（粗线芯、元件框边也会被补，
+        # 池子回归 −0.47），这里改成**有判据的**十字芯补全：只有当某胖像素在**两个轴向**
+        # 上都被细笔画夹住（= 两条细线真的相交）才补。
+        if self.cross_fill:
+            thin = cross_core_fill(thin, dt, self.thin_w, r=self.cross_fill_r,
+                                   min_axes=self.cross_fill_axes)
         if self.dilate_to:
             # conservative "shell" tolerance: a pixel that has a thin-stroke pixel nearby is
             # kept as a wire pixel too, which also repairs the gaps
@@ -685,6 +890,13 @@ class WireExtractor:
         thin, ink, has_chroma = self.foreground(bgr)
         skel = zhang_suen(thin, max_iter=self.max_thin_iter)
         res = SkeletonResult(skel=skel, thin=thin, ink=ink, has_chroma=has_chroma)
+        if self.gap_bridge:
+            skel, _nb, _brs = bridge_skeleton_gaps(
+                skel, max_gap=self.gap_bridge_max, max_angle_deg=self.gap_bridge_ang,
+                require_cross=self.gap_bridge_cross)
+            res.skel = skel
+            res.n_gap_bridges = int(_nb)
+            self.last_gap_bridges = int(_nb)
         self._trace(skel, res)
         return res
 
