@@ -125,6 +125,28 @@ def load_wrong(path: Path):
     return keys
 
 
+def mcnemar_exact(b: int, c: int) -> float:
+    """精确双侧 McNemar p（对数空间，避免 `2.0 ** disc` 溢出）。
+
+    p = 2 * P(X <= min(b,c))，X ~ Bin(b+c, 0.5)。★ 坑（2026-10-16）：原实现写
+    `sum(comb(disc, i) ...) / 2.0 ** disc`，在 `ruler_big`（n=20,343）上不协调数 ~1,000 ⇒
+    `OverflowError: (34, 'Result too large')`（float 上限 1.8e308 ≈ 2**1024）。改成
+    `lgamma` 逐项相加（log-sum-exp）后，disc 上千也只是几百项浮点加法。
+    """
+    disc = b + c
+    if disc == 0:
+        return 1.0
+    if disc > 10000:                      # 大样本走正态近似（带连续性校正），避免长求和
+        z = (abs(b - c) - 1.0) / math.sqrt(disc)
+        return min(1.0, math.erfc(max(0.0, z) / math.sqrt(2.0)))
+    k = min(b, c)
+    lg, l2 = math.lgamma, math.log(2.0)
+    terms = [lg(disc + 1) - lg(i + 1) - lg(disc - i + 1) - disc * l2 for i in range(k + 1)]
+    m = max(terms)
+    s = m + math.log(sum(math.exp(t - m) for t in terms))
+    return min(1.0, 2.0 * math.exp(s))
+
+
 def paired_test(ruler: Path, wrong_c, wrong_t, role: str = "value", min_len: int = 5) -> dict:
     """目标格的**配对**比较（McNemar）：b=control 错/treat 对，c=control 对/treat 错。
 
@@ -148,11 +170,7 @@ def paired_test(ruler: Path, wrong_c, wrong_t, role: str = "value", min_len: int
     delta = (b - c) / n
     disc = b + c
     se = math.sqrt(max(0.0, disc - (b - c) ** 2 / n)) / n if disc else 0.0
-    # 精确双侧 McNemar（b+c 很小，直接算二项尾）
-    p = 1.0
-    if disc:
-        k = min(b, c)
-        p = min(1.0, 2 * sum(math.comb(disc, i) for i in range(0, k + 1)) / (2.0 ** disc))
+    p = mcnemar_exact(b, c)
     return {"n": n, "b": b, "c": c, "disc": disc, "delta": delta,
             "ci": (delta - 1.96 * se, delta + 1.96 * se), "p": p}
 

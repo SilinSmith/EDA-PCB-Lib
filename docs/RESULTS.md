@@ -15295,3 +15295,96 @@ Python 自写的是 UTF-8 ⇒ 解析器必须按 BOM 自适应（`tools/dev/run_
 **教训**：**退出码 0 不等于跑过**。凡是「下游要读的产物」（这里是 `best.pt`）都必须在阶段边界断言存在性；判据脚本要把无效臂显式标出来，否则「三臂读数相同/全空」会被误读成「无效应」。这与 §5.170 的「控制量搞错」是同一族错误：**先验证仪器，再信任读数**。
 
 **产物**：`eda-pcb/textrec/train.py`（+8 行守卫）、`eda-pcb/tools/dev/run_fullpop_ab.py`（`--add-epochs` / `start_epoch_of` / `best.pt` 断言 / `bad_arms` 提示）。
+
+## §5.180 三臂 A/B 最终读数：主判据**过线**（treatment vs control Δ+0.1054），但机制裁定 = **裁剪口径位移**，不是长串能力；交付权重仍是交付口径上最好的模型
+
+**背景**：§5.166 冻结的三臂 A/B（`work/fullpop_r8`）本轮跑完（作业 `pwsh-48`，7:10–7:45，rc=0）。三臂配方逐字相同（12 epoch、batch 128、lr 3e-4 OneCycle、合成 22,000 行 + `tools/dev/mix_crnn_manifest --seed 0`、起点同一份 `work/ocr_mix/runs/last.pt`），**唯一差别是真实 `role=value` 训练行**：
+
+| 臂 | 真实 train 行 | `value` | `value`≥5 | 相对 control 的增量 |
+| --- | --- | --- | --- | --- |
+| control | 1,746 | 224 | 75 | — |
+| treatment_long | 2,008 | 486 | 337 | +262 条，**全部**是 `role=value` 且长度 ≥5 |
+| treatment | 3,155 | 1,633 | 337 | +1,409 条，全部 `role=value`（其中 262 条 ≥5） |
+
+§5.175 的开跑前自检：三臂合成面 22,000 行对称差 0、val 800 行逐条相同、charset.json 71 字 md5 相同、嵌套无丢失。
+
+### (A) 训练动力学：control 不是「不训练」，而是**被微调打坏**的模型
+
+| checkpoint | best epoch | val CER（800 条真实行） | val exact |
+| --- | --- | --- | --- |
+| start `work/ocr_mix/runs/last.pt` | —（起点） | 0.2153 | 0.6127 |
+| control | e61（之后 10 轮无改善 → 早停） | **0.2592** | 0.6481 |
+| treatment_long | e62（早停） | **0.2746** | 0.6217 |
+| treatment | e72（跑到上限，末轮刷新 best） | **0.1775** | 0.6958 |
+
+⇒ 11–12 epoch / lr 3e-4 的「合成 22k + 真实行」全量微调**本身有害**（control/TL 把真实面 CER 从 0.2153 拉到 0.26–0.27）；只有加了 1,409 条真实 `value` 行的 treatment 修回来并反超。**下面所有 Δ 都要带着这一条读：对照臂是坏的，不是中性的。**
+
+### (B) 冻结主判据（尺子 A：8 张 sheet / 2,687 行 / `value`≥5 n=389）
+
+| checkpoint | ALL exact | designator 259 | pin_name 319 | pin_number 433 | value 1,394 | **value≥5 389** | ALL≥5 602 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| delivered `weights/textrec_best.pt`（§5.166 基线） | 0.6621 | 0.9382 | 0.7618 | 0.8545 | 0.5366 | 0.2057 | 0.2757 |
+| start `ocr_mix/runs/last.pt` | 0.6170 | 0.9228 | 0.7304 | 0.7991 | 0.4907 | 0.1774 | 0.2342 |
+| control | 0.5463 | 0.8533 | 0.6082 | 0.7552 | 0.4440 | 0.1183 | 0.1246 |
+| treatment_long | 0.5809 | 0.8571 | 0.6301 | 0.7737 | 0.4978 | 0.1877 | 0.1877 |
+| **treatment** | **0.6424** | **0.8649** | **0.7116** | **0.7783** | **0.5717** | **0.2237** | **0.2591** |
+
+配对核查（精确 McNemar；键 = 图名 + 0.1px bbox + role + GT，与 `tools/dev/run_fullpop_ab.py` 同源，本表由 `work/_abfinal.py` 复算）：
+
+* **主判据 treatment vs control**：Δ **+0.1054**（b/c = 45/4，95%CI [+0.0717, +0.1391]，p < 1e-4）⇒ **过线**（点估计 ≥ +0.05 且配对 CI 下界 > 0）。
+* treatment_long vs control：Δ **+0.0694**（b/c = 37/10，CI [+0.0356, +0.1033]，p = 1e-4）⇒ 也过线。
+* **护栏（§5.162）**：① `ALL`≥5 ≥ −0.01：treatment +0.1346 ✓、treatment_long +0.0631 ✓。② 其余 role 的 ≥5 格各降不超 1pp（对照 = control）：treatment 全过 —— `net_label`≥5 0.1346→**0.4231**、`pin_name`≥5 0.2459→**0.3934**、`note`≥5 0→0（n=41）、`designator`≥5 n=1 0→1.0；**treatment_long 破**：`pin_name`≥5 0.2459→0.1967 = **−4.9pp**。③ 全 ruler exact 不降：treatment +0.0960 ✓、TL +0.0346 ✓。⇒ **treatment_long 出局**（破护栏，且在两把池尺子上都不如 treatment）。
+* **但主判据的对照是坏的**：treatment vs **delivered** 在主尺子上 `ALL` **−0.0197**（p=0.0047）、`designator` **−0.0734**（p=0.0002）、`net_label` −0.1538、`pin_number`≥5 0.3333→0.0000、`value` +0.0352（p=0.0002）、`value`≥5 **+0.0180（n.s.，p=0.3368）**、`ALL`≥5 −0.0166（n.s.）。⇒ **没有任何一个 checkpoint 比交付权重更好**。
+
+### (C) 交付口径（`work/pool_r1/ruler_clean.jsonl`，184 case / 4,068 行 / 外扩框）——决定「换不换模型」的那张表
+
+| checkpoint | ALL 4,068 | designator 2,160 | value 1,159 | value≥5 440 | ALL≥5 521 |
+| --- | --- | --- | --- | --- | --- |
+| **delivered** | **0.7847** | **0.8477** | **0.6903** | **0.5727** | **0.5355** |
+| start | 0.7321 | 0.8028 | 0.6411 | 0.5432 | 0.5067 |
+| control | 0.6514 | 0.7514 | 0.4858 | 0.4364 | 0.4012 |
+| treatment_long | 0.7168 | 0.8051 | 0.5953 | 0.4727 | 0.4472 |
+| treatment | 0.7638 | 0.8380 | 0.6454 | 0.5500 | 0.5144 |
+
+配对 vs **delivered**：treatment `value`≥5 **−0.0227**（p=0.087）、`designator` −0.0097（p=0.143）、`value` −0.0449（p<1e-4）、`ALL` −0.0209（p<1e-4）；treatment_long `value`≥5 **−0.1000**（p<1e-4）。配对 vs control：treatment `value`≥5 +0.1136、`designator` +0.0866、`ALL` +0.1123（全 p<1e-4）。
+
+⇒ **交付口径上交付权重仍是第一，treatment 是「较不坏」的那个**：不做模型替换。§5.176 的两条 n≥1,000 护栏终点（`ruler_big` 的 `value`≥5、`ruler_clean` 的 `designator`）上 treatment 相对 delivered 是 −0.0227 / −0.0097，都不是正面证据。
+
+### (D) 机制裁定：这些臂的增益是**裁剪口径位移**，不是「长串能力」
+
+同一批 **4,068 行、同一批标签**，只把 bbox 在「交付外扩」与「紧墨迹框」之间切换（`ruler_clean_tight.jsonl`；对照口径定义见 §5.176/§5.177）：
+
+| 终点（n） | 口径 | delivered | control | treatment_long | treatment |
+| --- | --- | --- | --- | --- | --- |
+| `value`≥5（440） | 外扩 | 0.5727 | 0.4364 | 0.4727 | 0.5500 |
+| `value`≥5（440） | **紧框** | 0.2568 | 0.1000 | **0.4000** | 0.3773 |
+| `designator`（2,160） | 外扩 | 0.8477 | 0.7514 | 0.8051 | 0.8380 |
+| `designator`（2,160） | **紧框** | 0.7861 | 0.7250 | 0.7519 | **0.8079** |
+| `value` 全部（1,159） | 外扩 | 0.6903 | 0.4858 | 0.5953 | 0.6454 |
+| `value` 全部（1,159） | **紧框** | 0.3857 | 0.2157 | 0.3598 | 0.3831 |
+| `ALL`（4,068） | 外扩 | 0.7847 | 0.6514 | 0.7168 | 0.7638 |
+| `ALL`（4,068） | **紧框** | 0.6436 | 0.5511 | 0.6160 | 0.6576 |
+
+**臂相对 delivered 的配对 Δ 随口径翻号或塌缩**（人口与标签逐字节相同，只有框变了）：
+
+| 终点 | 外扩口径 | 紧框口径 |
+| --- | --- | --- |
+| `value`≥5：treatment − delivered | **−0.0227**（p=0.087） | **+0.1205**（p<1e-4） |
+| `value`≥5：treatment_long − delivered | **−0.1000**（p<1e-4） | **+0.1432**（p<1e-4） |
+| `ALL`：treatment − delivered | **−0.0209**（p<1e-4） | **+0.0140**（p=0.020） |
+| `designator`：treatment − delivered | −0.0097（n.s.） | **+0.0218**（p=0.0002） |
+| `value` 全部：treatment_long − delivered | **−0.0949**（p<1e-4） | −0.0259（n.s.） |
+| `value` 全部：treatment − delivered | **−0.0449**（p<1e-4） | −0.0026（n.s.） |
+
+第三把尺子（`ruler_big`，184 case / 20,343 行 / 紧框）：treatment − delivered `value`≥5 **+0.1572**（p<1e-4）、`designator` **+0.0201**、`ALL` +0.0086（p=0.0012）、`value` −0.0148（p=0.052）——与紧框侧一致。⇒ **三把尺子一致：微调把模型沿「裁剪口径」轴推向了紧框（因为它真实训练行是紧框，§5.174），交付管线用的是外扩框，于是增益在交付面上消失。** 连起点也在这条轴上：外扩口径下 delivered > start（`value`≥5 0.5727 vs 0.5432），紧框口径下 start > delivered（0.2955 vs 0.2568）。
+
+一条反面注记（不掩盖）：`ruler_big` 紧框 `value`≥5 上 treatment_long（0.5123）**反超** treatment（0.4860），而 `ruler_clean`/尺子 A 上 treatment 更好 ⇒ 臂间排序在口径/人口之间并不稳定，这些 Δ 仍处敏感区。
+
+### (E) 判定与决策
+
+1. **冻结 A/B 的问题答完了**：在它自己的判据（treatment vs control，尺子 A）上 treatment **过线**（Δ+0.1054，CI 下界 >0），treatment_long 破护栏出局。
+2. **但交付决策是「不换模型」**：交付口径（`ruler_clean`）上 delivered 最好，treatment 全部终点都 ≤ delivered（`value`≥5 −0.0227 n.s.、`designator` −0.0097 n.s.、`value` −0.0449 显著更低）；主尺子上 treatment 相对 delivered 也只有 `value` 全部 +0.0352 一个终点为正。
+3. **机制**：本 A/B 的净效应是**裁剪口径位移 + 微调损伤**，两者都大于「长串能力」。真实长串行确实带来了方向性效应（treatment vs control +0.1054），但它被同一次微调的损伤与口径位移吃掉了。
+4. **下一步（零训练先做，训练待人类发令）**：§5.162 的判据把对照定成「同配方不加上增量的臂」，这只能证明**增量有方向性效应**，不能证明**交付价值**。后续任何训练侧 A/B 都要：① 对照换成**交付权重**；② 评测必须在**交付口径**（`ruler_clean`）上读；③ 配方要外科化（只训增量长串行 / 低 lr / 少 epoch / 不重放 22k 合成），否则量到的是损伤；④ 或者反向：**把真实训练行改成交付外扩框（或 pad jitter）**，让增益落在交付口径上。
+
+**产物**：`work/fullpop_r8/{control,treatment_long,treatment}/run/best.pt`；每臂 `ruler_eval.log` / `ruler_errors.jsonl` / `pool_errors.jsonl` / `tight_errors.jsonl` / `big_errors.jsonl`；起点重评 `work/fullpop_r8/start/ruler_eval.log`；配对复算脚本 `work/_abfinal.py`（本轮已提升为入库工具 `eda-pcb/tools/diag/_abmatrix.py`，一条命令 `python -X utf8 tools/diag/_abmatrix.py --spec <spec.json>`，spec = `work/fullpop_r8/_abmatrix_spec.json`），输出 `work/fullpop_r8/_abfinal_all.txt`；池尺子读数 `work/fullpop_r8/_poolread_all.txt`。
