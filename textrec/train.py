@@ -199,6 +199,10 @@ def main(argv=None) -> int:
     ap.add_argument("--val-limit", type=int, default=0)
     ap.add_argument("--smoke", action="store_true", help="1 轮 / 2000 条，验管线")
     ap.add_argument("--resume", default="", help="从某个 last.pt 继续")
+    ap.add_argument("--save-every", type=int, default=0, help=(
+        "每 N 轮另存一份 `ckpt_e%%03d.pt`（默认 0 = 不存）。用途：口径偏好随轮次漂移"
+        "（§5.181：同一次训练的 e56 偏外扩、e60 偏紧框），只有中间 ckpt 才能把这条曲线画出来，"
+        "否则只能像 §5.181 那样靠 best/last 两个点猜"))
     ap.add_argument("--include-real", action="store_true",
                     help="把真实语料也拿进训练（默认不用，它只做验证）")
     ap.add_argument("--pin-num-balance", choices=("off", "equal"), default="off",
@@ -342,6 +346,9 @@ def main(argv=None) -> int:
                          "width_reduction": C.WIDTH_REDUCTION},
               "epoch": epoch + 1, "val_cer": val_cer, "val_exact": val_exact}
         torch.save(dict(ck, opt=opt.state_dict()), out_dir / "last.pt")
+        if args.save_every and epoch % args.save_every == 0:
+            torch.save(ck, out_dir / ("ckpt_e%03d.pt" % epoch))
+            print("   * ckpt_e%03d.pt 存档 (CER %.4f)" % (epoch, val_cer), flush=True)
         if val_cer < best_cer:
             best_cer = val_cer
             torch.save(ck, out_dir / "best.pt")

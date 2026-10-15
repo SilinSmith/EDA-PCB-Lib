@@ -28,7 +28,12 @@ EDA = Path(__file__).resolve().parents[2]
 WORK = EDA.parent / "work"
 DEFAULT_OUT = WORK / "fullpop_r8"     # §5.166：人类已裁定换成「目标框最多的前 8 张」ruler
                                       # （旧的 work/fullpop，每 6 张取 1 / 989 框，已作废但留在盘上）
-DEFAULT_START = WORK / "ocr_mix" / "runs" / "last.pt"
+DEFAULT_START = EDA / "weights" / "textrec_best.pt"
+# ★ §5.181 更正（2026-10-16）：这里原本写死 `WORK/ocr_mix/runs/last.pt`，而 `last.pt` 是那次训练
+# **末段发散**的一轮（存储 epoch=61/完成 e60，val CER 0.21529），交付权重 `best.pt` 是更早的
+# 最优轮（存储 epoch=57/完成 e56，val CER 0.16978）。§5.180 的三臂就是从这个坏起点跑的，
+# 于是「起点自带紧框偏好」与「微调效应」混在一起。默认改成交付权重（`--start-ckpt` 可覆盖），
+# 这样任何训练侧 A/B 的参照物都是「要替换的那个模型」，而不是「同一次训练里更差的轮次」。
 ARMS = ("control", "treatment", "treatment_long")
 
 

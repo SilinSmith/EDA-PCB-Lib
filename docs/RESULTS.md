@@ -15312,12 +15312,13 @@ Python 自写的是 UTF-8 ⇒ 解析器必须按 BOM 自适应（`tools/dev/run_
 
 | checkpoint | best epoch | val CER（800 条真实行） | val exact |
 | --- | --- | --- | --- |
-| start `work/ocr_mix/runs/last.pt` | —（起点） | 0.2153 | 0.6127 |
+| delivered `weights/textrec_best.pt`（= `work/ocr_mix/runs/best.pt`，md5 7559096c9979） | e56（存储 epoch 57） | **0.16978** | 0.70573 |
+| start `work/ocr_mix/runs/last.pt` | e60（存储 epoch 61） | 0.21529 | 0.61274 |
 | control | e61（之后 10 轮无改善 → 早停） | **0.2592** | 0.6481 |
 | treatment_long | e62（早停） | **0.2746** | 0.6217 |
-| treatment | e72（跑到上限，末轮刷新 best） | **0.1775** | 0.6958 |
+| treatment | **e65**（best；之后跑到上限 e72 未再刷新） | **0.1775** | 0.6958 |
 
-⇒ 11–12 epoch / lr 3e-4 的「合成 22k + 真实行」全量微调**本身有害**（control/TL 把真实面 CER 从 0.2153 拉到 0.26–0.27）；只有加了 1,409 条真实 `value` 行的 treatment 修回来并反超。**下面所有 Δ 都要带着这一条读：对照臂是坏的，不是中性的。**
+⇒ 11–12 epoch / lr 3e-4 的「合成 22k + 真实行」全量微调**本身有害**（control/TL 把真实面 CER 从 0.2153 拉到 0.26–0.27）；只有加了 1,409 条真实 `value` 行的 treatment 修回来。**但 treatment 的 best 0.1775 仍差于交付 e56 的 0.16978，而起点 e60 本身已是发散轮 — 见 §5.181 的两处更正。**
 
 ### (B) 冻结主判据（尺子 A：8 张 sheet / 2,687 行 / `value`≥5 n=389）
 
@@ -15376,7 +15377,7 @@ Python 自写的是 UTF-8 ⇒ 解析器必须按 BOM 自适应（`tools/dev/run_
 | `value` 全部：treatment_long − delivered | **−0.0949**（p<1e-4） | −0.0259（n.s.） |
 | `value` 全部：treatment − delivered | **−0.0449**（p<1e-4） | −0.0026（n.s.） |
 
-第三把尺子（`ruler_big`，184 case / 20,343 行 / 紧框）：treatment − delivered `value`≥5 **+0.1572**（p<1e-4）、`designator` **+0.0201**、`ALL` +0.0086（p=0.0012）、`value` −0.0148（p=0.052）——与紧框侧一致。⇒ **三把尺子一致：微调把模型沿「裁剪口径」轴推向了紧框（因为它真实训练行是紧框，§5.174），交付管线用的是外扩框，于是增益在交付面上消失。** 连起点也在这条轴上：外扩口径下 delivered > start（`value`≥5 0.5727 vs 0.5432），紧框口径下 start > delivered（0.2955 vs 0.2568）。
+第三把尺子（`ruler_big`，184 case / 20,343 行 / 紧框）：treatment − delivered `value`≥5 **+0.1572**（p<1e-4）、`designator` **+0.0201**、`ALL` +0.0086（p=0.0012）、`value` −0.0148（p=0.052）——与紧框侧一致。⇒ **三把尺子一致：臂相对交付权重的取向随裁剪口径翻号/塌缩。** **但机制句已更正（见 §5.181）：三臂的真实训练行其实是外扩框（配对 953 行里 70.1% 更贴外扩、面积比中位 2.50×），口径位移来自起点 `last.pt` 自身 —— 它是同一次训练末段发散的一轮（e60），交付 `best.pt` 是更早的最优轮（e56）**：外扩口径下 delivered > start（`value`≥5 0.5727 vs 0.5432），紧框口径下 start > delivered（0.2955 vs 0.2568），三臂继承了 start 的取向。
 
 一条反面注记（不掩盖）：`ruler_big` 紧框 `value`≥5 上 treatment_long（0.5123）**反超** treatment（0.4860），而 `ruler_clean`/尺子 A 上 treatment 更好 ⇒ 臂间排序在口径/人口之间并不稳定，这些 Δ 仍处敏感区。
 
@@ -15384,7 +15385,67 @@ Python 自写的是 UTF-8 ⇒ 解析器必须按 BOM 自适应（`tools/dev/run_
 
 1. **冻结 A/B 的问题答完了**：在它自己的判据（treatment vs control，尺子 A）上 treatment **过线**（Δ+0.1054，CI 下界 >0），treatment_long 破护栏出局。
 2. **但交付决策是「不换模型」**：交付口径（`ruler_clean`）上 delivered 最好，treatment 全部终点都 ≤ delivered（`value`≥5 −0.0227 n.s.、`designator` −0.0097 n.s.、`value` −0.0449 显著更低）；主尺子上 treatment 相对 delivered 也只有 `value` 全部 +0.0352 一个终点为正。
-3. **机制**：本 A/B 的净效应是**裁剪口径位移 + 微调损伤**，两者都大于「长串能力」。真实长串行确实带来了方向性效应（treatment vs control +0.1054），但它被同一次微调的损伤与口径位移吃掉了。
+3. **机制**：本 A/B 的净效应是**裁剪口径位移 + 微调损伤**，两者都大于「长串能力」。真实长串行确实带来了方向性效应（treatment vs control +0.1054），但它被同一次微调的损伤与口径位移吃掉了。**（§5.181 更正：口径位移主要来自起点 `last.pt` e60 自身；且这 +0.1054 里混有「从发散轮往回恢复」的成分，而 treatment 的 val 0.1775 仍差于交付 e56 的 0.16978。）**
 4. **下一步（零训练先做，训练待人类发令）**：§5.162 的判据把对照定成「同配方不加上增量的臂」，这只能证明**增量有方向性效应**，不能证明**交付价值**。后续任何训练侧 A/B 都要：① 对照换成**交付权重**；② 评测必须在**交付口径**（`ruler_clean`）上读；③ 配方要外科化（只训增量长串行 / 低 lr / 少 epoch / 不重放 22k 合成），否则量到的是损伤；④ 或者反向：**把真实训练行改成交付外扩框（或 pad jitter）**，让增益落在交付口径上。
 
 **产物**：`work/fullpop_r8/{control,treatment_long,treatment}/run/best.pt`；每臂 `ruler_eval.log` / `ruler_errors.jsonl` / `pool_errors.jsonl` / `tight_errors.jsonl` / `big_errors.jsonl`；起点重评 `work/fullpop_r8/start/ruler_eval.log`；配对复算脚本 `work/_abfinal.py`（本轮已提升为入库工具 `eda-pcb/tools/diag/_abmatrix.py`，一条命令 `python -X utf8 tools/diag/_abmatrix.py --spec <spec.json>`，spec = `work/fullpop_r8/_abmatrix_spec.json`），输出 `work/fullpop_r8/_abfinal_all.txt`；池尺子读数 `work/fullpop_r8/_poolread_all.txt`。
+
+## §5.181 自我更正 §5.180（§5.180 的机制句作废）：三臂的真实训练行**是外扩框**；A/B 的起点是一个**末段发散**的 ckpt（e60），不是交付权重（e56）
+
+写完 §5.180 后的收尾核对把其中两处结论推翻了，逐条更正（本轮新测，全部零 GPU）：
+
+### (A) 更正一：真实训练行不是紧框，是**外扩框**（与交付口径一致）
+
+做法：三臂真实行的来源 `work/ocr_real/manifest.jsonl`（3,829 行 / 32 case）与官方池版本 `work/official_text_pad/manifest.jsonl`（4,974 行 / 214 case，同时带 `bbox`=交付外扩与 `bbox_tight`=紧）按 `(image, role, text)` 配对，看训练框更贴哪个。
+
+* 配对到 **953 行**（同 case 952）；**更贴外扩 668（70.1%）**、两者一样 282（29.6%）、**更贴紧框 3（0.3%）**。
+* 面积比（训练框 / 紧框）p10/p50/p90 = 2.14 / **2.50** / 3.12；参照：官方池自己「外扩 / 紧框」= 1.58 / 2.23 / 2.60 ⇒ **训练行的 pad 幅度与交付默认同量级、甚至更大**。
+
+⇒ §5.180(D) 那句「微调把模型推向紧框（因为它真实训练行是紧框，§5.174）」**作废**。「训练口径与交付口径错配」在本线上不成立 —— §5.174 的「邻居中心入框 0.2%」量的是**紧到什么程度/装不装得下邻居**，不是「有没有 pad」。**这一条同时消掉了「把真实行改成交付外扩框来训练」这个候选（§5.180(E)④）—— 训练行本来就是外扩框，改了等于没改。**
+
+### (B) 更正二：A/B 的起点是**发散轮**，不是交付权重
+
+`torch.load` 元数据（`epoch` 字段 = **已完成轮次 + 1**，见 `eda-pcb/textrec/train.py` 的 `ck = {... "epoch": epoch + 1 ...}`）：
+
+| checkpoint | 存储 epoch | 完成轮 | val CER | val exact | md5(前 12) |
+| --- | --- | --- | --- | --- | --- |
+| 交付 `weights/textrec_best.pt` = `work/ocr_mix/runs/best.pt`（同一文件） | 57 | e56 | **0.16978** | 0.70573 | 7559096c9979 |
+| 起点 `work/ocr_mix/runs/last.pt` | 61 | e60 | **0.21529** | 0.61274 | 15e2d1081d5e |
+| `fullpop_r8/control/run/best.pt` | 62 | e61 | 0.2592 | 0.64815 | 2759ce1e9f84 |
+| `fullpop_r8/treatment_long/run/best.pt` | 63 | e62 | 0.27459 | 0.62169 | bf800760699b |
+| `fullpop_r8/treatment/run/best.pt` | 66 | e65 | **0.1775** | 0.69577 | 38c3110101cc |
+
+`work/ocr_mix/runs/history.json` 可见窗口（e55–e60）：`val_cer` 0.17342 → **0.16978（e56 触底）** → 0.18161 → 0.17843 → 0.20847 → **0.21529（e60）**，同期训练 loss 从 0.0445 一路降到 0.0307–0.0585 ⇒ **末 4 轮 val 退化 +4.6pp 而 loss 继续降，是发散**。（该 history 只有 e55–e60，说明这次 run 是**从 e55 续训**的，`best.pt` 是这段窗口里的最优轮。）
+
+⇒ §5.166 冻结的三臂 A/B **是从发散的 e60 起步的，不是从交付 e56 起步**。这一条解释了 §5.180 里所有「奇怪」的读数：
+1. 三臂为什么都远不如交付权重（继承了坏起点）；
+2. 为什么 control 第一个 epoch 就把 val 从 0.2153 拉到 0.2592（坏起点继续坏，且 10 轮都回不来）；
+3. 为什么 treatment 能靠 1,409 条真实 `value` 行在 e65 拉回 0.1775（仍差于 e56 的 0.16978）。
+
+### (C) 更正三：口径位移**不是微调造成的**——起点自己就偏紧框
+
+| 尺子 / 终点 | delivered（e56） | start（e60） |
+| --- | --- | --- |
+| `ruler_clean`（外扩）`value`≥5 | **0.5727** | 0.5432 |
+| `ruler_clean_tight`（紧框）`value`≥5 | 0.2568 | **0.2955** |
+| `ruler_clean`（外扩）`ALL` | 0.7847 | 0.7321 |
+| `ruler_clean_tight`（紧框）`ALL` | 0.6436 | **0.6748** |
+
+⇒ **同一次训练的两个 ckpt 分居口径轴两侧**：val 最优轮（e56）偏外扩、末段发散轮（e60）偏紧框。「口径偏好随训练轮次漂移」是现象（两个点），但**§5.180(D)「微调把它推过去」这个因果句本 A/B 证明不了**——三个臂只是继承了 e60 的位置。
+
+**§5.180 里不受影响、继续成立的部分**：① 交付决策「不换模型」；② 臂 vs 交付权重的配对 Δ 在两种口径下**翻号/塌缩**（那是纯测量，人口与标签逐字节相同）；③ 裁剪口径是一阶因子（±30pp，§5.176/§5.177）；④ 臂间护栏读数与 TL 出局。
+
+### (D) 结论怎么变
+
+* §5.180(E) 的决策三条不变，且更硬：**不换模型**；交付面（外扩）上 `weights/textrec_best.pt`（e56）最好。
+* 但「真实长串行有方向性效应」这句话要**降权**：+0.1054 里混着「从发散 e60 恢复」的成分，而 treatment 的 best val（0.1775）**仍差于交付 e56 的 0.16978**，交付口径上也没有任何终点为正。⇒ **本 A/B 既没证明长串行有交付价值，也没干净地证明它有方向性效应。**
+
+### (E) 因此下一个实验只需要改一个东西：起点
+
+配方逐字不变（同 §5.166 三臂、同合成 22,000 行、同 seed、同 12 轮上限），只把**起点从 `ocr_mix/runs/last.pt` 换成交付权重 `weights/textrec_best.pt`（e56）**；读数仍分两把尺子，但**主表放在 `ruler_clean`（交付外扩口径，`value`≥5 n=440 / `designator` n=2,160）**，**对照 = 交付权重自身**（不是 control）。这条能干净回答「在交付口径上，加上真实长串行有没有增益」，预算 ≈45–70 min（步数账见 §5.167）。
+
+落地（本轮已改，均为**默认行为不变的前提下的闸门式改动**）：
+1. `eda-pcb/tools/dev/run_fullpop_ab.py`：`DEFAULT_START` 由 `work/ocr_mix/runs/last.pt` 改为 `eda-pcb/weights/textrec_best.pt`（要重放旧 A/B 就显式传 `--start-ckpt work/ocr_mix/runs/last.pt`），并在常量处写明这次更正；
+2. `eda-pcb/textrec/train.py`：新增 `--save-every N`（默认 **0 = 不存**，行为不变），每 N 轮另存 `ckpt_e%03d.pt`，用来把「口径偏好 vs 轮次」这条曲线一次跑出来（否则永远只有 best/last 两个点，就是本节的处境）。
+
+**产物**：`work/_convcheck.py`（口径核对，输出 `work/_convcheck.txt`）；ckpt 元数据由一段 `torch.load` 脚本读出（见本节 (B) 表）；`work/ocr_mix/runs/history.json`（发散证据）。
