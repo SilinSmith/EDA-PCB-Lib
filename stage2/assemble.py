@@ -1029,6 +1029,14 @@ def snap_ends_to_pins(nets: Dict[str, dict], pins: Dict[str, dict],
     落在引脚点 2.0px 内，而 §5.74 的 5 个「不在任何网」的引脚是 17.7~41.0px、夹角 0.4~31.3°
     ⇒ 走那么远后横向偏 5~9px，**永远判不中**（放大 `EDGE_EXT_ANY` 到 45/70 实测对 netH 零效果）。
     这里换成「引脚到边所在直线的垂距」判据 + 直接把端点搬到引脚点。
+
+    ★★ 别再回头做这个方向（RESULTS §5.125 已给**离线神谕上界**）：在线性判分里
+    「GT 端落在元件**引线尖**上、而不是引脚锚点」是系统性的——`_nlcrop.py` 裁图实证
+    （case 10 `L1`：GT 端 x=987，我方 x=1003.4，**过伸 16px**；我方 x=1003 已在引线**里面**）。
+    `tools/diag/_nlpinoracle.py` 在**已交付产物**上按本函数的语义（含「允许回缩到我方端点
+    **身后** backoff px」的加强版）扫了 40 组 (radius 10~45 / perp 3~5 / backoff 0~25)：
+    **delta 全为负，−0.0249 ~ −0.0436**（基线 0.5780；`mv` 294~360 个端点被搬动）。
+    故本函数**保持默认关**（`STAGE2_PIN_SNAP=0`）。
     """
     radius = PIN_SNAP_R if radius is None else radius
     perp = PIN_SNAP_PERP if perp is None else perp
