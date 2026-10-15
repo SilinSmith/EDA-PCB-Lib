@@ -169,10 +169,10 @@ case                                  score   compF1    pinF1   netHF1   lineF1
 | 工具 | 用途 |
 |---|---|
 | `tools/eval/fast.py` | 端到端「跑 + 判分」：`--cases 1,8`、`--save <名>`（归档到 `work/_fast_base/`）、`--score-only`（只重算分）、`--engine harness`（换备用口径） |
-| `tools/eval/gt_retest.py` | **一键复测矩阵**：6 条臂 × 2 口径，并打印 GT 逐案 sha1 指纹；`--fingerprint-only` 用来查主办方是否换了 GT |
+| `tools/eval/gt_retest.py` | **一键复测矩阵**：臂 × 口径，并打印 GT 逐案 sha1 指纹；`--fingerprint-only` 用来查主办方是否换了 GT |
 | `tools/dev/pinread_contract.py` | 引脚读数器接口契约检查（16 个入口，当前 16/16 PASS） |
-| `docs/KNOBS.md` | **458 个环境开关**全量表（生成物，别手改） |
-| `docs/TOOLS.md` | 720 个脚本索引（生成物） |
+| `docs/KNOBS.md` | **551 个环境开关**全量表（生成物，别手改） |
+| `docs/TOOLS.md` | 744 个脚本索引（生成物） |
 | `docs/RESULTS.md` | 全部实验账本（§0 起，逐条带数字与复现命令） |
 
 ---

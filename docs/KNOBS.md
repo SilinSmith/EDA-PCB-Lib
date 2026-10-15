@@ -6,18 +6,18 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **559** 个开关。
+共 **563** 个开关。
 
 ## 目录
 
-- [stage1](#stage1)（153）
+- [stage1](#stage1)（154）
 - [stage2](#stage2)（177）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（132）
 - [vlm](#vlm)（41）
 - [textrec](#textrec)（13）
 - [cvparts](#cvparts)（10）
-- [pipeline](#pipeline)（19）
+- [pipeline](#pipeline)（22）
 - [submission](#submission)（8）
 - [schematic_parser](#schematic_parser)（4）
 
@@ -61,13 +61,13 @@
 | `STAGE1_CV_WIN` | `"off"` | `stage1/detect.py:134` |
 | `STAGE1_DROP_TYPES` | `"pin,testpoint,mosfet_npn"` | `stage1/detect.py:97` |
 | `STAGE1_GROUP_TOL` | `"1.5"` | `stage1/labels.py:47` |
-| `STAGE1_MAX_PIXELS_HARD` | — | `stage1/pipeline.py:730` |
+| `STAGE1_MAX_PIXELS_HARD` | — | `stage1/pipeline.py:736` |
 | `STAGE1_MERGE_TP` | `"0"` | `stage1/detect.py:120` |
-| `STAGE1_MONO_FRAME_PINS` | `"0"` | `stage1/pipeline.py:112` |
+| `STAGE1_MONO_FRAME_PINS` | `"0"` | `stage1/pipeline.py:118` |
 | `STAGE1_NMS_IOU` | `"0.5"` | `stage1/detect.py:81` |
-| `STAGE1_OCC_BIG` | `"60"` | `stage1/pipeline.py:486` |
+| `STAGE1_OCC_BIG` | `"60"` | `stage1/pipeline.py:492` |
 | `STAGE1_OCC_LOCAL` | `"0"` | `stage1/wires.py:70` |
-| `STAGE1_OCC_MODE` | `"all"` | `stage1/pipeline.py:480` |
+| `STAGE1_OCC_MODE` | `"all"` | `stage1/pipeline.py:486` |
 | `STAGE1_OWN` | `"off"` | `stage1/detect.py:73` |
 | `STAGE1_OWN_DEMOTE` | `"0.85"` | `stage1/detect.py:75` |
 | `STAGE1_PINC` | `"1"` | `stage1/pipeline.py:89` |
@@ -101,7 +101,7 @@
 | `STAGE1_PINC_TIGHT_Y` | `"3.0"` | `stage1/pincol.py:871` |
 | `STAGE1_PINC_TIP_PAD` | `"0"` | `stage1/pincol.py:148` |
 | `STAGE1_PINC_TIP_TOL` | `"6.0"` | `stage1/pincol.py:149` |
-| `STAGE1_PIN_ATTACHMENT_GUARD` | `"0"` | `stage1/pipeline.py:114` |
+| `STAGE1_PIN_ATTACHMENT_GUARD` | `"0"` | `stage1/pipeline.py:120` |
 | `STAGE1_PIN_ATTR` | `"nearest"` | `stage1/nets.py:67` |
 | `STAGE1_PIN_ATTR_SLACK` | `"6"` | `stage1/nets.py:68` |
 | `STAGE1_PIN_AXIS` | `"1"` | `stage1/pins.py:240` |
@@ -109,7 +109,8 @@
 | `STAGE1_PIN_CLUSTER_IC` | `"12.0"` | `stage1/pins.py:94` |
 | `STAGE1_PIN_COLOR` | `"0"` | `stage1/pipeline.py:101` |
 | `STAGE1_PIN_COLOR_CAP` | `"0"` | `stage1/pipeline.py:106` |
-| `STAGE1_PIN_DIRECTION_GUARD` | `"0"` | `stage1/pipeline.py:113` |
+| `STAGE1_PIN_COLOR_KEEP_MISS` | `"0"` | `stage1/pipeline.py:112` |
+| `STAGE1_PIN_DIRECTION_GUARD` | `"0"` | `stage1/pipeline.py:119` |
 | `STAGE1_PIN_INK_TEXT` | `"0"` | `stage1/pins.py:201` |
 | `STAGE1_PIN_INK_TEXT_PAD` | `"0.0"` | `stage1/pins.py:203` |
 | `STAGE1_PIN_JOIN_DIST` | `"12"` | `stage1/nets.py:37` |
@@ -606,22 +607,25 @@
 |---|---|---|
 | `EDA_PCB_REPO` | — | `pipeline/config.py:23` |
 | `EDA_ROOT` | — | `pipeline/config.py:25` |
-| `STAGE1_WIRE_CLOSE_K` | `"3" if self.close_thin else "0"` | `pipeline/pskel.py:1060` |
+| `PSKEL_NODE_SOLVE` | `"1"` | `pipeline/pskel.py:996` |
+| `PSKEL_NODE_SOLVE_FIT` | `"4.0"` | `pipeline/pskel.py:1004` |
+| `PSKEL_NODE_SOLVE_LAM` | `"0.05"` | `pipeline/pskel.py:998` |
+| `STAGE1_WIRE_CLOSE_K` | `"3" if self.close_thin else "0"` | `pipeline/pskel.py:1160` |
 | `STAGE1_WIRE_COLOUR` | `"confirm"` | `pipeline/pskel.py:358` |
-| `STAGE1_WIRE_CROSS_FILL` | `"1"` | `pipeline/pskel.py:964` |
-| `STAGE1_WIRE_CROSS_FILL_AXES` | `"2"` | `pipeline/pskel.py:970` |
-| `STAGE1_WIRE_CROSS_FILL_R` | `"8.0"` | `pipeline/pskel.py:966` |
+| `STAGE1_WIRE_CROSS_FILL` | `"1"` | `pipeline/pskel.py:966` |
+| `STAGE1_WIRE_CROSS_FILL_AXES` | `"2"` | `pipeline/pskel.py:972` |
+| `STAGE1_WIRE_CROSS_FILL_R` | `"8.0"` | `pipeline/pskel.py:968` |
 | `STAGE1_WIRE_DEBUG` | — *(2 处)* | `pipeline/pskel.py:381` |
-| `STAGE1_WIRE_EDGE` | `"0"` | `pipeline/pskel.py:927` |
-| `STAGE1_WIRE_EDGE_MIN` | `"10.0"` | `pipeline/pskel.py:1027` |
-| `STAGE1_WIRE_EDGE_NEAR` | `"2"` | `pipeline/pskel.py:1040` |
-| `STAGE1_WIRE_EDGE_REL` | `"0.55"` | `pipeline/pskel.py:1023` |
-| `STAGE1_WIRE_GAPBRIDGE` | `"0"` | `pipeline/pskel.py:947` |
-| `STAGE1_WIRE_GAPBRIDGE_ANG` | `"35.0"` | `pipeline/pskel.py:953` |
-| `STAGE1_WIRE_GAPBRIDGE_CROSS` | `"1"` | `pipeline/pskel.py:956` |
-| `STAGE1_WIRE_GAPBRIDGE_MAX` | `"12.0"` | `pipeline/pskel.py:949` |
-| `STAGE1_WIRE_UNCONF` | `"veto"` | `pipeline/pskel.py:993` |
-| `STAGE1_WIRE_UNCONF_NEAR` | `"3"` | `pipeline/pskel.py:1007` |
+| `STAGE1_WIRE_EDGE` | `"0"` | `pipeline/pskel.py:929` |
+| `STAGE1_WIRE_EDGE_MIN` | `"10.0"` | `pipeline/pskel.py:1127` |
+| `STAGE1_WIRE_EDGE_NEAR` | `"2"` | `pipeline/pskel.py:1140` |
+| `STAGE1_WIRE_EDGE_REL` | `"0.55"` | `pipeline/pskel.py:1123` |
+| `STAGE1_WIRE_GAPBRIDGE` | `"0"` | `pipeline/pskel.py:949` |
+| `STAGE1_WIRE_GAPBRIDGE_ANG` | `"35.0"` | `pipeline/pskel.py:955` |
+| `STAGE1_WIRE_GAPBRIDGE_CROSS` | `"1"` | `pipeline/pskel.py:958` |
+| `STAGE1_WIRE_GAPBRIDGE_MAX` | `"12.0"` | `pipeline/pskel.py:951` |
+| `STAGE1_WIRE_UNCONF` | `"veto"` | `pipeline/pskel.py:1093` |
+| `STAGE1_WIRE_UNCONF_NEAR` | `"3"` | `pipeline/pskel.py:1107` |
 | `WINDIR` | `r'C:\Windows'` | `pipeline/pglyph.py:30` |
 
 <a id="submission"></a>

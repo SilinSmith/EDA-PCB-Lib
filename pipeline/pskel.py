@@ -910,6 +910,8 @@ class SkeletonResult:
     n_branch_paths: int = 0
     has_chroma: bool = False
     n_gap_bridges: int = 0
+    n_nodes_solved: int = 0
+    node_shift_mean: float = 0.0
 
 
 class WireExtractor:
@@ -970,6 +972,104 @@ class WireExtractor:
             self.cross_fill_axes = int(os.environ.get("STAGE1_WIRE_CROSS_FILL_AXES", "2") or 2)
         except ValueError:
             self.cross_fill_axes = 2
+        # ★ 结点位置重解（`PSKEL_NODE_SOLVE`，默认 0 = 关）。2026-10-14 §5.123。
+        #   背景：`_trace` 里结点坐标原本就是**簇像素的算术均值**（:1124），而骨架在
+        #   T/十字处的分支点天生比真交叉点短 8~10px、且簇本身是弯的 —— 于是切出来的
+        #   段端点系统性偏 5~20px，正好落在 net_line 的 `line_tol=5` 之外。实测口径：
+        #   把交付端点直接吸到 GT 端点（神谕）能到 0.9293，吸到「5px 内最近圆点」只有
+        #   0.5832 ⇒ 缺的是**位置**不是形状。另一个取证（`tools/diag/_endcause.py`）：
+        #   GT 缺的那 253 条边里 **98.6% 的端点落在别的 GT 导线上**（导线—导线 T 接），
+        #   只有 1.4% 在引脚上 ⇒ 引脚吸附不是主杠杆，T 接结点才是。
+        #   做法：每个 ≥2 度结点，用各分支离开结点 4px 之后的像素拟合直线（法向 n_i、
+        #   过 q_i），最小化 Σ(n_i·(p-q_i))² + λ‖p-p0‖² 解出交点，λ 取
+        #   `PSKEL_NODE_SOLVE_LAM`(0.05) × trace(A)/2（无量纲、对形状退化稳定），
+        #   位移上限 12px；随后把链在每个结点处的那个顶点替换成该坐标。
+        #   ★ 2026-10-14 实测（官方 10 张，`tools/eval/gt_retest.py --tag nsolve*`）：
+        #     确定性口径 80.48 → **80.62（+0.14）**，交付口径 84.95 → **85.08（+0.14）**，
+        #     元件/引脚两通道逐位不变。**但增益全部来自 case 7 的网络通道**（netH
+        #     0.8726→0.9171，其余 9 张 +0.0000），导线通道净 −0.0016（case5 +0.017、
+        #     case7 +0.015，但 case10 −0.026、case6 −0.012、case1/8 −0.004）。
+        #     λ∈{0.01,0.05,0.25}、fit∈{4,8,14} 六组 A/B 总分差异 ≤0.02（噪声级）；
+        #     ≥3 度结点的平均位移只有 **0.28px**（case 1，190 个结点）—— 所以起作用
+        #     的机制其实是「链在结点处那个顶点从 path 末像素换成结点中心（簇均值）」，
+        #     而不是「把结点搬很远」。默认已翻成开；`PSKEL_NODE_SOLVE=0` 可复现旧行为。
+        self.node_solve = os.environ.get("PSKEL_NODE_SOLVE", "1").strip().lower() in _on
+        try:
+            self.node_solve_lam = float(os.environ.get("PSKEL_NODE_SOLVE_LAM", "0.05") or 0.05)
+        except ValueError:
+            self.node_solve_lam = 0.05
+        # 拟合直线时，从结点往外**跳过**多少像素再取方向（簇本身是弯的，取太近会
+        # 把弯曲当成方向）。`PSKEL_NODE_SOLVE_FIT`，默认 4.0。
+        try:
+            self.node_solve_fit = float(os.environ.get("PSKEL_NODE_SOLVE_FIT", "4.0") or 4.0)
+        except ValueError:
+            self.node_solve_fit = 4.0
+        self.last_node_solved = 0
+        self.last_node_shift = 0.0
+        self.last_node_solved3 = 0
+        self.last_node_shift3 = 0.0
+
+    def _solve_nodes(self, nodes, node_slots, half, paths):
+        """把结点坐标从「簇像素均值」重解成「各分支拟合直线的交点」（见构造器注释）。"""
+        out: Dict[int, Tuple[float, float]] = {}
+        lam = float(self.node_solve_lam)
+        n_solved, shift_sum = 0, 0.0
+        n3, shift3 = 0, 0.0
+        for nid, hs in node_slots.items():
+            if len(hs) < 2:
+                continue
+            n = nodes[nid]
+            p0 = np.array([float(n.x), float(n.y)], float)
+            A = np.zeros((2, 2), float)
+            b = np.zeros(2, float)
+            used = 0
+            for hi in hs:
+                he = half[hi]
+                pts = paths[he.path].pts
+                if len(pts) < 2:
+                    continue
+                seg = pts if he.end == 0 else list(reversed(pts))
+                q0 = np.asarray(seg[0], float)
+                q1 = np.asarray(seg[-1], float)
+                for cand in seg[1:]:
+                    c = np.asarray(cand, float)
+                    if float(np.hypot(c[0] - q0[0], c[1] - q0[1])) >= self.node_solve_fit:
+                        q1 = c
+                        break
+                t = q1 - q0
+                L = float(np.hypot(t[0], t[1]))
+                if L < 1e-6:
+                    continue
+                t = t / L
+                nrm = np.array([-t[1], t[0]], float)
+                A += np.outer(nrm, nrm)
+                b += np.outer(nrm, nrm) @ q0
+                used += 1
+            if used < 2:
+                continue
+            tr = float(A[0, 0] + A[1, 1])
+            lam_eff = max(lam * tr / 2.0, 1e-6)
+            try:
+                p = np.linalg.solve(A + lam_eff * np.eye(2), b + lam_eff * p0)
+            except np.linalg.LinAlgError:
+                continue
+            d = p - p0
+            dist = float(np.hypot(d[0], d[1]))
+            if dist > 12.0:
+                p = p0 + d * (12.0 / dist)
+                dist = 12.0
+            n.x, n.y = float(p[0]), float(p[1])
+            out[nid] = (float(p[0]), float(p[1]))
+            n_solved += 1
+            shift_sum += dist
+            if len(hs) >= 3:
+                n3 += 1
+                shift3 += dist
+        self.last_node_solved = n_solved
+        self.last_node_shift = (shift_sum / n_solved) if n_solved else 0.0
+        self.last_node_solved3 = n3
+        self.last_node_shift3 = (shift3 / n3) if n3 else 0.0
+        return out
 
     def foreground(self, bgr: np.ndarray):
         if self.scale and self.scale != 1.0:
@@ -1088,6 +1188,8 @@ class WireExtractor:
             res.n_gap_bridges = int(_nb)
             self.last_gap_bridges = int(_nb)
         self._trace(skel, res)
+        res.n_nodes_solved = int(self.last_node_solved)
+        res.node_shift_mean = float(self.last_node_shift)
         return res
 
     # ---------------------------------------------------------- internals
@@ -1209,6 +1311,9 @@ class WireExtractor:
                         n.pair[int(i)] = int(j)
             n.kind = 'T' if k == 3 else 'X'
 
+        # --- ★ 结点位置重解（PSKEL_NODE_SOLVE，默认关）：见 `_solve_nodes`
+        node_fix = self._solve_nodes(nodes, node_slots, half, paths) if self.node_solve else {}
+
         # --- trace maximal polylines by jumping across the pairings
         consumed = set()
         polylines: List[List[Tuple[float, float]]] = []
@@ -1218,6 +1323,7 @@ class WireExtractor:
             # start at `he`, i.e. enter the path at its `he.end` side
             chain: List[Tuple[float, float]] = []
             cur = he
+            start_nid = he.node
             guard = 0
             while guard < 10000:
                 guard += 1
@@ -1235,9 +1341,16 @@ class WireExtractor:
                 # 的图纸边框长线（总长比 2.5×），斜向的跳变又被 snap_polyline
                 # 吸附成精确 45°，伪装成"大尺度斜线"并躲过 max_axis_dev 过滤。
                 seg = p.pts if cur.end == 0 else list(reversed(p.pts))
-                chain.extend(seg if not chain else seg[1:])
+                if not chain:
+                    chain.extend(seg)
+                    if start_nid in node_fix:
+                        chain[0] = node_fix[start_nid]
+                else:
+                    chain.extend(seg[1:])
                 exit_he = half[cur.partner]
                 nid = exit_he.node
+                if nid in node_fix:
+                    chain[-1] = node_fix[nid]
                 n = nodes[nid]
                 # which slot position does exit_he occupy at this node?
                 slot_pos = None

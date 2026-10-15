@@ -55,6 +55,13 @@ ARMS: "dict[str, dict]" = {
     "color_keep_cap": {"STAGE1_PIN_COLOR": "1", "STAGE1_PIN_COLOR_CAP": "12",
                        "STAGE1_PIN_COLOR_KEEP_MISS": "1"},
     "mono": {"STAGE1_MONO_FRAME_PINS": "1"},
+    "nodesolve": {"PSKEL_NODE_SOLVE": "1"},
+    "nodesolve_firm": {"PSKEL_NODE_SOLVE": "1", "PSKEL_NODE_SOLVE_LAM": "0.01"},
+    "nodesolve_soft": {"PSKEL_NODE_SOLVE": "1", "PSKEL_NODE_SOLVE_LAM": "0.25"},
+    "nodesolve_fit8": {"PSKEL_NODE_SOLVE": "1", "PSKEL_NODE_SOLVE_FIT": "8.0"},
+    "nodesolve_fit14": {"PSKEL_NODE_SOLVE": "1", "PSKEL_NODE_SOLVE_FIT": "14.0"},
+    # 2026-10-14 起 `PSKEL_NODE_SOLVE` 默认已是 1（§5.123），这条臂用来复现旧行为
+    "nodesolve_off": {"PSKEL_NODE_SOLVE": "0"},
 }
 ARM_DOC = {
     "default": "现行默认：常数 12px 外伸猜测",
@@ -63,6 +70,12 @@ ARM_DOC = {
     "color_keep": "交结实测 + 保留未实测边的旧猜测",
     "color_keep_cap": "交结实测 + 上限 12px + 保留旧猜测",
     "mono": "黑白框实测（§5.114；新 QA 说最终评分集无黑白图）",
+    "nodesolve": "结点位置重解（§5.123）：结点坐标从簇均值改成各分支拟合直线的交点",
+    "nodesolve_firm": "同上，λ=0.01（更信交点、几乎不正则化）",
+    "nodesolve_soft": "同上，λ=0.25（更靠近原簇均值）",
+    "nodesolve_fit8": "同上，方向拟合从结点外 8px 起算",
+    "nodesolve_fit14": "同上，方向拟合从结点外 14px 起算",
+    "nodesolve_off": "关掉结点位置重解（复现 2026-10-14 之前的旧行为；两口径均 −0.14）",
 }
 # 口径 = 透传给 submission/run.py 的额外参数
 RULERS: "dict[str, list]" = {

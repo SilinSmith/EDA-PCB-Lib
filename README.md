@@ -433,8 +433,8 @@ GND 互证先验（官方 GT 不这么编码）、自由读数压分（`FUSION_F
 | `docs/JUDGE.md` | **判题机说明书**：怎么用 `schematic_parser.evaluate` 打分、口径开关、已知性质、参考分、给队友的最短路径 |
 | `docs/RESULTS.md` | 分数轨迹、全部 A/B 表、负结果归档 |
 | `docs/DIAGNOSTICS.md` | 怎么做测量：诊断尺子、五步工作流、复现命令 |
-| `docs/KNOBS.md` | **全部 458 个环境开关**（自动生成，带默认值与 `文件:行号`） |
-| `docs/TOOLS.md` | **全部 720 个工具脚本**按用途分组（自动生成） |
+| `docs/KNOBS.md` | **全部 551 个环境开关**（自动生成，带默认值与 `文件:行号`） |
+| `docs/TOOLS.md` | **全部 744 个工具脚本**按用途分组（自动生成） |
 | `docs/TRAINING.md` | **怎么重训**：数据集重建（`trainset_v4[_merged]` 的开关与默认值）、YOLO 训练、CRNN 混合清单与热启动微调、训练后必跑的两把尺子 |
 | `docs/workflow.html` | 交互式流程图（**37 节点 / 86 连线**，含每个节点的实测笔记；判题机节点已画进去） |
 | `docs/PACKAGING.md` | **怎么打包 / 上传 GitHub / 把判题机单独交给队友**（含上传前自检清单与密钥红线） |
