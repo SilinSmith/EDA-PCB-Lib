@@ -26,7 +26,8 @@ from pathlib import Path
 
 EDA = Path(__file__).resolve().parents[2]
 WORK = EDA.parent / "work"
-DEFAULT_OUT = WORK / "fullpop"
+DEFAULT_OUT = WORK / "fullpop_r8"     # §5.166：人类已裁定换成「目标框最多的前 8 张」ruler
+                                      # （旧的 work/fullpop，每 6 张取 1 / 989 框，已作废但留在盘上）
 DEFAULT_START = WORK / "ocr_mix" / "runs" / "last.pt"
 ARMS = ("control", "treatment", "treatment_long")
 
@@ -162,6 +163,15 @@ def verdict(res: dict, treat: str = "treatment", paired: dict = None) -> list:
                      " 95%%CI [%+.4f, %+.4f]，精确 McNemar p=%.4f"
                      % (paired["n"], paired["disc"], paired["b"], paired["c"],
                         paired["delta"], lo, hi, paired["p"]))
+        # §5.165 人类裁定：判据读「Δ + 配对 CI」（不再只看点估计过/不过）
+        if dv >= 0.05 and lo > 0:
+            lines.append("   └ 读法（Δ+CI）：点估计达线且区间不跨 0 ⇒ **通过**")
+        elif dv >= 0.05:
+            lines.append("   └ 读法（Δ+CI）：点估计达线但区间跨 0 ⇒ **证据不足**（不可当通过）")
+        elif hi > 0:
+            lines.append("   └ 读法（Δ+CI）：点估计未达线但区间跨 0 ⇒ **未能证伪**（也不能当通过）")
+        else:
+            lines.append("   └ 读法（Δ+CI）：点估计未达线且区间全负 ⇒ **未通过**")
         if paired["disc"] and paired["p"] > 0.05:
             lines.append("   └ 注意：不协调对数太少/太偏，本判据在现 ruler 上**不足以**分辨 Δ（见 §5.165 功效分析）")
     ca, ta = c.get("ALL_ge5"), t.get("ALL_ge5")

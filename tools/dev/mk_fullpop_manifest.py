@@ -58,6 +58,11 @@ def main(argv=None) -> int:
     ap.add_argument("--real", default=str(DEFAULT_REAL), help="旧训练清单（定义「旧规则」人口）")
     ap.add_argument("--out", default=str(DEFAULT_OUT))
     ap.add_argument("--ruler-every", type=int, default=6, help="每 N 张 sheet 抽 1 张当 ruler")
+    ap.add_argument("--ruler-mode", default="every", choices=("every", "topvalue"),
+                    help="every=每 N 张取 1；topvalue=按 sheet 的 value>=long-min 条数降序取前 --ruler-k 张"
+                         "（GT-only 规则；动机见 §5.165：现 ruler 目标框只有 94 条，功效不足）")
+    ap.add_argument("--ruler-k", type=int, default=8, dest="ruler_k",
+                    help="--ruler-mode topvalue 取前几张")
     ap.add_argument("--val", type=int, default=800, help="公共 val 行数（按 role 分层）")
     ap.add_argument("--long-min", type=int, default=5, dest="long_min",
                     help="第三臂 treatment_long 只补长度 >= 此值的增量行")
@@ -70,7 +75,19 @@ def main(argv=None) -> int:
                 for d in (json.loads(ln) for ln in Path(a.real).open(encoding="utf-8"))}
 
     sheets = sorted({r["case"] for r in real})
-    ruler = {s for i, s in enumerate(sheets) if i % max(1, a.ruler_every) == 0}
+    if a.ruler_mode == "topvalue":
+        # GT-only 选择规则（不涉及任何模型输出）：按该 sheet 上 `role==value 且 len>=long_min` 的
+        # 条数降序，取前 k 张；同分用 sheet 名保证确定性。理由与功效数字见 §5.165。
+        cnt = collections.Counter()
+        for r in real:
+            if r["role"] == "value" and len(str(r["text"])) >= a.long_min:
+                cnt[r["case"]] += 1
+        ranked = sorted(sheets, key=lambda s: (-cnt[s], s))
+        ruler = set(ranked[: max(1, a.ruler_k)])
+        print("ruler 选择：topvalue（GT-only）前 %d 张，目标框数 %s"
+              % (len(ruler), [(s, cnt[s]) for s in ranked[: max(1, a.ruler_k)]]))
+    else:
+        ruler = {s for i, s in enumerate(sheets) if i % max(1, a.ruler_every) == 0}
     print("sheet 共 %d：ruler %d 张 = %s" % (len(sheets), len(ruler), sorted(ruler)))
     print("训练 sheet %d 张" % (len(sheets) - len(ruler)))
 
