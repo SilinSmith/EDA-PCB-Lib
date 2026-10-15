@@ -67,6 +67,8 @@ ARMS: "dict[str, dict]" = {
     "nlcorner0": {"STAGE2_EDGE_CORNER": "0"},
     "nlext0": {"STAGE2_EDGE_EXT": "0", "STAGE2_EDGE_EXT_ANY": "0"},
     "nlpskel0": {"STAGE1_SPLIT_JUNC_NODES": "0"},
+    # §5.130 竖直脚旋转重读（`stage2/pinrot.py`，默认关；离线档把它显式压成 0）
+    "pinrot": {"STAGE2_PINROT": "1"},
 }
 ARM_DOC = {
     "default": "现行默认：常数 12px 外伸猜测",
@@ -85,6 +87,7 @@ ARM_DOC = {
     "nlcorner0": "§5.126 归因：关掉拐角合拢 `STAGE2_EDGE_CORNER`（默认 12px）",
     "nlext0": "§5.126 归因：关掉两个外推算子 `STAGE2_EDGE_EXT`(20) + `STAGE2_EDGE_EXT_ANY`(25)",
     "nlpskel0": "§5.126 归因：关掉 `STAGE1_SPLIT_JUNC_NODES`（只在 pskel 真结点处切）",
+    "pinrot": "§5.130 打开竖直脚旋转重读 `STAGE2_PINROT`（上下边的引脚号印成 90°）",
 }
 # 口径 = 透传给 submission/run.py 的额外参数
 RULERS: "dict[str, list]" = {
