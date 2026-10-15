@@ -26,7 +26,7 @@ EDA = Path(__file__).resolve().parents[2]
 WORK = EDA.parent / "work"
 DEFAULT_OUT = WORK / "fullpop"
 DEFAULT_START = WORK / "ocr_mix" / "runs" / "last.pt"
-ARMS = ("control", "treatment")
+ARMS = ("control", "treatment", "treatment_long")
 
 
 def log_tail(path: Path, n: int = 30) -> None:
@@ -88,10 +88,11 @@ def parse_arm(log: Path) -> dict:
     return out
 
 
-def verdict(res: dict) -> list:
+def verdict(res: dict, treat: str = "treatment") -> list:
     """按 §5.162 判据给出结论行（主判据 + 护栏，逐条）。"""
     lines = []
-    c, t = res.get("control", {}), res.get("treatment", {})
+    c, t = res.get("control", {}), res.get(treat, {})
+    lines.append("[%s vs control]" % treat)
     cv, tv = c.get("value_ge5"), t.get("value_ge5")
     if cv is None or tv is None:
         return ["读数不足，无法判定（缺 value 的 >=5 格）"]
@@ -119,7 +120,8 @@ def verdict(res: dict) -> list:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(DEFAULT_OUT), help="清单/产物根目录")
-    ap.add_argument("--arm", default="both", choices=("control", "treatment", "both"))
+    ap.add_argument("--arm", default="both",
+                    choices=("control", "treatment", "treatment_long", "both"))
     ap.add_argument("--stage", default="all", choices=("mix", "train", "eval", "compare", "all"))
     ap.add_argument("--start-ckpt", default=str(DEFAULT_START))
     ap.add_argument("--epochs", type=int, default=0, help="0 = 用 train.py 默认（12）")
@@ -158,26 +160,31 @@ def main(argv=None) -> int:
                 d / "ruler_eval.log", a.dry)
 
     if a.stage in ("compare", "all") and (a.arm == "both" or a.stage == "compare"):
-        print("\n=== 对比（ruler，判据见 §5.162）===")
+        print("\n=== 对比（ruler，判据见 §5.162/§5.163）===")
         res = {arm: parse_arm(out / arm / "ruler_eval.log") for arm in ARMS}
-        print("  %-10s %-9s %-9s %-8s %-6s %-6s"
-              % ("role", "control", "treatment", "Δ", "n_c", "n_t"))
-        for role in sorted(set(res["control"].get("roles", {})) | set(res["treatment"].get("roles", {}))):
-            crc = res["control"].get("roles", {}).get(role) or {}
-            trc = res["treatment"].get("roles", {}).get(role) or {}
-            c5, t5 = crc.get("ge5"), trc.get("ge5")
-            d = "-" if (c5 is None or t5 is None) else "%+.4f" % (t5 - c5)
-            print("  %-10s %-9s %-9s %-8s %-6s %-6s"
-                  % (role, "%.4f" % c5 if c5 is not None else "-",
-                     "%.4f" % t5 if t5 is not None else "-", d,
-                     crc.get("n", "-"), trc.get("n", "-")))
+        roles = set()
+        for arm in ARMS:
+            roles |= set(res[arm].get("roles", {}))
+        hdr = "  %-12s" % "role" + "".join("%-11s" % arm for arm in ARMS)
+        print(hdr + "  Δ(vs control)")
+        for role in sorted(roles):
+            cells, base = "", res["control"].get("roles", {}).get(role, {}).get("ge5")
+            for arm in ARMS:
+                v = res[arm].get("roles", {}).get(role, {}).get("ge5")
+                cells += "%-11s" % ("%.4f" % v if v is not None else "-")
+            last = res[ARMS[-1]].get("roles", {}).get(role, {}).get("ge5")
+            d = "-" if (base is None or last is None) else "%+.4f" % (last - base)
+            print("  %-12s%s  %s" % (role, cells, d))
         for arm in ARMS:
             r = res[arm]
             if r.get("ALL_n"):
-                print("  [%s] ALL n=%s exact=%s CER=%s" % (arm, r.get("ALL_n"), r.get("ALL_exact"), r.get("ALL_cer")))
-        print("\n  ---- 判定（§5.162 预注册判据）----")
-        for ln in verdict(res):
-            print("  " + ln)
+                print("  [%s] ALL n=%s exact=%s CER=%s"
+                      % (arm, r.get("ALL_n"), r.get("ALL_exact"), r.get("ALL_cer")))
+        for treat in ("treatment_long", "treatment"):
+            if any(res[treat].get("roles")):
+                print("\n  ---- 判定（%s，§5.162 预注册判据）----" % treat)
+                for ln in verdict(res, treat):
+                    print("  " + ln)
     return 0
 
 

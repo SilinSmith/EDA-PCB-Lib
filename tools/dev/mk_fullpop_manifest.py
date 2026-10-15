@@ -59,6 +59,8 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=str(DEFAULT_OUT))
     ap.add_argument("--ruler-every", type=int, default=6, help="每 N 张 sheet 抽 1 张当 ruler")
     ap.add_argument("--val", type=int, default=800, help="公共 val 行数（按 role 分层）")
+    ap.add_argument("--long-min", type=int, default=5, dest="long_min",
+                    help="第三臂 treatment_long 只补长度 >= 此值的增量行")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args(argv)
 
@@ -109,8 +111,15 @@ def main(argv=None) -> int:
     dump(out / "ruler.jsonl", ruler_rows, lambda r: False)
     ctrl_tr = [r for r in ctrl_rows if id(r) not in val_ids]
     treat_tr = [r for r in tr_rows if id(r) not in val_ids]
+    # 第三臂：只补「长度 >= long_min」的增量行。动机见 RESULTS §5.163：模型是 role 条件模型
+    # （role_emb 32 维拼进 LSTM 每一步），而全人口的增量行里有大量被「空 details → value」规则
+    # 误标的网标/脚号/页面家具（GND、裸数字、嘉立创EDA…），会污染 value 的 role 嵌入。
+    long_extra = [r for r in tr_rows if id(r) not in val_ids and not is_old(r)
+                  and len(str(r["text"])) >= a.long_min]
+    long_tr = ctrl_tr + long_extra
     dump(out / "control" / "real.jsonl", ctrl_tr + val_rows, lambda r: id(r) in val_ids)
     dump(out / "treatment" / "real.jsonl", treat_tr + val_rows, lambda r: id(r) in val_ids)
+    dump(out / "treatment_long" / "real.jsonl", long_tr + val_rows, lambda r: id(r) in val_ids)
 
     print("\nruler.jsonl（干净尺子，split=real；喂 textrec.eval_real --manifest）")
     comp("ruler", ruler_rows)
@@ -120,9 +129,15 @@ def main(argv=None) -> int:
     print("treatment/real.jsonl（训练 sheet 上全部框）")
     comp("train", treat_tr)
     comp("val", val_rows)
-    print("\nvalue 人口：control train %d  vs  treatment train %d"
+    print("treatment_long/real.jsonl（control + 只补长度 >= %d 的增量行）" % a.long_min)
+    comp("train", long_tr)
+    comp("val", val_rows)
+    print("\nvalue 人口：control train %d  vs  treatment train %d  vs  treatment_long train %d"
           % (sum(1 for r in ctrl_tr if r["role"] == "value"),
-             sum(1 for r in treat_tr if r["role"] == "value")))
+             sum(1 for r in treat_tr if r["role"] == "value"),
+             sum(1 for r in long_tr if r["role"] == "value")))
+    print("增量行：treatment %d 行，其中 treatment_long 只取 %d 行（长度 >= %d）"
+          % (len(treat_tr) - len(ctrl_tr), len(long_extra), a.long_min))
     print("-> %s" % out)
     return 0
 
