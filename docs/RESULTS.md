@@ -13696,3 +13696,213 @@ GT 文字框取 `work/official_text/textrec_manifest.jsonl`（`200_train_cases` 
 | `work/_gen220_nu4.py` · `work/_gen220/nu4_emit.json` | stage1 引脚候选点几何覆盖读数（§2.5 末段口径） |
 | `work/_gen220_nu5.py` · `work/_gen220/nu5_funnel.json` | 「读到 → 发出 → 落位」漏斗（一张表） |
 | `work/_gen220/pred_200/` · `work/_gen220/nu_judge_pool.json` | 池判题产物与诊断明细（本节全部判题数字可复现） |
+
+## §5.149 官方字体小字微调实验：合成面大涨、真实面崩塌 —— 回滚
+
+用户批准（m19443）后做的一次**训练侧实验**：假设交付识别器小字弱，是因为基础语料
+（`eda-pcb/synth/symbols.py` 的 `consola` **等宽**）与生产图（Arial/Times 比例字）字体/渲染器不同。
+本节是**账**：结论、判据、环境坑、机理与教训。**实验产物只落在 `work/`；仓库源码零改动**，
+`weights/textrec_best.pt` 已回滚（§3.4）。
+
+### 0 结论先行
+
+1. **合成面大涨（+14.6pp）**：`pin_number` flat 墨迹 ≤6px **35.4% → 50.0%**、>6px **72.9% → 93.8%**，
+   逐样本净胜负 **+89**（win 111 / loss 22）。
+2. **真实面崩塌（−25~−48pp）**：真实池 5,856 个裁片上 `pin_name` **78.8% → 30.9%**、
+   `pin_number` **83.6% → 54.9%**、`value` **57.0% → 31.7%**；`pin_number` ≤6px **88.0% → 5.0%**。
+   判据①的「real val 不掉 >1pp」**远未通过**。
+3. **两把尺子**：确定性尺子（10GT）**80.62 → 76.82（−3.80 分）** ⇒ 判据②不过，**已在判据链上终止**，
+   未跑交付尺子。权重已回滚，`git status` 0 行（§3.4）。
+4. **机理 = 域偏移**：合成面的 +14.6pp 来自「与探针渲染器同域」（`mk_fonttext` 的 PIL Arial，
+   `render_text` 里 `ss=4` 超采样后 LANCZOS 缩小 ⇒ 抗锯齿），而线上 4–5px 贴片是**渲染器直接画的锯齿**字形；
+   合成的 val 又是「基础合成 + 新字体」混合 ⇒ 对新模型 in-distribution，**真实崩塌测不出来**。
+5. **副产品两条硬事实**（§5，比实验本身更值钱）：池 GT 脚键有 **15.7%（1429/9119）结构性不可得分**
+   （键 ≥200 且全图任何读数里都不出现）；且把不可达扣掉后，在**图上可得**的 38.7% 上我方召回也只 **10.34%**。
+   ⇒ **这个池不是合适的优化靶子**，本次实验的期望本就极低。
+
+### 1 目的与语料
+
+* 生成器用仓库现成的 `eda-pcb/tools/dev/mk_fonttext.py`，**只把 `--manifest` 换成真实池文字清单**
+  `work/official_text/textrec_manifest.jsonl`（这样 role 词表与字号分布都跟着真实数据走）：
+  ```
+  python -X utf8 tools/dev/mk_fonttext.py --out work\fonttext_pool --manifest work\official_text\textrec_manifest.jsonl \
+    --n 120000 --sheets 8 --sheet-side 2048 --val-frac 0.02 --synth-frac 0.4 --seed 7
+  ```
+* 冒烟（`work/fonttext_smoke2`）：`[vocab] designator=2223 net_label=508 pin_name=3685 pin_number=2059 value=12693`；
+  `[ink-h] designator=8.2±4.4 net_label=6.4±0.7 pin_name=6.4±2.9 **pin_number=4.5±0.9** value=7.2±2.1`。
+* 全量 **120,000** 行：`pin_name` 23692 / `designator` 23974 / `pin_number` 23904 / `net_label` 24195 / `value` 24235；
+  墨迹 ≤6px 占比：`designator` 18.7% / `pin_name` 54.8% / **`pin_number` 97.3%** / `value` 17.8% / `net_label` 14.4%。
+* **字符表坑**：仓库 `eda-pcb/textrec/data/charset.json` 是 **67 字**（缺 `% / q v w Ω`、多 `丝螺`），
+  而交付权重自带 charset 是 **71 字** `' %+-./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyzΩ∅'`
+  （`textrec/infer.py:124` 也是从 ckpt 读 charset）⇒ 直接训会
+  `RuntimeError: size mismatch for head.weight: copying a param with shape torch.Size([72, 512]) ... current model is torch.Size([68, 512])`。
+  改用 `work/charset_ckpt.json`（= 权重的 charset）。
+* 合并清单 `work/_mkmerged.py` → `work/textrec_merged.jsonl`（111.9 MB）：
+  train **483,206**（基础 365,730 + 字体 117,476）/ val **17,863** / real **6,121**。
+
+### 2 训练（从交付权重续训）
+
+```
+$env:PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True'
+python -u -X utf8 -m textrec.train --manifest work\textrec_merged.jsonl --charset work\charset_ckpt.json \
+  --resume weights\textrec_best.pt --out textrec/runs/official_pool --epochs 59 --batch 128 --lr 0.0001 \
+  --workers 6 --device cuda:0
+```
+
+`textrec/runs/official_pool/history.json` 两行（val = 合并 val，**基础合成 val 占绝大多数**，
+对新模型是 in-distribution）：
+
+| epoch | loss | val_cer | val_exact | sec | infeasible |
+|---|---|---|---|---|---|
+| 57 | 0.03917 | 0.147 | 0.73112 | 1324.1 | 23 |
+| **58（best）** | **0.0075** | **0.06575** | **0.83138** | 1344.7 | 14 |
+
+* **环境坑（务必记住）**：`--batch 256` 时显存 **15,861/16,376 MiB = 96.9%** ⇒ 训练**假死**
+  （日志 mtime 静止、GPU 100%、进程活着）；两台不同 worker 数（10、4）都卡。
+  `--batch 128` ⇒ 显存 **9,839 MiB**、**0.30 s/步**（比 batch 256 的 0.45 s/步还快），连跑 3,775 步/轮无停滞。
+  这台机器还承载桌面与 LM Studio，**必须留 ~6 GB 显存余量**。
+
+### 3 决定性检查（判据先写死，任一不过即回滚）
+
+判据：① 合成面 ≤6px 抬升 **且** real val 不掉 >1pp；② 确定性尺子（10GT）≥ **80.62**；③ 交付尺子 ≥ **85.0848**。
+
+#### (a) 合成面：大涨
+
+`work/_tinyrec.py`（真实池图上贴 Arial 已知串，确定性贴片）→ `work/_tinydet/tinyrec_after.json`，
+逐样本对照 `work/_tinycmp.py`：
+
+| 桶 | n | before | after | Δ | win | loss |
+|---|---|---|---|---|---|---|
+| **ALL** | 1344 | 26.6% | 33.2% | **+6.6pp** | **111** | **22** |
+| `pin_number`｜flat｜ink≤6px | 192 | **35.4%** | **50.0%** | **+14.6pp** | 28 | 0 |
+| `pin_number`｜flat｜ink>6px | 144 | 72.9% | **93.8%** | **+20.8pp** | 31 | 1 |
+| `pin_number`｜rot90｜ink≤6px | 60 | 13.3% | **0.0%** | −13.3pp | 0 | 8 |
+| `designator`｜flat｜ink≤6px | 192 | 33.3% | 43.8% | +10.4pp | 23 | 3 |
+| `designator`｜flat｜ink>6px | 144 | 72.9% | 91.0% | +18.1pp | 29 | 3 |
+
+* 总率 357/1344 → 446/1344，**净胜负 +89**（McNemar 方向）。
+* 旋转 90° 一列**全为 0**（`rot90|ink≤6px` 8 个 loss），但旋转由 `stage2/pinrot.py` 兜底，不看这一列。
+* 探针自身今天修了两处硬伤：① 贴片位置用 `hash()`（每进程随机化，pre/post 位置不一致）→ 改 `zlib.crc32`；
+  ② `a = np.asarray(tmp)` 覆盖了 argparse 命名空间，末尾写 `a.out` 必崩 → 改名 `arr`。
+  **before 已用修好的脚本重测**（`work/_tinydet/tinyrec_before.json`），before/after 同贴片、同设备。
+
+#### (b) 真实面：崩塌
+
+`work/_fontval.py --ckpt <候选> --manifest work/textrec_merged.jsonl --split real --bucket 1`（5,856 行真实池裁片）：
+
+| role | before（交付 e57） | after（候选 e58） |
+|---|---|---|
+| `pin_name` | **78.8%** / CER 0.1029 | **30.9%** / CER 0.3464 |
+| `pin_number` | **83.6%** / CER 0.1538 | **54.9%** / CER 0.4265 |
+| `value` | **57.0%** / CER 0.2783 | **31.7%** / CER 0.4421 |
+| `pin_number` ≤6px | **88.0%** | **5.0%** |
+
+⇒ 判据①的真实面条件**崩了 25~48pp**（远超 1pp）。
+
+#### (c) 确定性尺子：−3.80 分
+
+把候选权重拷进 `weights/textrec_best.pt` 后跑
+`python -X utf8 tools/eval/gt_retest.py --arms default --rulers deterministic --tag candidate_e58`：
+
+| 尺子 | 总分 | component | pin | netH | netL |
+|---|---|---|---|---|---|
+| 候选 e58 | **76.82** | 0.8802 | 0.6750 | 0.7932 | 0.5777 |
+| 交付 e57 | **80.62** | 0.9355 | 0.7385 | 0.8095 | 0.5764 |
+| Δ | **−3.80** | −0.0553 | −0.0635 | −0.0163 | +0.0013 |
+
+报告：`work/_gt_retest/candidate_e58/report.md`。判据②不过 ⇒ **判据链终止，未跑交付尺子**。
+
+#### (d) 回滚已完成
+
+| 文件 | SHA256 |
+|---|---|
+| `eda-pcb/weights/textrec_best.pt`（还原后 = 交付源 `work/ocr_mix/runs/best.pt`） | **DEA45F915DB3C0101689A6FBE2B84AFA102D3C58D67E38B296BCA948F3A03B64** |
+| 候选（留存，未使用）`eda-pcb/textrec/runs/official_pool/best.pt` | **E9BCB9DAC6E2DAA093B9982C95D1C72FE62066E20A3F505CC634A263956683C5** |
+
+备份 `work/weights_backup/textrec_best.e57.pt`（31,068,221 字节）；还原后 `git status` **0 行**。
+
+### 4 机理与教训
+
+1. **合成面赢、真实面崩 = 域偏移**：`mk_fonttext` 用 PIL 的官方字体（Arial/Times），`render_text` 里
+   `ss=4` 超采样再 LANCZOS 缩小 ⇒ 边缘**抗锯齿**；而生产图上 4–5px 的脚号是渲染器**直接画**的点阵/锯齿字形。
+   模型学到的是「抗锯齿小字」，到真实锯齿小字上直接失效（真实 `pin_number` ≤6px 掉到 5.0%）。
+2. **训练 val 测不出这种崩塌**：val 是「基础合成 + 新字体」混合 ⇒ 对新模型 in-distribution，
+   `val_cer 0.0658 / val_exact 0.8314` 看起来很好；**只有真实域检查（(b)/(c)）能测出来**。
+   ⇒ 训练侧任何改动，**必须每轮在 real split 上验证并早停**。
+3. **若还要做**：新字体行占比压到 **≤5–10%**、`lr` 降到 **1e-5**（或冻 CNN / 更短日程）、
+   用 `--include-real` 把真实域锚住；并且**先跑真实域闸门**再谈合成曲线。
+4. **池上的量级上界**（§5.148 §2.4 漏斗，4255 个脚）：`read|present` 494 / `read|absent` 185 /
+   **`unread|present` 1047** / `unread|absent` 2529；池上 GT 脚几乎没被标成文字
+   （9,119 个 GT box 脚 vs 全 GT 文字清单里 `pin_number` 仅 **259** 行）⇒ **就算小字识别率翻倍，池分也几乎不动**。
+   这条线的价值只在**官方 10GT / 将来的新 GT**。
+
+### 5 同批查出的两条硬事实（比实验本身更重要）
+
+#### 5.1 池的 GT 脚键有一片**结构性不可得分**（`work/_ovkeycensus.py` / `_ovpinkey2.py` / `_ovpinkey3.py`）
+
+全池 `200_train_cases` 的 **9,119** 个 GT box 脚：
+
+| 项 | 值 |
+|---|---|
+| 整数键 | **7,362** |
+| 整数键出现在**整图任何读数**里 | **3,531 = 48.0%**（读数是下界） |
+| 键 ≥200 的 | **1,429** ｜ 其中出现过的 **2 = 0.1%** |
+| 键大小 | 1–2 位 5,262 ｜ 3 位 2,025 ｜ ≥4 位 75 |
+| 逐元件覆盖 | 全覆盖 324 ｜ 部分 449 ｜ 无命中 173 |
+| 非整数键 | 1,757 = **19.3%**（`0.1uF` / `VCC` / 型号名…少数 BGA 球名如 `A1`/`B12` 图上可读） |
+
+⇒ **≥200 的键 1,429/9,119 = 15.7% 的脚结构性不可得分**（判题要求我们发出的脚号 == GT 键，
+读不到的键永远不可能是 tp）。典型：`0001-KiCad U1` 的 **53 个 `391..443`**、`0003-Altium Designer U2`
+的 36 个 `345..2269`、`0011-Altium Designer U1` 的 11 个 `286..299`，**一个都没被读过**
+（放大图 `work/_pincrop/0001-KiCad_U1.png` 里印的脚号只到 **77**，而 `pin_391` 的脚名 `ADC2/GPI042`
+在图上对应的脚号是 53；GT 内部自洽：`nets.hyperGraph` 引用的 `U1.391` 这类键 72/72 都被 pins 覆盖）。
+
+**在键已读对的那 382 个 IC（真正参与 pin 打分的 4,255 个脚）上**（`work/_gen220/pinkey3.json`）：
+
+| 类别 | n | 占 4255 | 含义 |
+|---|---|---|---|
+| `printed_int` | 1,794 | **42.2%** | 键是整数且该数字出现在全图某处读数里（可达） |
+| `small_int` | 1,023 | 24.0% | 键 <200 但没被我们读到（可能只是漏读） |
+| `big_int` | **680** | **16.0%** | 键 ≥200 且全图读不到 ⇒ **结构性不可得分** |
+| `text_key` | 758 | 17.8% | 键不是整数（`0.1uF`/`A1`/`VCC`/型号名…） |
+
+⇒ 本次训练实验**最多只能影响 `printed_int` 那 42.2% 里的小字那一部分**（`big_int` 680 个脚怎么读都不动）。
+
+**对照：官方 10GT 的 GT 是干净的**（`work/_gen220/keycensus_10gt.json`）：
+**box 脚 136 个，键全是整数，`big_int = 0`、`text_key = 0`**（`printed_int` 95 = 69.9% / `small_int` 41 = 30.1%）。
+⇒ 交付尺子的 GT 与图一致（没有「发不出来的键」），而 200 池有 15.7% 的键 ≥200 且读不到、19.3% 是非数字键。
+
+#### 5.2 但**不能把账全推给 GT**：图上可得的 38.7% 上，我方召回也只有 10.34%
+
+`work/_ovpinrecall.py` → `work/_gen220/pinrecall.json`（判题口径：同元件键 + 同脚号 + `pinname` 全等 + ≤5px）：
+
+| 分母 | n | 命中 tp | 召回 |
+|---|---|---|---|
+| 全部 GT box 脚 | 9,119 | **512** | **5.61%** |
+| 图上可得（键整数出现在全图读数里） | **3,531 = 38.7%** | **365** | **10.34%** |
+
+⇒ GT 键污染是硬天花板，但它**只把召回解释到 ~1.8×**；池上 pin 通道的大头仍在我们自己的
+**发射 / 脚名 / 落位**链（§5.148 §2.4 漏斗：`read|present` 494 ／ `read|absent` 185 ／
+**`unread|present` 1047** ／ `unread|absent` 2529）。
+
+#### 5.3 两个口径附录
+
+* **半径口径旁证**（`work/_pincrop.py --pick 4 --zoom 5` → `work/_pincrop/<case>_<comp>.png` + `pins.tsv`）：
+  图上脚号（红）印在**符号体边缘**、脚名（蓝框）在体内，而脚锚点在**引线末端**（离体边 ~13px）
+  ⇒ §5.148 §2.3 里「8px 内没有框」的 55.7% 里很大一部分是**半径口径**（脚号框其实在 10–15px 处），不是没检出。
+* **弃用声明**：`work/_ovpinkey.py`（用 `work/official_text/textrec_manifest.jsonl` 的 `role=pin_number` 行
+  当「印出来的脚号」）口径失败 —— 那份清单里 `pin_number` 只有 10,403 行、散在 **2,387 个 case** 上，
+  池里每案不足 5 行 ⇒ 98.7% 的脚在 20px 内查不到。该脚本**不能**用来判定键真假，**勿再引用它的 98.7%**。
+
+### 6 产物清单（全部只在 `work/`）
+
+| 文件 | 内容 |
+|---|---|
+| `work/fonttext_exp.md` | 实验日志：假设、语料、基线、判据、环境坑、公平召回（本节的一手记录） |
+| `work/fonttext_pool*` · `work/fonttext_smoke2/` | `mk_fonttext` 全量/冒烟语料 |
+| `work/textrec_merged.jsonl` · `work/charset_ckpt.json` · `work/_mkmerged.py` | 合并清单（111.9 MB）+ 权重自带字符表 + 合并器 |
+| `work/_fontval.py` · `work/_tinyrec.py` · `work/_tinycmp.py` · `work/_tinydet/tinyrec_{before,before_gpu,after}.json` | 真实域分档 / 零标注合成曲线 / 逐样本对照 |
+| `work/train_official_pool.log` · `eda-pcb/textrec/runs/official_pool/{history.json,best.pt,last.pt}` | 训练日志与候选权重 |
+| `work/weights_backup/textrec_best.e57.pt` | 回滚用备份（交付 e57） |
+| `work/_ovkeycensus.py` · `_ovpinkey2.py` · `_ovpinkey3.py` · `_ovpinrecall.py` · `_gen220/{pinkey.json,pinkey2.json,pinkey3.json,pinrecall.json,keycensus_10gt.json}` | GT 键质量普查与公平召回 |
+| `work/_pincrop.py` · `work/_pincrop/` | 放大裁剪叠画（`0001-KiCad_U1.png` = U1 全件 5× + 引脚号/名 + `pins.tsv`） |
