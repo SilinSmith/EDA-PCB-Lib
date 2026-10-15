@@ -35,6 +35,18 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 
+def _inter(a, b) -> float:
+    x0, y0 = max(a[0], b[0]), max(a[1], b[1])
+    x1, y1 = min(a[2], b[2]), min(a[3], b[3])
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    return (x1 - x0) * (y1 - y0)
+
+
+def _area(a) -> float:
+    return max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="在真实语料上评 textrec")
     ap.add_argument("--ckpt", default=str(C.RUNS_DIR / "best.pt"))
@@ -43,12 +55,35 @@ def main(argv=None) -> int:
     ap.add_argument("--device", default="auto")
     ap.add_argument("--dump", default="", help="把读错的样本写成 jsonl")
     ap.add_argument("--role", default="", help="只看某个角色")
+    ap.add_argument("--ov-thr", type=float, default=0.10,
+                    help="重叠桶阈值：与同图其它文本框的最大包含度 >= 该值记为「有重叠」")
+    ap.add_argument("--ov-strong", type=float, default=0.30,
+                    help="强重叠桶阈值（同一个包含度口径）")
+    ap.add_argument("--no-ov", action="store_true", help="不打印重叠分桶")
     args = ap.parse_args(argv)
 
     rec = Recognizer.load(Path(args.ckpt), device=args.device)
     print("[recognizer] " + rec.debug())
 
     recs = [r for r in load_manifest(Path(args.manifest)) if r["split"] == "real"]
+    # ---- 重叠桶：**只用 GT 自己的框**算（框与框的交 / 较小框面积），不涉及模型的任何输出 ----
+    # 真实语料（Dataset300 CVJsonStd）里密集排布的相邻行会让「一个框的裁片含到别行的字」，
+    # 这就是本线要对付的「重叠文本」。桶定义必须在评任何权重的**同一个口径**下固定，见 §5.156。
+    if not args.no_ov:
+        _by_img: Dict[str, List[dict]] = defaultdict(list)
+        for r in recs:
+            _by_img[r["image"]].append(r)
+        for _k, _rs in _by_img.items():
+            _a = [_area(r["bbox"]) for r in _rs]
+            for _i, _r in enumerate(_rs):
+                _best = 0.0
+                for _j, _s in enumerate(_rs):
+                    if _i == _j or _a[_i] <= 0 or _a[_j] <= 0:
+                        continue
+                    _iv = _inter(_r["bbox"], _s["bbox"])
+                    if _iv > 0:
+                        _best = max(_best, _iv / min(_a[_i], _a[_j]))
+                _r["ov"] = _best
     if args.role:
         recs = [r for r in recs if r["role"] == args.role]
     by_image: Dict[str, List[dict]] = defaultdict(list)
@@ -79,7 +114,7 @@ def main(argv=None) -> int:
             s[1] += max(1, len(gt))
             s[2] += 1
             s[3] += int(pred == gt)
-            per_item.append((r["role"], pred, gt, conf))
+            per_item.append((r["role"], pred, gt, conf, r.get("ov", -1.0)))
             if pred != gt and args.dump:
                 errors.append({"image": k, "case": r["case"], "role": r["role"],
                                "gt": gt, "pred": pred, "conf": round(conf, 4),
@@ -105,11 +140,79 @@ def main(argv=None) -> int:
               % (d[2], d[0] / max(1, d[1]), d[3] / max(1, d[2])))
         print("  （这条线的上界见 docs/算法路线设计.md：现有模板匹配端到端是 0.0000）")
 
+    # ---- 重叠分桶：验收线「重叠框 exact 提升且对照组不降」的基线（见 §5.156）----
+    if not args.no_ov and any(it[4] >= 0 for it in per_item):
+        def _bucket(ov: float):
+            if ov < 0:
+                return None
+            if ov < args.ov_thr:
+                return "clean"
+            return "mild" if ov < args.ov_strong else "strong"
+
+        bt = defaultdict(lambda: [0, 0, 0, 0])          # ed, len, n, exact
+        bt_d = defaultdict(lambda: [0, 0, 0, 0])        # 位号单独一份
+        for role, p, g, _c, ov in per_item:
+            b = _bucket(ov)
+            if b is None:
+                continue
+            for tbl in ((bt, bt_d) if role == "designator" else (bt,)):
+                s = tbl[b]
+                s[0] += levenshtein(p, g)
+                s[1] += max(1, len(g))
+                s[2] += 1
+                s[3] += int(p == g)
+        print("\n重叠分桶（桶只由 GT 框自身的包含度定：clean <%.2f ≤ mild <%.2f ≤ strong；"
+              "模型输出不参与分桶）" % (args.ov_thr, args.ov_strong))
+        print("%-8s %7s %8s %9s" % ("bucket", "n", "CER", "exact"))
+        for b in ("clean", "mild", "strong"):
+            s = bt[b]
+            print("%-8s %7d %8.4f %9.4f"
+                  % (b, s[2], s[0] / max(1, s[1]), s[3] / max(1, s[2])))
+        if bt_d["clean"][2] or bt_d["mild"][2] or bt_d["strong"][2]:
+            print("  ↳ 位号 designator：" + "  ".join(
+                "%s n=%d exact=%.4f" % (b, bt_d[b][2], bt_d[b][3] / max(1, bt_d[b][2]))
+                for b in ("clean", "mild", "strong")))
+        # 朴素分桶会被 role/长度组成混淆（clean 桶里长 value 串占多数）⇒ 必须按 role 与长度控制住
+        rb = defaultdict(lambda: [0, 0])                # (role, bucket) -> [n, exact]
+        bl = defaultdict(lambda: [0, 0])                # (len 桶, bucket) -> [n, exact]
+        lg = defaultdict(list)                          # bucket -> [gt 长度]
+        for role, p, g, _c, ov in per_item:
+            b = _bucket(ov)
+            if b is None:
+                continue
+            rb[(role, b)][0] += 1
+            rb[(role, b)][1] += int(p == g)
+            L = len(g)
+            lb = "1-2" if L <= 2 else ("3-4" if L <= 4 else "5+")
+            bl[(lb, b)][0] += 1
+            bl[(lb, b)][1] += int(p == g)
+            lg[b].append(L)
+        print("\n  按 role 控制（每格 n / exact）：")
+        print("  %-12s %14s %14s %14s" % ("role", "clean", "mild", "strong"))
+        for role in sorted(set(k[0] for k in rb)):
+            cells = []
+            for b in ("clean", "mild", "strong"):
+                n, ex = rb[(role, b)]
+                cells.append("%5d / %.3f" % (n, ex / n) if n else "      -      ")
+            print("  %-12s %14s %14s %14s" % (role, cells[0], cells[1], cells[2]))
+        print("  按 GT 长度控制：")
+        print("  %-12s %14s %14s %14s" % ("len", "clean", "mild", "strong"))
+        for lb in ("1-2", "3-4", "5+"):
+            cells = []
+            for b in ("clean", "mild", "strong"):
+                n, ex = bl[(lb, b)]
+                cells.append("%5d / %.3f" % (n, ex / n) if n else "      -      ")
+            print("  %-12s %14s %14s %14s" % (lb, cells[0], cells[1], cells[2]))
+        for b in ("clean", "mild", "strong"):
+            v = sorted(lg[b])
+            if v:
+                print("  GT 长度中位 %-6s %.1f（n=%d）" % (b, v[len(v) // 2], len(v)))
+
     # ---- 置信度阈值扫描 ----
     print("\n置信度阈值扫描（拒识 vs 误读）")
     print("%8s %9s %10s %10s %10s" % ("thr", "保留数", "保留占比", "保留内CER", "保留内exact"))
     for thr in (0.0, 0.5, 0.7, 0.8, 0.9, 0.95, 0.99):
-        keep = [(p, g) for (_r, p, g, c) in per_item if c >= thr]
+        keep = [(p, g) for (_r, p, g, c, _ov) in per_item if c >= thr]
         if not keep:
             print("%8.2f %9d %10s %10s %10s" % (thr, 0, "-", "-", "-"))
             continue
