@@ -14289,3 +14289,45 @@ python -X utf8 eda-pcb\tools\diag\_anchormode.py --back 4
 python -X utf8 eda-pcb\tools\diag\_anchormode.py --show        # 逐脚明细，case1 的 GT投影 中位 +2.00
 ```
 **状态**：本补节只追加、不改既有行；诊断工具无管线影响，确定性基线与 GT 指纹 `db9a9b7b36a89391` 不受影响。
+
+## §5.154 库补号闸门「零覆盖」补自检 ⇒ 抓出 `if gate:` 真值坑；锚点判别器覆盖率分母按参照分别取
+
+### (A) `STAGE2_LIB_PINS_NUMGATE`：官方 10 张上一次都不触发，却藏着默认档行为偏差
+
+- 事实：§5.150 §4(B) 记的库补**号**闸门（`ebb72d6` 新增，档位 `0`/`off`/`conflict`/`seen`）在官方 10 张上
+  四臂读数全等于 `default`（`libnumgate`/`libnumgate_seen`/`libnumfill0`/`libnamefill0` 全 80.62，0.9355/0.7385/
+  0.8095/0.5764、引脚 tp 90）—— 也就是说它以**零覆盖**状态准备进入新 GT。
+- 本轮给它补 `stage2/libpins.py:_selftest` 覆盖（`numgate_mode()` 档位 8 例 + 闸门行为 7 例 + 两个细闸各 1 例），
+  自检第一次跑就报红：`if gate:` 把档位 `"0"` 当**真值**（非空字符串）⇒「关」档也会进入闸门块、`conflict`
+  规则照跑（`seen` 那条有 `gate == "seen"` 守卫，所以没跑）。
+- 后果：`0`/`off` 与历史行为并**不**逐位相同，只是因为官方 10 张上「该号读到别的名字」这种冲突形态不出现，
+  A/B 才看不出来（`libpins0`/`libnumfill0`/`libnamefill0` 这些臂在函数入口就 return，也照不出来）。
+- 修法（`f7f2d10`）：`gated = gate in ("conflict", "seen")`，两处 `if gate:` → `if gated:`。
+  行为表（自检验证）：默认 / `0` / `off` ⇒ 照补（历史行为）；`conflict` / `seen` ⇒ 图上该号读到别的名字时
+  补 0 并记 `numgate_conflict`；`seen` 另在库号未出现在「真读号」集合时补 0 并记 `numgate_notseen`。
+- 复验：`python -X utf8 -m stage2.libpins` ⇒ 全部通过（rc 0）；
+  `gt_retest --arms default --rulers deterministic --tag postfix_default` ⇒ **80.62**
+  （0.9355/0.7385/0.8095/0.5764、引脚 tp 90），与交付逐位相同 ⇒ 修的是「关档语义」，不是现行读数。
+- 教训：**默认关的新闸门，「A/B 全等」不等于「无副作用」**。零覆盖路径必须用合成单测把语义锁住，
+  否则它会在新 GT 上以没人验证过的形态第一次生效。
+
+### (B) 锚点口径判别器：覆盖率分母按参照各自的适用性取
+
+- `98ef6a2` 的颜色盲区自检用的是 `has_colour = has_green and has_maroon`（AND）⇒ 将来若出现
+  「只有绿、没有红」的渲染，它会整体被踢出「有颜色子集」，连本来适用的 `green`/`junc` 覆盖率也被一起压低。
+- 收紧（`902c161`）为**按参照各自适用性**取分母（`tools/diag/_anchormode.py:report` 开头的 `bases`）：
+  `ours` = 全部可配对脚；`tip` = 有 maroon 的脚；`junc`/`green` = 有绿的脚；残差子集改用逐参照的 `applies` 累积。
+- 现 10GT 上各参照的适用集恰好相同（case1 绿红都缺）⇒ 主表四行、`参考`/`判别` 行、
+  `※ 颜色盲区修正`/`⇒ 按此口径` 行的数字**逐字不变**；只有追加块的表头行改成按参照列分母：
+  `—— 适用子集（颜色类参照各按适用性排除：本例 case1 整图无绿/无红）分母 = ours 124 / tip 98 / junc|green 98 根脚`。
+- 复跑（`python -X utf8 eda-pcb\tools\diag\_anchormode.py`、`--back 4`）与 §5.153 补记录的数字逐位一致：
+  `ours −1.70 / 38.8%`、`tip −8.10 / 5.1%`、`junc 47 (48.0%)`、`green 71 (72.4%)`；
+  `--back 4`：`junc 66 (67.3%) −9.60 (−13.45,−5.60)`、跨度 **7.85px**、`green 71 (72.4%)` 不变。
+- 判别结论不受影响：跨度最小的 `junc` **8.56px**（back4 **7.85px**）> 4px ⇒ 现 GT 的锚点不落在任何候选参照上。
+
+### (C) 本轮不变量
+
+- `tools/eval/newgt_reopen.py` 第 4c 步（`98ef6a2`）与 `tools/diag/_anchormode.py` 现在都按「参照各自适用性」
+  报分母；新 GT 落地后 4c 的 `※`/`⇒` 两行即是对「新 GT 锚点钉在哪个参照上」的**第一手判据**，
+  但前提是那批图里有绿/有红 —— 灰阶渲染只能靠非颜色参照（现 10GT 上 `ours` 自身在 case1 反而最准：
+  26 根脚残差中位 **+2.00px**、`|r|<=2px` **84.6%**）。
