@@ -56,6 +56,17 @@ def run(cmd: list, log: Path | None, dry: bool) -> int:
     return rc
 
 
+def start_epoch_of(ckpt: Path) -> int:
+    """读起点 checkpoint 的 `epoch`（train.py 的 `--epochs` 是**绝对**上限，必须 > 它）。"""
+    try:
+        import torch
+        ck = torch.load(str(ckpt), map_location="cpu", weights_only=False)
+        return int(ck.get("epoch", 0))
+    except Exception as e:                                   # pragma: no cover
+        print("  !! 读不出起点轮数（%s），按 0 算：%s" % (ckpt, e))
+        return 0
+
+
 def _read_text(path: Path) -> str:
     """容错读日志：pwsh 的 `>` 重定向默认写 UTF-16LE，Python 自己写的是 UTF-8。"""
     raw = path.read_bytes()
@@ -199,7 +210,13 @@ def main(argv=None) -> int:
                     choices=("control", "treatment", "treatment_long", "both"))
     ap.add_argument("--stage", default="all", choices=("mix", "train", "eval", "compare", "all"))
     ap.add_argument("--start-ckpt", default=str(DEFAULT_START))
-    ap.add_argument("--epochs", type=int, default=0, help="0 = 用 train.py 默认（12）")
+    ap.add_argument("--epochs", type=int, default=0,
+                    help="绝对轮数上限（>0 时原样传给 train.py；一般别用，用 --add-epochs）")
+    ap.add_argument("--add-epochs", type=int, default=12,
+                    help="在起点 checkpoint 的轮数上**再加**多少轮（默认 12）。"
+                         "train.py 的 --epochs 是绝对上限 `range(start, epochs)`，"
+                         "而 C.DEFAULTS['epochs']=40 < 起点第 61 轮 ⇒ 不显式给就会空跑 0 轮"
+                         "（§5.179 踩到：best CER 1e9、不产出 best.pt、eval 报 FileNotFoundError）")
     ap.add_argument("--batch", type=int, default=128)
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--dry", action="store_true", help="只打印命令，不执行")
@@ -211,6 +228,7 @@ def main(argv=None) -> int:
         print("!! 缺少 %s —— 先跑 tools/dev/mk_fullpop_manifest.py" % ruler)
         return 2
     arms = ARMS if a.arm == "both" else (a.arm,)
+    bad_arms: list = []
 
     for arm in arms:
         d = out / arm
@@ -221,13 +239,20 @@ def main(argv=None) -> int:
                  "--charset-from", a.start_ckpt],
                 d / "mix.log", a.dry)
         if a.stage in ("train", "all"):
+            st = 0 if a.epochs else start_epoch_of(a.start_ckpt)
+            ep = a.epochs or (st + a.add_epochs)
             cmd = [sys.executable, "-X", "utf8", "-m", "textrec.train",
                    "--resume", a.start_ckpt, "--out", d / "run",
                    "--manifest", d / "manifest.jsonl",
-                   "--batch", a.batch, "--workers", a.workers]
-            if a.epochs:
-                cmd += ["--epochs", a.epochs]
+                   "--batch", a.batch, "--workers", a.workers,
+                   "--epochs", ep]
+            print("  [epochs] 绝对上限 %d（起点第 %d 轮 + %d 轮）"
+                  % (ep, st, ep - st))
             run(cmd, d / "train.log", a.dry)
+            if not a.dry and not (d / "run" / "best.pt").exists():
+                print("  !! 没产出 best.pt —— 该臂无效，跳过 eval（看 %s）" % (d / "train.log"))
+                bad_arms.append(arm)
+                continue
         if a.stage in ("eval", "all"):
             run([sys.executable, "-X", "utf8", "-m", "textrec.eval_real",
                  "--ckpt", d / "run" / "best.pt", "--manifest", ruler,
@@ -236,6 +261,9 @@ def main(argv=None) -> int:
 
     if a.stage in ("compare", "all") and (a.arm == "both" or a.stage == "compare"):
         print("\n=== 对比（ruler，判据见 §5.162/§5.163）===")
+        if bad_arms:
+            print("  !! 本轮有臂无效（没产出 best.pt）：%s —— 下面的读数不可作为判据"
+                  % ", ".join(bad_arms))
         res = {arm: parse_arm(out / arm / "ruler_eval.log") for arm in ARMS}
         roles = set()
         for arm in ARMS:

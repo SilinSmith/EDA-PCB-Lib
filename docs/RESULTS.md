@@ -15274,3 +15274,24 @@ Python 自写的是 UTF-8 ⇒ 解析器必须按 BOM 自适应（`tools/dev/run_
 5. **未做（可后置的零训练实验）**：把 (a)(b) 分开——例如在同一批框上做「只补边不缩放」与「只缩放不补边」两组变体，或在 GT 框上先缩放墨迹再裁。本轮只做对账，不改任何判据。
 
 **产物**：`tools/diag/_padsweep.py`（既有工具，恢复原状、未改一行）、`tools/diag/_padcurve.py`（§5.177 的新探针：`pad_box` 精确逆 + 四档扫描；原提交里误覆盖了前者，已恢复并改名）。
+
+## §5.179 开跑踩坑（已修）：`textrec.train --epochs` 是**绝对**上限，续训不给就空跑 0 轮却以 0 退出
+
+**症状**（第一次开跑，`python -X utf8 tools/dev/run_fullpop_ab.py --arm both`，作业 pwsh-46）：三臂的 `train.log` 只有 8 行、**一条 `eNN` 进度行都没有**，末尾是
+`完成。best CER 1000000000.0000 -> ...\<arm>\run\best.pt`，而 `best.pt` **根本没生成** ⇒ 紧跟的评测三臂齐崩：
+`FileNotFoundError: 找不到权重: ...\control\run\best.pt`（`eda-pcb/textrec/infer.py:120`），对比表因此是空的。整个「三轮实验」在 4 分钟内"成功"结束。
+
+**根因**（`eda-pcb/textrec/train.py:268`、`:284`、`:297`）：起点 `work/ocr_mix/runs/last.pt` 是第 **61** 轮，`start_epoch = 61`；循环是
+`for epoch in range(start_epoch, args.epochs)`，而 `--epochs` 的默认值来自 `C.DEFAULTS["epochs"] = 40`（`textrec/config.py:115`）⇒ `range(61, 40)` 是**空集**。
+更骗人的是 `remain = max(1, args.epochs - start_epoch) = max(1, -21) = 1`，于是照样打印
+`[sched] 本次 1 轮 × 185 步 = 185 步，OneCycle 峰值 lr 3.00e-04`。`best_cer` 保持哨兵 `1e9`，不写 `best.pt`，**退出码仍是 0**。
+
+**修复（两处）**：
+1. `eda-pcb/textrec/train.py:271-278`：`start_epoch` 一确定就挡掉 `args.epochs <= start_epoch`，打印「会空跑 0 轮 + 续训请传绝对上限」并 `return 2`（不再让静默空跑发生）。
+2. `eda-pcb/tools/dev/run_fullpop_ab.py`：新增 `--add-epochs`（默认 **12**）与 `start_epoch_of(ckpt)`（`torch.load(..., weights_only=False)` 读 `ck["epoch"]`），实际传 `--epochs = 起点轮数 + 12`；**并在 train 结束后断言 `best.pt` 存在**——缺失就打印「该臂无效，跳过 eval」、把臂名放进 `bad_arms`，在对比表顶上显式列出（不再让 `FileNotFoundError` 混进读数）。
+
+**验证**：`--arm control --stage train --dry` 打印 `[epochs] 绝对上限 73（起点第 61 轮 + 12 轮）`；真实重跑（作业 pwsh-48）control 在 ≈75 s/轮下 5 分钟到 e65、`best.pt` 已生成（31 MB）、`last.pt` 持续更新。
+
+**教训**：**退出码 0 不等于跑过**。凡是「下游要读的产物」（这里是 `best.pt`）都必须在阶段边界断言存在性；判据脚本要把无效臂显式标出来，否则「三臂读数相同/全空」会被误读成「无效应」。这与 §5.170 的「控制量搞错」是同一族错误：**先验证仪器，再信任读数**。
+
+**产物**：`eda-pcb/textrec/train.py`（+8 行守卫）、`eda-pcb/tools/dev/run_fullpop_ab.py`（`--add-epochs` / `start_epoch_of` / `best.pt` 断言 / `bad_arms` 提示）。

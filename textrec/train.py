@@ -268,6 +268,15 @@ def main(argv=None) -> int:
         start_epoch = int(ck.get("epoch", 0))
         print("[resume] 从 %s 的第 %d 轮继续" % (args.resume, start_epoch))
 
+    if args.epochs <= start_epoch:
+        # 踩过的坑（§5.179）：`--epochs` 是**绝对**上限，`range(start_epoch, args.epochs)` 为空时
+        # 循环一次都不跑，却仍然打印「完成。best CER 1000000000.0000」并以 0 退出，
+        # 下游 eval 才报 FileNotFoundError: .../best.pt。这里直接挡掉。
+        print("!! --epochs %d <= 起点第 %d 轮 ⇒ 会空跑 0 轮。"
+              "续训请传绝对上限 `--epochs %d`（= 起点 + 想跑的轮数）"
+              % (args.epochs, start_epoch, start_epoch + 1))
+        return 2
+
     # OneCycle 的步数按「本次还要跑几轮」算，不按 --epochs 的绝对值：
     # 续训时 start_epoch 很大（例如 57），若按绝对值 `--epochs 58` 算 total_steps，
     # warmup（pct_start=0.1）会落在本次训练之外，整个这一轮的学习率只有峰值的
