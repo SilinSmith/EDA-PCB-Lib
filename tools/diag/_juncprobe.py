@@ -9,17 +9,21 @@
   junc  = 离锚点最近的**绿且内侧 1~2px 贴 maroon** 的交点像素（更贴「红绿交点」原义）
 与 `_pinanchor.py` 的「色转折射线」(ed) 口径并列，作为第三种/第四种独立估计。
 
-两种模式：
+三种模式：
   --mode agree （默认含）与 GT 锚点比：逐组中位是否一致(≤2px) + 把该估计当作平移施行后的 pin_f1
                             （GT 在这里只是量尺；施行分才代表「真能换成涨分吗」）
-  --mode stats GT 不参与几何量：覆盖率 / 交点距离中位·p90 / 组内稳定性(dev≤2 的组占比)
-                —— 用来回答「新 GT 真按交点定锚点时，检测器本身够不够用」。
-                口径说明：配对（哪些脚进统计）仍借 GT 的 (元件,边) 分组，但被统计的
-                覆盖率/距离/稳定性只读图像与我们自己的锚点，**不读 GT 坐标**。
+  --mode stats 覆盖率 / 交点距离中位·p90 / 组内稳定性(dev≤2 的组占比)。被统计的量只读图像
+                与我们自己的锚点（**不读 GT 坐标**），但**配对与 (元件,边) 分组仍借 GT**
+                （脚集合来自 GT↔我方配对，见 `schematic_parser.metrics.assign_components`）。
+  --mode statsfree 与 stats 同口径，但**连分组也不碰 GT**：脚集合与 (元件,边) 全部来自
+                我方产物 `<run-dir>/final_results/<cid>_Pred.json`（`components[*].bbox` +
+                `pins[*][*].point`），只借数据集的**图像路径**。
+                ⇒ 新 GT 落地、其锚点口径未知时，这一档可以先跑；GT 一到手再跑 stats 对照。
 
 用法：
   python -X utf8 eda-pcb/tools/diag/_juncprobe.py --mode both
   python -X utf8 eda-pcb/tools/diag/_juncprobe.py --mode stats --min-n 3
+  python -X utf8 eda-pcb/tools/diag/_juncprobe.py --mode statsfree --min-n 3   # 新 GT 未到手时先跑
   python -X utf8 eda-pcb/tools/diag/_juncprobe.py --mode stats --back 4   # 放宽「内侧贴 maroon」窗口
   python -X utf8 eda-pcb/tools/diag/_juncprobe.py --mode agree --show --cases 1,5,10
 （--half 默认 26px、--lat 默认 ±2px、--back 默认 1..2px = 严格口径。放宽 --back 到 4 时覆盖与
@@ -168,6 +172,65 @@ def scan(a, cfg, index, mode):
     return rows, st
 
 
+def scan_free(a):
+    """GT-free 统计：脚集合与 (元件,边) 分组全部来自我方产物，不读 GT。
+
+    注意：只借数据集索引里的**图像路径**（`discover()`），不碰 GT 标注坐标/名字。
+    """
+    st = dict(n_pin=0, n_jn=0, n_jc=0, d_jn=[], d_jc=[],
+              n_group=0, stable_jn=0, stable_jc=0,
+              n_case=0, n_case_skip=0, n_comp=0)
+    for cid in [s.strip() for s in a.cases.split(",") if s.strip()]:
+        pp = os.path.join(a.run_dir, "final_results", "%s_Pred.json" % cid)
+        if not os.path.exists(pp):
+            st["n_case_skip"] += 1
+            continue
+        case = a.index.get(cid)
+        if case is None or not os.path.exists(case.png_path):
+            st["n_case_skip"] += 1
+            continue
+        pred_doc = json.load(io.open(pp, encoding="utf-8"))
+        img = np.array(Image.open(case.png_path).convert("RGB"))
+        h = img.shape[0]
+        # ---- GT-free 分组：我方 box 元件的 bbox + 我方脚点 ----
+        groups = {}
+        for ck in sorted(PA.box_comps(pred_doc).keys()):
+            op = PA._pin_map(pred_doc, ck)
+            bbox = (pred_doc.get("components") or {}).get(ck, {}).get("bbox")
+            if not op or not bbox:
+                continue
+            st["n_comp"] += 1
+            for num, (_nm, pt) in sorted(op.items()):
+                groups.setdefault((ck, PA._edge_of(pt, bbox)), []).append((num, pt))
+        if not groups:
+            st["n_case_skip"] += 1
+            continue
+        st["n_case"] += 1
+        for (ck, edge), pins in groups.items():
+            u = PA._outward_img(edge)
+            v_jn, v_jc = [], []
+            for num, pt in pins:
+                st["n_pin"] += 1
+                q = (pt[0], h - pt[1])
+                pn = probe(img, q, u, a.half, False, lat=a.lat, back=a.back)
+                pc = probe(img, q, u, a.half, True, lat=a.lat, back=a.back)
+                if pn:
+                    st["n_jn"] += 1
+                    st["d_jn"].append((pn[1] ** 2 + pn[2] ** 2) ** 0.5)
+                    v_jn.append((pn[1], -pn[2]))
+                if pc:
+                    st["n_jc"] += 1
+                    st["d_jc"].append((pc[1] ** 2 + pc[2] ** 2) ** 0.5)
+                    v_jc.append((pc[1], -pc[2]))
+            if len(pins) >= a.min_n:
+                st["n_group"] += 1
+                if len(v_jn) >= a.min_n and PA._axis_dev(v_jn) <= 2.0:
+                    st["stable_jn"] += 1
+                if len(v_jc) >= a.min_n and PA._axis_dev(v_jc) <= 2.0:
+                    st["stable_jc"] += 1
+    return st
+
+
 def report_rows(rows):
     if not rows:
         print("(无可判分的 case)")
@@ -182,13 +245,18 @@ def report_rows(rows):
               % (tag, m[idx], m[idx] - m[0], m[idxs], m[idxs] - m[0], win, lose))
 
 
-def report_stats(st, min_n):
+def report_stats(st, min_n, free=False):
     print()
-    print("组统计（可比组 n>=%d） n=%d；中位与 GT 一致(≤2px)：jnear %d/%d (%.1f%%)  "
-          "junc %d/%d (%.1f%%)"
-          % (min_n, st["n_group"], st["hit_jn"], st["n_cmp"],
-             100.0 * st["hit_jn"] / max(1, st["n_cmp"]), st["hit_jc"], st["n_cmp"],
-             100.0 * st["hit_jc"] / max(1, st["n_cmp"])))
+    if free:
+        print("GT-free 统计（脚集合与 (元件,边) 分组均来自我方产物；不用 GT 标注，只借图像路径）"
+              " 可用 case %d（跳过 %d） 我方 box 元件 %d"
+              % (st["n_case"], st["n_case_skip"], st["n_comp"]))
+    else:
+        print("组统计（可比组 n>=%d） n=%d；中位与 GT 一致(≤2px)：jnear %d/%d (%.1f%%)  "
+              "junc %d/%d (%.1f%%)"
+              % (min_n, st["n_group"], st["hit_jn"], st["n_cmp"],
+                 100.0 * st["hit_jn"] / max(1, st["n_cmp"]), st["hit_jc"], st["n_cmp"],
+                 100.0 * st["hit_jc"] / max(1, st["n_cmp"])))
     print("GT-blind 体检：脚总数 %d" % st["n_pin"])
     for tag, k, dk in (("jnear", "n_jn", "d_jn"), ("junc", "n_jc", "d_jc")):
         d = st[dk]
@@ -207,7 +275,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-dir", default=DEFAULT_RUN)
     ap.add_argument("--cases", default=",".join(CASES))
-    ap.add_argument("--mode", choices=("agree", "stats", "both"), default="both")
+    ap.add_argument("--mode", choices=("agree", "stats", "statsfree", "both"), default="both")
     ap.add_argument("--min-n", type=int, default=2,
                     help="成组/一致率所需最少脚数（stats 组统计通常用 3）")
     ap.add_argument("--half", type=int, default=26)
@@ -221,6 +289,10 @@ def main():
     index = {str(c.case_id): c for c in discover()}
     print("口径：half=%d, lat=±%d, back=1..%d, min-n=%d, run-dir=%s"
           % (a.half, a.lat, a.back, a.min_n, a.run_dir))
+    a.index = index
+    if a.mode == "statsfree":            # GT-free 档不借 GT 分组，也不跑 GT 配对
+        report_stats(scan_free(a), a.min_n, free=True)
+        return
     rows, st = scan(a, cfg, index, a.mode)
     if a.mode in ("agree", "both"):
         report_rows(rows)

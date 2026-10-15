@@ -128,13 +128,21 @@ def main() -> int:
     if not run_dir.exists():
         notes.append("4b) 交点锚点探针: 跳过（找不到 %s；先跑确定性尺子）" % run_dir)
     else:
+        rc, out = run(PY + ["tools/diag/_juncprobe.py", "--mode", "statsfree", "--min-n", "3",
+                            "--run-dir", str(run_dir)]
+                      + (["--cases", a.cases] if a.cases else []),
+                      logdir, "4b_junc_statsfree", a.dry)
+        jf = [ln for ln in out.splitlines() if ln.startswith("组内恒定") or "覆盖" in ln]
+        notes.append("4b-f) 交点探针(GT-free，不读 GT 内容): %s"
+                     % (" / ".join(x.strip() for x in jf[-3:]) if jf
+                        else "(见 4b_junc_statsfree.log)"))
         rc, out = run(PY + ["tools/diag/_juncprobe.py", "--mode", "both", "--min-n", "3",
                             "--run-dir", str(run_dir)]
                       + (["--cases", a.cases] if a.cases else []),
                       logdir, "4b_junc", a.dry)
         jl = [ln for ln in out.splitlines() if ln.startswith("组内恒定") or "覆盖" in ln]
-        notes.append("4b) 交点锚点探针: %s" % (" / ".join(x.strip() for x in jl[-3:]) if jl
-                                             else "(见 4b_junc.log)"))
+        notes.append("4b-g) 交点探针(GT 配对): %s"
+                     % (" / ".join(x.strip() for x in jl[-3:]) if jl else "(见 4b_junc.log)"))
 
     # 4c) 锚点口径判别（量尺侧，故意读 GT 锚点）：直接回答「新 GT 的脚锚点钉在四个候选参照
     #     （我方锚点 / 引线外端 tip / 红绿交点 junc / 首绿 green）里的哪一个」。
@@ -167,7 +175,10 @@ def main() -> int:
   (A) 锚点约定：若新 GT 把引脚锚点改成别的参照（红绿导线交点 / 引线外端 / 别的），顺序是
       ① 先看 4c 的**口径判别**（`tools/diag/_anchormode.py`：GT 锚点到底钉在哪个参照上；
          现 10GT 的结论是「与我方同口径、中位 −0.15px」⇒ 现 GT 的问题是**精度**不是口径，见 §5.153）；
-      ② 看 4b 的 stats（交点检测器覆盖/稳定性够不够用；几何量不读 GT 坐标，
+      ② 看 4b-f 的 **GT-free** stats（`--mode statsfree`：脚集合与 (元件,边) 分组都来自我方
+         产物，不读任何 GT 内容 ⇒ 新 GT 标注未就绪时也能先量「检测器本身够不够用」；
+         现 10GT 上与 GT 配对口径逐位一致、只差我方多出的 1 根脚，见 §5.155）；
+         再看 4b-g 的 stats（GT 配对；几何量不读 GT 坐标）：
          旧 GT 基线 junc 37.9% / 组内恒定 19.2%，放宽 --back 4 后 53.2% / 53.8%，见 §5.152；
          覆盖率分母含「整图无绿/无红像素」的灰阶案例会被系统性压低——4c 会另报「有颜色子集」
          口径，现 10GT 排除 case1 后 junc 48.0% / green 72.4% / tip 100.0%）；
