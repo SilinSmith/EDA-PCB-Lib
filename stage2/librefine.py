@@ -3,7 +3,9 @@
 
 ## 为什么需要它（实测，不是猜的）
 
-* `stage2/libpins.py` 的规则 B（`names_for`）只在 `assemble.build_doc` 里跑；而
+* `stage2/libpins.py` 的规则 B 的**实际生效处**是 `stage2/assemble.py:2467` 起的**内联**规则 B
+  （`_libpins.LIB_PINS_NAMEFILL` + `_LIB_CTX.name_for_num`；模块里的 `names_for()` 无管线
+  调用点，见 §5.150 §4(B)），它只在 `assemble.build_doc` 里跑；而
   **VLM 补强发生在融合层之前**（`submission/run.py` 的顺序：阶段一/二 → 阶段三 →
   VLM 补强 → 融合层 → 导出），VLM 会在库里已经改写过的引脚上**再写一遍**自己的读数
   （`run.log`：「改写引脚 93 个」）⇒ 库里已经校准好的名字被 VLM 的读法覆盖。

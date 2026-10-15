@@ -76,7 +76,11 @@ LIB_PINS = env_on("STAGE2_LIB_PINS", "1")
 # §5.150 (B) 的**细闸**：把本模块的两条规则分别关掉，用来给「库的整体贡献」做归属。
 # 两条都**默认 1**（与历史逐位相同），只在 A/B 臂里显式设 0。
 #   * `STAGE2_LIB_PINS_NUMFILL=0`  ⇒ 只关**规则 A**（`complete_pins`：按名字补号）
-#   * `STAGE2_LIB_PINS_NAMEFILL=0` ⇒ 只关**规则 B**（`names_for`：按号补名，assemble 那条路）
+#   * `STAGE2_LIB_PINS_NAMEFILL=0` ⇒ 只关**规则 B**（按号补名）——**生效处是
+#     `stage2/assemble.py:2467` 起的内联规则 B**（`_libpins.LIB_PINS_NAMEFILL` +
+#     `_LIB_CTX.name_for_num`），**不是**本模块的 `names_for()`：后者
+#     （`stage2/libpins.py:504`）全仓只有定义与自检两个引用、**没有管线调用点**
+#     （§5.150 §4(B) 实测：早年把开关挂在它上面时是空开关）。
 # 注意：`librefine` 走的是 `LibCtx.name_for_num` 方法，不走 `names_for`，
 # 所以 `NAMEFILL=0` **只**影响 assemble 的规则 B —— 这正是做归属需要的正交性。
 LIB_PINS_NUMFILL = env_on("STAGE2_LIB_PINS_NUMFILL", "1")
