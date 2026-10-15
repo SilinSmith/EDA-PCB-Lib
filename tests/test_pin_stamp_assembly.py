@@ -13,7 +13,16 @@ class PinStampAssemblyTests(unittest.TestCase):
         }
 
     def stamp(self, points, ctype="r", component=None):
-        with patch.object(assemble, "PIN_STAMP_ON", True):
+        with patch.object(assemble, "PIN_STAMP_ON", True), \
+                patch.object(assemble, "EDGE_SNAP", 0), \
+                patch.object(assemble, "EDGE_TRIM", 0), \
+                patch.object(assemble, "EDGE_OVERLAP", 0), \
+                patch.object(assemble, "EDGE_CORNER", 0), \
+                patch.object(assemble, "EDGE_EXT", 0), \
+                patch.object(assemble, "EDGE_EXT_ANY", 0), \
+                patch.object(assemble, "EDGE_SPLIT", 0), \
+                patch.object(assemble, "EDGE_DEDUP", 0), \
+                patch.object(assemble, "EDGE_DEDUP2", 0):
             return assemble.stamp_pins(component or self.vertical, ctype, points, 100)
 
     def test_two_contacts_below_vertical_symbol_are_both_pin1(self):
@@ -58,7 +67,18 @@ class PinStampAssemblyTests(unittest.TestCase):
         }
         assigned = {"comps": {"c0": {"designator": {"text": "R1"},
                                       "value": {"text": "10K"}}}, "net_labels": []}
-        with patch.object(assemble, "PIN_STAMP_ON", True):
+        # Keep this alias/index test independent of the upstream wire
+        # snapping, splitting and overlap-merging postprocessors.
+        with patch.object(assemble, "PIN_STAMP_ON", True), \
+                patch.object(assemble, "EDGE_SNAP", 0), \
+                patch.object(assemble, "EDGE_OVERLAP", 0), \
+                patch.object(assemble, "EDGE_DEDUP", 0), \
+                patch.object(assemble, "EDGE_DEDUP2", 0), \
+                patch.object(assemble, "EDGE_SPLIT", 0), \
+                patch.object(assemble, "EDGE_CORNER", 0), \
+                patch.object(assemble, "EDGE_EXT", 0), \
+                patch.object(assemble, "EDGE_EXT_ANY", 0), \
+                patch.object(assemble, "EDGE_TRIM", 0):
             return assemble.build_doc(stage1, assigned, "synthetic")
 
     def test_duplicate_contacts_publish_one_pin_and_preserve_all_index_aliases(self):

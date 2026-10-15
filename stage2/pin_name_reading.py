@@ -3,23 +3,35 @@
 Only name evidence is added. Existing reads, coordinates and number recognition
 stay intact; no expected strings or numbering order enter recognition.
 """
+
 from __future__ import annotations
 
+
 from collections import Counter, defaultdict
+
 import math
 
+
 import cv2
+
 import numpy as np
+
 from PIL import Image
 
+
 from .assign import assign, _target_index
+
 from .isolated_ocr import prepare_isolated_sample
+
 from .pin_lane_crops import pin_lane_boxes
+
 from .pin_lane_reading import _name, _number, _threshold_reads, _unsafe_number_source
+
 from .pin_name_ocr import get_pin_name_ocr
 
 
 NAME_ACCEPTANCE_THRESHOLD = .90
+
 SOURCE = "color_pin_name_ppocr"
 
 
@@ -75,13 +87,16 @@ def _confirmed_numbers(doc, reads, min_conf):
     return values
 
 
-def read_pin_names(doc, reads, bgr, *, mode="auto", min_conf=0.0):
+def read_pin_names(doc, reads, engine, bgr=None, *, mode: str = "auto",
+                   min_conf: float = 0.0, grey_evidence: bool = False):
     """Return role-limited observations; weak/held ones have empty ``reads``.
 
     The optional recognizer receives the same isolated gray32 input used in
     the controlled CRNN/PP comparison, then applies its own 48px normalization.
     Confidence is an acceptance gate, not a score comparable to CRNN's score.
     """
+    if bgr is None:
+        bgr = engine  # Compatibility with the original three-argument direct API.
     if mode not in ("off", "auto", "on"):
         raise ValueError("pin name OCR mode must be off, auto or on")
     min_conf = float(min_conf)
@@ -90,7 +105,8 @@ def read_pin_names(doc, reads, bgr, *, mode="auto", min_conf=0.0):
     if mode == "off" or bgr is None or getattr(bgr, "ndim", 0) != 3:
         return []
     reads = _threshold_reads(reads, min_conf)
-    candidates, cleaned = pin_lane_boxes(doc, bgr, reads=reads)
+    candidates, cleaned = pin_lane_boxes(doc, bgr, reads=reads,
+                                         grey_evidence=grey_evidence)
     names = [c for c in candidates if c["role"] == "pin_name"
              and "glyph_integrity_unresolved" not in (c.get("flags") or [])]
     if not names:

@@ -79,6 +79,16 @@ class MonoPinPipelineTests(unittest.TestCase):
                 COLOR_NUMBER_CROP=False, PIN_TEXT_CROP=False, PIN_LANE_CROP=False,
                 PIN_NUMBER_REPAIR=False, PIN_NAME_OCR="off", MONO_PIN_OCR=mode,
                 DESIGNATOR_OCR="off"))
+            switches = {"color_crops": False, "pin_text_crops": False,
+                        "pin_lane_reading": False, "pin_number_reading": False,
+                        "pin_name_reading": False, "mono_pin_reading": mode != "off"}
+            readers = []
+            for name, on, mod, fn, need, kw in run.PIN_READERS:
+                kw = dict(kw)
+                if mod == "mono_pin_reading":
+                    kw["mode"] = mode
+                readers.append((name, switches.get(mod, on), mod, fn, need, kw))
+            stack.enter_context(patch.object(run, "PIN_READERS", readers))
             loader = stack.enter_context(patch.object(mono_pin_reading, "get_pin_name_ocr", return_value=None))
             arguments = ({"wraps": mono_pin_reading.read_mono_pin_texts} if real_reader
                          else {"return_value": copy.deepcopy(extras or [])})

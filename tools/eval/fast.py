@@ -37,7 +37,11 @@ from stage2_eval import build_index, resolve  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8")
 
 # 默认集合：10GT 全部（官方说这 10 张会作为评测案例）+ 200 训练集里最差的那些
-DEFAULT_CASES = ["1", "2", "3", "4", "5", "7", "8", "9", "10",
+# ★ case "6" 曾经**不在**这个列表里（注释却写「10GT 全部 9 张」），后果是它从来没进过
+#   任何一次默认 A/B：它是唯一一张「引脚文字旋转 90°」的图，引脚通道整张 0 分
+#   （`--cases 6 --no-vlm` 总分 53.20 / pin 0.0000）。2026-10-13 补上，见
+#   `docs/RESULTS.md` §2.13（`STAGE2_PINROT` 竖直脚旋转重读）。
+DEFAULT_CASES = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
                  "0092", "0048", "0019", "0024", "0075", "0086",
                  "0002", "0001", "0042", "0103"]
 
@@ -46,6 +50,26 @@ OUT_DIR = ROOT / "work" / "_fast_out"
 BASE_DIR = ROOT / "work" / "_fast_base"
 METRICS = ["component", "pin", "net_hypergraph", "net_line"]
 SHORT = {"component": "元件", "pin": "引脚", "net_hypergraph": "网络", "net_line": "导线"}
+
+# ★ 打分引擎（2026-10-14 换默认）：
+#   `protocol2`（**新默认**，别名 `soft`）= `schematic_parser/metrics.py` 的
+#   `evaluate_case` + 官方书面口径 **且** 2026-10-14 用真实判分产物标定过的两处口径：
+#   bbox 20px、pin/line 5px、**GT 的 `∅NNN` 走坐标匹配**（评测 Q5）、
+#   **pin_f1 只统计 box 元件**（评测 Q2）、**连通性 tp = Σ 每对网的 pin-set 软 F1**
+#   （官方 `connectivity.f1.soft_tp`，见 RESULTS §5.21）、**净图 refs 按字面比**
+#   （官方 case 1/7/2/3 的 soft_tp 与 f1 逐位复现；非 box 引脚号**不**折算成 `*`）。
+#   `protocol`（旧默认，别名 `legacy`）= 同一套容差，但连通性用「tp = Σ 交集」、
+#   非 box 引脚号折成通配 —— **2026-10-14 之前的所有 `_fast_base/*.json` 都是它**，
+#   只作历史对照（它会系统性高估 7~9 分）。
+#   `harness`（别名 `official`）= `schematic_parser/official.py`，**逐位复刻
+#   2026-10-09 那台判题机**：单一 5px 阈值当 bbox 容差、`∅NNN` 走键精确、非 box 引脚
+#   也进 pin_f1。业主明确说过「之前的判题机写错了」（bbox 20px 那处）⇒ 这台只作
+#   历史对照；同一批产物在它上面会给出**相反**的结论（电源/地符号 −10.48 vs +12.49）。
+#   完整证据链与读数见 `docs/RESULTS.md` §5.20 / §5.21。
+ENGINE = "protocol2"
+_ENGINE_ALIAS = {"protocol2": "protocol2", "soft": "protocol2",
+                 "protocol": "protocol", "legacy": "protocol",
+                 "harness": "harness", "official": "harness"}
 
 
 def lookup(cid, exact, digits):
@@ -107,12 +131,19 @@ def score(cases, cfg):
             continue
         gt = load_json(Path(case.json_path))
         pr = load_json(pp)
-        sc = evaluate_case(gt, pr, case_id=case.case_id, cfg=cfg)
+        if ENGINE == "harness":
+            from schematic_parser import official as OFF
+            sc = OFF.evaluate_case(gt, pr, case_id=case.case_id)
+            chans = {"component": sc.component, "pin": sc.pin,
+                     "net_hypergraph": sc.connectivity, "net_line": sc.wire}
+        else:
+            sc = evaluate_case(gt, pr, case_id=case.case_id, cfg=cfg)
+            chans = {m: getattr(sc, m) for m in METRICS}
         rows.append({
             "case": case.case_id, "split": case.split, "score": sc.score,
-            "out": str(OUT_DIR),
-            **{m: {"f1": getattr(sc, m).f1, "tp": getattr(sc, m).tp,
-                   "fp": getattr(sc, m).fp, "fn": getattr(sc, m).fn} for m in METRICS},
+            "out": str(OUT_DIR), "engine": ENGINE,
+            **{m: {"f1": chans[m].f1, "tp": chans[m].tp,
+                   "fp": chans[m].fp, "fn": chans[m].fn} for m in METRICS},
             "diag": dict(sc.diagnostic or {}),
         })
     return rows
@@ -183,11 +214,24 @@ def main(argv=None):
     ap.add_argument("--save", default="", help="把本次成绩存为基线 <名字>")
     ap.add_argument("--cmp", default="", help="和基线 <名字> 比")
     ap.add_argument("--list", action="store_true", help="只打印默认 case 列表")
+    ap.add_argument("--engine", default="protocol2",
+                    choices=("protocol2", "soft", "protocol", "harness",
+                             "legacy", "official"),
+                    help="protocol2（默认，别名 soft）= 书面口径 + 官方实测标定的连通性口径"
+                         "（bbox20 / ∅ 坐标匹配 / 只算 box 引脚 / tp=Σ 软 F1(Dice) / refs 字面比）；"
+                         "protocol（别名 legacy）= 旧口径（tp=Σ 交集、非 box 引脚折算 `*`，"
+                         "2026-10-14 前的基线都是它）；"
+                         "harness（别名 official）= 2026-10-09 判题机复刻（已被业主认定写错，"
+                         "只作历史对照，同一批产物结论常常相反）")
     a = ap.parse_args(argv)
 
-    global OUT_DIR
+    global OUT_DIR, ENGINE
     if a.out:
         OUT_DIR = ROOT / "work" / ("_fast_out_" + a.out.strip().rstrip("/\\"))
+    ENGINE = _ENGINE_ALIAS[a.engine]
+    if ENGINE == "harness":
+        print("!! 用判题机复刻尺（harness）打分：它把 bbox 容差当 5px、∅ 元件按键精确、"
+              "非 box 引脚也计分 —— 业主已认定这台写错，读数只作历史对照。")
 
     cases = [c.strip() for c in a.cases.split(",") if c.strip()] or DEFAULT_CASES
     if a.list:
@@ -196,6 +240,7 @@ def main(argv=None):
 
     _, names = ensure_inputs(cases)
     print("case 集合（%d 张）：%s" % (len(names), " ".join(names)))
+    print("打分引擎：%s" % ENGINE)
     if not a.score_only:
         extra = []
         if a.no_vlm:
@@ -205,13 +250,21 @@ def main(argv=None):
         if not run_pipeline(names, extra):
             print("!! 管线没跑成功，下面是已有产物的分数")
 
-    cfg = EvalConfig()
+    if ENGINE == "protocol2":
+        cfg = EvalConfig()                      # net_soft=True（软 Dice）、refs 字面比
+    else:
+        cfg = EvalConfig(net_soft=False, net_pin_collapse_nonbox=True)
     rows = score(names, cfg)
     base = None
     if a.cmp:
         bp = BASE_DIR / (a.cmp + ".json")
         if bp.exists():
             base = {r["case"]: r for r in json.loads(bp.read_text(encoding="utf-8"))}
+            be = {_ENGINE_ALIAS.get(r.get("engine") or "legacy",
+                                    r.get("engine") or "legacy") for r in base.values()}
+            if be and ENGINE not in be:
+                print("!! 基线 %s 是用 %s 尺子打的，本次是 %s ⇒ Δ 不可比，重打基线！"
+                      % (a.cmp, "/".join(sorted(be)), ENGINE))
         else:
             print("! 找不到基线 %s" % bp)
     table(rows, base)

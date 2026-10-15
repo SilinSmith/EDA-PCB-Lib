@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""第二阶段 · 结构化批量重绑定（沿框边的位置序列对齐）。
+"""第二阶段 · 结构化批量重绑定（单调序列对齐 + 阶梯重排）。
 
 **要解决的问题**（`work\\reports\\错例集_导线与元件.md`）：引脚号/引脚名现在是
 「离哪个引脚最近就归谁」逐个贪心。只要池子里多一个候选（网络标签、符号碎片、
@@ -8,23 +8,34 @@
     期望   1-1  2-2  3-3  4-4
     实得   1 悬空  1-2  2-3  3-4  4 悬空
 
-这里按候选与引脚的实际几何位置做整体匹配：
+这里换成两种**整体**候选，按总分取优（并把两者的分歧留给阶段三）：
 
 * **位置单调对齐**（`align_monotone`）：候选与引脚各自按「所在边 + 沿边坐标」排序，
-  动态规划求最大权单调匹配，两侧都允许悬空。这里的单调仅指空间顺序：芯片
-  编号可以任意排列，不按数值递增/递减筛选或重排候选。
+  动态规划求最大权单调匹配，两侧都允许悬空；再用**数值单调性**把破坏序列的离群候选
+  直接禁掉。它治的是「多一个候选就顺移一格」。
+* **阶梯重排**（ladder）：当这一排的数值是**严格单调**、个数又与引脚数相同时，
+  按「数值第 k 小 ↔ 位置第 k 个引脚」整体重排。它治的正是上面那种**整体偏移一格**：
+  每一条单独看距离都很大，但整体只有这一个自洽解。
 
-**已知边界**：某个数值本身被读错（`7` 读成 `1`）需要文字重读证据，不能依靠
-相邻编号的数值顺序推断或补写。
+**已知边界（不要过度期待）**：若某个数值本身被读错（`7` 读成 `1`），阶梯的单调性会被
+破坏，此时两个候选都会退化，只能靠阶段三的 LLM 看上下文判断 —— 所以 `rebind` 把
+「两种绑定不一致的槽位」原样输出。
 """
+
 from __future__ import annotations
 
+
 import math
+
 import os
+
 import re
+
 from typing import Dict, List, Optional, Sequence, Tuple
 
+
 EDGES = ("left", "top", "right", "bottom")
+
 _NUM_RE = re.compile(r"^\d{1,3}$")
 
 
@@ -714,6 +725,7 @@ def group_by_edge(bbox: Sequence[float], pins: Sequence[Sequence[float]],
     return out
 
 
+
 # ---------------------------------------------------------------------------
 def align_monotone(w: Sequence[Sequence[float]], gap_pen: float = 0.0,
                    cover: float = 0.0) -> List[Tuple[int, int]]:
@@ -762,7 +774,6 @@ def num_of(text: str) -> Optional[int]:
     return int(t) if _NUM_RE.match(t) else None
 
 
-# ---------------------------------------------------------------------------
 def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
            pool: Sequence[dict], value_of, score_of,
            gap_pen: float = 0.0, cover: float = 0.0, demote: float = 0.15,
@@ -847,6 +858,7 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
     groups = group_by_edge(bbox, pins, pool, evidence, active)
     return _rebind_groups(groups, pool, value_of, score_of,
                           gap_pen, cover, demote, majority, ladder)
+
 
 
 def _rebind_groups(groups, pool, value_of, score_of, gap_pen, cover,
@@ -953,6 +965,131 @@ def _selftest() -> int:
     for f in fails:
         print("  FAIL", f)
     return 1 if fails else 0
+
+
+
+# ★★ 「不删除，只削弱」（owner m23945，`docs/reports/工程哲学.md:41`/`:94`）：
+#   `stage2` 侧的落点。`NODELETE=0` 恢复历史行为（离群候选**清零** = 删除），
+#   仅用于 A/B 对照；默认 1 = 离群候选只乘一个**严格为正**的系数。
+NODELETE = os.environ.get("STAGE2_NODELETE", "1").strip().lower() not in (
+    "0", "off", "false", "no", "")
+
+DEMOTE_HARD = float(os.environ.get("STAGE2_DEMOTE_HARD", "0.05"))
+
+# ★★ 数值离群候选的**位置锚点豁免**（`STAGE2_PIN_ANCHOR`，默认 `0` = 关，单位 px）。
+#
+# 病（10GT case 5 的 `U2`，2026-10 实测，`work/tools/dev/_slotdbg.py` + `STAGE2_DBG_CID`）：
+# 这颗 IC 右列 4 根脚的 GT 是 `pin_2 VOUT`@460 / `pin_3 FB`@500 / `pin_7 PP`@539 /
+# `pin_1 GND`@559 —— 沿边顺序是 `2 3 7 1`，**号码本来就不单调**（脚号绕着封装走）。
+# `monotone_keep` 把 `1` 判成「破坏严格单调的离群」并清零收益（`hard=True`），
+# 于是 `pin_1` 明明在号池里（`1(0.92)c(1644,554)`，离那根脚只有 6px）却**永远绑不上**
+# ⇒ GT `U2.1` 白丢（`[dbg] [pin:pin_number] nplist=10 pool=13 bound=5`）。
+#
+# 规则：把候选移出活动集之前，先看它是不是**某根脚的最近候选**、且沿边距离 <= 该半径；
+# 是则**这一对**保留可配（同一候选对别的脚仍然清零），候选本体与降权记录照旧进台账。
+# 不强制配对（DP 仍按收益决定），所以对既有正确绑定只在「本来就有更好的候选」时才让位。
+#
+# ★ 2026-10 A/B（官方 10 张 `--no-vlm --engine official`）：关 = 59.9903，`=12` = **60.4847
+#   （+0.4944/张）**——case 4 +1.7946（pin tp 25->26）、case 5 +0.1115、case 8 **+3.0387**
+#   （pin tp 23->25），其余 7 张逐位不变，**pin fp 45 -> 45（零代价）**、netL fp 600 -> 596。
+#   与 `STAGE2_PIN_STUB_MERGE=12` 合用（`anb1`）= **60.5854（+0.5951/张）**。默认转正为 `12`。
+ANCHOR = float(os.environ.get("STAGE2_PIN_ANCHOR", "12"))
+
+
+try:                                    # 允许单独 import（自检 / 离线探针）
+    from cvparts.hypo import LEDGER
+except Exception:                       # pragma: no cover
+    class _NullLedger:                  # 独立跑时账本退化成空操作
+        def demote(self, *a, **k):
+            return None
+
+        def record(self, *a, **k):
+            return None
+
+    LEDGER = _NullLedger()
+
+
+# 最近一次 `rebind` 的**残差回填**明细（`{"pin","cand","d","edge"}`）。只给调试用，
+# 不参与返回签名（`rebind` 的返回元数被 stage2 与自检依赖）。
+LAST_RESIDUAL: List[dict] = []
+
+# 最近一次 `rebind` 的**降权**（被削弱而不是被删掉的候选）明细，只给调试与产物用。
+LAST_DEMOTED: List[dict] = []
+
+# 重扫队列的**消费者输入**：本趟被移出活动集、但证据仍在的候选（含降权后的分）。
+# `stage2/assign.py` 在 `STAGE2_PIN_RESIDUAL > 0` 时会把它们当作残差回填的候选源。
+LAST_RESERVE: List[dict] = []
+
+# 一次 `assign`（= 一个 case）内跨多次 `rebind` 的**累计**降权/保留池，
+# 由 `assign` 开头调用 `clear_hist()` 清空，产物写进 `_assigned/<case>.json` 的
+# `no_delete` 块（复核与重扫都读它）。
+HIST_DEMOTED: List[dict] = []
+
+HIST_RESERVE: List[dict] = []
+
+
+def clear_hist() -> None:
+    HIST_DEMOTED.clear()
+    HIST_RESERVE.clear()
+
+
+def monotone_keep(values: Sequence[Optional[int]],
+                  weights: Sequence[float]) -> Tuple[List[bool], int]:
+    """在一维数值序列上找**严格单调**的最大权子序列（递增与递减里取更优的那个）。
+
+    返回 `(keep 掩码, 方向)`，方向 `+1` 递增 / `-1` 递减 / `0` 无有效序列。
+    用来把「1,2,4,3,5」里的 `3` 认成离群。O(n^2)，一排引脚最多几十个，够用。
+    """
+    n = len(values)
+    if n == 0:
+        return [], 0
+    best_mask, best_dir, best_val = [False] * n, 0, 0.0
+    for direction in (1, -1):
+        dp = [0.0] * n
+        prev = [-1] * n
+        for i in range(n):
+            if values[i] is None or weights[i] <= 0:
+                continue
+            dp[i] = weights[i]
+            for j in range(i):
+                if values[j] is None or dp[j] <= 0:
+                    continue
+                if (values[i] - values[j]) * direction <= 0:
+                    continue
+                if dp[j] + weights[i] > dp[i]:
+                    dp[i] = dp[j] + weights[i]
+                    prev[i] = j
+        k = max(range(n), key=lambda i: dp[i])
+        if dp[k] <= best_val:
+            continue
+        mask = [False] * n
+        t = k
+        while t >= 0:
+            mask[t] = True
+            t = prev[t]
+        best_mask, best_dir, best_val = mask, direction, dp[k]
+    return best_mask, best_dir
+
+
+# ---------------------------------------------------------------------------
+def _ladder(nums: Sequence[Tuple[int, int]], n_pins: int) -> Optional[List[Tuple[int, int]]]:
+    """阶梯重排：`nums` 是 `[(候选下标, 数值)]`。只在「数值严格单调」且
+    「数值个数恰好等于引脚数」时才给方案，否则返回 None。
+
+    返回一批 `(候选下标, 引脚位次)`，由调用方把「引脚位次」换成真实引脚下标。
+    """
+    if len(nums) != n_pins or n_pins < 3:
+        return None
+    vals = [v for _c, v in nums]
+    inc = all(vals[i] < vals[i + 1] for i in range(len(vals) - 1))
+    dec = all(vals[i] > vals[i + 1] for i in range(len(vals) - 1))
+    if not (inc or dec):
+        return None
+    order = sorted(range(len(nums)), key=lambda i: nums[i][1])
+    if dec:
+        order = order[::-1]           # 数值沿位置递减时，序列要反过来
+    # 位置顺序 != 数值顺序 说明有候选整体错位，阶梯依然是「按数值定序」的那个解
+    return [(nums[order[r]][0], r) for r in range(n_pins)]
 
 
 if __name__ == "__main__":

@@ -1,0 +1,1451 @@
+{
+ "source": "tools/flow/graph.json",
+ "kinds": {
+  "img": "image",
+  "det": "det",
+  "boxes": "boxes",
+  "reads": "reads",
+  "segs": "segments",
+  "pins": "pins",
+  "nets": "nets",
+  "priors": "priors",
+  "claims": "claims",
+  "sol": "sol",
+  "bad": "bad",
+  "susp": "susp",
+  "q": "question",
+  "answer": "answer",
+  "plan": "plan",
+  "doc": "doc",
+  "file": "file",
+  "back": "back",
+  "region": "region",
+  "ledger": "ledger",
+  "faith": "faith",
+  "hint": "hint",
+  "engine": "engine",
+  "fixread": "reads"
+ },
+ "link_kinds": [
+  "data",
+  "param",
+  "ctrl"
+ ],
+ "nodes": [
+  {
+   "id": "input",
+   "title": "输入 PNG + 坐标系",
+   "group": "in",
+   "file": "submission/run.py",
+   "code": "submission/run.py:main",
+   "impl": true,
+   "ins": [],
+   "outs": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_sym",
+   "title": "① 符号检测",
+   "group": "ev",
+   "file": "stage1/detect.py + stage1/bigic.py",
+   "code": "stage1/detect.py:Detector",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "det",
+     "kind": "det",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_text",
+   "title": "② 文字区域定位",
+   "group": "ev",
+   "file": "cvparts/textbox.py",
+   "code": "cvparts/textbox.py:detect_boxes",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "boxes",
+     "kind": "boxes",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_crop",
+   "title": "③ 裁剪尺度归一",
+   "group": "ev",
+   "file": "stage2/text.py pad_box + textrec/dataset.py",
+   "code": "stage2/text.py:pad_box",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "boxes",
+     "kind": "boxes",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "boxes",
+     "kind": "boxes",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_ocr",
+   "title": "④ CRNN 识别",
+   "group": "ev",
+   "file": "textrec/infer.py",
+   "code": "textrec/infer.py:Recognizer",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "boxes",
+     "kind": "boxes",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_vlm",
+   "title": "⑤ LLM / VLM 读取",
+   "group": "ev",
+   "file": "vlm/enrich.py（753 行）",
+   "code": "vlm/enrich.py:enrich_dir",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "engine",
+     "kind": "engine",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_wire",
+   "title": "⑥ 导线与结点",
+   "group": "ev",
+   "file": "stage1/wires.py",
+   "code": "stage1/wires.py:extract_wires",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "segs",
+     "kind": "segments",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_pin",
+   "title": "⑦ 引脚点",
+   "group": "ev",
+   "file": "stage1/pintrace.py",
+   "code": "stage1/pintrace.py:trace_from_boxes",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "det",
+     "kind": "det",
+     "role": "consume"
+    },
+    {
+     "id": "segs",
+     "kind": "segments",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "pins",
+     "kind": "pins",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_net",
+   "title": "⑧ 初始网络",
+   "group": "ev",
+   "file": "stage1/nets.py",
+   "code": "stage1/nets.py:build_nets",
+   "impl": true,
+   "ins": [
+    {
+     "id": "det",
+     "kind": "det",
+     "role": "consume"
+    },
+    {
+     "id": "pins",
+     "kind": "pins",
+     "role": "consume"
+    },
+    {
+     "id": "segs",
+     "kind": "segments",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "nets",
+     "kind": "nets",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "know",
+   "title": "★ 常识与先验表",
+   "group": "kn",
+   "file": "fusion/priors.py（911 行）",
+   "code": "fusion/priors.py:Priors",
+   "impl": true,
+   "ins": [],
+   "outs": [
+    {
+     "id": "priors",
+     "kind": "priors",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "pool",
+   "title": "★ 证据池",
+   "group": "fz",
+   "file": "fusion/claims.py（744 行）",
+   "code": "fusion/claims.py:from_stage2",
+   "impl": true,
+   "ins": [
+    {
+     "id": "det",
+     "kind": "det",
+     "role": "consume"
+    },
+    {
+     "id": "boxes",
+     "kind": "boxes",
+     "role": "consume"
+    },
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "consume"
+    },
+    {
+     "id": "segs",
+     "kind": "segments",
+     "role": "consume"
+    },
+    {
+     "id": "pins",
+     "kind": "pins",
+     "role": "consume"
+    },
+    {
+     "id": "nets",
+     "kind": "nets",
+     "role": "consume"
+    },
+    {
+     "id": "answer",
+     "kind": "answer",
+     "role": "consume"
+    },
+    {
+     "id": "fixed",
+     "kind": "object",
+     "role": "consume"
+    },
+    {
+     "id": "back",
+     "kind": "back",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "claims",
+     "kind": "claims",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "solve",
+   "title": "★ 约束求解",
+   "group": "fz",
+   "file": "fusion/solve.py（470 行）",
+   "code": "fusion/solve.py:solve",
+   "impl": true,
+   "ins": [
+    {
+     "id": "claims",
+     "kind": "claims",
+     "role": "consume"
+    },
+    {
+     "id": "priors",
+     "kind": "priors",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "sol",
+     "kind": "sol",
+     "role": "produce"
+    },
+    {
+     "id": "bad",
+     "kind": "bad",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "plausible",
+   "title": "★★ 全局合理性检查（结构）",
+   "group": "fz",
+   "file": "fusion/plausible.py",
+   "code": "fusion/plausible.py:check",
+   "impl": true,
+   "ins": [
+    {
+     "id": "sol",
+     "kind": "sol",
+     "role": "consume"
+    },
+    {
+     "id": "claims",
+     "kind": "claims",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "susp",
+     "kind": "susp",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "fixstr",
+   "title": "★★ 字符串合理性修正（内容）",
+   "group": "fz",
+   "file": "（已证否）fixstr.py",
+   "code": "",
+   "impl": false,
+   "ins": [
+    {
+     "id": "claims",
+     "kind": "claims",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "fixed",
+     "kind": "object",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "conflict",
+   "title": "★ 冲突与缺口",
+   "group": "fz",
+   "file": "fusion/solve.py + fusion/plausible.py",
+   "code": "fusion/solve.py:open_questions",
+   "impl": true,
+   "ins": [
+    {
+     "id": "bad",
+     "kind": "bad",
+     "role": "consume"
+    },
+    {
+     "id": "susp",
+     "kind": "susp",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "plan",
+     "kind": "plan",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "llm_judge",
+   "title": "★★ LLM 判断 + 定位 + 排序",
+   "group": "fz",
+   "file": "fusion/llm_judge.py（484 行）",
+   "code": "fusion/llm_judge.py:judge",
+   "impl": true,
+   "ins": [
+    {
+     "id": "plan",
+     "kind": "plan",
+     "role": "consume"
+    },
+    {
+     "id": "claims",
+     "kind": "claims",
+     "role": "consume"
+    },
+    {
+     "id": "engine",
+     "kind": "engine",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "answer",
+     "kind": "answer",
+     "role": "produce"
+    },
+    {
+     "id": "plan",
+     "kind": "plan",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "rescan",
+   "title": "★ 按优先级定向重扫",
+   "group": "fz",
+   "file": "fusion/rescan.py（336 行）",
+   "code": "fusion/rescan.py:run",
+   "impl": true,
+   "ins": [
+    {
+     "id": "plan",
+     "kind": "plan",
+     "role": "consume"
+    },
+    {
+     "id": "engine",
+     "kind": "engine",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "r",
+     "kind": "object",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "iterate",
+   "title": "★ 迭代控制",
+   "group": "fz",
+   "file": "fusion/run.py:145-181",
+   "code": "fusion/run.py:run_case",
+   "impl": true,
+   "ins": [
+    {
+     "id": "r",
+     "kind": "object",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "back",
+     "kind": "back",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "batch",
+   "title": "★★ 请求合并与预算闸门",
+   "group": "cost",
+   "file": "vlm/enrich.py",
+   "code": "vlm/enrich.py:enrich_dir",
+   "impl": true,
+   "ins": [],
+   "outs": [
+    {
+     "id": "plan",
+     "kind": "plan",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "assemble",
+   "title": "装配官方格式",
+   "group": "out",
+   "file": "stage2/assemble.py（960 行）",
+   "code": "stage2/assemble.py:build_doc",
+   "impl": true,
+   "ins": [
+    {
+     "id": "sol",
+     "kind": "sol",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "doc",
+     "kind": "doc",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "export",
+   "title": "导出最终结果",
+   "group": "out",
+   "file": "submission/run.py:380-400",
+   "code": "submission/run.py:main",
+   "impl": true,
+   "ins": [
+    {
+     "id": "doc",
+     "kind": "doc",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "file",
+     "kind": "file",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "metrics",
+   "title": "官方标尺 metrics.py",
+   "group": "out",
+   "file": "schematic_parser/metrics.py",
+   "code": "schematic_parser/metrics.py:evaluate_case",
+   "impl": true,
+   "ins": [
+    {
+     "id": "file",
+     "kind": "file",
+     "role": "consume"
+    }
+   ],
+   "outs": []
+  },
+  {
+   "id": "cropfix",
+   "title": "★★ 裁切方向反馈",
+   "group": "ev",
+   "file": "fusion/cropfix.py（456 行）",
+   "code": "fusion/cropfix.py:run",
+   "impl": true,
+   "ins": [
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "consume"
+    },
+    {
+     "id": "hint",
+     "kind": "hint",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "fixread",
+     "kind": "reads",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "audit",
+   "title": "★★ 现实规律判断（电学合理性）",
+   "group": "fz",
+   "file": "fusion/audit.py（588 行）",
+   "code": "fusion/audit.py:run",
+   "impl": true,
+   "ins": [
+    {
+     "id": "susp",
+     "kind": "susp",
+     "role": "consume"
+    },
+    {
+     "id": "answer",
+     "kind": "answer",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "fixed",
+     "kind": "object",
+     "role": "produce"
+    },
+    {
+     "id": "plan",
+     "kind": "plan",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "boxscan",
+   "title": "★★ 围绕元件 box 的重扫（融合层缺的那一环）",
+   "group": "fz",
+   "file": "（要补）fusion/boxscan.py 或 claims.from_stage2 第 5 步",
+   "code": "",
+   "impl": false,
+   "ins": [
+    {
+     "id": "claims",
+     "kind": "claims",
+     "role": "consume"
+    },
+    {
+     "id": "det",
+     "kind": "det",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "region",
+     "kind": "region",
+     "role": "produce"
+    },
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "own",
+   "title": "★★ 独家归属（一个东西只有一个主人）",
+   "group": "fz",
+   "file": "cvparts/own.py",
+   "code": "cvparts/own.py:thin",
+   "impl": true,
+   "ins": [
+    {
+     "id": "det",
+     "kind": "det",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "det",
+     "kind": "det",
+     "role": "produce"
+    },
+    {
+     "id": "ledger",
+     "kind": "ledger",
+     "role": "sink"
+    }
+   ]
+  },
+  {
+   "id": "ev_bridge",
+   "title": "⑥b 并网的形状判据（规则 5）",
+   "group": "ev",
+   "file": "stage1/labels.py · stage1/nets.py",
+   "code": "stage1/labels.py:wire_groups",
+   "impl": true,
+   "ins": [
+    {
+     "id": "segs",
+     "kind": "segments",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "segs",
+     "kind": "segments",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "pincol",
+   "title": "⑦b 引脚列枚举（格点补脚）",
+   "group": "ev",
+   "file": "stage1/pincol.py",
+   "code": "stage1/pincol.py:enumerate_pins",
+   "impl": true,
+   "ins": [
+    {
+     "id": "det",
+     "kind": "det",
+     "role": "consume"
+    },
+    {
+     "id": "pins",
+     "kind": "pins",
+     "role": "consume"
+    },
+    {
+     "id": "segs",
+     "kind": "segments",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "pins",
+     "kind": "pins",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ownnum",
+   "title": "★★ 引脚号候选：归属 + 沿边对齐",
+   "group": "fz",
+   "file": "stage2/assign.py · stage2/structmatch.py",
+   "code": "stage2/structmatch.py:rebind",
+   "impl": true,
+   "ins": [
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "consume"
+    },
+    {
+     "id": "pins",
+     "kind": "pins",
+     "role": "consume"
+    },
+    {
+     "id": "det",
+     "kind": "det",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "boxpinprior",
+   "title": "★ IC 不补位置号",
+   "group": "kn",
+   "file": "fusion/priors.py",
+   "code": "fusion/priors.py:slot_boxes",
+   "impl": true,
+   "ins": [
+    {
+     "id": "det",
+     "kind": "det",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "priors",
+     "kind": "priors",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "gtcheck",
+   "title": "★★ GT 保真度检查（自造 GT 会骗你）",
+   "group": "out",
+   "file": "work/tools/diag/_desigsrc.py · _boxkey.py · _desigabsent.py",
+   "code": "tools/diag/_desigsrc.py",
+   "impl": true,
+   "ins": [
+    {
+     "id": "file",
+     "kind": "file",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "faith",
+     "kind": "faith",
+     "role": "sink"
+    }
+   ]
+  },
+  {
+   "id": "ev_pincolor",
+   "title": "⑦c 彩色引脚端点实测",
+   "group": "ev",
+   "file": "stage1/pincolor.py",
+   "code": "stage1/pincolor.py:extract_color_pins",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "det",
+     "kind": "det",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "pins",
+     "kind": "pins",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_pinevid",
+   "title": "⑦d 逐脚图像证据",
+   "group": "ev",
+   "file": "stage1/pin_evidence.py",
+   "code": "stage1/pin_evidence.py:build_pin_evidence",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "det",
+     "kind": "det",
+     "role": "consume"
+    },
+    {
+     "id": "pins",
+     "kind": "pins",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "evid",
+     "kind": "pins",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_pinlane",
+   "title": "⑦e 引脚车道裁片",
+   "group": "ev",
+   "file": "stage2/pin_lane_crops.py · stage2/pin_text_crops.py · stage2/color_crops.py",
+   "code": "stage2/pin_lane_crops.py:pin_lane_boxes",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "pins",
+     "kind": "pins",
+     "role": "consume"
+    },
+    {
+     "id": "evid",
+     "kind": "pins",
+     "role": "consume"
+    },
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "crops",
+     "kind": "boxes",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_pinread",
+   "title": "⑦f 引脚车道读数（追加候选）",
+   "group": "ev",
+   "file": "stage2/pin_lane_reading.py · stage2/pin_number_reading.py · stage2/isolated_ocr.py",
+   "code": "stage2/pin_lane_reading.py:read_pin_lanes",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "crops",
+     "kind": "boxes",
+     "role": "consume"
+    },
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "consume"
+    },
+    {
+     "id": "engine",
+     "kind": "engine",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "produce"
+    }
+   ]
+  },
+  {
+   "id": "ev_pinppocr",
+   "title": "⑦g 可选 PP-OCR 引脚名/号（默认关）",
+   "group": "ev",
+   "file": "stage2/pin_name_ocr.py · stage2/pin_name_reading.py · stage2/mono_pin_reading.py",
+   "code": "stage2/pin_name_ocr.py:get_pin_name_ocr",
+   "impl": true,
+   "ins": [
+    {
+     "id": "img",
+     "kind": "image",
+     "role": "consume"
+    },
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "consume"
+    },
+    {
+     "id": "evid",
+     "kind": "pins",
+     "role": "consume"
+    },
+    {
+     "id": "engine",
+     "kind": "engine",
+     "role": "consume"
+    }
+   ],
+   "outs": [
+    {
+     "id": "reads",
+     "kind": "reads",
+     "role": "produce"
+    }
+   ]
+  }
+ ],
+ "links": [
+  {
+   "from": "input.img",
+   "to": "ev_sym.img",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_text.img",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_ocr.img",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_vlm.img",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_wire.img",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pin.img",
+   "kind": "data"
+  },
+  {
+   "from": "own.det",
+   "to": "ev_pin.det",
+   "kind": "data"
+  },
+  {
+   "from": "ev_wire.segs",
+   "to": "ev_pin.segs",
+   "kind": "data"
+  },
+  {
+   "from": "own.det",
+   "to": "ev_net.det",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pin.pins",
+   "to": "ev_net.pins",
+   "kind": "data"
+  },
+  {
+   "from": "ev_wire.segs",
+   "to": "ev_net.segs",
+   "kind": "data"
+  },
+  {
+   "from": "own.det",
+   "to": "pool.det",
+   "kind": "data"
+  },
+  {
+   "from": "ev_text.boxes",
+   "to": "pool.boxes",
+   "kind": "data"
+  },
+  {
+   "from": "ev_ocr.reads",
+   "to": "pool.reads",
+   "kind": "data"
+  },
+  {
+   "from": "ev_vlm.reads",
+   "to": "pool.reads",
+   "kind": "data"
+  },
+  {
+   "from": "ev_wire.segs",
+   "to": "pool.segs",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pin.pins",
+   "to": "pool.pins",
+   "kind": "data"
+  },
+  {
+   "from": "ev_net.nets",
+   "to": "pool.nets",
+   "kind": "data"
+  },
+  {
+   "from": "know.priors",
+   "to": "solve.priors",
+   "kind": "data"
+  },
+  {
+   "from": "pool.claims",
+   "to": "solve.claims",
+   "kind": "data"
+  },
+  {
+   "from": "solve.sol",
+   "to": "assemble.sol",
+   "kind": "data"
+  },
+  {
+   "from": "solve.bad",
+   "to": "conflict.bad",
+   "kind": "data"
+  },
+  {
+   "from": "pool.claims",
+   "to": "plausible.claims",
+   "kind": "data"
+  },
+  {
+   "from": "solve.sol",
+   "to": "plausible.sol",
+   "kind": "data"
+  },
+  {
+   "from": "plausible.susp",
+   "to": "conflict.susp",
+   "kind": "data"
+  },
+  {
+   "from": "pool.claims",
+   "to": "fixstr.claims",
+   "kind": "data"
+  },
+  {
+   "from": "fixstr.fixed",
+   "to": "pool.fixed",
+   "kind": "data"
+  },
+  {
+   "from": "conflict.plan",
+   "to": "llm_judge.plan",
+   "kind": "data"
+  },
+  {
+   "from": "pool.claims",
+   "to": "llm_judge.claims",
+   "kind": "data"
+  },
+  {
+   "from": "llm_judge.answer",
+   "to": "pool.answer",
+   "kind": "data"
+  },
+  {
+   "from": "llm_judge.plan",
+   "to": "rescan.plan",
+   "kind": "data"
+  },
+  {
+   "from": "rescan.r",
+   "to": "iterate.r",
+   "kind": "data"
+  },
+  {
+   "from": "iterate.back",
+   "to": "pool.back",
+   "kind": "ctrl"
+  },
+  {
+   "from": "batch.plan",
+   "to": "ev_vlm.engine",
+   "kind": "param"
+  },
+  {
+   "from": "batch.plan",
+   "to": "llm_judge.engine",
+   "kind": "param"
+  },
+  {
+   "from": "batch.plan",
+   "to": "rescan.engine",
+   "kind": "param"
+  },
+  {
+   "from": "assemble.doc",
+   "to": "export.doc",
+   "kind": "data"
+  },
+  {
+   "from": "export.file",
+   "to": "metrics.file",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_crop.img",
+   "kind": "data"
+  },
+  {
+   "from": "ev_text.boxes",
+   "to": "ev_crop.boxes",
+   "kind": "data"
+  },
+  {
+   "from": "ev_crop.boxes",
+   "to": "ev_ocr.boxes",
+   "kind": "data"
+  },
+  {
+   "from": "ev_ocr.reads",
+   "to": "cropfix.reads",
+   "kind": "data"
+  },
+  {
+   "from": "cropfix.fixread",
+   "to": "pool.reads",
+   "kind": "data"
+  },
+  {
+   "from": "plausible.susp",
+   "to": "audit.susp",
+   "kind": "data"
+  },
+  {
+   "from": "llm_judge.answer",
+   "to": "audit.answer",
+   "kind": "data"
+  },
+  {
+   "from": "audit.fixed",
+   "to": "pool.fixed",
+   "kind": "data"
+  },
+  {
+   "from": "audit.plan",
+   "to": "rescan.plan",
+   "kind": "data"
+  },
+  {
+   "from": "pool.claims",
+   "to": "boxscan.claims",
+   "kind": "data"
+  },
+  {
+   "from": "ev_sym.det",
+   "to": "boxscan.det",
+   "kind": "data"
+  },
+  {
+   "from": "boxscan.region",
+   "to": "ev_vlm.engine",
+   "kind": "param"
+  },
+  {
+   "from": "boxscan.reads",
+   "to": "pool.reads",
+   "kind": "data"
+  },
+  {
+   "from": "ev_sym.det",
+   "to": "own.det",
+   "kind": "data"
+  },
+  {
+   "from": "ev_wire.segs",
+   "to": "ev_bridge.segs",
+   "kind": "data"
+  },
+  {
+   "from": "ev_bridge.segs",
+   "to": "ev_net.segs",
+   "kind": "data"
+  },
+  {
+   "from": "own.det",
+   "to": "pincol.det",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pin.pins",
+   "to": "pincol.pins",
+   "kind": "data"
+  },
+  {
+   "from": "ev_wire.segs",
+   "to": "pincol.segs",
+   "kind": "data"
+  },
+  {
+   "from": "pincol.pins",
+   "to": "ev_net.pins",
+   "kind": "data"
+  },
+  {
+   "from": "own.det",
+   "to": "ownnum.det",
+   "kind": "data"
+  },
+  {
+   "from": "ev_ocr.reads",
+   "to": "ownnum.reads",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pin.pins",
+   "to": "ownnum.pins",
+   "kind": "data"
+  },
+  {
+   "from": "ownnum.reads",
+   "to": "pool.reads",
+   "kind": "data"
+  },
+  {
+   "from": "own.det",
+   "to": "boxpinprior.det",
+   "kind": "data"
+  },
+  {
+   "from": "boxpinprior.priors",
+   "to": "solve.priors",
+   "kind": "data"
+  },
+  {
+   "from": "export.file",
+   "to": "gtcheck.file",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pincolor.img",
+   "kind": "data"
+  },
+  {
+   "from": "ev_sym.det",
+   "to": "ev_pincolor.det",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pinevid.img",
+   "kind": "data"
+  },
+  {
+   "from": "ev_sym.det",
+   "to": "ev_pinevid.det",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pincolor.pins",
+   "to": "ev_pinevid.pins",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pinlane.img",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pincolor.pins",
+   "to": "ev_pinlane.pins",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pinevid.evid",
+   "to": "ev_pinlane.evid",
+   "kind": "data"
+  },
+  {
+   "from": "ev_ocr.reads",
+   "to": "ev_pinlane.reads",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pinlane.crops",
+   "to": "ev_pinread.crops",
+   "kind": "data"
+  },
+  {
+   "from": "ev_ocr.reads",
+   "to": "ev_pinread.reads",
+   "kind": "data"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pinread.img",
+   "kind": "data"
+  },
+  {
+   "from": "batch.plan",
+   "to": "ev_pinread.engine",
+   "kind": "param"
+  },
+  {
+   "from": "input.img",
+   "to": "ev_pinppocr.img",
+   "kind": "data"
+  },
+  {
+   "from": "ev_ocr.reads",
+   "to": "ev_pinppocr.reads",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pinevid.evid",
+   "to": "ev_pinppocr.evid",
+   "kind": "data"
+  },
+  {
+   "from": "batch.plan",
+   "to": "ev_pinppocr.engine",
+   "kind": "param"
+  },
+  {
+   "from": "ev_pinread.reads",
+   "to": "ownnum.reads",
+   "kind": "data"
+  },
+  {
+   "from": "ev_pinppocr.reads",
+   "to": "ownnum.reads",
+   "kind": "data"
+  }
+ ]
+}

@@ -6,27 +6,44 @@ pins or repair strings. Numbers use a separate explicit original-glyph API.
 Detection/classification models and
 network downloads are never used here.
 """
+
 from __future__ import annotations
 
+
 import hashlib
+
 import importlib
+
 import importlib.metadata
+
 import math
+
 from pathlib import Path
+
 import warnings
+
 
 import numpy as np
 
 
 EXPECTED_PACKAGE_VERSION = "1.4.4"
+
 EXPECTED_MODEL_SHA256 = "48fc40f24f6d2a207a2b1091d3437eb3cc3eb6b676dc3ef9c37384005483683b"
+
 REC_IMAGE_SHAPE = (3, 48, 320)
+
 SHARED_GRAY_HEIGHT = 32
+
 SHARED_GRAY_MAX_WIDTH = 384
+
 SAMPLING_VERSION = "ppocr-v4-shared-gray-single-v1"
+
 _UNSET = object()
+
 _provider = _UNSET
+
 _load_error = None
+
 _warning_emitted = False
 
 

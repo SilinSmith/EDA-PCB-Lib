@@ -3,14 +3,20 @@
 Geometry always remains in the original image. Recognition padding and 90 degree
 rotation are separate, and none of the windows use expected names or numbers.
 """
+
 from __future__ import annotations
+
 
 import math
 
+
 import cv2
+
 import numpy as np
 
+
 from .color_crops import COLOR_SOURCES
+
 
 # Rotated one-digit crops are often much smaller than complete words. Add
 # uncertain new words as alternatives, but do not let a weak rotated number
@@ -28,7 +34,16 @@ def _finite(values, length):
     return numbers if all(math.isfinite(v) for v in numbers) else None
 
 
-def _observations(doc, include_horizontal=False):
+def _observations(doc, include_horizontal=False, grey_evidence=False):
+    """Yield lane anchors for confirmed pins.
+
+    ``grey_evidence`` additionally accepts the monochrome evidence records
+    written by ``stage1/pin_evidence.py`` (``source`` missing or empty): those
+    carry the same ``point_img``/``anchor_img``/``edge`` geometry, and their
+    ``trust == "trusted"`` means the frame edge really is attached to a normal
+    stroke -- the colour *source* is the only thing they lack.  Off by default
+    so every existing caller keeps the colour-only behaviour.
+    """
     for comp in doc.get("components") or []:
         if not isinstance(comp, dict) or comp.get("type") != "box":
             continue
@@ -44,9 +59,11 @@ def _observations(doc, include_horizontal=False):
             point = _finite(raw, 2)
             observed = _finite(ev.get("point_img"), 2)
             anchor = _finite(ev.get("anchor_img"), 2)
+            source = ev.get("source")
+            source_ok = (isinstance(source, str) and source in COLOR_SOURCES) or (
+                grey_evidence and (source is None or source == ""))
             if (point is None or observed is None or anchor is None
-                    or not isinstance(ev.get("source"), str)
-                    or ev.get("source") not in COLOR_SOURCES
+                    or not source_ok
                     or ev.get("trust") != "trusted"
                     or ev.get("frame_confirmed") is not True
                     or math.dist(point, observed) > .001):
@@ -114,17 +131,19 @@ def _nearest_glyph(mask, region, anchor, edge, *, number=False, min_ratio=1.10):
     return min(choices, key=lambda v: v[0])[1] if choices else None
 
 
-def pin_text_boxes(doc, image, *, include_horizontal=False):
+def pin_text_boxes(doc, image, reads=None, *, include_horizontal: bool = False,
+                   grey_evidence: bool = False):
     """Return original-image ink boxes and a cleaned grayscale image.
 
     By default only vertical pin words are added. ``include_horizontal`` is an
     explicit experiment option. Monochrome pins and evidence which does not
     match the current point always retain the existing path.
     """
+    _ = reads  # 契约参数：裁片器一律 (doc, image, reads=None)，本函数不消费 reads
     if image is None or getattr(image, "ndim", 0) != 3 or image.shape[2] != 3:
         return [], None
     mask, cleaned = _ink(image)
-    observations = list(_observations(doc, include_horizontal))
+    observations = list(_observations(doc, include_horizontal, grey_evidence))
     out = []
     for ob in observations:
         frame, anchor, edge = ob["frame"], ob["anchor_img"], ob["edge"]
@@ -189,14 +208,16 @@ def _padded_crop(gray, box, padding=3):
     return np.pad(core, padding, constant_values=255)
 
 
-def read_pin_texts(doc, reads, engine, bgr, *, include_horizontal=False):
+def read_pin_texts(doc, reads, engine, bgr, *, min_conf: float = 0.0,
+                   include_horizontal: bool = False, grey_evidence: bool = False):
     """Append role-only reads of whole words, never mutate existing reads.
 
     Both rotations are actually recognized. A component-level orientation
     vote from its complete name crops chooses the reading direction for digit
     crops; no presumed pin order or dictionary of expected words participates.
     """
-    boxes, gray = pin_text_boxes(doc, bgr, include_horizontal=include_horizontal)
+    boxes, gray = pin_text_boxes(doc, bgr, include_horizontal=include_horizontal,
+                                 grey_evidence=grey_evidence)
     if not boxes:
         return []
     recognizer = engine.recognizer()

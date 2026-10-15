@@ -8,48 +8,102 @@
 产物：`<out>\\<case>.json`（官方 components/pins/nets 格式，左下角原点）
       `<out>\\_stage2_report.json`（每个 case 的统计与耗时）
 """
+
 from __future__ import annotations
 
+
 import argparse
+
 import json
+
 import os
+
 import sys
+
 import time
+
 from pathlib import Path
+
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
+
 from .text import DEFAULT_CKPT, TextEngine, detect_texts, imread_unicode, read_stage1_texts
+
 from .assign import assign, dist_to_rect
+
 from .assemble import build_doc
+
 from .expect import merge_runs, score_expect, should_grow
+
 from .growbox import grow_reading
+
 from envflag import env_on
+
 
 # 「不可分就默认是长的」时，长出来的新读法要过这道门才允许进候选池（用户 m06734：
 # 「截止条件定的高一点」）。0.9 = 必须落在它自己前缀所期望的长度区间里。
 GROW_MIN_SCORE = float(os.environ.get("STAGE2_GROW_MIN", "0.9"))
+
 # 每颗元件最多为几个框做生长（控成本）
 GROW_PER_COMP = int(os.environ.get("STAGE2_GROW_PER_COMP", "4"))
+
 # ★★ 把 `stage1/pincol.py` 算好的引脚号窗口当文字框送进 OCR（默认开）。
 # 只取 `out_win`（框外的**号**）：名字在框内，检测器本来就检得到，而号漏检最狠。
 # 想连名字一起读就设 `STAGE2_PINCOL_WIN_KEYS=out_win,in_win`。
 PINCOL_WIN_TEXTS = os.environ.get("STAGE2_PINCOL_WIN", "1").strip().lower() not in (
     "", "0", "false", "off", "none")
+
 PINCOL_WIN_KEYS = tuple(k.strip() for k in
                         os.environ.get("STAGE2_PINCOL_WIN_KEYS", "out_win").split(",")
                         if k.strip())
+
+
+# ---------------------------------------------------------------------------
+# ★★ 队友分支 `origin/codex/improve-pin-network-parsing` 的**五个引脚读法模块**
+#    （2026-10-15 并入；模块本体原样拷入，接口与开关名沿用他们的命名）：
+#
+#    这五个读取器都是**纯追加**：由「已确认的引脚/车道几何」再切一批裁片、读一轮，
+#    把结果 append 进 `reads`，再由 `assign` 统一消化 —— 不动已有读数、不删候选，
+#    因此与我们的 `pincol`/`pinname`/`pinrot` 通道**并列**而不是替换。
+#
+#    ★ 默认值：这里先全部 **off**（队友分支里默认是 1/auto），因为并进来必须先做
+#      A/B（用户 m55811 的要求：改了识别逻辑的要 A/B）。逐个 A/B 有正收益的再翻默认。
+#      · `STAGE2_COLOR_NUMBER_CROP`  =1 彩色引脚外部脚号重裁（`stage2/color_crops.py`）
+#      · `STAGE2_PIN_TEXT_CROP`      =1 完整旋转引脚词（`stage2/pin_text_crops.py`）
+#      · `STAGE2_PIN_LANE_CROP`      =1 独立引脚车道窗口 + 选择性恢复（§5.59 起**默认 1**：
+#                                        离线 +1.11/张、派生 +0.1868、精简 +0.20、完整 +0.31）
+#                                        （`stage2/pin_lane_crops.py` / `pin_lane_reading.py`）
+#        `STAGE2_PIN_LANE_CLEANUP`   =light/heavy，车道裁片的去杂强度
+#      · `STAGE2_PIN_NUMBER_REPAIR`  =1 脚号几何保守修复 + 双视图一致才确认
+#                                        （`stage2/pin_number_crops.py` / `pin_number_reading.py`）
+#      · `STAGE2_PIN_NAME_OCR`       =auto/on/off 可选 PP-OCR 名称识别
+#                                        （`stage2/pin_name_reading.py`，需 `requirements.pin-name-ocr.txt`）
+#        `STAGE2_MONO_PIN_OCR`       继承它；黑白引脚通道（`stage2/mono_pin_reading.py`）
+#    依赖：`stage2/isolated_ocr.py`（单样本独立识别，避免 CRNN 依赖最长裁片）。
+#    可选依赖：`rapidocr-onnxruntime`（本机未装 ⇒ auto 会告警回退，on 会报错）。
+# ---------------------------------------------------------------------------
 COLOR_NUMBER_CROP = env_on("STAGE2_COLOR_NUMBER_CROP", "1")
+
 PIN_TEXT_CROP = env_on("STAGE2_PIN_TEXT_CROP", "1")
+
 PIN_LANE_CROP = env_on("STAGE2_PIN_LANE_CROP", "1")
-PIN_LANE_CLEANUP = os.environ.get("STAGE2_PIN_LANE_CLEANUP", "light")
+
+PIN_LANE_CLEANUP = os.environ.get("STAGE2_PIN_LANE_CLEANUP", "light").strip().lower()
+
 PIN_NAME_OCR = os.environ.get("STAGE2_PIN_NAME_OCR", "auto").strip().lower()
+
 DESIGNATOR_OCR = os.environ.get("STAGE2_DESIGNATOR_OCR", PIN_NAME_OCR).strip().lower()
+
 MONO_PIN_OCR = os.environ.get("STAGE2_MONO_PIN_OCR", PIN_NAME_OCR).strip().lower()
+
 NON_IC_CAPTION_OCR = os.environ.get("STAGE2_NON_IC_CAPTION_OCR", "auto").strip().lower()
+
 PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "1")
+
 PIN_NAME_LIBRARY = env_on("STAGE2_PIN_NAME_LIBRARY", "1")
+
 # 这些是「参数」类元件，它们旁边没有长器件名，不参与生长
 _VALUE_TYPES = {"r", "c", "l", "fuse", "crystal", "crystal_2pin",
                 "crystal_3pin", "crystal_4pin"}
@@ -236,37 +290,52 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
             bgr, doc.get("components") or [], reads, mode=DESIGNATOR_OCR,
             pin_evidence=doc.get("pin_evidence"),pins=doc.get("pins"))
         reads = list(reads) + extra
-    if do_ocr and COLOR_NUMBER_CROP and (roles is None or "pin_number" in roles):
-        from .color_crops import read_color_numbers
-        reads = list(reads) + read_color_numbers(doc,reads,engine,bgr)
-    if do_ocr and PIN_TEXT_CROP and (roles is None or any(r in roles for r in ("pin_name", "pin_number"))):
-        from .pin_text_crops import read_pin_texts
-        extra = read_pin_texts(doc, reads, engine, bgr)
-        if roles is not None:
-            extra = [dict(r, reads={k:v for k,v in r["reads"].items() if k in roles})
-                     for r in extra if any(k in roles for k in r["reads"])]
-        reads = list(reads) + extra
-    if do_ocr and PIN_LANE_CROP and (roles is None or any(r in roles for r in ("pin_name", "pin_number"))):
-        from .pin_lane_reading import read_pin_lanes
-        extra = read_pin_lanes(doc, reads, engine, bgr,
-                               include_names=roles is None or "pin_name" in roles,
-                               include_numbers=roles is None or "pin_number" in roles,
-                               cleanup=PIN_LANE_CLEANUP, min_conf=min_conf)
-        reads = list(reads) + extra
-    if do_ocr and PIN_NUMBER_REPAIR and (roles is None or "pin_number" in roles):
-        from .pin_number_reading import read_pin_numbers
-        reads = list(reads) + read_pin_numbers(doc, reads, engine, bgr,
-                                               min_conf=min_conf)
-    if do_ocr and PIN_NAME_OCR != "off" and (roles is None or "pin_name" in roles):
-        from .pin_name_reading import read_pin_names
-        reads = list(reads) + read_pin_names(doc, reads, bgr, mode=PIN_NAME_OCR,
-                                             min_conf=min_conf)
-    if do_ocr and MONO_PIN_OCR != "off" and (roles is None or any(r in roles for r in ("pin_name", "pin_number"))):
-        from .mono_pin_reading import read_mono_pin_texts
-        reads = list(reads) + read_mono_pin_texts(
-            doc, reads, engine, bgr, min_conf=min_conf, mode=MONO_PIN_OCR,
-            include_names=roles is None or "pin_name" in roles,
-            include_numbers=roles is None or "pin_number" in roles)
+    # ★★ 用**队友的逐脚图像证据**给引脚做「信任闸门」（我们自己的胶水，开关默认关）。
+    #   依据（work\_evidpow.py，官方 10 张的框引脚 220 个）：
+    #       trust=trusted   n=142  几何未命中 23.2%
+    #       trust=uncertain n= 52  几何未命中 100%
+    #       trust=rejected  n= 26  几何未命中 100%
+    #   ⇒ 这就是**我们没有的信息**：它能把「离任何 GT 引脚都 >5px」的假脚全挑出来
+    #     （78/220 = 35%），而我们的判据目前只有「文字读没读出来」。
+    #   闸门只在这一层生效（不动 stage1 已建好的网络引用）⇒ 单独隔离出引脚通道的
+    #   收益/代价，代价方向是**网络成员引用可能变成悬空**，必须 A/B 说了算。
+    #   丢掉的脚印一条 `no_delete` 账本（不静默消失）。
+    if PIN_TRUST_DROP:
+        doc, _n_trust = _trust_drop(doc, PIN_TRUST_DROP)
+        if _n_trust:
+            print("[stage2] 引脚信任闸门（PIN_TRUST_DROP=%s）：放下 %d 个脚"
+                  % (PIN_TRUST_DROP, _n_trust))
+    # ★ 队友分支的追加式读取器 —— **统一注册表**（开关与清单见文件头的 PIN_READERS）。
+    #
+    # 为什么是注册表：这些读取器/裁片器是「可重组的部件」，只有接口一致才能被 workflow
+    # 自由连线（用户 m40034 第 2 项）。契约（13 个模块 docstring 里也都写着）：
+    #     读数器   read_xxx(doc, reads, engine, bgr, *, min_conf=0.0, **opts) -> List[dict]
+    #     裁片器   xxx_boxes(doc, image, reads=None, **opts)                  -> List[dict]
+    #     返回     纯追加：只返回**新增**候选（{"bbox":…, "reads":{role:(text,conf)}}），
+    #              绝不改入参、绝不删既有读数 ⇒ 关掉时下游逐位不变
+    #     开关     只在**这里**读 env（模块自身不读 env）
+    # 关掉或角色不匹配都整项跳过；单项异常只打印，不拖垮其它读取器。
+    if do_ocr:
+        for _name, _on, _mod, _fn, _need, _kw in PIN_READERS:
+            if not _on:
+                continue
+            if roles is not None and not any(_r in roles for _r in _need):
+                continue
+            try:
+                _m = _load_reader(_mod)
+                _args = {k: (v(roles) if callable(v) else v) for k, v in _kw.items()}
+                _extra = list(getattr(_m, _fn)(doc, reads, engine, bgr,
+                                               min_conf=min_conf, **_args))
+            except Exception as e:                     # 单个读取器失败不影响整张图
+                print("[stage2] 读取器 %s 失败：%s" % (_name, e))
+                continue
+            if roles is not None:                      # 只留被请求的角色
+                _extra = [dict(r, reads={k: v for k, v in r.get("reads", {}).items()
+                                         if k in roles})
+                          for r in _extra if any(k in r.get("reads", {}) for k in roles)]
+            if _extra:
+                reads = list(reads) + _extra
+
     t2 = time.time()
 
     for r in reads:
@@ -299,6 +368,27 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
             reads = list(reads) + list(extra)
             a = assign(doc.get("components") or [], doc.get("pins") or {}, reads,
                        pincol=doc.get("pincol"), pin_evidence=doc.get("pin_evidence"))
+    # ★ 引脚名救援（`stage2/pinname.py`，`STAGE2_PINNAME_RESCUE` 默认**开**，2026-10-16）：
+    #   「号读对了、名字没读到」的 box 脚以前会被 `assemble.py` 的 NEED_NAME 闸门
+    #   整条丢掉（官方 9 张：缺号 51 里有 23 根 = 45%）。这里从脚点往体内切带、
+    #   剔掉体描边、按行分组只取离脚最近的一行，读一次；过闸门才写回名字。
+    #   必须在 `build_doc` **之前**（名字要进交付文档），且只动 `a` 不删任何东西。
+    #   默认值依据：官方 10 张 --no-vlm 60.5854 → 61.0000（+0.4146/张，3 涨 0 跌）、
+    #   派生 val 19 张 17.0047 → 17.0322（+0.0274，4 涨 0 跌）；置 0 时逐位不变。
+    try:
+        from . import pinname as _pinname
+        _pn = _pinname.rescue(bgr, doc, a, engine)
+    except Exception as _e:                      # noqa: BLE001
+        _pn = {"on": True, "error": "%s: %s" % (type(_e).__name__, _e)}
+    # ★ 竖直脚旋转重读（`stage2/pinrot.py`，`STAGE2_PINROT` 默认关）：上下边的脚
+    #   文字是旋转 90° 印的（官方 10GT：case 6 有 6 根、case 10 有 3 根、case 7 有 2 根），
+    #   轴对齐裁片只能读成 'L'/'33' 这类碎片 —— case 6 引脚通道整张 0 分。这里把整图
+    #   转 90°（顺/逆各一轮）、在旋转帧里取体内/体外条带重读号与名，过闸门才覆盖。
+    try:
+        from . import pinrot as _pinrot
+        _pr = _pinrot.fix(bgr, doc, a, engine)
+    except Exception as _e:                      # noqa: BLE001
+        _pr = {"on": True, "error": "%s: %s" % (type(_e).__name__, _e)}
     a["designator_ocr_audit"] = designator_audit
     if caption_audit:
         a['non_ic_caption_ocr'] = caption_audit
@@ -323,6 +413,53 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
     # 再把选定值回填后重新 `build_doc`（改名会牵动 `pins` 的键和 net 的 hyperGraph，
     # 所以只能重装配，不能事后改字符串）。
     (out_dir / "_assigned").mkdir(exist_ok=True)
+    # ★ 「不删除，只削弱」账本（m40034 第四项）：随 `_assigned` 旁路落盘，**不进交付物**
+    #   （`pred` 已在上面 `build_doc` 时定稿，这里只动旁路 dict `a`）。
+    #   内容 = `cvparts.hypo.LEDGER`（改写/截断/丢弃事件 + 降权分）+ `structmatch`
+    #   的降权候选与保留池（`HIST_RESERVE` = 重扫队列的输入）。
+    try:
+        from cvparts.hypo import LEDGER as _LG
+        from . import structmatch as _sm
+        # ⚠ 不能写 `from . import assign as _as`：`stage2/__init__` 里有
+        #   `from .assign import assign`，包属性 `stage2.assign` 已被**函数**遮蔽，
+        #   那样拿到的是函数（实测 `AttributeError: 'function' object has no
+        #   attribute 'LAST_CONFORM'`）。直接按名字取模块级列表对象即可。
+        from .assign import LAST_CONFORM as _lc
+        from .assign import LAST_CONFORM_EXTRA as _le
+        _nd = _LG.dump()
+        _nd["demotions_pin"] = len(_sm.HIST_DEMOTED)
+        _nd["reserve_pin"] = len(_sm.HIST_RESERVE)
+        _nd["demoted"] = _sm.HIST_DEMOTED[-60:]
+        _nd["reserve"] = _sm.HIST_RESERVE[-60:]
+        _nd["residual"] = list(_sm.LAST_RESIDUAL)[-40:]
+        # ★ 内涵「遗漏检测」（m48732，`STAGE2_CONFORM_AUDIT` 默认开）：本来按内涵
+        #   规则（位号前缀 ⇄ 元件类型互证、削开头胶连）能拿到键、却因为判型/取证
+        #   不对而最终没挂上键的元件。官方 10 张上它恰好点出 4 颗被丢掉的 LED
+        #   （case 6 ×2、case 7、case 10）。**只写旁路报告**，不进交付物。
+        _nd["conform_audit"] = list(_lc)
+        # ★ 内涵「多余检测」（同一开关）：我方发出去的、内涵上必然判错的元件
+        #   （`d`/`led` 的 Name 槽在官方 10GT 里是型号，我方 `name = key`）。
+        _nd["conform_extra"] = list(_le)
+        # ★ 大一统交叉校验层（用户 m50175，`CV_UNIFIED` 默认 0=关）：把已有的各种
+        #   候选池/降权痕迹**只读**投影成统一 `Registry`（5 种并行候选表示 → `Claim`），
+        #   跑内置校验（几何判据走 `GridIndex`/`AlongIndex`），产出 `Verdict` 台账。
+        #   **只往旁路 dict `a` 里加 `unified` 键**：`pred` 早在 `:263 build_doc`
+        #   定稿，交付 `<case>.json` 的字节不受影响；自带 try，坏了不牵连 `no_delete`。
+        try:
+            if os.environ.get("CV_UNIFIED", "0").strip().lower() not in (
+                    "", "0", "false", "off", "none"):
+                from cvparts import unified as _uf
+                _reg = _uf.Registry("case%s" % case)
+                _reg.add_many(_uf.project_stage1(doc))
+                _reg.add_many(_uf.project_assigned(a))
+                _reg.register(*_uf.default_checks())
+                _reg.run()
+                _nd["unified"] = _reg.to_json()
+        except Exception as _ue:                  # noqa: BLE001
+            _nd["unified"] = {"error": "%s: %s" % (type(_ue).__name__, _ue)}
+        a["no_delete"] = _nd
+    except Exception as _e:
+        a["no_delete"] = {"error": "%s: %s" % (type(_e).__name__, _e)}
     (out_dir / "_assigned" / ("%s.json" % case)).write_text(
         json.dumps(a, ensure_ascii=False), encoding="utf-8")
 
@@ -341,6 +478,8 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         "n_pin_name": n_pn, "n_pin_number": n_pnum, "n_pins": n_pins,
         "n_net_labels": len(a["net_labels"]), "n_nets": len(pred["nets"]),
         "labels_merged": sum(1 for v in pred["nets"].values() if v.get("label")),
+        "pinname_rescue": _pn,
+        "pinrot": _pr,
         "t_read": round(t2 - t1, 2), "t_assign": round(t3 - t2, 2),
         "t_total": round(t3 - t0, 2),
     }
@@ -429,6 +568,141 @@ def main(argv=None) -> int:
     # 缺文件在提交里只能表现为掉分。现在有失败就以非 0 退出，调用方（run.py -workers）
     # 才能把这一层报上去。
     return 1 if failed else 0
+
+
+# 「假值词表」的唯一实现（`eda-pcb/envflag.py`）；`stage2/assign.py` 用的是同一份。
+try:
+    from envflag import env_on
+except ImportError:                     # 直接跑脚本时 `sys.path[0]` 是本目录
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from envflag import env_on
+
+
+# ★ 引脚「灰底证据」通道（`STAGE2_PIN_GREY_EVIDENCE`，§5.59 起默认 1）：
+#   队友的读音器（`pin_text_crops._observations`）只认「彩色端点」证据
+#   （`source ∈ COLOR_SOURCES`），而 `stage1/pin_evidence.py` 对我们的 220 个框
+#   引脚写的是**灰底**记录（没有 `source` 字段）⇒ 读数器长期是 no-op（§5.28/§5.29）。
+#   打开后：`trust == "trusted"` + `frame_confirmed` + 点与证据点一致 + 锚点贴框
+#   的灰底记录也能开出车道（几何判据一字未改，只放宽 source 门）。
+#   §5.30 量到 +1.98/张（`--no-vlm`，当时基线 71.65），但按纪律**留默认 0**
+#   等交付口径（VLM 开）同批 A/B；§5.59 补做后四档全为正（离线协议尺
+#   76.39→77.50、复刻尺 63.3417→63.7827、派生 14.5376→14.7244、
+#   精简 79.84→80.04、完整 79.66→79.97）⇒ 翻默认 1。
+#   ★ 只有与 `STAGE2_PIN_LANE_CROP=1` 同时开才有收益：单独开本闸实测
+#   与基线**逐位相同**（`tok_grey0` = `tok_g6def` = 76.39，其余三个读数器
+#   在本机仍是 no-op：号修复/彩色号要 PP-OCR，整词读数器净中性）。
+PIN_GREY_EVIDENCE = env_on("STAGE2_PIN_GREY_EVIDENCE", "1")
+
+
+# ★ 引脚「信任闸门」：用队友 `stage1/pin_evidence.py` 的逐脚图像证据决定哪些脚
+#   不可信（`""`=关；`rejected` / `rejected+uncertain` / `uncertain`）。
+#   这是我们**缺的那条信息**（官方 10 张实测：trusted 的几何未命中率 23.2%，
+#   uncertain / rejected 都是 **100%**，见 `work\_evidpow.py`）。
+#   默认关：闸门会放下 26~78 个脚，网络成员引用可能悬空 ⇒ 必须 A/B 定去留。
+PIN_TRUST_DROP = os.environ.get("STAGE2_PIN_TRUST_DROP", "").strip().lower()
+
+_TRUST_LEVELS = {"rejected": ("rejected",),
+                 "uncertain": ("uncertain",),
+                 "rejected+uncertain": ("rejected", "uncertain")}
+
+# ★ 队友 13 个模块里的「读数器」注册表（`origin/codex/improve-pin-network-parsing`）。
+#   契约见各模块 docstring 顶部的【接口】块，也见 `process()` 里的用法注释。
+#   每项 = (名字, 开关, 模块, 函数, 需要的角色, 额外 kwargs)；
+#   kwargs 的值可以是 `roles -> value` 的函数（按角色决定要不要读名字/号）。
+PIN_READERS = [
+    ("color_number", COLOR_NUMBER_CROP, "color_crops", "read_color_numbers",
+     ("pin_number",), {}),
+    ("pin_text", PIN_TEXT_CROP, "pin_text_crops", "read_pin_texts",
+     ("pin_name", "pin_number"), {"grey_evidence": PIN_GREY_EVIDENCE}),
+    ("pin_lane", PIN_LANE_CROP, "pin_lane_reading", "read_pin_lanes",
+     ("pin_name", "pin_number"),
+     {"include_names": lambda roles: roles is None or "pin_name" in roles,
+      "include_numbers": lambda roles: roles is None or "pin_number" in roles,
+      "cleanup": PIN_LANE_CLEANUP, "grey_evidence": PIN_GREY_EVIDENCE}),
+    ("pin_number_repair", PIN_NUMBER_REPAIR, "pin_number_reading", "read_pin_numbers",
+     ("pin_number",), {"grey_evidence": PIN_GREY_EVIDENCE}),
+    ("pin_name_ocr", PIN_NAME_OCR != "off", "pin_name_reading", "read_pin_names",
+     ("pin_name",), {"mode": PIN_NAME_OCR, "grey_evidence": PIN_GREY_EVIDENCE}),
+    ("mono_pin_ocr", MONO_PIN_OCR != "off", "mono_pin_reading", "read_mono_pin_texts",
+     ("pin_name", "pin_number"),
+     {"mode": MONO_PIN_OCR,
+      "include_names": lambda roles: roles is None or "pin_name" in roles,
+      "include_numbers": lambda roles: roles is None or "pin_number" in roles}),
+]
+
+
+def _load_reader(mod: str):
+    """按模块名加载队友读取器（先包相对导入，再退化绝对导入）。"""
+    import importlib
+    try:
+        return importlib.import_module("." + mod, __package__ or "stage2")
+    except Exception:
+        return importlib.import_module("stage2." + mod)
+
+
+def _trust_drop(doc: dict, mode: str):
+    """★ 引脚「信任闸门」：按队友的逐脚图像证据放下不可信的脚（我们自己的胶水）。
+
+    输入：`doc["pins"]`（stage1 合并后的框引脚，图像帧）与 `doc["pin_evidence"]`
+    （同键、**逐位对齐**的记录：`trust ∈ {trusted, uncertain, rejected}`、
+    `frame_confirmed`、`reason`、`source`、`point_img` …）。
+
+    语义（owner 规矩 ①：**不允许静默消失**）：
+      · 每一枚被放下的脚都写一条 `no_delete` 账本（`kind="drop"`，带原坐标、trust、
+        理由与 by=`stage2.run._trust_drop`），下游/审计仍能看见它曾经存在；
+      · 同时从 `doc["pins"][cid]` 与 `doc["pin_evidence"][cid]` 删**同一批下标**
+        （从后往前删），保证剩下两条列表仍逐位对齐 —— 下游所有按下标取证据的
+        读取器/绑定代码不需要知道闸门的存在。
+
+    为什么只在 stage2 动手：stage1 的网络（`nets` / `hyperGraph` 的成员引用）不重建
+    ⇒ 收益（引脚通道少 fp+fn）与代价（成员引用可能悬空）被隔离成一个可 A/B 的量。
+
+    实测依据（`work\\_evidpow.py`，官方 10 张 220 个框引脚，几何命中判据 ≤5px）：
+      trust=trusted   n=142  未命中 23.2% ｜ uncertain n=52 未命中 100% ｜
+      rejected        n=26   未命中 100%
+    """
+    levels = _TRUST_LEVELS.get(mode)
+    if not levels:
+        return doc, 0
+    pins = doc.get("pins") or {}
+    ev = doc.get("pin_evidence") or {}
+    try:
+        from cvparts.hypo import LEDGER
+    except Exception:  # 账本不可用时也必须能跑（只在诊断层损失溯源）
+        LEDGER = None
+    n = 0
+    for cid in list(pins.keys()):
+        plist = pins.get(cid)
+        recs = ev.get(cid) if isinstance(ev, dict) else None
+        if not isinstance(plist, list) or not isinstance(recs, list):
+            continue
+        drop = []
+        for i, r in enumerate(recs):
+            if i >= len(plist):
+                break
+            if isinstance(r, dict) and str(r.get("trust") or "") in levels:
+                drop.append(i)
+        for i in reversed(drop):
+            pt = list(plist[i]) if isinstance(plist[i], (list, tuple)) else plist[i]
+            r = recs[i] if i < len(recs) else {}
+            recs.pop(i)
+            plist.pop(i)
+            n += 1
+            if LEDGER is not None:
+                try:
+                    LEDGER.record(
+                        "drop", "trust:%s.%d" % (cid, i),
+                        before=[{"point_img": pt,
+                                 "trust": (r or {}).get("trust"),
+                                 "frame_confirmed": (r or {}).get("frame_confirmed"),
+                                 "reason": (r or {}).get("reason"),
+                                 "source": (r or {}).get("source")}],
+                        reason="逐脚图像证据判为 %s（框未贴住/无正常笔画），从活动集移出"
+                               % ((r or {}).get("trust"),),
+                        by="stage2.run._trust_drop")
+                except Exception:
+                    pass
+    return doc, n
 
 
 if __name__ == "__main__":

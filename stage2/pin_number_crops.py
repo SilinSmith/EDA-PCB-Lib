@@ -3,13 +3,19 @@
 Legacy name/number lanes are unchanged. Repairs use connected dark ink and
 current trusted colour contacts only; recognized strings never set a crop.
 """
+
 from __future__ import annotations
 
+
 import copy
+
 import cv2
+
 import numpy as np
 
+
 from .pin_lane_crops import pin_lane_boxes
+
 from .pin_text_crops import _observations
 
 
@@ -139,21 +145,22 @@ def _vertical_completion(mask, original, target, peers):
     return completed, expanded, evidence
 
 
-def number_repair_boxes(doc, bgr, reads=None):
+def number_repair_boxes(doc, image, reads=None, *, grey_evidence: bool = False):
     """Return only number candidates and an independent cleaned gray copy.
 
     Metadata preserves the original geometry/flags as well as every removed
     contact fragment and completion decision. Input documents, OCR records,
     and image pixels are never changed. Unproven clipping stays unresolved.
+    ``grey_evidence`` widens eligibility to monochrome trusted evidence.
     """
-    candidates, cleaned = pin_lane_boxes(doc, bgr, reads=reads)
+    candidates, cleaned = pin_lane_boxes(doc, image, reads=reads, grey_evidence=grey_evidence)
     if cleaned is None:
         return [], None
     cleaned = cleaned.copy()
-    observations = list(_observations(doc, include_horizontal=True))
+    observations = list(_observations(doc, include_horizontal=True, grey_evidence=grey_evidence))
     observed = {(o["component_id"], o["pin_index"]): o for o in observations}
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    chroma = bgr.max(2).astype(np.int16) - bgr.min(2).astype(np.int16)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    chroma = image.max(2).astype(np.int16) - image.min(2).astype(np.int16)
     colour = (chroma >= 50) & (gray < 230)
     near_colour = cv2.dilate(colour.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
     out = []

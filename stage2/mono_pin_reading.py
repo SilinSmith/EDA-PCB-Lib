@@ -3,22 +3,33 @@
 These are role-only additional observations. Missing optional OCR leaves the
 existing pipeline intact. Agreement is never a dictionary or numbering repair.
 """
+
 from __future__ import annotations
 
+
 import math
+
 import re
 
+
 import cv2
+
 import numpy as np
 
+
 from .mono_pin_crops import _finite, mono_observations, mono_pin_boxes
+
 from .pin_name_ocr import get_pin_name_ocr
+
 from .pin_identifier import pin_identifier_key
+
 from .intact_pin_numbers import intact_number_line_box
+
 from .name_fringe import antialiased_name_candidate, FRINGE_PADDINGS
 
 
 ACCEPTANCE_THRESHOLD = .90
+
 PADDINGS = (2, 4)
 
 
@@ -519,7 +530,7 @@ def _guard_vertical_number_collisions(doc, reads, output, min_conf=0.0):
                 break
 
 
-def read_mono_pin_texts(doc, reads, engine, bgr, min_conf=0.0, mode="auto",
+def read_mono_pin_texts(doc, reads, engine, bgr, *, min_conf=0.0, mode="auto",
                         include_names=True, include_numbers=True):
     """Read original horizontal glyphs and a local clockwise vertical view."""
     options = dict(min_conf=min_conf, mode=mode, include_names=include_names,

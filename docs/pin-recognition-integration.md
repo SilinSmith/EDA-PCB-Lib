@@ -86,3 +86,21 @@ Known output gaps remain: power/ground `value` fields are empty, and eight gray
 power/ground references in the first 10GT image are omitted by the existing
 evidence gate. Non-IC LED identity/type errors and missed or ambiguous IC
 readings remain. References, labels and weights were not changed to hide them.
+
+## Requirement update on 2026-10-14
+
+See [the current contest requirements](赛题要求核对清单.md) and the
+[Q&A comparison](赛题Q&A更新对照20261014.md). The new exports confirm color-only
+final cases, component-level matching for non-box net members, scoring-time
+merging of same-named power nets, and connectors classified as box. The
+20-pixel bbox statements and the newer mIoU answer do not yet define a complete
+official scoring procedure. This documentation update changes no inference
+or evaluation code and does not recompute the validation figures above.
+
+## Main compatibility update on 2026-10-15
+
+The branch now includes author main `3e7261b`. See the
+[merge validation record](pin-main-compatibility-20261015.md) for resolved
+interfaces, measured-contact protection, final validation, upstream model
+changes, and the remaining network diagnostic difference. The historical
+figures above describe the earlier integration snapshot, not this update.

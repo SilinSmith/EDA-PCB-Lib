@@ -3,22 +3,33 @@
 Two fixed white-margin views must agree. No expected label, numbering order,
 dictionary correction or highest-confidence view selection is used.
 """
+
 from __future__ import annotations
+
 
 import math
 
+
 import numpy as np
 
+
 from .pin_lane_reading import _number, _threshold_reads
+
 from .assign import assign
+
 from .isolated_ocr import read_isolated_many
+
 from .pin_name_reading import _directions
+
 from .pin_name_ocr import get_pin_name_ocr
+
 from .pin_number_crops import number_repair_boxes
 
 
 NUMBER_ACCEPTANCE_THRESHOLD = .90
+
 PADDINGS = (2, 4)
+
 SOURCE = "color_pin_number_ppocr"
 
 
@@ -38,7 +49,8 @@ def _agreement(variants, threshold):
     return values[0][0], min(v[1] for v in values)
 
 
-def read_pin_numbers(doc, reads, engine, bgr, *, min_conf=0.0):
+def read_pin_numbers(doc, reads, engine, bgr, *, min_conf: float = 0.0,
+                     grey_evidence: bool = False):
     """Add qualified digits; missing optional PP runtime keeps the old path.
 
     ``engine`` is retained for the pipeline's reader interface; this recognizer
@@ -51,7 +63,8 @@ def read_pin_numbers(doc, reads, engine, bgr, *, min_conf=0.0):
     if bgr is None or getattr(bgr, "ndim", 0) != 3:
         return []
     reads = _threshold_reads(reads, min_conf)
-    candidates, cleaned = number_repair_boxes(doc, bgr, reads=reads)
+    candidates, cleaned = number_repair_boxes(doc, bgr, reads=reads,
+                                             grey_evidence=grey_evidence)
     candidates = [c for c in candidates
                   if "glyph_integrity_unresolved" not in c.get("flags", [])]
     if not candidates:

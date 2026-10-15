@@ -27,6 +27,19 @@
 整批失败都不会让 final_results 少产物。
 
 **每张图独立 try/except**：一张图炸掉不能拖垮整批（评测是整目录跑，2 小时预算）。
+★ 2026-10-14（用户 m42543「考虑各种灾难性现场」）—— 上面两条**曾经只是口号**，现已落实：
+`main` = `parse_args → _fix_device → try _run except _safety_net`，`_safety_net` 会对输入目录
+**每张图**补空壳 `_Pred.json` 并写 `decision_log.json`（`summary.fatal`）后返回 3；阶段一
+`run_cases` 的进程池崩溃改在本进程串行补跑；导出层对没有产物的 case 写空壳（不是 `continue`）；
+`_fix_device` 在无 CUDA 时把 `-device 0` 回退成 `cpu`；同名 case 去重；巨图走
+`stage1/pipeline.py:_imread_bgr` 的降采样护栏。故障注入测试见 `tools/dev/_hardtest.py`。
+
+★ 2026-10-15（用户 m42543「判题机同时给全部样例且允许并发」）—— **case 级扇出**：
+`-case-workers`（默认 -1 = 自动：可见 GPU ≥2 时取 min(GPU 数, 图数)，否则 1 = 老行为）
+把每张图的**全流程**分给一个独立子进程、每个子进程独占一张卡；父进程负责分派、
+看门狗（`EDA_WALL_BUDGET_S`）、合并产物、给没产出的 case 补空壳并写 `decision_log.json`。
+`-workers` 只并行阶段一（9 张实测只快 ~10%），而阶段二/三/融合层是逐 case 顺序循环，
+交付口径 26.6 s/张（官方 case 1）~3.7 min/张（派生大图）⇒ 50 张必须并行才进 2 小时。
 """
 from __future__ import annotations
 
@@ -34,6 +47,7 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 import traceback
@@ -68,6 +82,25 @@ def discover_inputs(input_dir: Path):
     return [(p.stem, p) for p in files]
 
 
+def _dedupe_items(items):
+    """按 `<case_name>` 去重（保序，保留排序后的第一个）。返回 `(kept, dropped)`。
+
+    ★ 灾难现场加固（用户 m42543）：`a.png` + `a.jpg`（或递归到不同子目录的同名图）
+    会让 `stage1` 输出**同名互相覆盖**（`-workers>1` 时还是并发写同一个文件，
+    可能写出半个 JSON），最后只得到 1 份 `_Pred.json`，而 `run.py` 的导出计数
+    与 `ok1 = {r["case"] ...}` 都察觉不到。同名输入在评测端本身就是歧义（
+    `<case_name>_Pred.json` 只有一个名字），所以**保留第一个、把被丢弃的显式报出来**。
+    """
+    seen, kept, dropped = set(), [], []
+    for cid, p in items:
+        if cid in seen:
+            dropped.append((cid, str(p)))
+            continue
+        seen.add(cid)
+        kept.append((cid, p))
+    return kept, dropped
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="EDA 赛题六 提交入口")
     ap.add_argument("-input", "--input", dest="input_dir", required=True)
@@ -78,8 +111,25 @@ def main(argv=None) -> int:
                     help="YOLO 用；torch 侧由 textrec.infer.normalize_device 翻译"
                          "（'0' -> 'cuda:0'，没卡则退 CPU）")
     ap.add_argument("-imgsz", "--imgsz", dest="imgsz", type=int, default=1600)
+    ap.add_argument("-tile", "--tile", dest="tile", type=int, default=0,
+                    help="阶段一切块推理的瓦片边长（px）。0（默认）= 整图，即今天的行为。"
+                         ">0 时交给 `stage1.detect.Detector.detect(tiler=(tile, overlap))` "
+                         "做跨瓦片全局 NMS —— 大图（如 val 的 4500×2850 / 3450×2280）"
+                         "在 `-imgsz 1600` 下小元件与细脚文字会被缩没，切块是唯一"
+                         "不看整图缩放的对策。**未过 val 前不要改默认**。")
+    ap.add_argument("-overlap", "--overlap", dest="overlap", type=int, default=0,
+                    help="切块重叠像素（仅 `-tile > 0` 时生效；0 = 自动取 tile/8）")
     ap.add_argument("-workers", "--workers", dest="workers", type=int, default=1,
-                    help="stage1 进程池大小（CPU 密集；>1 会各自占显存）")
+                    help="**stage1 内部**进程池大小（CPU 密集；>1 会各自占显存）")
+    ap.add_argument("-case-workers", "--case-workers", dest="case_workers", type=int,
+                    default=-1,
+                    help="**case 级扇出**：把整张图的全流程分给 N 个独立进程并行，"
+                         "每个子进程独占一张卡（`-device` 递增）。-1（默认）= 自动："
+                         "可见 GPU ≥2 时取 min(GPU 数, 图数)，否则 1（= 今天的行为）。"
+                         "环境变量 `EDA_CASE_WORKERS` 可覆盖自动值；0 = 强制关。"
+                         "用户 m42543：判题机一次给全部样例且允许并发；"
+                         "交付口径每张 ~30 s（官方 case 1）~3.7 min（派生大图），"
+                         "50 张串行顶穿 2 小时预算。")
     ap.add_argument("-no-wires", "--no-wires", dest="no_wires", action="store_true",
                     help="跳过骨架提线（最耗时的 CPU 段）")
     ap.add_argument("-texts", "--texts", dest="texts", default="both",
@@ -132,6 +182,20 @@ def main(argv=None) -> int:
     ap.add_argument("-vlm-name-margin", "--vlm-name-margin", dest="vlm_name_margin",
                     type=float, default=80.0,
                     help="读器件型号时元件框外扩的像素（40 起就平了）。")
+    ap.add_argument("-vlm-pin", "--vlm-pin", dest="vlm_pin",
+                    default="on", choices=("on", "off"),
+                    help="用 VLM **引脚通道**（读 IC 的引脚号/名，替换引脚键）。"
+                         "**默认开**：官方 10GT 9 张交付口径 58.6304 → **61.5112（+2.88）**"
+                         "（pin F1 0.3920→0.4858、tp 37→45）；全量 220 按 split 拆开是"
+                         " 10GT **+2.59** / 10_GTcase **+0.76** / 200_train_cases **−0.25**"
+                         "（负号只在自动命名那一档）。⚠ 这是**替换**引脚键那条路"
+                         "（`VLM_PIN_MERGE=0`）；`VLM_PIN_MERGE=1` 是只并名的旧路线。")
+    ap.add_argument("-vlm-pin-name", "--vlm-pin-name", dest="vlm_pin_name",
+                    default="on", choices=("on", "off"),
+                    help="引脚通道里**『名』那一半**（融合层 `FUSION_VLM_PIN_NAME`）。"
+                         "关掉只剩「号」：官方 9 张 **+1.95 且九张零回归**（全开 +2.88）。"
+                         "**如果评测集更像 JLC 派生的那 200 张（GT 引脚名常常就是号本身），"
+                         "关掉这一半更稳。** 号那一半由 `-vlm-pin` 控制。")
     ap.add_argument("-vlm-desig-fallback", "--vlm-desig-fallback",
                     dest="vlm_desig_fallback", default="on", choices=("on", "off"),
                     help="对『键还是兜底键 pNNN』的元件补读位号（不限类型）。"
@@ -141,12 +205,14 @@ def main(argv=None) -> int:
     ap.add_argument("-fusion", "--fusion", dest="fusion", default="on",
                     choices=("off", "on", "llm"),
                     help="融合层（21 节点架构的落地）：先验 + 解 + 合理性检查。"
-                         "`on` = 只跑确定性节点（不调模型，220 张约 10 分钟）；"
-                         "`llm` = 再叠加判官/审计/重扫（每张多约 50 秒 LM Studio）；"
+                         "`on` = 确定性节点 **+ LLM 轮（judge/audit/rescan）**；"
+                         "`llm` = 再叠加 cropfix（重裁重读）；"
                          "`off` = 不做融合，直接导出阶段三/二产物。"
-                         "220 张实测：融合 `on` = 28.4200、不融合（VLM 补强后的阶段二）"
-                         "= 28.4133 ⇒ 融合**不降分**（+0.007，噪声级），而它修掉了"
-                         "`Name` 顶位号这类真 bug。")
+                         "LLM 轮实测约 **+30 s/张**（case 1+10 墙钟：融合 3.5 s → "
+                         "62.7 s；折算 220 张约 +1.8 h），临时关掉用 `FUSION_LLM=0`。"
+                         "220 张实测：LLM 轮关 = 28.4973、开 = 28.4200、不融合"
+                         "（VLM 补强后的阶段三）= 28.4133。默认带 LLM 轮是 owner "
+                         "m25661 的决定（见下方 `fusion_rows` 上方那段注释）。")
     ap.add_argument("-llm-max-slots", "--llm-max-slots", dest="llm_max_slots",
                     type=int, default=0)
     ap.add_argument("-gpu-frac", "--gpu-frac", dest="gpu_frac", type=float,
@@ -157,8 +223,573 @@ def main(argv=None) -> int:
     ap.add_argument("-gpu-headroom", "--gpu-headroom", dest="gpu_headroom",
                     type=float, default=0.0,
                     help="改为「给 LLM 留出 N MiB」；优先级高于 -gpu-frac。")
+    ap.add_argument("-lean", "--lean", dest="lean", action="store_true",
+                    help="**精简档**（为赛题 `Score_Token` 排名项）：`-vlm-pin off` + "
+                         "`-vlm-value-batch 4`。官方 10 张实测（`work\\_tokcost.py`，"
+                         "protocol2）：默认 222 次 / 152 164 token / 118.2 s / 79.66 "
+                         "→ 精简 **115 次 / 93 181 token（−39%）/ 94.9 s / 79.84**，"
+                         "且逐项诊断与默认**同级**（component.text_mismatch 2 = 2）。"
+                         "再加 `-vlm-value off` 更狠：**82 次 / 45 428 token（−70%）/"
+                         "62.6 s / 79.45**（−0.21，落在跨运行 VLM 噪声带 ±0.38 内，"
+                         "代价是 component.text_mismatch 2→5）。")
+    ap.add_argument("-offline", "--offline", dest="offline", action="store_true",
+                    help="**零外部调用档**（为赛题 `Score_Token` 排名项与「官方只给纯文本"
+                         "API」两种现实准备）：`-vlm off` + `FUSION_LLM=0` + "
+                         "`FUSION_ITERATE=0` + `STAGE1_WIRE_COLOUR=dominant` + "
+                         "`STAGE2_PINROT=0`（**保留**融合层的确定性节点，不发请求，"
+                         "值 +0.24），已由环境变量显式设过的值**不覆盖**。"
+                         "官方 10 张实测：0 次调用 / 0 token / 22.6 s / protocol2 70.04"
+                         "（默认档 222 次 / 152 164 token / 118.2 s / 79.66）。")
     a = ap.parse_args(argv)
+    _fix_device(a)
+    _apply_lean(a)
+    _apply_offline(a)
+    a.platform_budgets = _platform_budgets()
+    print("[run] 护栏：%s" % " ".join("%s=%s" % kv for kv in a.platform_budgets.items()),
+          flush=True)
+    try:
+        # ★ case 级扇出（用户 m42543）：`_run_fanout` 在扇出数 <= 1 时**原样**调
+        #   `_run(a)`，所以单卡机器/小批量的行为与以前逐位一致。
+        return _run_fanout(a)
+    except Exception as e:                                          # noqa: BLE001
+        return _safety_net(a, e)
 
+
+def _apply_lean(a) -> None:
+    """把 `-lean` 翻译成「省 token 但分量不掉」的通道组合。
+
+    依据（`work\\_tokcost.py`，官方 10 张，protocol2，逐通道隔离 A/B）：
+      · `-vlm-pin off`（关引脚/网格通道，省 23 次调用）：**+0.18 分**（79.84 vs 79.66），
+        逐项诊断不劣（pin.missing 12 vs 13）⇒ 脚号/脚名本地（textrec + `BoxICLibrary`
+        先验 + `STAGE2_PINROT`）已经读对，VLM 那一档是冗余。这与判题机报告
+        `pin_number_accuracy_on_matched = 1.000`（§5.37）互证。
+      · `-vlm-value-batch 4`（值通道 4 格拼一图，省 104 次调用）：**−0.36 分**
+        （79.30 vs 79.66，落在 ±0.38 的跨运行噪声带内），`component.text_mismatch`
+        与默认一致（2 = 2）⇒ 拼图没有伤到值文本。
+    两者合并实测 **115 次 / 93 181 token / 94.9 s / 79.84**。
+    """
+    if not getattr(a, "lean", False):
+        return
+    a.vlm_pin = "off"
+    try:
+        if int(getattr(a, "vlm_value_batch", 1) or 1) < 4:
+            a.vlm_value_batch = 4
+    except (TypeError, ValueError):
+        a.vlm_value_batch = 4
+    print("[run] 精简档：-vlm-pin off｜-vlm-value-batch %s（官方 10 张：115 次 / "
+          "93 181 token / 79.84，与默认档同级）" % a.vlm_value_batch, flush=True)
+
+
+def _apply_offline(a) -> None:
+    """把 `-offline` 翻译成「真正一次外部调用都不发」的环境组合。
+
+    为什么不能只靠 `-vlm off`：实测（`work\\_tokcost.py`，官方 10 张）`-vlm off` +
+    `FUSION_LLM=0` + `STAGE2_PINROT=0` 仍然发出了 **19 次**调用、9 726 token ——
+    两条旁路不归 `-vlm` 管：
+
+    * `fusion/iterate.py:189`（⓪.9 定向回传：按 pincol 格点窗回问引脚名，`FUSION_ITERATE`）；
+    * `stage1/wires.py:537`（导线色相提示，`STAGE1_WIRE_COLOUR=hint` 默认）。
+
+    这 19 次值 **+1.11** 分（71.15 → 70.04 少的就是它），所以不能无条件砍掉 ——
+    只有显式要「离线档」时才关。已在环境里设过的值不覆盖（便于单独做 A/B）。
+    """
+    if not getattr(a, "offline", False):
+        return
+    a.vlm = "off"
+    # ★ 只关 LLM 轮，**不关融合层**：融合层里的确定性节点（先验 + 解）本身不发请求，
+    #   实测值 +0.24（`zero` 档 70.04 vs `-fusion off` 的 69.80，官方 10 张）。
+    #   `-fusion on`（默认）不覆盖 `FUSION_LLM` ⇒ 这里显式置 0 即可。
+    for k, v in (("FUSION_LLM", "0"), ("FUSION_ITERATE", "0"),
+                 ("STAGE1_WIRE_COLOUR", "dominant"), ("STAGE2_PINROT", "0")):
+        if k not in os.environ:
+            os.environ[k] = v
+    print("[run] 离线档：-vlm off｜FUSION_LLM=%s｜FUSION_ITERATE=%s｜STAGE1_WIRE_COLOUR=%s"
+          "｜STAGE2_PINROT=%s（零外部调用，保留融合层确定性节点）"
+          % (os.environ.get("FUSION_LLM"), os.environ.get("FUSION_ITERATE"),
+             os.environ.get("STAGE1_WIRE_COLOUR"), os.environ.get("STAGE2_PINROT")),
+          flush=True)
+
+
+def _fix_device(a) -> None:
+    """**CPU 回退**（灾难现场加固，用户 m42543）。
+
+    提交默认 `-device 0`；官方基线镜像里未必有 GPU。`ultralytics` 在 CUDA 不可用时对
+    显式指定的 `device=0` 是**直接抛 ValueError**（`torch_utils.py:326-346`），而
+    `stage1` 的 `_worker` 会把它吞成 `ok: False` ⇒ **220 张全失败、退出码 0、0 产物**。
+    这条我们自己的 `textrec.infer.normalize_device` 早就做了，语义不一致，这里对齐。
+    只改「看起来是卡号/cuda 的那种值」，显式 `cpu` 不动。
+    """
+    d = str(getattr(a, "device", "") or "").strip().lower()
+    if not (d.isdigit() or d.startswith("cuda")):
+        return
+    try:
+        import torch
+        ok = bool(torch.cuda.is_available())
+    except Exception:                                               # noqa: BLE001
+        ok = False
+    if not ok:
+        print("[run] ⚠️ 请求 device=%r 但本机 torch.cuda.is_available()=False ⇒ "
+              "回退 CPU（否则 YOLO 会对每张图抛 ValueError，整批 0 产物）"
+              % (a.device,), flush=True)
+        a.device = "cpu"
+
+
+# ======================================================================
+# 交付护栏：外部推理（VLM / LLM）的时间预算（用户 m40034「2 小时跑 50 样例」）
+# ======================================================================
+# 赛题硬约束（`docs/COMPETITION_RULES.md`）：**全部案例评测总时长 < 2 小时**，而且
+# **未完成的案例双罚**（分子少它、`m/M` 再折一次）⇒ 「超时被杀」比「产出差」贵得多。
+# 实测：交付口径 26.6 s/张（官方图）~ 3.7 min/张（派生大图），50 张串行顶穿预算 ⇒
+# 平时靠 `-case-workers` 扇出（每个 lane 一个独立进程、独占一张卡）摊薄。
+# 但扇出**摊不掉**「外部端点被限流 / 挂死」这种病：`vlm/client.ask()` 在没有护栏时
+# **单次耗时没有上界** —— 黑洞端点（连得上、不回包）要等满 `VLM_TIMEOUT` 才抛错返回，
+# 而「答得出来但正文空 / 被 length 截断」那条路会把 4 次重试串起来（旧默认 600 s ⇒
+# 最坏 **2400 s = 40 min** 一次调用）；一个 lane 几张图就能把 2 小时整段吃掉，
+# 而官方判题机是按墙钟硬杀的 —— 那时候没落进 `final_results/` 的案例全是双罚。
+# 所以这里补三个**只在用户没设时**才生效的默认值，量级取「正常跑根本不会触发」：
+#   · `VLM_TIMEOUT=180`：本机实测单次调用 0.2~9 s（VLM 段整张图 16.3 s）⇒ 180 s 宽裕；
+#   · `VLM_BUDGET_S=1800`：**本进程**累计外部推理时间上限（`vlm/client.py` 实现：
+#     到点后 `ask()` 直接返回空串降级成纯 CV，且单次超时会被剩余预算夹住）；
+#   · `EDA_WALL_BUDGET_S=6900`（115 min）：父进程看门狗，到点强杀剩余 lane 并对没产出
+#     的图**补空壳** —— 空壳只丢准确度分，不会触发 `m/M` 双罚。
+# 想复现「没有护栏」的旧行为：`VLM_TIMEOUT=600 VLM_BUDGET_S=0 EDA_WALL_BUDGET_S=0`。
+_PLATFORM_DEFAULTS = (
+    ("VLM_TIMEOUT", "180"),
+    ("VLM_BUDGET_S", "1800"),
+    ("EDA_WALL_BUDGET_S", "6900"),
+)
+
+# 扇出时**全进程同时在飞**的 VLM 请求数上限（`_child_concurrency` 用它反推每 lane 的
+# `-vlm-workers`）。8 是 §5.61 量出来的拐点：8 路在飞时官方 10 张逐字节不变，16 路时
+# 答案本身变了（-2.79 分）。串行路径（lane 数 ≤ 1）不受它影响。
+VLM_INFLIGHT_CAP = 8
+
+
+def _platform_budgets() -> dict:
+    """补上没设过的护栏默认值，返回**实际生效**的三元组（进决策日志）。"""
+    for k, v in _PLATFORM_DEFAULTS:
+        if not str(os.environ.get(k, "") or "").strip():
+            os.environ[k] = v
+    return {k: os.environ.get(k, "") for k, _ in _PLATFORM_DEFAULTS}
+
+
+# ======================================================================
+# case 级扇出（用户 m42543：「判题机将同时提供所有样例并且允许并发」）
+# ======================================================================
+# 为什么不是 `-workers`：它只并行**阶段一**（`stage1.pipeline.run_cases` 的进程池）。
+# 9 张官方图实测：串行 50.6 s → `-workers 8` 45.1 s（只快 ~10%），且
+# `final_results/*_Pred.json` **9/9 逐字节相同**（并发只改速度、不改内容）。
+# 交付口径的墙钟分布（官方 case 1，`work\_fast_out_tm_vlm1\final_results\run.log`）：
+#   阶段一 3.7 s ｜ 阶段二 0.6 s ｜ 阶段三 0.1 s ｜ VLM 探测+补强 16.3 s ｜ 融合(LLM 轮) 5.8 s
+#   = **26.6 s/张**；派生大图（元件多 ⇒ VLM 请求多）实测约 **3.7 min/张**
+# ⇒ 50 张串行约 3 h，顶穿「2 小时」硬约束；而阶段二/三/融合层**都是逐 case 顺序循环**。
+# 做法：把「一张图的全流程」当不可分割的任务，N 个**独立进程**并行、每个独占一张卡；
+# 父进程只做分派 / 看门狗 / 合并 / 兜底（空壳 + decision_log）。
+# 用进程而不是线程：CRNN、fusion 的 LLM 轮、以及各模块的模块级状态（`cvparts.hypo.LEDGER`、
+# `structmatch.HIST_*`、stage1 的 VLM 熔断计数）都不是线程安全的；进程级隔离还顺带把
+# `runs/fusion/_fusion_report.json` 的读-改-写竞态消掉了（每个 lane 一份，父进程再合并）。
+_CASE_ARGV_MAP = (
+    ("imgsz", "-imgsz"), ("texts", "-texts"), ("mode", "-mode"),
+    ("llm_batch", "-llm-batch"),
+    ("vlm", "-vlm"), ("vlm_workers", "-vlm-workers"), ("vlm_margin", "-vlm-margin"),
+    ("vlm_value", "-vlm-value"), ("vlm_value_margin", "-vlm-value-margin"),
+    ("vlm_value_batch", "-vlm-value-batch"), ("vlm_value_side", "-vlm-value-side"),
+    ("vlm_value_cols", "-vlm-value-cols"),
+    ("vlm_name", "-vlm-name"), ("vlm_name_margin", "-vlm-name-margin"),
+    ("vlm_pin", "-vlm-pin"), ("vlm_pin_name", "-vlm-pin-name"),
+    ("vlm_desig_fallback", "-vlm-desig-fallback"),
+    ("fusion", "-fusion"), ("llm_max_slots", "-llm-max-slots"),
+    ("gpu_frac", "-gpu-frac"), ("gpu_headroom", "-gpu-headroom"),
+)
+
+
+def _visible_cuda_devices() -> int:
+    try:
+        import torch
+        return int(torch.cuda.device_count()) if torch.cuda.is_available() else 0
+    except Exception:                                               # noqa: BLE001
+        return 0
+
+
+def _tiler(a):
+    """阶段一切块参数 `(tile, overlap)`，或 `None`（= 整图，今天的行为）。
+
+    为什么存在：`stage1/detect.py:202` 早就实现了切块 + 跨瓦片全局 NMS，但**从来
+    没有接进交付入口**（`submission/run.py` 里此前搜不到 `tile`），于是 val 池里
+    4500×2850 / 3450×2280 的图在 `-imgsz 1600` 下被整体缩掉 ~2.8×，小元件与细脚
+    文字一起消失（README 口径 `pin.missing=729`）。默认 0 ⇒ 交付行为不变。
+    """
+    tile = int(getattr(a, "tile", 0) or 0)
+    if tile <= 0:
+        return None
+    ov = int(getattr(a, "overlap", 0) or 0)
+    return (tile, ov if ov > 0 else max(64, tile // 8))
+
+
+def _resolve_case_workers(a, n_cases: int) -> int:
+    """扇出进程数。`-case-workers` > `EDA_CASE_WORKERS` > 自动（可见 GPU 数）。"""
+    v = int(getattr(a, "case_workers", -1))
+    env = (os.environ.get("EDA_CASE_WORKERS", "") or "").strip()
+    if v < 0 and env.lstrip("+-").isdigit():
+        v = int(env)
+    if v == 0:
+        return 1
+    if v > 0:
+        return max(1, min(v, n_cases))
+    ndev = _visible_cuda_devices()
+    if ndev <= 1:
+        return 1                       # 单卡/无卡：保持交付默认（逐 case 串行）
+    return max(1, min(ndev, n_cases))
+
+
+def _lane_device(base, lane: int) -> str:
+    """lane i 独占一张卡（`-device 0` → 0/1/…/N-1 轮转）。"""
+    d = str(base or "0").strip()
+    n = _visible_cuda_devices()
+    if n <= 0:
+        return d
+    low = d.lower()
+    if d.isdigit():
+        return str((int(d) + lane) % n)
+    if low.startswith("cuda"):
+        i = 0
+        if ":" in low:
+            try:
+                i = int(low.split(":", 1)[1])
+            except Exception:                                       # noqa: BLE001
+                i = 0
+        return "cuda:%d" % ((i + lane) % n)
+    return d
+
+
+def _child_argv(a, out_dir: Path, cases: list, device, vlm_workers: int,
+                stage1_workers: int) -> list:
+    argv = [sys.executable, "-X", "utf8", str(Path(__file__).resolve()),
+            "-input", str(a.input_dir), "-output", str(out_dir),
+            "-cases", ",".join(cases), "-device", str(device),
+            "-case-workers", "1",
+            "-workers", str(stage1_workers)]
+    if getattr(a, "no_wires", False):
+        argv.append("-no-wires")
+    for dest, flag in _CASE_ARGV_MAP:
+        val = getattr(a, dest, None)
+        if val is None:
+            continue
+        if dest == "vlm_workers":
+            val = vlm_workers
+        argv += [flag, str(val)]
+    return argv
+
+
+def _child_concurrency(a, n_lanes: int):
+    """lane 内的并发度 `(vlm_workers, stage1_workers)`：整体并发 = lanes × 每 lane 并发。
+
+    端点通常是**单模型**的兼容端点（8 卡那天是外部服务），并发太高只会让它排队并回
+    429/5xx（读数靠 `vlm/client.py` 的 `VLM_RETRY` 兜，但兜回来的是时间）。所以这里
+    把「全进程同时在飞的 VLM 请求数」钉在 `VLM_INFLIGHT_CAP` 以内。
+
+    ★ 8 是量出来的，不是拍的（`docs/RESULTS.md` §5.61，官方 10 张、`-lean`、本机 1 卡）：
+      1 lane × vw 4 = 4 路在飞 → 与基线逐字节相同；
+      2 lane × vw 4 = 8 路在飞 → **10/10 逐字节相同**，80.04，墙钟 114 s；
+      4 lane × vw 2 = 8 路在飞 → **10/10 逐字节相同**，80.04，墙钟 122 s；
+      8 lane × vw 2 = 16 路在飞 → 只有 4/10 相同、**77.25（-2.79）**、墙钟 407 s（3.8×）。
+    即拐点在 8 与 16 之间：8 路在飞时端点给的答案逐字节不变，16 路时答案本身变了
+    （过载下采样/截断不同），掉的分靠重试救不回来。所以 8 路扇出时每 lane 只留 1 个
+    worker（8 在飞），而不是默认的 2。
+
+    lane 数一多同时也把 stage1 的进程内并行让给 lane 之间的并行（`s1 = 1`）。
+    """
+    vw = int(getattr(a, "vlm_workers", 4))
+    s1 = int(getattr(a, "workers", 1))
+    if n_lanes > 1:
+        vw = max(1, min(vw, VLM_INFLIGHT_CAP // n_lanes))
+        s1 = 1
+    return vw, s1
+
+
+def _publish_one(lane_file: Path, dst: Path, state: dict, stage_dir: Path) -> bool:
+    """把 lane 里的一份 `<case>_Pred.json` **升级**进主输出目录（§5.54）。
+
+    ★ 为什么不是「只补缺不覆盖」：`_run()` 的**渐进导出**（阶段二那一段，用户 m42543
+    的灾难现场加固）会在阶段二刚跑完时就把**还没融合**的文档写进 lane 的
+    `final_results/`，然后阶段三 / 融合层再覆盖它。父进程若「只补缺不覆盖」，抢到的
+    第一份（stage2 档）就**永久胜出**：8 路扇出单卡实测 9/10 张交付的是缺
+    `__pin_index`、没过融合层的 stage2 文档（13 293 B），而 lane 里躺着的、以及
+    `runs/fusion/<case>.json` 才是对的（14 812 B）。
+
+    正确语义 = **按源文件的新旧升级**：lane 里有更新版本才覆盖主目录里的旧版本，
+    绝不把更旧的版本写回去。`state` 记「上次发布时**源文件**的 mtime」，所以主目录
+    那份（拷贝时刻更新）不会被误判成「更新的版本」。
+
+    拷贝前先 `json.loads` 验一次（子进程可能正在写这个文件），并且**先落同卷暂存
+    文件、再 `os.replace`**：判题机任何时刻读到的都是完整 JSON，不会是半截。
+    """
+    key = lane_file.name
+    try:
+        st = lane_file.stat()
+    except OSError:
+        return False
+    if dst.exists():
+        prev = state.get(key)
+        if prev is not None:
+            if st.st_mtime_ns <= prev:
+                return False
+        else:
+            # 没有本进程的记忆（例如输出目录里是上一轮留下的旧产物）⇒ 退回「源比它新才升级」
+            try:
+                if st.st_mtime_ns <= dst.stat().st_mtime_ns:
+                    return False
+            except OSError:
+                return False
+    try:
+        data = lane_file.read_bytes()
+        json.loads(data.decode("utf-8"))
+    except Exception:                                               # noqa: BLE001
+        return False                    # 还在写 / 写坏了 ⇒ 下一轮再看
+    try:
+        tmp = stage_dir / key
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_bytes(data)
+        os.replace(str(tmp), str(dst))
+    except Exception:                                               # noqa: BLE001
+        return False
+    state[key] = st.st_mtime_ns
+    return True
+
+
+def _merge_lane(lane_dir: Path, final_dir: Path, runs: Path,
+                state: dict = None, stage_dir: Path = None) -> int:
+    """把一个 lane 的产物并回主输出目录。
+
+    `*_Pred.json` 走 `_publish_one`（**按源文件新旧升级**，见那里的 §5.54 说明）；
+    `runs/` 下的中间产物仍旧「只补缺不覆盖」—— 它们只是留档，且同一个 case 的
+    `runs/<层>/<case>.json` 在 lane 里也会被后续层覆盖，主目录留第一份无碍。
+    """
+    n = 0
+    state = {} if state is None else state
+    stage_dir = (runs / ".pub") if stage_dir is None else stage_dir
+    lf = lane_dir / "final_results"
+    if lf.is_dir():
+        for f in sorted(lf.glob("*_Pred.json")):
+            if _publish_one(f, final_dir / f.name, state, stage_dir):
+                n += 1
+    lr = lane_dir / "runs"
+    if lr.is_dir():
+        for f in sorted(lr.rglob("*.json")):
+            dst = runs / f.relative_to(lr)
+            if dst.exists():
+                continue
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(str(f), str(dst))
+            except Exception:                                       # noqa: BLE001
+                pass
+    return n
+
+
+def _publish_preds(lanes: list, final_dir: Path, state: dict = None,
+                   stage_dir: Path = None) -> int:
+    """把各 lane **已完成**的 `<case>_Pred.json` 立刻补进主输出目录。
+
+    为什么需要：平台侧超时是**硬杀容器**（官方练习环境实测 `Timeout: 1200 seconds
+    (20 minutes)`，见 `docs/RESULTS.md` §5.46），父进程的收尾合并根本没机会跑；
+    「边跑边发布」保证平台来杀我们时，已经做完的图**仍然躺在输出目录里**。
+
+    每一份都走 `_publish_one`（§5.54：**按源文件新旧升级**）；从前那种「只补缺
+    不覆盖」会让阶段二的渐进导出把未融合的旧档永久钉在输出目录里。
+    """
+    state = {} if state is None else state
+    stage_dir = (final_dir.parent / "runs" / ".pub") if stage_dir is None else stage_dir
+    n = 0
+    for lane in lanes:
+        lf = lane["dir"] / "final_results"
+        if not lf.is_dir():
+            continue
+        for f in sorted(lf.glob("*_Pred.json")):
+            if _publish_one(f, final_dir / f.name, state, stage_dir):
+                n += 1
+    return n
+
+
+def _run_fanout(a) -> int:
+    """`-case-workers` > 1 时把 case 分给 N 个独立子进程；否则原样走 `_run(a)`。"""
+    in_dir, out_dir = Path(a.input_dir), Path(a.output_dir)
+    if not in_dir.is_dir():
+        print("输入目录不存在：%s" % in_dir, file=sys.stderr)
+        return 2
+    items, _dup = _dedupe_items(discover_inputs(in_dir))
+    if getattr(a, "cases", ""):
+        want = {c.strip() for c in a.cases.split(",") if c.strip()}
+        items = [(c, p) for c, p in items if c in want]
+    if getattr(a, "limit", 0):
+        items = items[:a.limit]
+    n_lanes = _resolve_case_workers(a, len(items)) if items else 1
+    if n_lanes <= 1:
+        return _run(a)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    final_dir = out_dir / "final_results"
+    final_dir.mkdir(parents=True, exist_ok=True)
+    runs = out_dir / "runs"
+    lanes_root = out_dir / "_lanes"
+    lanes_root.mkdir(parents=True, exist_ok=True)
+    t_start = time.time()
+    fp = (final_dir / "run.log").open("w", encoding="utf-8")
+    _log(fp, "EDA 赛题六 · 提交入口（case 级扇出）")
+    _log(fp, "input=%s  output=%s" % (in_dir, out_dir))
+    _log(fp, "找到 %d 张图，扇出 %d 个进程（每 lane 独占一张卡）" % (len(items), n_lanes))
+    if _dup:
+        _log(fp, "⚠️ 输入里 %d 张图与别的图**同名**：%s ⇒ 只保留第一个"
+             % (len(_dup), ", ".join("%s <- %s" % (c, p) for c, p in _dup[:6])))
+
+    # lane 内并发度：整体并发 = lanes × 每 lane 并发，别把本地 LLM/VLM 端点打爆。
+    # 端点通常是 LM Studio 单模型（127.0.0.1:1234），32 路并发只会让它排队。
+    child_vw, child_s1 = _child_concurrency(a, n_lanes)
+    ncpu = os.cpu_count() or 4
+    child_env = dict(os.environ)
+    nthr = str(max(1, ncpu // n_lanes))
+    for k in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENCV_FOR_THREADS_NUM"):
+        child_env[k] = nthr
+
+    ids = [cid for cid, _p in items]
+    lanes = []
+    for i in range(n_lanes):
+        sub = ids[i::n_lanes]
+        if not sub:
+            continue
+        lane_dir = lanes_root / ("lane%d" % i)
+        lane_dir.mkdir(parents=True, exist_ok=True)
+        dev = _lane_device(getattr(a, "device", "0"), i)
+        argv = _child_argv(a, lane_dir, sub, dev, child_vw, child_s1)
+        lf = (lane_dir / "stdout.log").open("w", encoding="utf-8")
+        proc = None
+        try:
+            proc = subprocess.Popen(argv, stdout=lf, stderr=subprocess.STDOUT,
+                                    env=child_env)
+        except Exception as exc:                                    # noqa: BLE001
+            _log(fp, "⚠️ lane%d 起不来（%r）⇒ 这 %d 张只能靠空壳兜底" % (i, exc, len(sub)))
+        lanes.append({"i": i, "cases": sub, "dir": lane_dir, "proc": proc,
+                      "log": lf, "device": dev})
+        _log(fp, "lane%d：device=%s，%d 张，vlm-workers=%d，stdout=%s"
+             % (i, dev, len(sub), child_vw, lane_dir / "stdout.log"))
+
+    budget = 0.0
+    try:
+        budget = float(os.environ.get("EDA_WALL_BUDGET_S", "0") or 0)
+    except Exception:                                               # noqa: BLE001
+        budget = 0.0
+    deadline = (t_start + budget) if budget > 0 else None
+    _log(fp, "墙钟预算 %s（EDA_WALL_BUDGET_S；0 = 不限）"
+         % ("%.0f s" % budget if budget > 0 else "不限"))
+    try:
+        pub_every = float(os.environ.get("EDA_PUBLISH_S", "15") or 15)
+    except Exception:                                               # noqa: BLE001
+        pub_every = 15.0
+    if pub_every > 0:
+        _log(fp, "增量发布间隔 %.0f s（EDA_PUBLISH_S）：lane 的产物边跑边补进输出目录，"
+                 "平台硬杀容器也留得下已完成的图" % pub_every)
+    else:
+        _log(fp, "增量发布关闭（EDA_PUBLISH_S=0）⇒ 父进程若被平台杀掉则输出目录为空")
+    n_pub = 0
+    # §5.54：发布状态（记「上次发布时**源文件**的 mtime」，用来按新旧升级）
+    #   + 同卷暂存目录（先写它、再 `os.replace`，判题机不会读到半截 JSON）。
+    pub_state = {}
+    pub_stage = runs / ".pub"
+    pending = [ln for ln in lanes if ln["proc"] is not None]
+    while pending:
+        still = []
+        for lane in pending:
+            p = lane["proc"]
+            if p.poll() is None:
+                still.append(lane)
+                continue
+            lane["rc"] = p.returncode
+            try:
+                lane["log"].close()
+            except Exception:                                       # noqa: BLE001
+                pass
+            _log(fp, "lane%d 结束 rc=%s" % (lane["i"], lane["rc"]))
+        if pub_every > 0 and still:
+            got = _publish_preds(lanes, final_dir, pub_state, pub_stage)
+            if got:
+                n_pub += got
+                _log(fp, "增量发布 %d 份（累计 %d）" % (got, n_pub))
+        if not still:
+            pending = []
+            break
+        if deadline is not None and time.time() >= deadline:
+            for lane in still:
+                _log(fp, "⚠️ lane%d 超过墙钟预算 ⇒ 强杀（未产出的图走空壳兜底）" % lane["i"])
+                try:
+                    lane["proc"].kill()
+                    lane["proc"].wait(timeout=30)
+                except Exception:                                   # noqa: BLE001
+                    pass
+                lane["rc"] = -9
+                try:
+                    lane["log"].close()
+                except Exception:                                   # noqa: BLE001
+                    pass
+            pending = []
+            break
+        wait = pub_every if pub_every > 0 else 5.0
+        if deadline is not None:
+            wait = min(wait, max(0.5, deadline - time.time()))
+        time.sleep(max(0.2, wait))
+    if pub_every > 0:
+        got = _publish_preds(lanes, final_dir, pub_state, pub_stage)
+        if got:
+            n_pub += got
+            _log(fp, "增量发布（收尾）%d 份（累计 %d）" % (got, n_pub))
+
+    n_merge = 0
+    for lane in lanes:
+        n_merge += _merge_lane(lane["dir"], final_dir, runs, pub_state, pub_stage)
+    n_shell_here = 0
+    for cid, _p in items:
+        if not (final_dir / ("%s_Pred.json" % cid)).exists():
+            if _write_shell(final_dir, cid, note="扇出 lane 未产出，空壳兜底"):
+                n_shell_here += 1
+    n_export = len(items) - n_shell_here
+    _log(fp, "合并 lane 产物 %d 份；导出 %d 份 <case>_Pred.json%s"
+         % (n_merge, n_export,
+            ("（另有 %d 份空壳兜底）" % n_shell_here) if n_shell_here else ""))
+
+    lane_log = []
+    for lane in lanes:
+        s = {}
+        dl = lane["dir"] / "decision_log.json"
+        if dl.exists():
+            try:
+                s = (json.loads(dl.read_text(encoding="utf-8")) or {}).get("summary") or {}
+            except Exception:                                       # noqa: BLE001
+                s = {}
+        lane_log.append({"lane": lane["i"], "device": lane["device"],
+                         "n": len(lane["cases"]), "rc": lane.get("rc"),
+                         "cases": lane["cases"], "summary": s})
+    cases_log = [{"case": cid, "exported": (final_dir / ("%s_Pred.json" % cid)).exists()}
+                 for cid, _p in items]
+    wall = round(time.time() - t_start, 1)
+    _log(fp, "全部完成，墙钟 %.1fs（%.2f s/张，扇出 %d 路）"
+         % (wall, wall / max(1, len(items)), n_lanes))
+    fp.close()
+    agg = {k: sum(int((l["summary"] or {}).get(k) or 0) for l in lane_log)
+           for k in ("n_stage1_ok", "n_stage2_ok", "n_stage3_ok")}
+    # 空壳 = lane 自己写的（图坏了 / 该 lane 内部阶段失败）+ 父进程补的
+    n_shell_lane = sum(int((l["summary"] or {}).get("n_shell") or 0) for l in lane_log)
+    _write_decision(out_dir,
+                    {"n_cases": len(items), "n_lanes": n_lanes,
+                     "n_stage1_ok": agg["n_stage1_ok"], "n_stage2_ok": agg["n_stage2_ok"],
+                     "n_stage3_ok": agg["n_stage3_ok"],
+                     "n_exported": n_export, "n_shell": n_shell_lane + n_shell_here,
+                     "wall_s": wall,
+                     "lanes": lane_log},
+                    cases_log, a, t_start, note="case 级扇出")
+    print("产物 -> %s" % final_dir)
+    return 0
+
+
+def _run(a) -> int:
     # ★ 在碰 torch / ultralytics 之前把显存上限设好。LLM（LM Studio）和管线
     # 共用一张卡，PyTorch 默认会「能用多少用多少」，把 LLM 挤到 CPU 或自己 OOM。
     if a.gpu_headroom > 0:
@@ -192,6 +823,12 @@ def main(argv=None) -> int:
                  "并发把总量放大 %d 倍，LLM 会被挤。" % (a.workers, a.workers))
 
     items = discover_inputs(in_dir)
+    items, _dup = _dedupe_items(items)
+    if _dup:
+        _log(fp, "⚠️ 输入里 %d 张图与别的图**同名**（`<case_name>` 相同）：%s ⇒ 只保留第一个"
+                 "（同名无法产出两份独立的 `<case_name>_Pred.json`；`-workers>1` 时"
+                 "同名还会并发写同一个 stage1 文件）"
+             % (len(_dup), ", ".join("%s <- %s" % (c, p) for c, p in _dup[:6])))
     if a.cases:
         want = {c.strip() for c in a.cases.split(",") if c.strip()}
         items = [(c, p) for c, p in items if c in want]
@@ -207,7 +844,52 @@ def main(argv=None) -> int:
 
     from stage1.detect import DEFAULT_WEIGHTS
     from stage1.pipeline import run_cases
-    _log(fp, "权重 " + json.dumps(assets.describe(), ensure_ascii=False))
+    _assets = assets.describe()
+    _log(fp, "权重 " + json.dumps(_assets, ensure_ascii=False))
+    # ★ 加固：资产缺失**当时就喊**。三个资产里有任何一个不在，对应通道会静默降级
+    #   （YOLO 权重缺失 = stage1 全灭；CRNN 缺失 = 位号/值全空但产物齐全；
+    #   元件库缺失 = 引脚补号/改名白丢实测 +1.60）——「能跑出分但少一大截」最难查。
+    for _k, _v in (_assets or {}).items():
+        if isinstance(_v, dict) and _v.get("exists") is False:
+            _log(fp, "⚠️ 资产缺失：%s = %s —— 该通道会静默降级，"
+                     "请检查镜像里是否带上了这个文件" % (_k, _v.get("path")))
+
+    # ------------------------------------ VLM 预探测 + 竖直脚旋转重读的自动兜底
+    # ★ 用户 m42543「要考虑各种灾难性的现场」：交付默认 `-vlm auto` ⇒ 端点不可用时
+    #   **整个引脚通道不跑**（回到纯 CRNN）。这时 `STAGE2_PINROT`（竖直脚旋转重读）是
+    #   唯一的救命通道：官方 10GT 里 case 6 的引脚在无 VLM 口径是**整张 0 分**
+    #   （`fast.py --cases 6 --no-vlm` = 53.20 / pin 0.0000），开了它 +2.86；case 7
+    #   +3.85、case 10 +2.17（9 张均值 63.02 → 63.69，**7 张逐位不变、无一倒退**）。
+    #   反过来「VLM 引脚通道开着」时旋转重读是**净负**（交付口径 case 6 59.94 → 59.67，
+    #   引脚 +0.0033 但网络 −0.0101：修好的引脚名会参与电源轨挂标签）⇒ 只在引脚通道
+    #   不会跑时自动打开。显式设了 `STAGE2_PINROT` 的人优先，不覆盖。
+    vlm_ok = (a.vlm == "on")
+    _vlm_why = "显式 -vlm on" if a.vlm == "on" else ""
+    if a.vlm == "auto":
+        try:
+            from vlm import client as _vc
+            _t0 = time.time()
+            # ★ 用 `preflight(strict=False)` 而不是 `probe()`（2026-10-27，§5.103）：
+            #   `probe()` 只回 bool，日志里一律写成「不支持图片」，而**鉴权失败（401）**
+            #   与「模型不吃图（400）」在这句话里长得一样 —— token 轮换那天整跑真的
+            #   按「不支持图片」记了一笔，排查方向被带偏。detail 里才有 401 / 400 / EMPTY。
+            vlm_ok, _why = _vc.preflight(strict=False)
+            _why = str(_why or "").replace("\n", " ")[:220]
+            _vlm_why = _why or "预探测回 False（无 detail）"
+            _log(fp, "VLM 端点预探测（%s，%.1fs，key 来源 %s）：%s"
+                 % (_vc.BASE, time.time() - _t0, getattr(_vc, "KEY_SOURCE", "?"),
+                    "可用" if vlm_ok else "不可用 ⇒ 跳过补强｜%s" % _why))
+            if not vlm_ok and any(t in _why for t in ("401", "Unauthorized", "header")):
+                _log(fp, "  ⚠️ 这是**鉴权**问题，不是「模型不支持图片」：设 LLM_API_KEY，"
+                         "或把 LM Studio 的 token 写进 eda-pcb/.lmstudio_key（见 RESULTS §5.103）")
+        except Exception as _e:                                     # noqa: BLE001
+            vlm_ok = False
+            _log(fp, "VLM 预探测失败（%s: %s）⇒ 按不可用处理"
+                 % (type(_e).__name__, _e))
+    if not (vlm_ok and a.vlm_pin == "on") and "STAGE2_PINROT" not in os.environ:
+        os.environ["STAGE2_PINROT"] = "1"
+        _log(fp, "VLM 引脚通道不会跑 ⇒ 打开 STAGE2_PINROT=1（竖直脚旋转重读；"
+                 "无 VLM 口径官方 9 张 +0.67 且九张零回归）")
 
     # ---------------------------------------------------------- 阶段一
     cases = [Case(split="input", case_id=cid, png_path=str(p), json_path=None)
@@ -216,7 +898,8 @@ def main(argv=None) -> int:
     t0 = time.time()
     r1 = run_cases(cases, s1_dir, workers=a.workers, weights=DEFAULT_WEIGHTS,
                    imgsz=a.imgsz, conf=0.25, device=a.device,
-                   use_cv=True, do_wires=not a.no_wires)
+                   use_cv=True, do_wires=not a.no_wires,
+                   tiler=_tiler(a))
     ok1 = {r["case"] for r in r1 if r["ok"]}
     _log(fp, "阶段一完成 %d/%d，用时 %.1fs" % (len(ok1), len(r1), time.time() - t0))
     stage1_report = {r["case"]: r for r in r1}
@@ -228,6 +911,7 @@ def main(argv=None) -> int:
     engine = TextEngine(device=a.device)
     _log(fp, "识别器 " + engine.describe())
     s2_rows = []
+    n_prog = 0
     t0 = time.time()
     for i, cid in enumerate([c.case_id for c in cases if c.case_id in ok1], 1):
         try:
@@ -235,10 +919,23 @@ def main(argv=None) -> int:
             s2_rows.append(r)
             _log(fp, "  [%d] %-28s 元件 %-4d 位号 %-4d %.1fs"
                  % (i, cid, r["n_components"], r["n_designator"], r["t_total"]))
+            # ★ 渐进导出（灾难现场加固，用户 m42543）：阶段三是 LLM（~30 s/张）、
+            #   VLM 补强 **~3.7 min/张**，19 张交付口径就要 55 min，220 张数小时；
+            #   被判题机按墙钟硬杀时**只有已经落进 `final_results/` 的才有分**。
+            #   这里每完成一张先把阶段二文档顶上去，后面各层照旧覆盖（导出优先序不变，
+            #   分数与非渐进路径逐位相同）⇒ 任何时刻被杀都不至于整批空手。
+            try:
+                shutil.copyfile(s2_dir / ("%s.json" % cid),
+                                final_dir / ("%s_Pred.json" % cid))
+                n_prog += 1
+            except Exception as _e:                               # noqa: BLE001
+                _log(fp, "  ⚠️ 渐进导出失败 %s: %s: %s"
+                     % (cid, type(_e).__name__, _e))
         except Exception as e:                                    # noqa: BLE001
             _log(fp, "  [%d] %-28s 阶段二失败 %s: %s" % (i, cid, type(e).__name__, e))
             fp.write(traceback.format_exc()[-800:] + "\n")
-    _log(fp, "阶段二完成 %d 张，用时 %.1fs" % (len(s2_rows), time.time() - t0))
+    _log(fp, "阶段二完成 %d 张，用时 %.1fs（渐进导出 %d 份）"
+         % (len(s2_rows), time.time() - t0, n_prog))
 
     # ---------------------------------------------------------- 阶段三
     from stage3.run import process as s3_process
@@ -289,10 +986,13 @@ def main(argv=None) -> int:
             from vlm import enrich as vlm_enrich
             on = a.vlm == "on"
             if not on:
-                t0 = time.time()
-                on = vlm_client.probe()
-                _log(fp, "VLM 端点探测（%s，%.1fs）：%s"
-                     % (vlm_client.BASE, time.time() - t0, "可用" if on else "不支持图片，跳过"))
+                # 复用上面的预探测结果（同一次运行只探一次；`STAGE2_PINROT` 的自动开关
+                # 也依赖它 —— 两边必须一致，否则会出现「按 VLM 可用关掉旋转重读，
+                # 补强却因为端点挂了没跑」的空档）。
+                on = vlm_ok
+                _log(fp, "VLM 端点探测（%s，复用预探测结果）：%s"
+                     % (vlm_client.BASE,
+                        "可用" if on else "不可用，跳过补强｜%s" % (_vlm_why or "未探")))
             if on:
                 png_of = {cid: str(p) for cid, p in items}
                 s3v = s3v_dir
@@ -305,6 +1005,7 @@ def main(argv=None) -> int:
                           "value_batch": a.vlm_value_batch, "value_side": a.vlm_value_side,
                           "value_cols": a.vlm_value_cols,
                           "name": (a.vlm_name == "on"), "name_margin": a.vlm_name_margin,
+                          "pin": (a.vlm_pin == "on"),
                           "desig_fallback": (a.vlm_desig_fallback == "on")},
                     cases=[c.case_id for c in cases if c.case_id in ok1])
                 s3_dir = s3v                       # 补强后的目录成为导出源
@@ -321,6 +1022,22 @@ def main(argv=None) -> int:
                 if vlm_stats.get("n_failed"):
                     _log(fp, "⚠️ 有 %d 张案例的 VLM 补强失败、产物是**未补强的原样拷贝**"
                              "（导出阶段发现不了，只能靠这一行）" % vlm_stats["n_failed"])
+                # ★ 护栏可见性：预算到点后 `ask()` 会静默降级成纯 CV（产物照出、只是
+                #   没有 VLM 补强），不给一行日志的话没人知道质量为什么掉了。
+                _bs = vlm_client.stats()
+                _tk = _bs["tokens"]
+                # ★ token 用量必须**永远**打出来（不只是预算到点）：赛题
+                #   `Score_Token` 是排名项（0.05·(m/M)，消耗越少越高），看不到用量就
+                #   没法做「少用外部模型」的取舍。见 `docs/COMPETITION_RULES.md`。
+                _bd = ("预算 %.0f/%.0f s｜超预算被拒 %d 次"
+                       % (_bs["used_s"], _bs["budget_s"], _bs["refused"])
+                       if _bs["budget_s"] > 0 else "预算 0 = 不限")
+                _log(fp, "外部推理：发出 %d 次｜失败 %d 次｜%s"
+                         "｜token 入 %d / 出 %d / 合计 %d%s"
+                     % (_bs["calls"], _bs["errors"], _bd,
+                        _tk["prompt"], _tk["completion"], _tk["total"],
+                        "（⚠️ 已降级成纯 CV：后续调用不再发出）"
+                        if _bs["exhausted"] else ""))
             else:
                 # 2026-07：这里原来是 `elif a.vlm == "on":`，挂在 `if a.vlm != "off"` 的
                 # else 分支里 —— `a.vlm == "on"` 必然满足 `!= "off"`，所以那条警告
@@ -328,6 +1045,13 @@ def main(argv=None) -> int:
                 _log(fp, "警告：-vlm %s 但补强未执行（端点不可用），导出的产物**未经 VLM 补强**"
                      % a.vlm)
         except Exception as exc:                    # noqa: BLE001
+            # ⚠ 这里原来有一行 `import traceback`。它是**函数内的局部导入**，会让
+            # `main()` 整个函数体里的 `traceback` 都变成局部名 —— 于是后面融合层那两个
+            # `except` 支（`:401` / `:407` 的 `fp.write(traceback.format_exc()...)`）在
+            # **这一行还没执行到**的路径上抛
+            # `UnboundLocalError: cannot access local variable 'traceback' where it is
+            #  not associated with a value`，把真正的 traceback 整个吃掉。
+            # 模块顶层已有 `import traceback`（`:39`），这里不需要再导一次。
             traceback.print_exc()
             vlm_err = "%s: %s" % (type(exc).__name__, exc)
             _log(fp, "⚠️ VLM 补强整段失败：%s —— 继续用**未补强**的阶段三产物导出" % vlm_err)
@@ -362,7 +1086,24 @@ def main(argv=None) -> int:
         # `DO_LLM = env_on("FUSION_LLM","1")`）：`on` 不覆盖 `FUSION_LLM`，
         # 想临时关掉 LLM 轮但保留融合层就 `FUSION_LLM=0`；`-fusion off` 才整层关，
         # `-fusion llm` 额外打开 cropfix/rescan。
+        #
+        # ★ 成本实测（10-08，LM Studio 实测在 127.0.0.1:1234，case 1+10，`fast.py`）：
+        #   融合层墙钟 **LLM 轮关 3.5 s → 开 62.7 s**（每张 **+29.6 s**；
+        #   220 张折算 **+1.8 h**，会与「所有案例 < 2 小时」的硬约束抢预算）。
+        #   ⚠ 同一对臂的 `final_results/*_Pred.json` 与 `runs/fusion/_assigned/*.json`
+        #   **MD5 逐字节相同** ⇒ 这两张图上 LLM 轮**一个字段都没改**。
+        #   归档 `work\_fast_base\{llmab_off,llmab_on}.json`、日志
+        #   `work\_fast_out_llmab_{off,on}\final_results\run.log`。
+        #   即「省时间」的开关是安全可用的；但**是否默认开**是 owner m25661 的
+        #   决定（见上），不要因为一次 A/B 就翻回去。
         os.environ["FUSION_CROPFIX"] = "1" if a.fusion == "llm" else "0"
+        # ★ 引脚通道的**「名」那一半**（`fusion/claims.py` 的 `_add_vlm` (d) 段）。
+        #   号那一半由 `-vlm-pin` 走 enrich 的 opts（`pin=True` + 出处标记 `_pin_channel`），
+        #   这一半是融合层侧的开关，只能用环境变量；`from fusion import run` 在下面，
+        #   模块级常量尚未求值 ⇒ 在这里 set 是有效的。
+        #   默认 on（全开 +2.88）；评测集若更像 JLC 派生的那 200 张就 `-vlm-pin-name off`
+        #   （那时只补号更稳：官方 9 张 +1.95 且零回归）。
+        os.environ["FUSION_VLM_PIN_NAME"] = "1" if a.vlm_pin_name == "on" else "0"
         if a.fusion == "off":
             os.environ["FUSION_LLM"] = "0"
         elif a.fusion == "llm":
@@ -372,9 +1113,13 @@ def main(argv=None) -> int:
         try:
             from fusion import run as fusion_run
             want = [r["case"] for r in s2_rows]
-            _log(fp, "=== 融合层：先验 + 解 + 合理性检查（%d 张，LLM 轮 %s，cropfix %s） ==="
+            _log(fp, "=== 融合层：先验 + 解 + 合理性检查（%d 张，LLM 轮 %s，"
+                     "cropfix %s，FUSION_LLM=%s，引脚通道 %s/名 %s） ==="
                  % (len(want), "开" if _do_llm else "关",
-                    "开" if a.fusion == "llm" else "关"))
+                    "开" if a.fusion == "llm" else "关",
+                    os.environ.get("FUSION_LLM", "(未设→默认 开)"),
+                    "开" if a.vlm_pin == "on" else "关",
+                    "开" if a.vlm_pin_name == "on" else "关"))
             t0 = time.time()
             for i, cid in enumerate(want, 1):
                 try:
@@ -386,6 +1131,29 @@ def main(argv=None) -> int:
                     fp.write(traceback.format_exc()[-800:] + "\n")
             _log(fp, "融合完成 %d/%d 张，用时 %.1fs"
                  % (len(fusion_rows), len(want), time.time() - t0))
+            # ★ 落 `_fusion_report.json`：`fusion/run.py` 只在它自己的 `main()` 里写这份
+            #   报告，而**真实提交路径**（这里）是直接调 `run_case` 的 ⇒ 以前提交产物里
+            #   根本没有它，**逐轮明细（judge/audit/rescan 的每一题）事后无从查证**。
+            #   合并进已有文件，别覆盖：分批跑（后台作业 / 重跑单张）时覆盖会让报告
+            #   只剩最后一批 —— 这个坑 `fusion/run.py:412` 已记过。
+            try:
+                _rp = fuse_dir / "_fusion_report.json"
+                _old = []
+                if _rp.exists():
+                    _prev = json.loads(_rp.read_text(encoding="utf-8"))
+                    _new = {r.get("case") for r in fusion_rows}
+                    _old = [x for x in (_prev.get("cases") or [])
+                            if x.get("case") not in _new]
+                _merged = sorted(_old + fusion_rows,
+                                 key=lambda x: str(x.get("case") or ""))
+                _atomic_write_text(
+                    _rp,
+                    json.dumps({"cases": _merged, "run_dir": str(runs)},
+                               ensure_ascii=False, indent=1))
+                _log(fp, "  逐轮明细 %s（现共 %d 张）"
+                     % (_rp.name, len(_merged)))
+            except Exception as exc:                    # noqa: BLE001
+                _log(fp, "  ⚠️ 写 %s 失败：%s" % ("_fusion_report.json", exc))
         except Exception as exc:                        # noqa: BLE001
             _log(fp, "⚠️ 融合层整段失败：%s: %s —— 继续用未融合的产物导出"
                  % (type(exc).__name__, exc))
@@ -395,8 +1163,214 @@ def main(argv=None) -> int:
     # ---------------------------------------------------------- 导出
     _log(fp, "=== 导出 final_results ===")
     n_export = 0
+    n_shell = 0
     exported = set()
+    pinzoom_rows = []
+    try:
+        from vlm import pinzoom as _pzmod                      # noqa: PLC0415
+        _pinzoom_on = bool(_pzmod.ON)
+    except Exception:                                          # noqa: BLE001
+        _pinzoom_on = False
+    if _pinzoom_on:
+        _log(fp, "引脚名重读通道：开（FUSION_PINZOOM=1）")
+    # §5.85：值「紧框重读」通道（`FUSION_VALREAD`，默认 1）。用的是**管线自己的账**
+    #   `runs/fusion/_assigned/<case>.json`（回退 `runs/stage2/`）：每颗元件记着它的值
+    #   取自哪个文字框 ⇒ 直接拿那个框 + 只问值的 prompt 复读，采信规则见 `vlm/valread.py` 顶注。
+    valread_rows = []
+    _vrmod = None
+    try:
+        from vlm import valread as _vrmod                      # noqa: PLC0415
+        # ★ 必须挂 `vlm_ok`（= 上面的端点探测结果）：复读通道每槽一次 VLM 调用，端点死了
+        #   也不会报错 —— `ask()` 把失败包成 `"ERR:..."` 字符串返回，于是它**照跑到底**、
+        #   每槽白等 `VLM_RETRY` 次指数退避。实测（case 3、`LLM_BASE_URL` 指向死端口、
+        #   `VLM_TIMEOUT=180`）：预探测 15.2 s 后通道仍然「开」，7 个槽位耗掉 **107 s**
+        #   （≈15 s/槽），整张 144 s（正常 18 s）；官方交付 222 张按 ~30 槽/张外推 ≈ 7.8 h
+        #   纯浪费，且墙钟被 `EDA_WALL_BUDGET_S` 掐掉时**真的会丢分**。
+        _valread_on = bool(_vrmod.ON) and vlm_ok
+    except Exception:                                          # noqa: BLE001
+        _valread_on = False
+    if _valread_on:
+        _log(fp, "值重读通道：开（FUSION_VALREAD=1，trigger=%s，guard=%d）"
+             % (getattr(_vrmod, "TRIGGER", "?"), int(bool(getattr(_vrmod, "GUARD", 0)))))
+    elif bool(getattr(_vrmod, "ON", False)):
+        _log(fp, "值重读通道：跳过（VLM 端点不可用 ⇒ 复读只会空转重试）")
+
+    # §5.86：引脚名「紧框复读」通道（`FUSION_PINNAME`，默认 1）。与值通道同构 —— 槽位来自
+    #   管线自己的账 `_assigned`（`comps[*].pins[*].name.{box,text,conf}` 就是 CRNN 读名字用的
+    #   那个框），紧框 + 只问「这段文字是什么」；采信规则见 `vlm/pinname.py` 顶注（四条闸门，
+    #   其中「不与同元件别的脚重名」用来挡 case 4 那种「两个名字框被归到同一根脚」的误采）。
+    pinname_rows = []
+    _pnmod = None
+    try:
+        from vlm import pinname as _pnmod                      # noqa: PLC0415
+        # ★ 同值通道：必须挂 `vlm_ok`，否则端点死掉时它每槽白等一次重试退避（实测 ≈15 s/槽）。
+        _pinname_on = bool(_pnmod.ON) and vlm_ok
+    except Exception:                                          # noqa: BLE001
+        _pinname_on = False
+    if _pinname_on:
+        _log(fp, "引脚名复读通道：开（FUSION_PINNAME=1，conf<%.2f 或 w<=%.0f，guard=%d）"
+             % (getattr(_pnmod, "CONF", 0.0), getattr(_pnmod, "MAXW", 0.0),
+                int(bool(getattr(_pnmod, "GUARD", 0)))))
+    elif bool(getattr(_pnmod, "ON", False)):
+        _log(fp, "引脚名复读通道：跳过（VLM 端点不可用 ⇒ 复读只会空转重试）")
+
+    # §5.87：元件「同物重复」消重（`FUSION_COMPDEDUP`，默认 **1** = 开；官方 10 张 A/B
+    #   81.75 → 81.86、元件 F1 0.9963 → 1.0000）。官方
+    #   10 张的 `component.extra` 只剩两条，都是**同一颗符号被检出两次**、其中一次只有假键
+    #   `pNNN`（case 4 `p010`(d) 撞 `LED1`；case 10 `p016`(gnd) 撞 `p015`）⇒ 按 bbox 几何删掉
+    #   假键那颗；守卫见 `fusion/dedup.py` 顶注（有脚/被网引用的永不删）。
+    compdedup_rows = []
+    try:
+        from fusion import dedup as _cdmod                       # noqa: PLC0415
+        _compdedup_on = bool(_cdmod.ON)
+    except Exception:                                           # noqa: BLE001
+        _compdedup_on = False
+    if _compdedup_on:
+        _log(fp, "元件消重通道：开（FUSION_COMPDEDUP=1）")
+
+    def _compdedup_step(cid):
+        """在**已经落盘**的 `<cid>_Pred.json` 上消重同物元件；失败一律不影响导出。"""
+        if not _compdedup_on:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            _st = _cdmod.apply_file(dst_j, dst_j)
+            if not _st or not _st.get("dropped"):
+                return
+            compdedup_rows.append({"case": cid,
+                                   **{k: v for k, v in _st.items() if k != "trace"}})
+            _log(fp, "  %-28s 元件消重 删 %d：%s"
+                 % (cid, _st.get("dropped", 0),
+                    "；".join("%s(%s) 与 %s 重复[%s]" % (t.get("drop"), t.get("type"),
+                                                        t.get("keep"), t.get("rule"))
+                              for t in (_st.get("trace") or []))))
+        except Exception as exc:                               # noqa: BLE001
+            _log(fp, "  ⚠️ %s 元件消重失败：%s: %s" % (cid, type(exc).__name__, exc))
+
+    # §5.95：网线端点吸附到「电源/地符号」的连接点（`FUSION_PWRCLIP`，默认 **1** = 开；
+    #   离线裁定 82.72 → 83.03（+0.31，导线 F1 0.4984 → 0.5291），逐案全部非负）。
+    #   病：我们的网线把电源符号自己那截引线也圈进来，比 GT 多画 ~26px（case 2
+    #   GT `(933,787)-(1021,787)` vs 我方 `(907,785.81)-(1020,786.52)`）；而 GT 的网线
+    #   从符号的连接点起画 —— 连接点 = bbox 四边之一外 10px、居中的点（7 颗 `∅` 全部吻合）。
+    #   守卫：端点必须贴在这颗符号上（到 bbox ≤ `fusion/pwrclip.py` 的 `BOXTOL=8`），
+    #   否则 T 型接头的中段端点会被误吸。只改 `nets[*].edges` 的端点坐标。
+    pwrclip_rows = []
+    try:
+        from fusion import pwrclip as _pcmod                    # noqa: PLC0415
+        _pwrclip_on = bool(_pcmod.ON)
+    except Exception:                                           # noqa: BLE001
+        _pwrclip_on = False
+    if _pwrclip_on:
+        _log(fp, "网线端点吸附通道：开（FUSION_PWRCLIP=1）")
+
+    def _pwrclip_step(cid):
+        """在**已经落盘**的 `<cid>_Pred.json` 上吸网线端点；失败一律不影响导出。"""
+        if not _pwrclip_on:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            _st = _pcmod.apply_file(dst_j, dst_j)
+            if not _st or not _st.get("moved"):
+                return
+            pwrclip_rows.append({"case": cid,
+                                 **{k: v for k, v in _st.items() if k != "trace"}})
+            _log(fp, "  %-28s 网线吸附 吸 %d 个端点" % (cid, _st.get("moved", 0)))
+        except Exception as exc:                               # noqa: BLE001
+            _log(fp, "  ⚠️ %s 网线吸附失败：%s: %s" % (cid, type(exc).__name__, exc))
+
+    # ★ `FUSION_EDGECAL`（网线端点偏置校正，默认 0 = 先 A/B）
+    #   病：`work/_netl2.py` 逐边归因显示配对网里未配上的 288 fp / 290 fn 中，
+    #   端点纵向差在 **+2px 处一个尖峰（118 个）**、超出 310 / 短了 87
+    #   ⇒ 上游外推（`stage2/assemble.py:694 EDGE_EXT=20`、`:788 EDGE_EXT_ANY=25`）
+    #   让我们的端点整体比 GT 多伸 ~1px。药：两端沿自身轴内收 `TRIM` px。
+    #   离线裁定（`work/_edgetrimx.py` + `fast.py --score-only`，官方 10 张）：见 `fusion/edgecal.py` 顶注。
+    #   必须排在 `pwrclip` **之后**（吸附会重新移动端点）。
+    edgecal_rows = []
+    try:
+        from fusion import edgecal as _ecmod                    # noqa: PLC0415
+        _edgecal_on = bool(_ecmod.ON)
+    except Exception:                                           # noqa: BLE001
+        _edgecal_on = False
+    if _edgecal_on:
+        _log(fp, "网线端点偏置校正：开（FUSION_EDGECAL=1，内收 %.1fpx）"
+             % float(getattr(_ecmod, "TRIM", 0.0)))
+
+    def _edgecal_step(cid):
+        """在**已经落盘**的 `<cid>_Pred.json` 上内收网线两端；失败一律不影响导出。"""
+        if not _edgecal_on:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            _st = _ecmod.apply_file(dst_j, dst_j)
+            if not _st or not _st.get("moved"):
+                return
+            edgecal_rows.append({"case": cid,
+                                 **{k: v for k, v in _st.items() if k != "trace"}})
+            _log(fp, "  %-28s 端点内收 %d 条边" % (cid, _st.get("moved", 0)))
+        except Exception as exc:                               # noqa: BLE001
+            _log(fp, "  ⚠️ %s 端点内收失败：%s: %s" % (cid, type(exc).__name__, exc))
+
+    def _pinname_step(cid, png):
+        """在**已经落盘**的 `<cid>_Pred.json` 上补一层引脚名复读；失败一律不影响导出。"""
+        if not _pinname_on:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            _ap = runs / "fusion" / "_assigned" / ("%s.json" % cid)
+            if not _ap.exists():
+                _ap = runs / "stage2" / "_assigned" / ("%s.json" % cid)
+            _st = _pnmod.apply_file(png, _ap, dst_j, dst_j)
+            if not _st:
+                return
+            pinname_rows.append({"case": cid,
+                                 **{k: v for k, v in _st.items() if k != "trace"}})
+            if _st.get("adopted"):
+                _log(fp, "  %-28s 引脚名复读 槽 %d 采用 %d 调用 %d：%s"
+                     % (cid, _st.get("slots", 0), _st.get("adopted", 0), _st.get("calls", 0),
+                        "；".join("%s.%s %s→%s" % (t.get("key"), t.get("num"),
+                                                   t.get("cur"), t.get("ans"))
+                                  for t in (_st.get("trace") or []) if t.get("adopted"))))
+        except Exception as exc:                               # noqa: BLE001
+            _log(fp, "  ⚠️ %s 引脚名复读失败：%s: %s" % (cid, type(exc).__name__, exc))
+
+    def _valread_step(cid, png):
+        """在**已经落盘**的 `<cid>_Pred.json` 上补一层值重读；失败一律不影响导出。"""
+        if not _valread_on:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            _ap = runs / "fusion" / "_assigned" / ("%s.json" % cid)
+            if not _ap.exists():
+                _ap = runs / "stage2" / "_assigned" / ("%s.json" % cid)
+            _st = _vrmod.apply_file(png, _ap, dst_j, dst_j)
+            if not _st:
+                return
+            valread_rows.append({"case": cid,
+                                 **{k: v for k, v in _st.items() if k != "trace"}})
+            if _st.get("adopted"):
+                _log(fp, "  %-28s 值重读 槽 %d 采用 %d 调用 %d：%s"
+                     % (cid, _st.get("slots", 0), _st.get("adopted", 0), _st.get("calls", 0),
+                        "；".join("%s %s→%s" % (t.get("key"), t.get("cur"), t.get("ans"))
+                                  for t in (_st.get("trace") or []) if t.get("adopted"))))
+        except Exception as exc:                               # noqa: BLE001
+            _log(fp, "  ⚠️ %s 值重读失败：%s: %s" % (cid, type(exc).__name__, exc))
+
+    _n_seen = 0
     for cid, _p in items:
+        # ★ 熔断：`vlm_ok` 只在开跑前探过一次。复读通道每槽一次调用、失败**不抛异常**
+        #   （`ask()` 返回 `"ERR:..."`），所以端点若在跑批途中死掉（LM Studio 崩、显存爆），
+        #   后面每张图都会白等重试退避（实测 ≈15 s/槽）而整批分数一分不涨。每 20 张重探
+        #   一次，探不通就整批关掉两个复读通道。
+        _n_seen += 1
+        if (_valread_on or _pinname_on) and _n_seen % 5 == 0:
+            try:
+                from vlm import client as _vc2                     # noqa: PLC0415
+                if not _vc2.probe(timeout=30.0):
+                    _valread_on = _pinname_on = False
+                    _log(fp, "⚠️ VLM 端点中途失效 ⇒ 熔断：关闭值/引脚名复读通道（余下 %d 张）"
+                         % (len(items) - _n_seen + 1))
+            except Exception as _e:                                # noqa: BLE001
+                _log(fp, "⚠️ 复读通道熔断探测本身失败：%s: %s" % (type(_e).__name__, _e))
         # 导出优先序：融合层 > VLM 补强 > 阶段三 > 阶段二。
         # 每一层都是「上一步的产物 + 一次受约束的改写」，所以取到哪一层都是完整的
         # 文档；取不到就往下退，保证 220 张里一张都不会因为某一层失败而丢产物。
@@ -407,12 +1381,50 @@ def main(argv=None) -> int:
                 src = _cand
                 break
         if src is None:
-            _log(fp, "  %-28s 没有产物（阶段一/二失败）" % cid)
+            # ★ 加固：以前这里只记一行日志就 `continue` ⇒ 该 case 在
+            #   `final_results/` 里**一份文件都没有**。若评测端把「缺文件」当致命
+            #   错误，就是整批 0 分。现在写一份空壳（三个键齐全，`metrics.py` 直接
+            #   下标也解析得动），把「整批 0 分」压到「这一张 0 分」。
+            ok = _write_shell(final_dir, cid, note="阶段一/二没有产物，空壳兜底")
+            n_shell += 1 if ok else 0
+            _log(fp, "  %-28s 没有产物（阶段一/二失败）→ %s"
+                 % (cid, "已写空壳" if ok else "⚠️ 空壳也写失败"))
             continue
-        shutil.copyfile(src, final_dir / ("%s_Pred.json" % cid))
+        # §5.82：引脚名「框选重读」通道（`FUSION_PINZOOM`，**默认 0 = 关**；A/B 实测
+        #   80.98 → 80.01（−0.97），4 次采纳全坏 ⇒ 只留库，见 `vlm/pinzoom.py` 顶注）。它在
+        #   **导出前**对最终文档再补一层受约束的名字改写（只碰名字、不动点/号/边）；失败
+        #   一律不影响导出（退化成直接拷贝）。
+        pz_note = ""
+        dst = final_dir / ("%s_Pred.json" % cid)
+        if _pinzoom_on:
+            try:
+                from vlm import pinzoom                            # noqa: PLC0415
+                _st = pinzoom.apply_file(_p, src, dst)
+                if _st is not None:
+                    pinzoom_rows.append({"case": cid, **{k: v for k, v in _st.items()}})
+                    pz_note = "（名字重读：槽 %d 采用 %d 调用 %d）" % (
+                        _st.get("slots", 0), _st.get("adopted", 0), _st.get("calls", 0))
+                    exported.add(cid)
+                    n_export += 1
+                    _log(fp, "  %-28s 引脚名重读 %s" % (cid, pz_note))
+                    _valread_step(cid, _p)
+                    _pinname_step(cid, _p)
+                    _compdedup_step(cid)
+                    _pwrclip_step(cid)
+                    _edgecal_step(cid)
+                    continue
+            except Exception as exc:                        # noqa: BLE001
+                _log(fp, "  ⚠️ %s 引脚名重读失败：%s: %s" % (cid, type(exc).__name__, exc))
+        shutil.copyfile(src, dst)
         exported.add(cid)
         n_export += 1
-    _log(fp, "导出 %d 份 <case>_Pred.json" % n_export)
+        _valread_step(cid, _p)
+        _pinname_step(cid, _p)
+        _compdedup_step(cid)
+        _pwrclip_step(cid)
+        _edgecal_step(cid)
+    _log(fp, "导出 %d 份 <case>_Pred.json%s"
+         % (n_export, ("（另有 %d 份空壳兜底）" % n_shell) if n_shell else ""))
 
     # ---------------------------------------------------------- 决策日志
     cases_log = []
@@ -432,16 +1444,120 @@ def main(argv=None) -> int:
             e["stage3"] = {"n_slots": r["n_slots_total"], "n_named": r["n_named"],
                            "arb": r.get("arb"), "t": r["t"]}
     wall = round(time.time() - t_start, 1)
+    # ★ 必须在 `fp.close()` **之前**写：第一版把这几行放在 close 之后，开通道时
+    #   直接 `ValueError: I/O operation on closed file` ⇒ run.py 退出码 3（2026-10 A/B 实测）。
+    if pinzoom_rows:
+        _log(fp, "引脚名重读合计：槽 %d 采用 %d 调用 %d（%d 张图）"
+             % (sum(r.get("slots", 0) for r in pinzoom_rows),
+                sum(r.get("adopted", 0) for r in pinzoom_rows),
+                sum(r.get("calls", 0) for r in pinzoom_rows), len(pinzoom_rows)))
+    if valread_rows:
+        _log(fp, "值重读合计：槽 %d 采用 %d 调用 %d（%d 张图）"
+             % (sum(r.get("slots", 0) for r in valread_rows),
+                sum(r.get("adopted", 0) for r in valread_rows),
+                sum(r.get("calls", 0) for r in valread_rows), len(valread_rows)))
+    if pinname_rows:
+        _log(fp, "引脚名复读合计：槽 %d 采用 %d 调用 %d（%d 张图）"
+             % (sum(r.get("slots", 0) for r in pinname_rows),
+                sum(r.get("adopted", 0) for r in pinname_rows),
+                sum(r.get("calls", 0) for r in pinname_rows), len(pinname_rows)))
+    if compdedup_rows:
+        _log(fp, "元件消重合计：删除 %d 个同物元件（%d 张图）"
+             % (sum(r.get("dropped", 0) for r in compdedup_rows), len(compdedup_rows)))
+    if pwrclip_rows:
+        _log(fp, "网线吸附合计：吸 %d 个端点（%d 张图）"
+             % (sum(r.get("moved", 0) for r in pwrclip_rows), len(pwrclip_rows)))
+    if edgecal_rows:
+        _log(fp, "端点内收合计：%d 条边（%d 张图）"
+             % (sum(r.get("moved", 0) for r in edgecal_rows), len(edgecal_rows)))
     _log(fp, "全部完成，墙钟 %.1fs（%.2f s/张）" % (wall, wall / max(1, len(items))))
     fp.close()
 
     _write_decision(out_dir,
                     {"n_cases": len(items), "n_stage1_ok": len(ok1),
                      "n_stage2_ok": len(s2_rows), "n_stage3_ok": len(s3_rows),
-                     "n_exported": n_export, "wall_s": wall},
+                     "n_exported": n_export, "n_shell": n_shell, "wall_s": wall,
+                     "pinzoom": pinzoom_rows, "valread": valread_rows,
+                     "pinname": pinname_rows, "compdedup": compdedup_rows,
+                     "pwrclip": pwrclip_rows, "edgecal": edgecal_rows},
                     cases_log, a, t_start)
     print("产物 -> %s" % final_dir)
     return 0
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """先写同名 `.tmp` 再 `os.replace`（原子）。★ 加固：被硬杀在写一半时，
+    留下的是一个**半截 JSON**，比没有更糟（评测端解析失败可能连累整批判定）。
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(str(tmp), str(path))
+
+
+# ★ 空壳产物：`schematic_parser/metrics.py` 对 `components`/`pins`/`nets` 是**直接下标**
+#   （`:309 gc, pc = gt['components'], pred['components']`、`:455 flat(pred['pins'])`、
+#   `:552 pred['nets'].items()`）⇒ 缺一个键就可能整批解析失败。空壳三个键都在，
+#   得分是「这一张全 0」，而不是「整批 0」。用户 m42543 的灾难现场里这是底线。
+_EMPTY_DOC = {"components": {}, "pins": {}, "nets": {}}
+
+
+def _write_shell(final_dir: Path, cid: str, note: str = "") -> bool:
+    """给一张**没有任何产物**的图写一份空壳 `<case>_Pred.json`（尽力而为）。"""
+    try:
+        doc = dict(_EMPTY_DOC)
+        doc["case"] = cid
+        if note:
+            doc["note"] = note
+        final_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write_text(final_dir / ("%s_Pred.json" % cid),
+                           json.dumps(doc, ensure_ascii=False))
+        return True
+    except Exception:                                               # noqa: BLE001
+        return False
+
+
+def _safety_net(a, exc: Exception) -> int:
+    """**整进程兜底**（用户 m42543：「灾难性现场」）。`_run` 里任何未捕获异常都到这里。
+
+    做的事（全部尽力而为，任何一步失败都不再抛）：
+      1. 把异常与 traceback 打进 `final_results/run.log`；
+      2. 对输入目录里**每一张图**保证有 `<case>_Pred.json`（已有的不动，缺的写空壳）；
+      3. 写 `decision_log.json`（含 `fatal` 字段与 traceback）。
+    `main()` 以前是**整个函数体外无 try**（`run.py:71`），模块级 import 一炸
+    （`:224 from stage1.detect import DEFAULT_WEIGHTS`）就一份产物都没有、退出码 0。
+    """
+    try:
+        print(traceback.format_exc(), file=sys.stderr, flush=True)
+    except Exception:                                               # noqa: BLE001
+        pass
+    out_dir = Path(getattr(a, "output_dir", ".") or ".")
+    final_dir = out_dir / "final_results"
+    n_shell = 0
+    try:
+        final_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with (final_dir / "run.log").open("a", encoding="utf-8") as fp:
+                _log(fp, "!!! 致命异常 %s: %s" % (type(exc).__name__, exc))
+                fp.write(traceback.format_exc()[-4000:] + "\n")
+        except Exception:                                           # noqa: BLE001
+            pass
+        try:
+            in_dir = Path(getattr(a, "input_dir", ".") or ".")
+            for cid, _p in _dedupe_items(discover_inputs(in_dir))[0]:
+                if not (final_dir / ("%s_Pred.json" % cid)).exists():
+                    if _write_shell(final_dir, cid, note="run.py 致命异常，空壳兜底"):
+                        n_shell += 1
+        except Exception:                                           # noqa: BLE001
+            pass
+    except Exception:                                               # noqa: BLE001
+        pass
+    try:
+        _write_decision(out_dir, {"fatal": "%s: %s" % (type(exc).__name__, exc),
+                                  "n_shell": n_shell}, [], a, time.time(),
+                        note="fatal")
+    except Exception:                                               # noqa: BLE001
+        pass
+    return 3
 
 
 def _write_decision(out_dir: Path, summary: dict, cases_log: list,
@@ -463,22 +1579,52 @@ def _write_decision(out_dir: Path, summary: dict, cases_log: list,
         "output_dir": str(a.output_dir),
         "config": {
             "device": a.device, "imgsz": a.imgsz, "workers": a.workers,
+            "tile": int(getattr(a, "tile", 0) or 0),
+            "overlap": int(getattr(a, "overlap", 0) or 0),
+            "case_workers": getattr(a, "case_workers", -1),
             "do_wires": not a.no_wires, "texts": a.texts,
             "llm_mode": a.mode, "llm_batch": a.llm_batch,
             "llm_max_slots": a.llm_max_slots,
             "vlm": a.vlm, "vlm_workers": a.vlm_workers, "vlm_margin": a.vlm_margin,
             "vlm_desig_fallback": a.vlm_desig_fallback,
+            # ★ 生效档位的**逐项**明细（§5.51）：平台回传里只有这个文件，而
+            #   `vlm_stats` 看不出「引脚通道关没关」（关掉时它同样报 grid_calls=0）；
+            #   把 `_apply_lean` / `_apply_offline` 之后的实际值写下来，事后能复盘档位。
+            "vlm_pin": a.vlm_pin, "vlm_pin_name": a.vlm_pin_name,
+            "vlm_name": a.vlm_name, "vlm_value": a.vlm_value,
+            "vlm_value_batch": a.vlm_value_batch,
+            "fusion": a.fusion,
             "vlm_stats": getattr(a, "vlm_stats", None),
+            # ★ 交付护栏的实际生效值 + 外部推理的真实用量（超预算 ⇒ `refused>0`）。
+            #   只读**本进程已经 import 过**的 `vlm.client`：父进程（扇出）没跑过 VLM，
+            #   这里如实报 `None`，不去凭空 import 一个「零用量」的模块骗自己。
+            "platform_budgets": getattr(a, "platform_budgets", None),
+            "vlm_client": (lambda m: m.stats() if m is not None else None)(
+                sys.modules.get("vlm.client")),
         },
         "env": {k: os.environ.get(k, "") for k in
                 ("LLM_MODEL", "LLM_BASE_URL", "NVIDIA_VISIBLE_DEVICES",
-                 "STAGE2_BOTH_TOL", "STAGE2_DROP_UNKEYED", "STAGE2_NET_DROP_UNKEYED")},
+                 "STAGE2_BOTH_TOL", "STAGE2_DROP_UNKEYED", "STAGE2_NET_DROP_UNKEYED",
+                 "STAGE2_PIN_DROP_UNKEYED", "STAGE2_PIN_DROP_LAUNDERED",
+                 "FUSION_REF_PRUNE", "FUSION_MODEL_SET",
+                 "FUSION_MODEL_SET_MIN", "FUSION_MODEL_SET_MARGIN",
+                 "FUSION_NAME_SNAP",
+                 "FUSION_NAME_SNAP_TOL", "FUSION_NAME_SNAP_MINLEN",
+                 "FUSION_VALUE_FIX",
+                 "FUSION_PIN_LIBFIX", "FUSION_PIN_LIBFIX_RATIO",
+                 "FUSION_PIN_LIBFIX_MARGIN",
+                 "VLM_TIMEOUT", "VLM_BUDGET_S",
+                 # ★ 比赛日档位：由交付入口 `submission/agent_system` 读进参数
+                 #   （`docs/RESULTS.md` §5.51），这里只登记它，便于判题机回传里
+                 #   直接看出那一轮跑的是哪个档。
+                 "EDA_TIER_ARGS",
+                 "EDA_WALL_BUDGET_S", "EDA_CASE_WORKERS", "EDA_PUBLISH_S")},
         "assets": assets.describe(),
         "summary": summary,
         "cases": cases_log,
     }
-    (out_dir / "decision_log.json").write_text(
-        json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
+    _atomic_write_text(out_dir / "decision_log.json",
+                       json.dumps(doc, ensure_ascii=False, indent=1))
 
 
 if __name__ == "__main__":

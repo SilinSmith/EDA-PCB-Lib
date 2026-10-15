@@ -64,6 +64,145 @@ OVERWRITE_DEMOTE = 0.05
 # 候选上限（防止一个槽位塞进几十个候选把 LLM 上下文撑爆）
 MAX_ALTS = 6
 
+# ---------------------------------------------------------------- 不删除：降权档位
+# owner（m23945）的规矩：「可以削弱内容的置信度，但不能轻易覆盖」「任何『距离/分数
+# 超阈值就丢弃』的判断都是错的，超限项必须留在系统里，附一个可比较的标量，由下游
+# 降权或复核」（`docs/reports/工程哲学.md:41`、`:94`）。
+# 统一档位（**任何**「本来会被丢掉」的东西都落到这四档之一，而不是 0 或被删）：
+DEMOTE_OVERWRITE = OVERWRITE_DEMOTE   # 0.05  被别的证据改写
+DEMOTE_HARD = 0.05                    # 0.05  判据被强证据否掉（原来是 0.0 = 删除）
+DEMOTE_SOFT = 0.15                    # 0.15  与主流不一致（弱判据）
+DEMOTE_TRUNC = 0.02                   # 0.02  被截断/挤出（超上限、超预算）
+# 详细记录的条数上限；**超出的只丢明细不丢计数**（`stats()["truncated_demotions"]`），
+# 所以「有多少东西被降权过」永远可查，只是不再逐条可点名。
+LEDGER_DETAIL_LIMIT = 600
+
+
+@dataclass
+class Demotion:
+    """一条「本来会被丢掉、现在只降权」的记录。
+
+    `score_before > 0` 且 `score_after < score_before` 就是一次削弱；`score_after`
+    取上面四档之一，绝不取 0 —— 0 在很多下游等于「不可选」，那就又变成删除了。
+    """
+    where: str = ""                 # 槽位 id / 引脚下标 / 分组名
+    value: Any = None
+    score_before: float = 0.0
+    score_after: float = 0.0
+    reason: str = ""
+    by: str = ""
+    at: str = ""                    # 阶段标记，如 "stage1:pincol"、"stage2:structmatch"
+
+    @property
+    def lost(self) -> float:
+        return round(self.score_before - self.score_after, 6)
+
+
+@dataclass
+class Event:
+    """merge / split / demote / drop / truncate / overwrite 的统一事件（时间维度）。
+
+    `before` / `after` 是**事实**（不是差集）：合并前后各有哪些，拆分前后各有哪些，
+    谁来做的（`by`）、为什么（`reason`）。owner 要的「本来不是同一个结果变成同一个、
+    本来是同一个但被拆分，这些都有意义」就落在这里。
+    """
+    kind: str = ""
+    where: str = ""
+    before: list = field(default_factory=list)
+    after: Any = None
+    reason: str = ""
+    by: str = ""
+    at: str = ""
+
+
+class Ledger:
+    """全局「不删除只削弱」账本：降权记录 + 事件 + 重扫队列。
+
+    * `demote(...)` 记一次削弱（值仍然在候选池里，只是分低了）；
+    * `record(...)` 记一次 merge/split/drop/…（信息搬家而不是消失）；
+    * `touched_slots()` = **重扫队列**：只有产生过事件的槽位才需要再扫一次
+      （`工程哲学.md:94` 第 ③ 条），没出事的槽位不浪费算力；
+    * `dump()` 是可 json 化的紧凑结构，直接塞进 stage1/stage2 产物给复核用。
+    """
+
+    def __init__(self, case: str = ""):
+        self.case = case
+        self.demotions: list = []
+        self.events: list = []
+        self.n_demotions = 0
+        self.n_events = 0
+        self.by_kind: dict = {}
+
+    # ---- 写 ----
+    def demote(self, where: str, value=None, score_before: float = 0.0,
+               score_after: float = DEMOTE_SOFT, reason: str = "",
+               by: str = "", at: str = "") -> None:
+        self.n_demotions += 1
+        if len(self.demotions) < LEDGER_DETAIL_LIMIT:
+            self.demotions.append(Demotion(where=where, value=value,
+                                           score_before=round(float(score_before), 4),
+                                           score_after=round(float(score_after), 4),
+                                           reason=reason, by=by, at=at))
+
+    def record(self, kind: str, where: str, before=None, after=None,
+               reason: str = "", by: str = "", at: str = "") -> None:
+        self.n_events += 1
+        self.by_kind[kind] = self.by_kind.get(kind, 0) + 1
+        if len(self.events) < LEDGER_DETAIL_LIMIT:
+            self.events.append(Event(kind=kind, where=where,
+                                     before=list(before or []), after=after,
+                                     reason=reason, by=by, at=at))
+
+    # ---- 读 ----
+    def touched_slots(self) -> list:
+        out = []
+        for x in list(self.events) + list(self.demotions):
+            w = getattr(x, "where", "")
+            if w and w not in out:
+                out.append(w)
+        return out
+
+    def stats(self) -> dict:
+        return {"case": self.case, "n_events": self.n_events,
+                "n_demotions": self.n_demotions,
+                "by_kind": dict(self.by_kind),
+                "strictly_positive": all(d.score_after > 0.0 for d in self.demotions),
+                "truncated_events": max(0, self.n_events - len(self.events)),
+                "truncated_demotions": max(0, self.n_demotions - len(self.demotions)),
+                "n_rescan": len(self.touched_slots())}
+
+    def dump(self, sample: int = 6) -> dict:
+        """紧凑、可 json 化：计数 + 按档位汇总 + 少量样例 + 重扫队列。"""
+        by_after: dict = {}
+        lost = 0.0
+        for d in self.demotions:
+            k = round(float(d.score_after), 4)
+            by_after[k] = by_after.get(k, 0) + 1
+            lost += d.lost
+        return {"stats": self.stats(),
+                "by_score_after": by_after,
+                "lost_score_total": round(lost, 4),
+                "rescan": self.touched_slots()[:40],
+                "events": [asdict(e) for e in self.events[:sample]],
+                "demotions": [asdict(d) for d in self.demotions[:sample]]}
+
+    def clear(self) -> None:
+        self.demotions.clear(); self.events.clear()
+        self.n_demotions = self.n_events = 0
+        self.by_kind.clear()
+
+
+# 进程内默认账本：任何模块都能 `from cvparts.hypo import LEDGER` 记账，不必层层传参。
+# （stage1 走 ProcessPoolExecutor，所以每个 worker 各有一本，产物里带不回来 —— 见
+#  `stage1/pipeline.py` 把 `LEDGER.dump()` 塞进 doc 的做法。）
+LEDGER = Ledger()
+
+
+def reset_ledger(case: str = "") -> Ledger:
+    LEDGER.case = case
+    LEDGER.clear()
+    return LEDGER
+
 
 @dataclass
 class Alt:
@@ -121,10 +260,24 @@ class Slot:
         self._spill()
 
     def _spill(self) -> None:
-        """把超出 `MAX_ALTS` 的候选**移进 `overflow`**（不删除、可追溯）。"""
+        """把超出 `MAX_ALTS` 的候选**移进 `overflow`**（不删除、可追溯）。
+
+        ★ 到 2026-10 为止这里只做了「搬家」，全局账本 `LEDGER` 里没有它的名字 ——
+        复核者能看到 `overflow` 里有什么，却看不到「一共挤出过多少、挤出去多少分」。
+        现在每次挤出都记一条 `truncate` 事件 + 一条 `DEMOTE_TRUNC` 降权
+        （信息仍然在 `overflow` 里，只是被标成「被截断的」）。
+        """
         if len(self.alts) > MAX_ALTS:
-            self.overflow.extend(self.alts[MAX_ALTS:])
+            gone = self.alts[MAX_ALTS:]
+            self.overflow.extend(gone)
             del self.alts[MAX_ALTS:]
+            for a in gone:
+                LEDGER.demote(self.slot_id, a.value, a.score, DEMOTE_TRUNC,
+                              reason=f"候选数超过 MAX_ALTS={MAX_ALTS}，移入 overflow",
+                              by=a.source or "?", at="hypo:spill")
+                LEDGER.record("truncate", self.slot_id, before=[a.value], after=None,
+                              reason="超出候选上限（值保留在 overflow）",
+                              by=a.source or "?", at="hypo:spill")
 
     def resolved(self) -> bool:
         return self.decided_by is not None
@@ -199,6 +352,16 @@ class CaseHypotheses:
                               "replaced_by": by})
             s.add(Alt(value=prev, score=OVERWRITE_DEMOTE, source=src,
                       evidence={"被覆盖": by, "降权理由": "改写只降权不删除"}))
+            # ★ 全局账本：被顶掉的值进了 `history`（槽位本地）+ 一条 overwrite 事件
+            #   与一条 `DEMOTE_OVERWRITE` 降权（跨槽位可查）。
+            prev_score = 1.0
+            for a in s.alts:
+                if str(a.value) == str(prev):
+                    prev_score = max(prev_score, float(a.score))
+            LEDGER.demote(slot_id, prev, prev_score, DEMOTE_OVERWRITE,
+                          reason=f"被 {value!r} 改写（{by}）", by=src, at="hypo:resolve")
+            LEDGER.record("overwrite", slot_id, before=[prev], after=value,
+                          reason="改写只降权不删除", by=by, at="hypo:resolve")
         s.chosen = value
         s.decided_by = by
 
@@ -306,6 +469,17 @@ def _demo():
               " | ".join(f"{a.value}({a.score:.2f} {a.source})" for a in s.alts))
     print("\n已决:", [(s.slot_id, s.chosen, s.decided_by) for s in h.decided()])
     print("\n折叠后的类名:", h.collapse_types())
+    # ★ 账本自检（第四项「不删除只削弱」）：改写要留 history + 记事件 + 降权分 > 0。
+    h.resolve("t0021.key", "TP21", by="rule:seq")
+    h.resolve("t0021.key", "TP2", by="llm:demo")
+    hist = h.slots["t0021.key"].history
+    assert hist and hist[-1]["value"] == "TP21", hist
+    st = LEDGER.stats()
+    assert st["n_demotions"] >= 1 and st["n_events"] >= 1, st
+    assert st["strictly_positive"], "降权分必须 > 0（0 在很多下游等于删除）"
+    print("账本自检 ✓", st)
+    print("  事件:", [(e.kind, e.where) for e in LEDGER.events])
+    print("  重扫队列:", LEDGER.touched_slots())
     out = Path(r"Y:\workspace\EDA\work\preview\hypo_demo.json")
     h.save(out)
     print(f"\n写到 {out}  ({out.stat().st_size} B)")

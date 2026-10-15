@@ -6,14 +6,20 @@ Current chromatic strokes are rechecked before color text crops are opened.
 The source image stays unchanged. Recognition copies may exclude measured long
 wire pixels and their raster fringes; ambiguous glyph/line contact stays held.
 """
+
 from __future__ import annotations
+
 
 import math
 
+
 import cv2
+
 import numpy as np
 
+
 from .structmatch import trusted_frame_pin_evidence
+
 
 COLOR_CONTACT_SOURCES = frozenset(("red_green_transition", "red_stub_endpoint",
                                   "red_green_transition_uncertain"))

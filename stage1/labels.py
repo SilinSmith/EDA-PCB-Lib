@@ -95,6 +95,20 @@ WIRE_TOL = float(os.environ.get("STAGE1_WIRE_TOL", "1.5"))
 WIRE_EXT = float(os.environ.get("STAGE1_WIRE_EXT", "8.0"))
 WIRE_EXT_PERP = float(os.environ.get("STAGE1_WIRE_EXT_PERP", "2.0"))
 WIRE_EXT_NEAREST = env_on("STAGE1_WIRE_EXT_NEAREST", "0")
+# ---- 定向「抹字断口」桥接（`STAGE1_TEXT_BRIDGE`，默认 0 = 关）----
+# 动机（case 3 实证）：`extract_wires(erase=texts, erase_pad=1.0)` 会把**盖在导线上的
+# 文本框像素一起抹掉**，留下 9~12px 的断口 —— C1 上脚的竖线 `seg0=[[156.5,508.9],
+# [156.5,433.2]]` 顶到 y=433.2，长横线 `seg46=[[812.1,422.5],[152.0,424.0]]` 在 y=424，
+# 缺口 9.2px，缺口里正是被抹掉的 `t0018 [154,426,163,430]`；常规规则接不上
+# （`WIRE_TOL=1.5` 太短、`WIRE_EXT=8` 又差一点点）。同型碎片在 case 3 有 7 对
+# （8.4~11.7px），全部没并上 ⇒ 网络成员少、netH/netL 吃亏。
+# **为什么不能靠抬容差**（都已实测）：`WIRE_TOL=10` 是零和交换（官方 9 张 +0.82 /
+# 派生 −0.75，且 case 10 把电容两块极板并成 11 脚巨块）；`WIRE_EXT` 20/30 →
+# 53.55/50.48；`WIRE_WELD` 24/32 → 54.33/51.86（都更差）。根因是那些断口躺在
+# **元件框**里 —— 一抬就把极板并上。所以这里只认**被擦除的文本框**，且要求两个线端
+# 各自贴住**同一个**框（见 `_text_bridge_unions`）。**绝不用元件框做桥接。**
+TEXT_BRIDGE = float(os.environ.get("STAGE1_TEXT_BRIDGE", "0"))   # 0 = 关；>0 = 允许的最大跨框缺口(px)
+TEXT_BRIDGE_PAD = float(os.environ.get("STAGE1_TEXT_BRIDGE_PAD", "3.0"))   # 框外扩，容端点贴着框边
 # ★ `weld` / `perp` 的正确配比：**`perp` 必须跟着 `weld` 放大，否则等于没开 weld。**
 #
 # `_weld_unions` 里 `perp = |out_A × v̂| * dist` 是「位移偏离 A 的外法线延长线多少像素」，
@@ -132,6 +146,65 @@ WIRE_COS = float(os.environ.get("STAGE1_WIRE_COS", "-0.75"))
 # `STAGE1_WIRE_INK=0` 关掉（回到纯几何）。`STAGE1_WIRE_INK_FRAC` 调阈值。
 WIRE_INK = env_on("STAGE1_WIRE_INK", "1")
 WIRE_INK_FRAC = float(os.environ.get("STAGE1_WIRE_INK_FRAC", "0.5"))
+# ★★ 规则 (1) 的**十字交叉拆分**（`STAGE1_CROSS_SPLIT`，默认开）。
+#
+# 规则 (1)「四段端点在 tol 内 ⇒ 并」会把**交叉**当成连接：一条竖直走线穿过
+# 一条水平走线时，骨架在交叉处把两条线各切成两段，四个端点相距 1~2px，于是
+# 四条段并进同一组 ⇒ **本来独立的两个网络被合成一条**。官方 GT 是分开标的：
+# case 2 的 `net_5 = (R2.2, U1.3)`（竖直走线）与 `net_22 = (R1.2, U1.4)`
+# （水平走线）在 (576,375) 处十字交叉，图上**没有圆点**，我们却并成了一坨
+# `(R1.2, R2.2, U1.3, U1.4)` ⇒ 一个满分配对被稀释、另一个 GT 网直接变 fn。
+#
+# 判据（两条同时成立才拆）：
+#   ① 结点处**有 >= 2 条不同的轴都「穿过去」** —— 同轴在本结点有 >= 2 个端点，
+#      或者有线段从结点**中间穿过**（骨架偶尔对同一根导线给出两条重叠副本：一条
+#      长段 + 若干被切开的短段，长副本的端点不在结点上，只按端点聚类看不见它 ——
+#      case 2 的 `seg 49 [624.3,376]-[444,375]` 正是这样把竖直/水平两半并起来的）；
+#   ② 该处**没有实心结点圆点**（`_has_dot`：半径 `STAGE1_CROSS_DOT_R` 的对角方向
+#      都有墨 ⇒ 圆点 ⇒ 保持合并）。真结点（T 型、L 角、圆点四叉、单端支）不受影响。
+#
+# ★ 泛化（`STAGE1_CROSS_TAGS` 默认开 = 根级标签；`STAGE1_CROSS_WIDE` 默认**关**）：
+# 判据从「这两段不许并」升级为「**同一个根不许同时持有同一结点的两条不同轴**」
+# （`axis_of` 标签 + `_u` 里的根级冲突检查）—— 后者能拦住**经由第三段传递**的
+# 跨轴合并（A 轴 ∪ 无关段 ∪ B 轴），那是逐对黑名单拦不住的。多岔（>=3 条轴）本来就是
+# 两两判定，自动覆盖。实测（官方 10 张、no-vlm）：只用标签 **case 1 62.01→62.79
+# (+0.78)**，其余 9 张逐位不变（case 5 也不动）；把聚簇半径也从 `tol` 放宽到
+# `pass_tol` 反而 **case 5 −1.24**（把两个本来无关的近距结点并成一个簇 ⇒ 误判交叉），
+# 所以 `WIDE` 默认关。
+CROSS_SPLIT = env_on("STAGE1_CROSS_SPLIT", "1")
+CROSS_COS = float(os.environ.get("STAGE1_CROSS_COS", "-0.85"))
+CROSS_DOT_R = float(os.environ.get("STAGE1_CROSS_DOT_R", "3.0"))
+CROSS_DOT_NEED = int(os.environ.get("STAGE1_CROSS_DOT_NEED", "3"))
+CROSS_WIDE = env_on("STAGE1_CROSS_WIDE", "0")
+CROSS_TAGS = env_on("STAGE1_CROSS_TAGS", "1")
+CROSS_WIDE_MAX = int(os.environ.get("STAGE1_CROSS_WIDE_MAX", "96"))
+# ★ `STAGE1_CROSS_GAP`（默认 0 = 关）：**起簇**半径。骨架在无圆点的十字交叉处给出的
+# 端点常常差 **2~4px**（> `WIRE_TOL=1.5`、也 > `CROSS_WIDE` 摊到的 2.25），只按 `ee`
+# 端点对聚类就永远看不见这个结点 ⇒ 跨轴合并不被拦。实测 case 4 的 (979,320)：
+# 竖直两臂端点差 4.0px、水平长副本从结点中间穿过 ⇒ 规则 (2) 把两轴并成了一个 group 13。
+#
+# **实测（官方 10 张、no-vlm、`work\_xgap_ab.ps1`）⇒ 净负，默认 0 保持关：**
+#
+# | 臂 | 总分 | netH | netL | case 1 | case 4 | case 5 | case 6 | case 8 |
+# |---|---|---|---|---|---|---|---|---|
+# | ref（关） | **80.88** | 0.7749 | 0.4975 | 81.46 | 79.39 | 77.70 | 77.14 | 68.83 |
+# | `=3.0` | 80.56 | 0.7663 | 0.4956 | 81.52 | **80.02** | 76.48 | 76.33 | 66.94 |
+# | `=4.5` | 80.28 | 0.7574 | 0.4989 | 79.06 | 79.71 | 76.48 | 76.33 | 66.94 |
+#
+# 唯一赚到的是 case 4（组 66→68：横轴 {seg16, seg70} 与竖轴 {seg52, seg54}+U3.2 引线
+# {seg53, seg90} 拆开 ⇒ netL 0.3607→0.4098、netH 0.7412→0.7452 = **+0.63 案内分**）；
+# 亏的是四类**误拆**（`work\_xgapbox.py` 逐结点取证 + 拼图
+# `work/preview/_cropat/montage_nodes.png`）：
+# ① case 5 (1772,499) 图上**有红点**、`_has_dot` 漏判（−1.22）；
+# ② case 6 (1736,919) / case 8 (706,449) 是**导线接到引脚引线**的同轴结点，
+#    簇内段端到引脚 **0.0px**（各 −0.81 / −1.89）；
+# ③ case 1 的十个新结点是 GND / 电容符号笔画（gap 4.5 时 −2.40，gap 3.0 时 +0.06 无害）。
+# 加「簇内段端→引脚 ≤2px 就不拆」+「多点圆点判据」两道闸后只剩 case 4 的 +0.63 案内分
+# ⇒ 全局 **+0.07 分**（交付分 = 逐案分平均），在 ±0.05 噪声带内，且要给 `wire_groups`
+# 新增引脚点管道 ⇒ **不实现**（与 §5.80 一致）。
+CROSS_GAP = float(os.environ.get("STAGE1_CROSS_GAP", "0") or 0.0)
+# 诊断计数（`wire_detail` 之外用不到；探针读它看「这次拆了几处交叉」）
+LAST_X = {"n_cross": 0, "n_blocked": 0}
 # ★★ 规则 (5)「端点微越过目标段」的容差（`STAGE1_WIRE_OVER`，0 = 关）。
 #
 # **为什么需要它、以及它为什么比抬 `WIRE_TOL` 干净。** `WIRE_TOL=10` 在官方 9 张上
@@ -422,9 +495,247 @@ def _extend_unions(segs, ends, own, out, ext_len, ext_perp, ext_cos=1.0,
     return pairs
 
 
+def _has_dot(ink, p, r=None, need=None) -> bool:
+    """结点圆点判据：真结点画了实心圆点，**对角**方向（45°/135°/225°/315°）也有墨。
+
+    只看对角是关键 —— 十字交叉的四个**轴向**（与两条线同向）永远有墨，只有对角
+    是空白；实心圆点（直径 9~10px）在对角一样是墨。case 2 实测（`STAGE1_CROSS_DOT_R=3`）：
+    交叉点 (576,375) 对角 0/4、圆点 (575,355)/(493,375) 对角 4/4、普通走线 0/4。
+    `ink` 为 None 时一律当圆点（保守：保持历史行为）。
+    """
+    if ink is None:
+        return True
+    r = CROSS_DOT_R if r is None else float(r)
+    need = CROSS_DOT_NEED if need is None else int(need)
+    h, w = ink.shape[:2]
+    hit = 0
+    for k in range(4):
+        a = np.pi * (0.25 + 0.5 * k)
+        x = int(round(float(p[0]) + r * float(np.cos(a))))
+        y = int(round(float(p[1]) + r * float(np.sin(a))))
+        if 0 <= x < w and 0 <= y < h and ink[y, x]:
+            hit += 1
+    return hit >= need
+
+
+def _cross_forbid(segs, ends, own, ee_pairs, ink,
+                  cos_par=None, r=None, need=None, pass_tol=None):
+    """返回「十字交叉（无圆点）」处**不许并**的段对集合，以及交叉点个数。
+
+    结点处只要有**两条不同的轴都「穿过去」**（同轴端点 >= 2 支，或有线段从结点
+    中间穿过），且该处**没有实心结点圆点**（`_has_dot`），就判为交叉：
+    只有**同轴**的段能并；两轴**都穿过**时，它们之间的任何合并都被禁止
+    （规则 1~5 全适用，由 `wire_groups` 里的 `_u` 拦截）。
+    真结点（T 型、L 角、圆点四叉、单端支）一律不动 —— 历史行为。
+
+    ★ 为什么需要「穿过」这一支：骨架对同一根导线偶尔会给出**两条重叠副本**
+    （一条长段 + 若干被切开的短段），长副本从结点中间穿过、端点并不落在结点上，
+    只按端点聚类看不见它，跨轴合并就经由它发生 —— case 2 的 SDA/SCL 实测：
+    `seg 49 [624.3,376]-[444,375]` 从 (576,375) 中间穿过，把竖直的
+    `seg 4/seg 10`（R2 顶脚）与水平的 `seg 46/seg 9` 并成了同一个 group 19。
+    """
+    cos_par = CROSS_COS if cos_par is None else float(cos_par)
+    pass_tol = (max(2.0, 1.5 * float(WIRE_TOL)) if pass_tol is None else float(pass_tol))
+    axis_cos = abs(cos_par)
+    par = {}
+
+    def find(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+
+    def union(x, y):
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            par[rx] = ry
+
+    for m, j in ee_pairs:
+        par.setdefault(m, m)
+        par.setdefault(j, j)
+        union(m, j)
+    # ★ `STAGE1_CROSS_GAP`：把 1.5~GAP px 的端点对也纳入起簇（见同名旋钮注释）。
+    # 只影响「是否成簇」；是否拆分仍要求 ≥2 条轴都穿过去 + 无圆点，T 型/L 角不受影响。
+    if CROSS_GAP > 0.0 and len(ends) <= 4000:
+        D_gap = np.hypot(ends[:, 0][:, None] - ends[:, 0][None, :],
+                         ends[:, 1][:, None] - ends[:, 1][None, :])
+        for m in range(len(ends)):
+            for j in np.nonzero(D_gap[m] <= CROSS_GAP)[0]:
+                j = int(j)
+                if int(own[m]) != int(own[j]):
+                    par.setdefault(int(m), int(m))
+                    par.setdefault(j, j)
+                    union(int(m), j)
+    # ★ 泛化（`STAGE1_CROSS_WIDE`）：聚簇半径从规则 (1) 的 `tol`(1.5) 放宽到 `pass_tol`(2.25)。
+    # 骨架在交叉处给出的端点常常差 1.5~2.2px —— 它们**进不了 `ee`**，只按 `ee` 聚类就
+    # 永远看不见这个结点（多岔、粗笔画、rdp 抖动都会这样）。放宽只影响「是否成簇」，
+    # 是否拆分仍要求**≥2 条轴都穿过去**，所以 T 型（1 条轴穿过）不会被动到。
+    # 只对已有簇的邻域做两轮闭包，并把簇规模封顶，避免密集区炸开。
+    if CROSS_WIDE and pass_tol > float(WIRE_TOL) and par:
+        near = set(int(m) for m in par)
+        for _ in range(2):
+            add = set()
+            for m in sorted(near):
+                p = ends[m]
+                d = np.hypot(ends[:, 0] - p[0], ends[:, 1] - p[1])
+                for k in np.nonzero(d <= pass_tol)[0]:
+                    add.add(int(k))
+            if add <= near:
+                break
+            near |= add
+        if len(near) <= CROSS_WIDE_MAX:
+            near_s = sorted(near)
+            for x in range(len(near_s)):
+                px = ends[near_s[x]]
+                for y in range(x + 1, len(near_s)):
+                    py = ends[near_s[y]]
+                    if float(np.hypot(px[0] - py[0], px[1] - py[1])) <= pass_tol:
+                        par.setdefault(near_s[x], near_s[x])
+                        par.setdefault(near_s[y], near_s[y])
+                        union(near_s[x], near_s[y])
+    cl = {}
+    for m in list(par):
+        cl.setdefault(find(m), []).append(m)
+    forbid, axis_of, n_cross = set(), {}, 0
+    n_seg = len(segs)
+    for mems in cl.values():
+        group = sorted({int(own[m]) for m in mems})
+        if len(group) < 2:
+            continue
+        node = ends[mems].mean(axis=0)
+        # 「穿过」结点、端点却不在结点上的段（重叠副本）：点到线段距离 + 投影在内部
+        for i in range(n_seg):
+            if i in group:
+                continue
+            a = np.asarray(segs[i, :2], dtype=np.float64)
+            b = np.asarray(segs[i, 2:4], dtype=np.float64)
+            d = b - a
+            L2 = float(d @ d)
+            if L2 <= 1e-9:
+                continue
+            t = float((node - a) @ d) / L2
+            if t <= 0.03 or t >= 0.97:
+                continue
+            if float(np.hypot(*(node - (a + t * d)))) <= pass_tol:
+                group.append(int(i))
+        group = sorted(set(group))
+        if len(group) < 2:
+            continue
+        # 每支的**轴**（无向）+ 这一支是否「穿过」结点
+        axes, is_pass, good = {}, {}, True
+        for i in group:
+            a = np.asarray(segs[i, :2], dtype=np.float64)
+            b = np.asarray(segs[i, 2:4], dtype=np.float64)
+            d = b - a
+            L2 = float(d @ d)
+            if L2 <= 1e-9:
+                good = False
+                break
+            t = float((node - a) @ d) / L2
+            if 0.03 < t < 0.97 and float(np.hypot(*(node - (a + t * d)))) <= pass_tol:
+                v = d / float(np.sqrt(L2))
+                is_pass[i] = True
+            else:
+                o = b if np.hypot(*(b - node)) >= np.hypot(*(a - node)) else a
+                w = o - node
+                Lw = float(np.hypot(w[0], w[1]))
+                if Lw <= 1e-6:
+                    good = False
+                    break
+                v = w / Lw
+                is_pass[i] = False
+            if v[0] < 0.0 or (v[0] == 0.0 and v[1] < 0.0):
+                v = -v
+            axes[i] = v
+        if not good:
+            continue
+        # 按轴聚类（无向：|cos| 够大即同轴）
+        sets, used = [], set()
+        for i in group:
+            if i in used:
+                continue
+            g = [j for j in group if abs(float(axes[i] @ axes[j])) >= axis_cos]
+            used.update(g)
+            sets.append(g)
+        if len(sets) < 2:
+            continue
+        # 「穿过去」的轴：有穿过支，或同轴在本结点有 >= 2 个端点
+        cont = [bool(any(is_pass[j] for j in g)) or sum(1 for j in g if not is_pass[j]) >= 2
+                for g in sets]
+        if sum(cont) < 2:
+            continue
+        if _has_dot(ink, node, r=r, need=need):
+            continue
+        n_cross += 1
+        cid = n_cross
+        for x in range(len(sets)):
+            if cont[x]:
+                for i in sets[x]:
+                    axis_of.setdefault(int(i), []).append((cid, x))
+        for x in range(len(sets)):
+            for y in range(x + 1, len(sets)):
+                if not (cont[x] and cont[y]):
+                    continue
+                for a in sets[x]:
+                    for b in sets[y]:
+                        forbid.add((a, b) if a < b else (b, a))
+    return forbid, n_cross, axis_of
+
+
+def _closest_on_seg(s, x, y):
+    """线段 `s = [x1,y1,x2,y2]` 上离 `(x, y)` 最近的点（投影后夹到段内）。"""
+    x1, y1, x2, y2 = float(s[0]), float(s[1]), float(s[2]), float(s[3])
+    dx, dy = x2 - x1, y2 - y1
+    L2 = dx * dx + dy * dy
+    if L2 < 1e-12:
+        return x1, y1
+    t = ((x - x1) * dx + (y - y1) * dy) / L2
+    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+    return x1 + t * dx, y1 + t * dy
+
+
+def _text_bridge_unions(segs, ends, own, D, max_d, pad, bridges):
+    """端点被「抹字」截断的桥接（规则 6）：两个线端各贴住**同一个**被擦除文本框。
+
+    三重判据，缺一不可：
+      (a) 端点-线段距离 > 常规容差（否则规则 2 已经并了）、但在 `max_d` 内；
+      (b) **该端点**落在某个被擦除文本框（外扩 `pad`）里、或紧贴它；
+      (c) 目标段上离该端点**最近的点**也落在**同一个**框（外扩 `pad`）里。
+    (c) 是排他判据：只有「缺口横穿同一个文本框」才成立 —— 电容的两块平行极板、并排
+    走线（文本框在旁边而不是在缺口上）都不成立。这正是抬全局容差做不到的区分。
+    返回 `[(段下标 i, 段下标 j)]`；调用方一律经 `_u` 合并（仍受 forbid/轴冲突约束）。
+    """
+    box = np.asarray(bridges, np.float64).reshape(-1, 4)
+    if not len(box):
+        return []
+    x1 = np.minimum(box[:, 0], box[:, 2]) - pad
+    y1 = np.minimum(box[:, 1], box[:, 3]) - pad
+    x2 = np.maximum(box[:, 0], box[:, 2]) + pad
+    y2 = np.maximum(box[:, 1], box[:, 3]) + pad
+    out = []
+    for m in range(len(ends)):
+        i = int(own[m])
+        ex, ey = float(ends[m, 0]), float(ends[m, 1])
+        hit = np.nonzero((ex >= x1) & (ex <= x2) & (ey >= y1) & (ey <= y2))[0]
+        if not len(hit):
+            continue
+        row = D[m]
+        for j in np.nonzero((row > 0.0) & (row <= float(max_d)))[0]:
+            k = int(j)
+            if k == i:
+                continue
+            cx, cy = _closest_on_seg(segs[k], ex, ey)
+            for h in hit:
+                if x1[h] <= cx <= x2[h] and y1[h] <= cy <= y2[h]:
+                    out.append((i, k))
+                    break
+    return out
+
+
 def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
                 ext=0.0, ext_perp=2.0, ext_cos=1.0, ext_nearest=True,
-                over=0.0, over_cross=None, over_cos=None, ink=None, ink_frac=0.5):
+                over=0.0, over_cross=None, over_cos=None, ink=None, ink_frac=0.5,
+                bridges=None, bridge=None, bridge_pad=None):
     """把段并成连通分量，返回每条段的组号（组号 = 该组最小的段下标）。
 
     三种合并：
@@ -433,7 +744,9 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
       (3) `weld > 0` 时的**方向性桥接**（见 `_weld_unions`，修断口用）；
       (4) `ext > 0` 时的端点外法线延伸；
       (5) `over > 0` 时的**穿越式微越过**（见 `_overshoot_unions` —— 只吃「端点跨过
-          目标段所在的直线、且只多画了几像素」，不吃电容极板那种平行近距）。
+          目标段所在的直线、且只多画了几像素」，不吃电容极板那种平行近距）；
+      (6) `bridge > 0` 时的**抹字断口定向桥接**（见 `_text_bridge_unions` —— 只吃
+          「两个线端各贴住同一个被擦除文本框的两侧」，`bridges` 是该框列表）。
     `ink` 非空时给规则 (3) 加一道墨迹判据（见 `_ink_along`）。
     """
     segs = segments if isinstance(segments, np.ndarray) else _as_segs(segments)
@@ -445,7 +758,8 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
     # 否则每一段会和自己的**序号后继**并起来，整张图塌成一个分量（踩过）。
     ends = np.stack([segs[:, :2], segs[:, 2:]], axis=1).reshape(-1, 2)
     own = np.repeat(np.arange(n), 2)
-    # (1) 端点-端点
+    # (1) 端点-端点（`STAGE1_CROSS_SPLIT` 时把「无圆点的十字交叉」拆成两组）
+    ee = []
     if n <= 4000:
         D_ee = np.hypot(ends[:, 0][:, None] - ends[:, 0][None, :],
                         ends[:, 1][:, None] - ends[:, 1][None, :])
@@ -453,15 +767,56 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
             row = D_ee[m]
             for j in np.nonzero(row <= tol)[0]:
                 if own[m] != own[j]:
-                    uf.union(int(own[m]), int(own[j]))
+                    ee.append((int(m), int(j)))
     else:
         try:
             from scipy.spatial import cKDTree
             for a, b in cKDTree(ends).query_pairs(float(tol), output_type='ndarray'):
                 if own[a] != own[b]:
-                    uf.union(int(own[a]), int(own[b]))
+                    ee.append((int(a), int(b)))
         except Exception:
             pass
+    # ★ 十字交叉（无圆点）的**跨轴禁止**：命中的段对在规则 (1)~(5) 里一律不许并；
+    # `axis_of` 给出「段 -> [(结点, 轴号)]」，`_u` 用它做**根级**冲突检查（拦传递合并）。
+    forbid, n_cross, axis_of = set(), 0, {}
+    if CROSS_SPLIT and ink is not None and (ee or CROSS_GAP > 0.0):
+        forbid, n_cross, axis_of = _cross_forbid(segs, ends, own, ee, ink)
+    n_blocked = [0]
+    LAST_X["n_cross"], LAST_X["n_blocked"] = n_cross, 0
+    root_tags = {int(i): dict(t) for i, t in axis_of.items()} if (axis_of and CROSS_TAGS) else {}
+
+    def _u(a, b):
+        a, b = int(a), int(b)
+        if a == b:
+            return
+        ra, rb = uf.find(a), uf.find(b)
+        if ra == rb:
+            return
+        ta, tb = root_tags.get(ra), root_tags.get(rb)
+        if ta and tb:
+            for cid, ax in ta.items():
+                if cid in tb and tb[cid] != ax:
+                    n_blocked[0] += 1
+                    return
+        if a > b:
+            a, b = b, a
+        if forbid and (a, b) in forbid:
+            n_blocked[0] += 1
+            return
+        uf.union(ra, rb)
+        if ta or tb:
+            r = uf.find(ra)
+            m = dict(ta or {})
+            for cid, ax in (tb or {}).items():
+                m.setdefault(cid, ax)
+            root_tags[r] = m
+            if r != ra:
+                root_tags.pop(ra, None)
+            if r != rb:
+                root_tags.pop(rb, None)
+
+    for m, j in ee:
+        _u(own[m], own[j])
     # (2) 端点-线段（T 型结点）
     D = _dist_pt_segs(ends, segs)
     for m in range(len(ends)):
@@ -470,12 +825,12 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
         row[i] = np.inf
         j = int(np.argmin(row))
         if float(row[j]) <= tol:
-            uf.union(i, j)
+            _u(i, j)
     # (3) 方向性桥接
     if weld > 0.0:
         for a, b in _weld_unions(segs, ends, own, weld, perp_tol, cos_tol,
                                  ink=ink, ink_frac=ink_frac):
-            uf.union(a, b)
+            _u(a, b)
     # (4) 端点沿外法线朝前延伸
     if ext > 0.0:
         out = np.zeros((len(ends), 2), np.float64)
@@ -487,7 +842,7 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
         out[1::2] = u
         for a, b in _extend_unions(segs, ends, own, out, ext, ext_perp,
                                    ext_cos=ext_cos, nearest_only=ext_nearest):
-            uf.union(a, b)
+            _u(a, b)
     # (5) 穿越式微越过（端点跨过目标段的支撑直线、只多画了几像素）
     if over > 0.0:
         if over_cross is None:
@@ -496,7 +851,14 @@ def wire_groups(segments, tol=GROUP_TOL, weld=0.0, perp_tol=1.5, cos_tol=-0.75,
             over_cos = WIRE_OVER_COS
         for a, b in _overshoot_unions(segs, ends, own, over,
                                       cross_only=bool(over_cross), cos_par=over_cos):
-            uf.union(a, b)
+            _u(a, b)
+    # (6) 抹字断口定向桥接（只认被擦除的文本框，绝不用元件框）
+    _br = TEXT_BRIDGE if bridge is None else float(bridge)
+    if _br > 0.0 and bridges is not None:
+        _bp = TEXT_BRIDGE_PAD if bridge_pad is None else float(bridge_pad)
+        for a, b in _text_bridge_unions(segs, ends, own, D, _br, _bp, bridges):
+            _u(a, b)
+    LAST_X["n_blocked"] = n_blocked[0]
     roots = {}
     out = []
     for i in range(n):

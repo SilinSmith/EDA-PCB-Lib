@@ -66,6 +66,11 @@ STAMP_WH: dict[str, tuple[int, int]] = {
     "led": (20, 14),            # 186
     "pin": (20, 20),            # 175
     "testpoint": (20, 20),      # 43
+    # ★ `tp` = `pin` + `testpoint` 的合并类（`work/trainset_v4_merged`，`nc=42`）。
+    #   只有用合并集训出来的 YOLO 才会吐这个名字；父类两个都是 (20,20) ⇒ 直接继承。
+    #   少了这一行，`stamp_wh("tp")` 返回 None（`tp` 也不在 `SNAP_TYPES` 里）⇒
+    #   合并模型反而不贴框，等于用训练集换掉了一个已验证的几何先验。
+    "tp": (20, 20),             # = pin + testpoint
     "fuse": (22, 10),           # 20
     "bjt": (29, 20),            # 51
     "bjt_npn": (29, 20),        # 2
@@ -93,7 +98,7 @@ STAMP_SIDE: dict[str, int] = {t: wh[0] for t, wh in STAMP_WH.items()}
 
 # 「长边竖直」的比例（官方语料实测），只在检出的原始框接近正方时兜底
 AXIS_VERT_PRIOR: dict[str, float] = {
-    "v": 1.0, "pin": 1.0, "testpoint": 1.0, "amp_3pin": 1.0, "amp_5pin": 1.0,
+    "v": 1.0, "pin": 1.0, "testpoint": 1.0, "tp": 1.0, "amp_3pin": 1.0, "amp_5pin": 1.0,
     "crystal_4pin": 1.0, "c": 0.789, "d": 0.617, "r": 0.546, "led": 0.532,
     "crystal_2pin": 0.432, "mosfet": 0.394, "mosfet_npn": 0.333, "l": 0.235,
     "gnd": 0.203, "net_input": 0.162, "bjt": 0.137, "net_output": 0.105,
@@ -104,7 +109,7 @@ AXIS_VERT_PRIOR: dict[str, float] = {
 # 只有这些类做贴框；其余（box/switch/other/buzzer/block/jumper/amp/esd/dc/... 等
 # 逐实例测量的类）保持预测框原样
 SNAP_TYPES: frozenset[str] = frozenset({
-    "v", "c", "r", "gnd", "d", "led", "pin", "testpoint", "fuse",
+    "v", "c", "r", "gnd", "d", "led", "pin", "testpoint", "tp", "fuse",
     "crystal", "crystal_2pin", "crystal_3pin", "crystal_4pin",
     "bjt", "bjt_npn", "bjt_pnp", "mosfet", "mosfet_npn", "mosfet_pnp",
     "net_input", "net_output", "net_bidirection",

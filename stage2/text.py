@@ -29,13 +29,18 @@ def _default_ckpt() -> Path:
     """CRNN 权重：**不再写死 `Y:\\workspace\\...`**（进容器必炸）。
 
     顺序：`STAGE2_CKPT` 环境变量 -> `eda-pcb/weights/textrec_best.pt`（随仓库提交）
-    -> `EDA/work/ocr_real/runs/best.pt`（本机训练产物）。详见 `assets.py`。
+    -> `EDA/work/ocr_mix/runs/best.pt`（本机训练产物）。详见 `assets.py`。
+
+    ★ 2026-10-11：兜底路径从 `ocr_real`(e51) 改成 `ocr_mix`(e57) —— `weights/textrec_best.pt`
+    也一起换成了 e57（两把尺子都更好：官方 9 张 57.26→62.80，派生 80 张 23.81→26.14，
+    见 `docs/DIAGNOSTICS.md`「交付 CRNN 权重陈旧」）。旧权重留在
+    `work/weights_backup/textrec_best.real_e51.pt`（= `work/ocr_real/runs/best.pt`）。
     """
     try:
         from assets import textrec_ckpt
     except ImportError:                       # 以别的方式被导入时退回老路径
         return Path(os.environ.get(
-            "STAGE2_CKPT", r"Y:\workspace\EDA\work\ocr_real\runs\best.pt"))
+            "STAGE2_CKPT", r"Y:\workspace\EDA\work\ocr_mix\runs\best.pt"))
     return Path(textrec_ckpt(must_exist=False))
 
 
@@ -123,6 +128,38 @@ PINNUM_PAD_FRAC_Y = float(os.environ.get("STAGE2_PINNUM_PAD_FRAC_Y", "0.0"))
 TIGHT_ROLES = tuple(r.strip() for r in
                     os.environ.get("STAGE2_TIGHT_ROLES", "pin_number,pin_name").split(",")
                     if r.strip()) if PINNUM_TIGHT else ()
+# ★★ 文字框的「**有色墨迹**」统计（`STAGE2_TEXT_INK`，**默认 0 = 关**）。
+#
+# 病（10GT case 5 的 `U3`，见 `docs/RESULTS.md` §5.91）：pin1 名字框那一行有两个候选
+# —— 真名 `ADJ(GND)`（67x13）与**红点引脚标记**（8x8，CRNN 读 `Q`）。名轮把标记绑给
+# pin1、把真名挤到 pin2 ⇒ 两条名字双双错位。
+# **几何分不开**（合法名 `L` 是 7x10、红点是 8x8），但**墨迹颜色分得开**：实测同一张图
+#   * 真名框（`FB`/`P`/`EN`/`L`，10 个）本项 = **0.000**；
+#   * 红点（`U3` 两处 + `p022`）= **0.641 / 0.484 / 0.500**。
+# 判据与 `tight_ink_box` 同源（`max-min >= SAT` 且灰度 < DARK），只是这里算**占比**。
+# 结果作为 `cfrac` 挂在 `read()` 返回的每条记录上（`assign.py` 的名轮据此踢掉标记框）。
+TEXT_INK = os.environ.get("STAGE2_TEXT_INK", "0").strip().lower() in ("1", "true", "yes", "on")
+TEXT_INK_SAT = float(os.environ.get("STAGE2_TEXT_INK_SAT", "60"))
+TEXT_INK_DARK = float(os.environ.get("STAGE2_TEXT_INK_DARK", "160"))
+
+
+def colored_frac(bgr: np.ndarray, box: Box, sat: float = None, dark: float = None) -> float:
+    """框内**有色墨迹**占比（0~1）：`(max-min) >= sat` 且灰度均值 `< dark` 的像素比例。
+
+    灰度图、空框、越界框一律 0.0。**不改框本身**，只作为候选的附加属性供 `assign` 用。
+    """
+    if bgr is None or getattr(bgr, "ndim", 2) != 3:
+        return 0.0
+    sat = TEXT_INK_SAT if sat is None else sat
+    dark = TEXT_INK_DARK if dark is None else dark
+    x1, y1, x2, y2 = [int(round(float(v))) for v in box]
+    x1 = max(0, x1); y1 = max(0, y1)
+    x2 = min(int(bgr.shape[1]), x2); y2 = min(int(bgr.shape[0]), y2)
+    if x2 - x1 < 2 or y2 - y1 < 2:
+        return 0.0
+    sub = bgr[y1:y2, x1:x2].astype(np.int16)
+    m = ((sub.max(2) - sub.min(2)) >= sat) & (sub.mean(2) < dark)
+    return float(m.mean())
 
 
 def tight_ink_box(bgr: np.ndarray, box: Box,
@@ -394,7 +431,11 @@ class TextEngine:
         boxes = [tuple(float(v) for v in b) for b in boxes]
         rec = self.recognizer()
         if rec is None or not boxes:
-            return [{"bbox": b, "reads": {}} for b in boxes]
+            out0 = [{"bbox": b, "reads": {}} for b in boxes]
+            if TEXT_INK:
+                for i, r in enumerate(out0):
+                    r["cfrac"] = colored_frac(bgr, boxes[i])
+            return out0
 
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) if bgr.ndim == 3 else bgr
         reads: List[Dict[str, Tuple[str, float]]] = [dict() for _ in boxes]
@@ -423,7 +464,9 @@ class TextEngine:
             got = rec.read_many(gray, part)
             for (i, r), (txt, conf) in zip(keys[s:s + self.chunk], got):
                 reads[i][r] = (txt, float(conf))
-        return [{"bbox": boxes[i], "reads": reads[i]} for i in range(len(boxes))]
+        return [{"bbox": boxes[i], "reads": reads[i],
+                 **({"cfrac": colored_frac(bgr, boxes[i])} if TEXT_INK else {})}
+                for i in range(len(boxes))]
 
     # ------------------------------------------------------------------
     def describe(self) -> str:

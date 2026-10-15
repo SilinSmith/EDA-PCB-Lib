@@ -6,26 +6,36 @@ fixed distance from its component box. A green no-connect cross is not a wire.
 Only an actual long red body edge can anchor the search; unrelated red text
 and short coloured strokes outside a detection box are not pin evidence.
 """
+
 from __future__ import annotations
 
+
 import math
+
 from typing import Dict, Sequence
+
 
 import numpy as np
 
 
 _EDGES = ("top", "right", "bottom", "left")
+
 _NORMALS = ((0, -1), (1, 0), (0, 1), (-1, 0))
+
 FRAME_RADIUS = 6
+
 MAX_STUB = 96
+
 MIN_RED_HITS = 4
+
 MIN_GREEN_RUN = 6
+
 MAX_TRANSITION_GAP = 4
 
 
-def _colour_masks(bgr):
+def _colour_masks(image):
     """Dominance rather than brightness preserves dark red/green and AA pixels."""
-    blue, green, red = np.moveaxis(bgr.astype(np.int16), -1, 0)
+    blue, green, red = np.moveaxis(image.astype(np.int16), -1, 0)
     chroma = np.maximum.reduce((blue, green, red)) - np.minimum.reduce((blue, green, red))
     red_mask = ((red - green >= 18) & (red - blue >= 18)
                 & (red >= 45) & (chroma >= 24))
@@ -256,8 +266,8 @@ def _component_pins(red, green, box, frame_report=None):
     return records
 
 
-def extract_color_pins(bgr: np.ndarray, components: Sequence[dict], *,
-                       frame_report: dict | None = None) -> Dict[str, list]:
+def extract_color_pins(image: np.ndarray, components: Sequence[dict], *,
+                       frame_report: dict | None = None):
     """Return measured colour pins per box IC, without names/numbers or GT.
 
     Each record has point_img, edge, connected, confidence, source, anchor_img,
@@ -270,9 +280,9 @@ def extract_color_pins(bgr: np.ndarray, components: Sequence[dict], *,
     filled per component even when no red stubs were found, so callers can
     distinguish unconfirmed sides from a confirmed side with no pins.
     """
-    if not isinstance(bgr, np.ndarray) or bgr.ndim != 3 or bgr.shape[2] != 3:
+    if not isinstance(image, np.ndarray) or image.ndim != 3 or image.shape[2] != 3:
         return {}
-    red, green = _colour_masks(bgr)
+    red, green = _colour_masks(image)
     out = {}
     for component in components or ():
         if str(component.get("type") or "").lower().split(":", 1)[0] != "box":

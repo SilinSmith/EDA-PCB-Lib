@@ -1,98 +1,114 @@
 # -*- coding: utf-8 -*-
-"""同号引脚（`box` IC）的位置误差普查：我们的引脚点 vs GT 的引脚点。
+"""IC 引脚「点距」误差体检：PinF1 里 tp 要求 pinname 相等 **且** 点距 ≤ pin_tol(5 px)。
 
-问题：GT 的引脚点贴在**符号框边上**，我们的 stage1 引脚点是从框沿引脚方向追出去
-碰到导线才停（可能 10~45px 外）⇒ `metrics.pin_f1` 的 `position_mismatch`。
+`_libopp.py` 量到：匹配上的 box/IC 里，有 58 个引脚「号对 + 名对」，但交付口径 PinF1 的 tp 只有
+37 ⇒ 怀疑相当一部分是**坐标差过 5 px** 被判 position_mismatch。本脚本量这个：
 
-    python work\\tools\\diag\\_pinpos.py --pred work\\_gt10_vlmh
+  · 号能对上的引脚，点距分布（≤5 / ≤10 / ≤20 / >20 px）
+  · 误差向量 (dx, dy) 的分布 —— 若是**系统性偏移**（外扩/内缩），就还有救
+  · 按「名是否也对」分桶，看坐标与命名各占多少损失
+
+用法：
+    python -X utf8 work\\tools\\diag\\_pinpos.py --pred work\\_fnew --cases 1,2,3,4,5,7,8,9,10
 """
 from __future__ import annotations
 
 import argparse
-import collections
 import json
-import statistics
+import math
 import sys
+from collections import Counter
 from pathlib import Path
 
-sys.stdout.reconfigure(encoding="utf-8")
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "eda-pcb"))
 
-from schematic_parser import metrics as M          # noqa: E402
-from schematic_parser.data import discover          # noqa: E402
+from schematic_parser.metrics import EvalConfig, assign_components, canon_type, rewrite_keys  # noqa: E402
+from schematic_parser.data import IC_TYPES, pin_key_to_number  # noqa: E402
+
+GT9 = ROOT / "eda-pcb" / "yolo_part" / "Dataset(waitforpreprocess)" / "10GT"
+BUCKETS = ((5.0, "<=5 (tp)"), (10.0, "5~10"), (20.0, "10~20"), (50.0, "20~50"), (1e9, ">50"))
 
 
-def main() -> int:
+def bucket(d: float) -> str:
+    for thr, name in BUCKETS:
+        if d <= thr:
+            return name
+    return ">50"
+
+
+def point_of(rec):
+    p = (rec or {}).get("point") or {}
+    return (float(p.get("x", 0.0)), float(p.get("y", 0.0)))
+
+
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pred", required=True)
-    ap.add_argument("--cases", default="")
-    ap.add_argument("--show", type=int, default=12, help="打印前 N 个样本")
+    ap.add_argument("--cases", default="1,2,3,4,5,7,8,9,10")
+    ap.add_argument("--gt", default=str(GT9))
+    ap.add_argument("--tol", type=float, default=5.0)
+    ap.add_argument("--verbose", type=int, default=0)
     a = ap.parse_args()
 
-    pred_dir = Path(a.pred)
-    if not pred_dir.is_absolute():
-        pred_dir = ROOT / pred_dir
-    cases = {c.case_id: c for c in discover()}
-    want = [x.strip() for x in a.cases.split(",") if x.strip()] or None
-    cfg = M.EvalConfig()
-    dists, inside, outs = [], 0, 0
-    samples = []
-    for cid, c in sorted(cases.items()):
-        if want and cid not in want:
+    cfg = EvalConfig()
+    cfg.pin_tol = a.tol
+    gtroot, predroot = Path(a.gt), Path(a.pred)
+    name_ok = Counter()
+    name_bad = Counter()
+    dxy: dict = {k: [] for _t, k in BUCKETS}
+    per_case = []
+
+    for c in [x.strip() for x in a.cases.split(",") if x.strip()]:
+        gtf, pf = gtroot / c / ("%s.json" % c), predroot / ("%s.json" % c)
+        if not (gtf.exists() and pf.exists()):
             continue
-        pj = pred_dir / ("%s.json" % cid)
-        if not (pj.is_file() and c.json_path):
-            continue
-        gt = json.loads(Path(c.json_path).read_text(encoding="utf-8"))
-        pr = json.loads(pj.read_text(encoding="utf-8"))
-        _f1, keymap = M.assign_components(gt, pr, cfg)
-        g2p = {gk: pk for pk, gk in keymap.items()}
-        for gk, pk in g2p.items():
-            gv = (gt.get("components") or {}).get(gk) or {}
-            if str(gv.get("type") or "").lower() not in M.IC_TYPES:
+        gt = json.loads(gtf.read_text(encoding="utf-8"))
+        pred = json.loads(pf.read_text(encoding="utf-8"))
+        _f1, keymap = assign_components(gt, pred, cfg)
+        pred2 = rewrite_keys(pred, keymap)
+        gpin, ppin = gt.get("pins", {}), pred2.get("pins", {})
+        n_tp = n_pos = 0
+        for k, rec in gt.get("components", {}).items():
+            if canon_type(rec.get("type")) not in IC_TYPES or k not in gpin:
                 continue
-            gbox = gv.get("bbox") or gv.get("box")
-            gl = (gt.get("pins") or {}).get(gk) or {}
-            pl = (pr.get("pins") or {}).get(pk) or {}
-            pfl = {M.pin_key_to_number(k): v for k, v in pl.items()}
-            for gkey, ginfo in gl.items():
-                num = M.pin_key_to_number(gkey)
-                p = pfl.get(num)
-                if p is None:
+            if k not in pred2.get("components", {}):
+                continue
+            pmap = {pin_key_to_number(pk): pv for pk, pv in (ppin.get(k) or {}).items()}
+            for pk, pv in gpin[k].items():
+                num = pin_key_to_number(pk)
+                if num not in pmap:
                     continue
-                try:
-                    gx = float((ginfo.get("point") or {})["x"])
-                    gy = float((ginfo.get("point") or {})["y"])
-                    px = float((p.get("point") or {})["x"])
-                    py = float((p.get("point") or {})["y"])
-                except Exception:  # noqa: BLE001
-                    continue
-                d = ((px - gx) ** 2 + (py - gy) ** 2) ** 0.5
-                dists.append(d)
-                if gbox:
-                    x0, y0, x1, y1 = [float(v) for v in gbox]
-                    if x0 <= gx <= x1 and y0 <= gy <= y1:
-                        inside += 1
-                    else:
-                        outs += 1
-                if len(samples) < a.show:
-                    samples.append((cid, gk, num, (round(gx), round(gy)),
-                                    (round(px), round(py)), round(d, 1)))
-    print("同号引脚样本 n=%d" % len(dists))
-    if dists:
-        q = statistics.quantiles(dists, n=20)
-        print("  距离 d: min=%.1f p25=%.1f p50=%.1f p75=%.1f p90=%.1f max=%.1f"
-              % (min(dists), q[4], statistics.median(dists), q[14], q[17], max(dists)))
-        print("  <= pin_tol(%.1f): %d (%.3f)" % (cfg.pin_tol,
-              sum(1 for d in dists if d <= cfg.pin_tol),
-              sum(1 for d in dists if d <= cfg.pin_tol) / len(dists)))
-    print("  GT 引脚点落在 GT 符号框内: %d / 框外: %d" % (inside, outs))
-    print()
-    for s in samples:
-        print("   case %-6s %-5s num=%-5s GT=%-12s PR=%-12s d=%s" % s)
-    return 0
+                same_name = (pv.get("pinname") or "") == (pmap[num].get("pinname") or "")
+                gx, gy = point_of(pv)
+                px, py = point_of(pmap[num])
+                d = math.dist((gx, gy), (px, py))
+                b = bucket(d)
+                (name_ok if same_name else name_bad)[b] += 1
+                dxy[b].append((px - gx, py - gy))
+                if same_name and d <= a.tol:
+                    n_tp += 1
+                elif same_name:
+                    n_pos += 1
+                    if a.verbose:
+                        print("    [pos] %s %s.%s 误差 %.1f px  dx %.1f dy %.1f" % (c, k, num, d, px - gx, py - gy))
+        per_case.append((c, n_tp, n_pos))
+        print("  case %-3s tp %2d，名对但位置超差 %2d" % (c, n_tp, n_pos))
+
+    print("\n===== 号能对上的引脚：名字 × 点距桶 =====")
+    tot = sum(name_ok.values()) + sum(name_bad.values())
+    for _t, b in BUCKETS:
+        if tot:
+            print("  %-9s 名对 %3d  名错 %3d" % (b, name_ok[b], name_bad[b]))
+    print("  合计 %d（名对 %d / 名错 %d）" % (tot, sum(name_ok.values()), sum(name_bad.values())))
+    print("\n===== 各桶的误差向量中位数（找系统性偏移）=====")
+    for _t, b in BUCKETS:
+        v = dxy[b]
+        if v:
+            mx = sorted(x for x, _y in v)[len(v) // 2]
+            my = sorted(y for _x, y in v)[len(v) // 2]
+            print("  %-9s n=%3d  中位 dx %+7.2f  dy %+7.2f" % (b, len(v), mx, my))
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

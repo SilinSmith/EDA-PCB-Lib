@@ -69,6 +69,40 @@ _REPO = _ROOT.parent                                       # 仓库根 Y:\worksp
 # 上限），独立的 `llm_judge` 是 1.5 —— VLM 补强排在中间：它确实比 CRNN 准
 # （真值紧框上 0.95 vs 0.70），但它是**批量补读**、没有针对这一处单独设问。
 VLM_ENRICH = float(os.environ.get("FUSION_VLM_SCORE", "1.15"))
+# ★ `FUSION_VLM_PIN_SCORE`：VLM **引脚通道**（`vlm/enrich.py` 的 `pin=True`）读到的
+#   号/名作为候选时的分数。和 `VLM_ENRICH` 同档：同样是「批量补读」。
+VLM_PIN = float(os.environ.get("FUSION_VLM_PIN_SCORE", "1.15"))
+# ★ 引脚通道的两半**分开开关**（默认都开）：`FUSION_VLM_PIN_NUM` / `FUSION_VLM_PIN_NAME`。
+#   为什么要拆：官方 9 张上这条通道是 +2.88（只号 +1.95 / 只名 +1.32），可 220 派生集
+#   上是 −0.07，**两个集子的引脚约定不同**（`tools/diag/_pinconv.py` 普查：官方 `10GT`
+#   的 21 个 IC 里 20 个（95.2%）的 GT 键就是 `1..N`、IC `pinname` 纯数字 0.0%；
+#   派生 `200_train_cases` 946 个 IC 只有 22.6% 是顺序键、50.9% 的引脚键 >8
+#   （物理封装号）、`pinname` 纯数字 20.1%）。拆开才能量出「号」和「名」各自值多少、
+#   谁在派生集上倒扣（case 9 上「名」倒扣 4.55）。
+VLM_PIN_NUM = env_on("FUSION_VLM_PIN_NUM", "1")
+VLM_PIN_NAME = env_on("FUSION_VLM_PIN_NAME", "1")
+# ★ `FUSION_VLM_PIN_ADDONLY`（默认 **1** = 只增不删，2026-10 转正）：VLM 的引脚**号**只许补
+# 空槽，不许覆盖「阶段一/CRNN 已经读到的号」。
+#
+# 依据（官方 10 张 + 派生 val 19 张，`--engine official`、bbox 已按 20px 修正）：
+#   | 臂 | 官方 10 | val 19 | 官方 10 的 pin tp |
+#   |---|---|---|---|
+#   | 关（旧行为 = 现行之前） | 67.4420 | 19.7911 | 316 |
+#   | `FUSION_VLM_PIN_NUM=0`（整段关掉号通道） | 67.5397 (+0.10) | 20.1208 (+0.33) | 317 |
+#   | **`ADDONLY=1`（只增不删，本行起为默认）** | **67.6782 (+0.24)** | **20.1030 (+0.31)** | **319** |
+# ⇒ 只增不删在官方 10 上**优于**整段关掉（+0.24 vs +0.10，pin tp 319 vs 317），val 19 上持平
+# （−0.02）。逐案最大项：case 8 +1.74、case 1 +0.95、case 7 −0.33；val 0029 +3.68 / 0151 +1.09 /
+# 0176 +1.05 / 0011 +0.71 / 0190 −0.58。
+#
+# 机理（探针 `work\tools\dev\_nopin.py`，case 1 的 `U1`）：VLM 补对 5 根，却把 3 根本来读对、
+# 槽位仍在的号（`17`/`79`/`122`，GT 里都存在）从产物里**抹掉**，而且补进来的 5 根里有 4 根落在
+# 离 GT 脚点 >5px 处 ⇒「加 5 减 3」。业主 ④「可以削弱内容的置信度，但不能轻易覆盖/删除」在引脚
+# 号上同样成立 ⇒ 覆盖不生效、只记一条 `keep` 台账（`cvparts.hypo.LEDGER`）。
+#
+# ⚠ 第一版写成查 `pool.alts(sid)` 判定「槽位已有号」，实测与基线**逐位相同**（no-op）：`_add_vlm`
+# 是在 OCR 那一轮**之前**被调用的（见 `from_stage2` 尾部），此时池子里还没有 OCR 的号，查池子
+# 恒为空。判据必须查 `pool.assigned`（`_assigned` 那一份原始读数）。
+VLM_PIN_ADDONLY = env_on("FUSION_VLM_PIN_ADDONLY", "1")
 # 装配层给未配上位号的元件发的占位键（`assemble.build_doc` 的 `"p%03d" % i`）：
 # `p008` 这种既不是位号也不是型号，被 VLM 照抄回来时必须丢掉。
 FKEY_RE = re.compile(r"^p\d{3,4}$")
@@ -78,6 +112,58 @@ FKEY_RE = re.compile(r"^p\d{3,4}$")
 REGION_PAD = float(os.environ.get("FUSION_REGION_PAD", "24"))
 # 取景框的**最小边长**：位号框常常只有十几个像素，直接切出来给 VLM 看不出是什么。
 REGION_MIN = float(os.environ.get("FUSION_REGION_MIN", "120"))
+
+# ★★ boxscan（用户 m23186 原话：「我探测到了 box 元件，那么肯定要围绕他的 box 展开
+#    pin 和文字的扫描。这也是为什么需要融合层：统筹各种资源引导其他的子调度。」）
+#
+# 改造前的缺口：第 1 节只遍历 `assigned["desig_slots"]` —— 于是**一个位号候选都没有的
+# 元件连槽位都没有**，`llm_judge`/`rescan`/`cropfix`/`audit` 四个模块全部跳过它，
+# `solve.open_questions` 也问不到（零候选）。实测 220 张：629 颗没配上的 GT IC 里
+# **418 颗（56.0%）**的重叠元件 `desig_slots` 是空的。
+#
+# 打开后：对每个 `type` **不在 `NO_DESIGNATOR` 里**、又没有取景框的元件建
+# `comp.<cid>.key` 槽位 + 取景框（本体框，`set_region` 再用 `REGION_MIN=120` 兜底撑开
+# 视野）。零候选槽位的「去问一遍」路径在 `solve.open_questions` 的
+# `FUSION_OPEN_FREEFORM` 那里。
+# ⚠ VLM 开着时这一条基本是 no-op（`_add_vlm` 已经把 `comp.<cid>.key` 覆盖到 82/83、
+#   12/12、22/22）；它补的是**无 VLM**口径下整条路径消失的那一半。
+#
+# ============================ 实测：**判负，默认关** ============================
+# 口径：`--no-vlm` + `$env:FUSION_LLM='1'`（VLM 开着时 ① 是 no-op、② 要 LLM 轮真跑，
+# 所以只有这个口径量得到 boxscan 本身）。同口径配对对照（两档、官方 10GT 9 张与
+# 派生 19 张）：
+#   官方 9：`bs0_9` **52.48**（comp 0.7682 / netH 0.5130 / 元件 tp 167）
+#           vs `bs1_9` **52.47**（0.7721 / 0.5096 / 168）      ⇒ **−0.01**
+#   19 张：`bs0_19` **31.32**（0.5278 / 0.2754 / 316）
+#           vs `bs1_19` **31.37**（0.5302 / 0.2762 / 318）      ⇒ **+0.05**
+#   （不满足「两档都赚」门槛。）
+# 机制（`_fusion_report.json` 的 `notes`，一次 4 张的现场）：
+#   `{"kind":"boxscan","n_slot":0,"n_no_bbox":0,"n_skip_type":8}`（case 1）
+#   `{...,"n_slot":1,...,"n_skip_type":11}`（case 4）/ `n_slot:1`（case 7、case 10）
+#   ⇒ **每张图最多只建 1 个槽位**（类型闸门挡掉 6~11 个），收益/损失就是那 1 颗元件的
+#   自由读数对不对：case 4 那颗读错 ⇒ **57.99 → 55.69**（comp 0.7755→0.7347，多一个
+#   fp）；case 7 读对 ⇒ 57.12 → 58.37；case 10 读对 ⇒ 51.56 → 52.57。**净打平。**
+# 试过的补救（也否掉了）：把自由读数的分数压到读数带以下（`FUSION_FREE_SCORE=0.5`，
+#   见 `llm_judge.py`），让零候选元件只能**补空位**不能**抢位** —— 实测 `bs1f_9`
+#   与 `bs1_9` **逐位相同**（52.47，case 4 仍是 55.69）⇒ **case 4 的损失不是「抢位」
+#   造成的，就是那颗元件被 LLM 读错了**，压分救不了。
+# ⇒ 代码保留（`FUSION_BOXSCAN=1` 可复现每一臂），**默认 0**。
+BOXSCAN = env_on("FUSION_BOXSCAN", "0")
+
+# ⚠ 取景框高亮取哪个候选的框：`1` = 按分数最高的那个（与注释一致的语义），
+#   `0` = 老行为（`assigned["desig_slots"][cid]` 的**列表首项**，而 stage2 从不保证
+#   它按分数降序）。留成开关只是为了让那次 A/B 的两条臂都能复现。
+REGION_TOPK = env_on("FUSION_REGION_TOPK", "1")
+
+# ⚠ boxscan 的**类型闸门**：这些 type 纸上本来就没有位号（key 是伪造号 `∅N`），
+# 给它们建「位号是什么？」槽位只会让 LLM **编一个** key 出来 ⇒ 元件变 fp。
+# 与 `stage2/assign.py:303 NO_DESIGNATOR` 保持同一份 —— 先试着 import，
+# 拿不到时退回本地副本（内容逐字相同）。
+try:
+    from stage2.assign import NO_DESIGNATOR as _NO_DESIGNATOR      # noqa: E402
+except Exception:                                                  # noqa: BLE001
+    _NO_DESIGNATOR = frozenset({"gnd", "v", "net_input", "net_short", "net_output",
+                                "other", "net_bidirection", "m3\u87ba\u4e1d"})
 
 
 def _f(v, d: float = 0.0) -> float:
@@ -496,6 +582,102 @@ def _add_vlm(pool: "ClaimPool", vlm: dict, comps: dict,
                 if sid in pool.hy.slots and not pool.region(sid):
                     pool.set_region(sid, bb, focus=bb,
                                     note="VLM 补强的元件 %s" % cid, src="vlm:enrich")
+    # (d) ★★ **引脚通道**：`vlm["pins"]` 里的号/名也要进池子。
+    #
+    # ⚠ 漏了这一块 = 引脚通道的收益**在交付口径上整段归零**（2026-10 实测）：
+    #   `vlm/enrich.py` 的引脚通道把号/名写进**文档的 `pins` 字典**，而融合层是
+    #   从 `_assigned` 的槽位**重新装配**引脚的（`build_doc`），文档里那份 `pins`
+    #   从来没人读 ⇒ 官方 9 张 `FUSION_VLM_DIR=<引脚通道产物>` 的融合结果与基线
+    #   **逐位相同**（58.6304、pin F1 0.3920、`pin.name_mismatch` 16），而同一份
+    #   补强文档在 `stage2_eval` 上是 60.7776（pin F1 0.5174）。**+4 分的收益死在
+    #   「没人读」这一步上。**
+    #
+    # 槽位按**点**对齐：`vlm["pins"][cid][pk]["point"]` 与 `doc["pins"][cid][k]`
+    # 同源（`assemble.build_doc:766-768` 只把 y 翻成 JSON 空间），所以按点最近邻
+    # 就能拿到槽位下标 `k`；阈值 3px，对不上就不认（宁可少改，不可改错桩）。
+    # 出处标记：只有引脚通道**真跑过**的文档才认（`vlm/enrich.py` 写 `_pin_channel`）。
+    # 没标记 ⇒ 这份 `vlm["pins"]` 只是 stage2 的 CRNN 读数，收进池子会让**基线臂**
+    # 凭空多一批 1.15 分的候选，A/B 就不干净了。
+    _pins_src = (vlm.get("pins") or {}) if vlm.get("_pin_channel") else {}
+    _Hh = float(((pool.doc.get("image") or {}).get("h")) or 0.0)
+    _pts_of = pool.doc.get("pins") or {}
+    n_pin = 0
+    for vkey, vp in _pins_src.items():
+        cid = km.get(str(vkey))
+        if not cid or cid not in known or not isinstance(vp, dict):
+            continue
+        pts = _pts_of.get(cid) or []
+        if not pts:
+            continue
+        for pk, info in vp.items():
+            if not isinstance(info, dict):
+                continue
+            pt = info.get("point") or {}
+            try:
+                qx, qy = float(pt["x"]), float(pt["y"])
+            except Exception:                                  # noqa: BLE001
+                continue
+            k, bestd = None, 1e9
+            for i, pp in enumerate(pts):
+                try:
+                    d = abs(float(pp[0]) - qx) + abs(_Hh - float(pp[1]) - qy)
+                except Exception:                              # noqa: BLE001
+                    continue
+                if d < bestd:
+                    k, bestd = i, d
+            if k is None or bestd > 3.0:
+                continue
+            pks = str(pk)
+            num = pks[4:] if pks.startswith("pin_") else pks
+            for fld, txt in (("number", num if VLM_PIN_NUM else ""),
+                             ("name", str(info.get("pinname") or "").strip()
+                                      if VLM_PIN_NAME else "")):
+                if not txt:
+                    continue
+                sid = "pin.%s.%d.%s" % (cid, k, fld)
+                if fld == "number" and VLM_PIN_ADDONLY:
+                    # 只增不删：这个槽位在 `_assigned`（阶段一/CRNN 的读数，VLM 之前的原始
+                    # 那一份）里**已经有号**，就保留它，VLM 的值只记一条台账。
+                    #
+                    # ⚠ 判据必须查 `pool.assigned`，**不能**查 `pool.alts(sid)`：`_add_vlm`
+                    # 是在 OCR 那一轮**之前**调用的（见 `from_stage2` 尾部），此时池子里还
+                    # 没有 OCR 的号，查池子恒为空 ⇒ 第一版就是这么写成 no-op 的（实测
+                    # 官方 10 张与基线逐位相同 67.4420）。
+                    _orec = ((pool.assigned.get("comps") or {}).get(cid) or {}).get("pins") or {}
+                    _o = _orec.get(k) or _orec.get(str(k)) or {}
+                    _ocur = str(((_o.get("number") or {}).get("text")) or "").strip()
+                    if _ocur:
+                        try:
+                            from cvparts.hypo import LEDGER
+                            LEDGER.record(
+                                "keep", "vlm_pin:%s.%d" % (cid, k),
+                                before=_ocur, after=_ocur,
+                                reason=("VLM 引脚号 %r 与阶段一读到的 %r 冲突：按「只增不删」"
+                                        "保留原读数（VLM 值只记台账）" % (txt, _ocur)),
+                                by="claims:_add_vlm")
+                        except Exception:                          # noqa: BLE001
+                            pass
+                        continue
+                _dup = False
+                for alt in pool.alts(sid):
+                    if str(alt.value) == txt and float(alt.score) >= VLM_PIN:
+                        _dup = True
+                        break
+                if _dup:
+                    continue
+                pool.add(sid, txt, score=VLM_PIN, source="vlm:pin",
+                         evidence={"来源": "vlm/enrich.py 引脚通道",
+                                   "原键": pks, "点距": round(bestd, 2)},
+                         question="元件 %s 第 %d 个引脚的%s是？"
+                                  % (cid, k, "号" if fld == "number" else "名"),
+                         meta={"cid": cid, "k": k,
+                               "type": (pool.assigned.get("comps") or {})
+                                       .get(cid, {}).get("type"),
+                               "pt": [round(qx, 1), round(qy, 1)]})
+                n_pin += 1
+    pool.note("vlm_pin_ingest", n=n_pin,
+              skipped=None if vlm.get("_pin_channel") else "no_pin_channel")
+
     pool.note("vlm_ingest", n=n, n_key=len(km))
     return n
 
@@ -558,16 +740,25 @@ def from_stage2(case: str, doc: dict, assigned: dict, bgr=None,
                                   if not PR.desig_shape_ok(
                                       cd.get("text") or cd.get("canon") or "")]
         # ★ 取景框只设**一次**：窗口 = 全部候选框的并集，高亮 = **分数最高**那个候选的框。
-        # ⚠ 这里踩过一次坑：原来在候选循环里逐个 `set_region`，而 `set_region` 是**覆盖**语义
-        # ⇒ 最后一个候选（＝分数**最低**的）赢。`case 0001` 的 `c0015` 候选是
-        # `C5(0.754) / C1 / C5 / C3(-1.77)`，高亮最终落在 `C3` 那个框上，而那个框里印的是
-        # `R8` —— 模型老老实实答了 `R8`，是取景错了不是模型错了。
-        boxed = [cd.get("box") for cd in cands if cd.get("box")]
+        # ⚠ 这里踩过两次坑：
+        #   (1) 原来在候选循环里逐个 `set_region`，而 `set_region` 是**覆盖**语义
+        #       ⇒ 最后一个候选（＝分数**最低**的）赢。`case 0001` 的 `c0015` 候选是
+        #       `C5(0.754) / C1 / C5 / C3(-1.77)`，高亮最终落在 `C3` 那个框上，而那个框里印的是
+        #       `R8` —— 模型老老实实答了 `R8`，是取景错了不是模型错了。
+        #   (2) 改成「设一次」之后，高亮取的是 `boxed[0]`，而 `boxed` 是
+        #       `assigned["desig_slots"][cid]` 的**原始列表顺序**，`stage2` 从来没有
+        #       保证过它按分数降序 ⇒ 注释写着「分数最高那个候选的框」，代码却不保证。
+        #       现在按分数**显式排序**后再取（`FUSION_REGION_TOPK=0` 可退回列表首项）。
+        boxed = [cd for cd in cands if cd.get("box")]
         if boxed:
-            win = [_f(v) for v in boxed[0]]
-            for bx in boxed[1:]:
-                win = union_box(win, [_f(v) for v in bx]) or win
-            pool.set_region(sid, win, focus=[_f(v) for v in boxed[0]],
+            order = (sorted(boxed, key=lambda cd: -_f(cd.get("score")))
+                     if REGION_TOPK else boxed)
+            win = [_f(v) for v in order[0].get("box")]
+            for cd in boxed:
+                if cd is order[0]:
+                    continue
+                win = union_box(win, [_f(v) for v in cd.get("box")]) or win
+            pool.set_region(sid, win, focus=[_f(v) for v in order[0].get("box")],
                             note="元件 %s（%s）的位号候选框" % (cid, ctype),
                             src="ocr:designator")
         # 本体框也给进去：位号经常印在本体边上，取景必须包含本体才认得出是什么。
@@ -578,6 +769,49 @@ def from_stage2(case: str, doc: dict, assigned: dict, bgr=None,
 
     if shape_dropped:
         pool.note("shape_gate", n=len(shape_dropped), dropped=shape_dropped)
+
+    # ---- 1b boxscan：连位号候选都没有的元件，也要有槽位和取景框 --------------
+    # 见文件顶部 `BOXSCAN` 的长注释。这里只做「建槽位 + 建框」；「去问一遍」在
+    # `solve.open_questions`（零候选以前被 `continue` 挡死）。
+    #
+    # ⚠ 2026-10 修正：第一版**没有类型闸门**，于是 `gnd` / `v` / `net_*` / `other`
+    # 这些 `stage2/assign.py:303 NO_DESIGNATOR` **故意不给位号候选**的类型也被建了
+    # `comp.<cid>.key` 槽位，去问 LLM「这颗元件的位号是什么」—— 它们纸上本来就没有位号，
+    # LLM 只能**编一个**出来，编出来的 key 配不上 GT ⇒ 元件变 fp。
+    # 实测（官方 9 张，`--no-vlm` + `FUSION_LLM=1` 同口径配对）：
+    #   无闸门 `bs1_9` **52.47**（comp 0.7721 / netH 0.5096 / 元件 tp 168）
+    #   vs 对照 `bs0_9` **52.48**（comp 0.7682 / netH 0.5130 / tp 167）
+    #   ⇒ **净 −0.01（打平偏负）**，且 case 4 从 57.99 掉到 55.69（comp 0.7755→0.7347）。
+    if BOXSCAN:
+        n_new, n_no_bb, n_skip_type = 0, 0, 0
+        for cid in sorted(set(comps) | set(assigned.get("comps") or {})):
+            sid = "comp.%s.key" % cid
+            if pool.region(sid) is not None:
+                continue                                    # 第 1 节已建过
+            c = comps.get(cid) or {}
+            rec = (assigned.get("comps") or {}).get(cid) or {}
+            ctype = rec.get("type") or c.get("type")
+            if str(ctype) in _NO_DESIGNATOR:
+                n_skip_type += 1
+                continue
+            bb = c.get("bbox_img") or rec.get("bbox_img")
+            if not _box4(bb):
+                n_no_bb += 1
+                continue
+            if sid not in pool.hy.slots:
+                pool.hy.slots[sid] = Slot(
+                    slot_id=sid,
+                    question="元件 %s（类型 %s）的位号是什么？" % (cid, ctype),
+                    context={"type": ctype, "cid": cid, "boxscan": True})
+            meta = pool.meta.setdefault(sid, {})
+            meta.setdefault("type", ctype)
+            meta["boxscan"] = True
+            pool.set_region(sid, bb, focus=bb,
+                            note="元件 %s（%s）本体：无位号候选，按 box 重扫" % (cid, ctype),
+                            src="boxscan:component")
+            n_new += 1
+        if n_new or n_no_bb or n_skip_type:
+            pool.note("boxscan", n_slot=n_new, n_no_bbox=n_no_bb, n_skip_type=n_skip_type)
 
     # ---- 2 参数 / 器件名 ---------------------------------------------------
     for cid, rec in (assigned.get("comps") or {}).items():

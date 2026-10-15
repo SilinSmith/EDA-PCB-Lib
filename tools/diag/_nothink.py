@@ -29,7 +29,23 @@ from schematic_parser.data import discover, load_json  # noqa: E402
 from stage2.text import imread_unicode  # noqa: E402
 
 BASE = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:1234/v1").rstrip("/")
-KEY = os.environ.get("LLM_API_KEY", "sk-lm-YPX0MZpY:YPu0ZenotNLwPeVYNJ3Q")
+def _vlmkey():
+    """§5.103：token 会被轮换 ⇒ 探针里**不要写死 key**。来源与 vlm/client.py 同序。"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    cands = [os.environ.get("LLM_API_KEY_FILE"),
+             os.path.join(os.path.dirname(os.path.dirname(here)), ".lmstudio_key"),
+             os.path.join(os.path.expanduser("~"), ".lmstudio", "api_key")]
+    for _p in cands:
+        if _p and os.path.exists(_p):
+            _t = open(_p, encoding="utf-8").read().strip()
+            if _t.startswith("LLM_API_KEY="):
+                _t = _t.split("=", 1)[1].strip()
+            if _t:
+                return _t
+    return ""
+
+
+KEY = os.environ.get("LLM_API_KEY", "") or _vlmkey()
 
 P = ("这是电路原理图里的一个元器件（IC / 模块）。图里每个引脚旁边印着"
      "一个引脚编号（数字）和一个信号名。\n"

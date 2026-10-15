@@ -52,7 +52,7 @@ except Exception:                                        # noqa: BLE001
         "led": ("D", "LED"), "pin": ("TP",), "switch": ("SW", "S"), "l": ("L",),
         "mosfet": ("Q",), "bjt": ("Q",), "crystal_2pin": ("X", "Y", "C"),
         "crystal_3pin": ("X", "Y"), "crystal_4pin": ("X", "Y"), "crystal": ("X",),
-        "testpoint": ("TP",), "fuse": ("F",), "amp": ("U",), "amp_3pin": ("U",),
+        "testpoint": ("TP",), "tp": ("TP",), "fuse": ("F",), "amp": ("U",), "amp_3pin": ("U",),
         "amp_5pin": ("U",), "bjt_npn": ("Q",), "bjt_pnp": ("Q",),
         "mosfet_npn": ("Q",), "mosfet_pnp": ("Q",), "v": ("TP",),
     }
@@ -135,6 +135,35 @@ SHAPE_SCORE = os.environ.get("FUSION_SHAPE_SCORE", "").strip()
 BOX_PIN_PRIOR = env_on("FUSION_BOX_PIN_PRIOR", "0")
 _PRIOR_IC_TYPES = ("box", "ic", "boxic", "bigic")
 
+# ★★ `FUSION_SHAPE_W`（默认 **0.0 = 关**）：**让形状分真的压分**。
+#
+# 原来第 3 节「形状惩罚」只把 `f` 写进 `a.evidence["形状分"]` 并给 `st["shape_pen"]`
+# 加一 —— **分数一动不动**，是个静默的 no-op：`pin_number_shape("A")=0.1` 与
+# `pin_number_shape("7")=1.0` 在 `best()` 眼里一模一样。`value_shape` / `key_fits_type`
+# 里那几十行判据相当于只写给人看。
+#
+# 语义按 owner 的两条原则定：**判据不二值、信息只降权不销毁**。
+#   * 不是「f 低就删」—— 候选永远还在池子里，`overflow`/`history` 也都留着；
+#   * 只是**乘一个系数**：`k = FLOOR + (1-FLOOR)·f`，`f=1 → k=1`（原样），
+#     `f=0 → k=FLOOR=0.35`（明显降权，仍能被别的证据重新扶起来）。
+#   * `SHAPE_W` 是「这个降权管多大用」的插值：`0` = 老行为（只标注不压分），
+#     `1` = 完全生效。
+#
+# ★★ **实测判负，默认取 0**（口径：`--no-vlm` + `FUSION_LLM=0`，
+#    `work\tools\eval\fast.py`；归档 `work\_fast_base\{sw0,sw35,sw100,sw0_19,sw100_19}.json`）：
+#    * 官方 10GT 9 张：`W=0` / `W=0.35` / `W=1.0` **三者逐位相同**
+#      （51.06，comp 0.7682 / pin 0.3769 / netH 0.4840 / netL 0.1648）⇒ 对 10GT 毫无影响；
+#    * 19 张档：`W=1.0` **30.16**（pin 0.1841 / netH 0.2539）vs `W=0` **30.73**
+#      （pin 0.1974 / netH 0.2599 / netL 0.0862），tp 引脚 36→42、网络 204→211
+#      ⇒ **压分反而掉 0.57**（引脚号与网络成员一起掉，说明形状分低的候选
+#      里有用的是「分数低但对」的那些 —— 降权把它们推下去了）。
+#    * ⇒ 机制保留（`SHAPE_W>0` 可复现上面每一臂），**默认关**。
+#
+# ⚠️ 压分之后**必须重排 `s.alts`**：`Slot.best()` 是 `alts[0]`，而列表是按分降序维护的
+# （`hypo.py` 的 `Slot.add` 就踩过同一个坑：抬了分不重排 ⇒ `best()` 返回分更低那个）。
+SHAPE_W = float(os.environ.get("FUSION_SHAPE_W", "0.0"))
+SHAPE_FLOOR = float(os.environ.get("FUSION_SHAPE_FLOOR", "0.35"))
+
 
 def desig_shape_ok(raw: Any) -> bool:
     """**原样读出的串** `raw` 有没有可能是个位号？
@@ -194,6 +223,63 @@ RUN_MAX_GAP = 6          # 串内允许的最大空洞（超过就认为不是�
 REPAIR_PENALTY = float(os.environ.get("FUSION_REPAIR_PENALTY", "0.85"))
 # 连号窗口返回前几名（并列时交给 llm_judge 看图二选一，不硬选）
 TOP_WINDOWS = int(os.environ.get("FUSION_TOP_WINDOWS", "3"))
+# ★ **并列窗口（alt window）到底能不能给槽位派号。**
+#   **2026-10-09 定案：默认已从 `1`（开）翻成 `0`（关）**。依据是它与
+#   `FUSION_RUN_ORDER` 的成对 A/B（`work\_fast_out_wl_on` 链，`FUSION_LLM=0`，
+#   官方 9 张，新口径）：
+#       默认（alt1/ord0）        **68.2706**
+#       `ALTWINDOW=0` 单开       68.3238（+0.0532）
+#       `ALTWINDOW=0 + ORDER=1`  **68.8997（+0.6291）** ← 现在的默认
+#   逐 case：**只有 case 1 变（54.3981 → 60.0600），其余 8 张逐字节相同**；
+#   case 1 的 12 颗电容位号从 `C151,C152,C156,C157,C158,C162 + C1513,C1514,
+#   C1515,C1517,C1518,C1519` 变成**完整的 `C151…C162`**（GT 正是这 12 个）
+#   ⇒ netH 0.6140 → 0.7368、pin F1 不变。
+#   打开时（旧默认）：`[151,162]` 之外还有 `[1151,1162]`/`[1511,1522]` 这些
+#   **偏移窗口**，它们窗内的号也会作为候选塞进池子（`source=prior:run_altwindow`）。
+#   实测代价（官方 9 张交付口径）：`case 1` 的 12 颗电容真值 `C151..C162`，
+#   6 颗被判成 **`C1513/C1514/C1515/C1517/C1518/C1519`**（正是偏移窗口 `[1511,1522]`
+#   里的号），`_assigned` 里这 6 条的 `_by` 全是 `solve:prior:run_altwindow`；
+#   `case 1` compF1 因此 0.5909（其余 8 张 0.94~1.00）。窗口清单见
+#   `work\_f9_B_pin\_fusion_report.json` 的 `run_prior` note。
+#   置 `0` 后只保留**首选窗口**（`[151,162]`）的 `run_inwindow` 与窗内空号的
+#   `run_free` 两个先验。**注意**：`context["连号窗口候选"]` 照旧写（LLM 轮仍能看图二选一），
+#   关掉的只是「文字侧自己派号」。
+RUN_ALTWINDOW = os.environ.get("FUSION_RUN_ALTWINDOW", "0").strip().lower() not in ("0", "off", "false", "no", "")
+
+# ★ **阅读顺序先验（`prior:run_order`）到底开不开。**
+#   **2026-10-09 定案：默认已从 `0`（关）翻成 `1`（开）** —— 它才是 case 1 那
+#   6 个位号被修好的那一半（`ALTWINDOW=0` 单开只 +0.0532，加上它才 +0.6291）。
+#   ⚠️ **两者必须同时开**：历史 A/B（旧链 `_fast_out_reg9`、官方 9 张、新口径）
+#   `D alt1/ord1` = 62.5952 = 与基线 `A alt1/ord0` 逐位相同 ⇒ **窗口不关时，
+#   阅读顺序先验一分不加**（窗内的错号仍然赢）。
+#   动机：`case 1` 的 12 颗电容真值 `C151..C162`，按**阅读顺序**（图上从上到下、
+#   同行从左到右）排恰好一一对应 —— 而现在的管线只会用「读数/修复变体」决定
+#   谁拿哪个号，读数一错（`C153`→`C53`、`C159`→`C153`）就全错。
+#   规则见 `Priors._run_order`。
+RUN_ORDER = os.environ.get("FUSION_RUN_ORDER", "1").strip().lower() not in ("0", "off", "false", "no", "")
+# ★ 是否**也**改「窗内读数与自己的阅读位不符」的槽位（默认关）。
+#   关时只派给「没有窗内真读数」的槽位（最保守：一个已读出的号都不动）。
+#   开时的理由：一个窗内读数如果**已经被同族另一个槽位在自己的阅读位上认领**
+#   （`case 1`：`c0010` 读 `C153`，而阅读顺序第 3 位正是 `C153` 的家），那它多半
+#   是读错/串框，让位给「它自己阅读位上的号」更对。**一致性闸**（下面第三条）保证
+#   只在「这张图的编号确实跟着阅读顺序走」时才敢这么做 —— 阅读顺序≠连号顺序的图
+#   （`case 3` 的 `C` 就是 `7,4,5,6,1,2,3`）过不了闸，整段放弃。
+#   ★ 2026-10-09 复核（`work\_fast_out_wl_on` 链，官方 9 张）：`HOME=1` 与不设
+#     **逐字节相同**（都是 68.8997）；旧链上它只比不设多 +0.0241（63.2844 vs
+#     63.2603）⇒ **保持默认 0**（不翻一个边际收益未复现的开关）。
+RUN_ORDER_HOME = os.environ.get("FUSION_RUN_ORDER_HOME", "0").strip().lower() not in ("0", "off", "false", "no", "")
+# 派号的加成：`该槽位当前最优分 + RUN_ORDER_BONUS`。
+# 尺度理由（与 `fusion/axis.py:AXIS_MARGIN=0.05` 同款）：要**刚好越过它自己那条
+# 窗外读数**，又不能凭空造出一个比别处真读数还高的分。实测 `0001` 的位号读数分
+# 都在 `[-1.02, -0.73]`，0.05 足以让本槽位自己的号排在它自己窗外读数之前。
+RUN_ORDER_BONUS = float(os.environ.get("FUSION_RUN_ORDER_BONUS", "0.05"))
+# 一致性闸：窗内真读数里「落在自己阅读位上」的比例下限。低于它 = 这张图的编号
+# 不跟阅读顺序走，整段放弃（**不猜**）。
+RUN_ORDER_AGREE = float(os.environ.get("FUSION_RUN_ORDER_AGREE", "0.6"))
+# 一致性闸要有多少条窗内真读数才算数（太少没有统计意义）。
+RUN_ORDER_MIN_TRUST = int(os.environ.get("FUSION_RUN_ORDER_MIN_TRUST", "2"))
+# 同一「行」的判据：竖直重叠 ≥ 较矮那个框高度的这个比例。
+READ_ROW_OVERLAP = float(os.environ.get("FUSION_READ_ROW_OVERLAP", "0.5"))
 
 
 def _f(v, d: float = 0.0) -> float:
@@ -239,6 +325,99 @@ def _cap(pool, sid: str, want: str, sc: float) -> float:
     if _is_read(getattr(b, "source", "")) and str(b.value) != str(want):
         return min(sc, _f(b.score) - 0.01)
     return sc
+
+
+def _b4(v):
+    """`[x0,y0,x1,y1]`（图像帧）或 None。"""
+    try:
+        if v is not None and len(v) == 4:
+            return [_f(v[0]), _f(v[1]), _f(v[2]), _f(v[3])]
+    except TypeError:
+        pass
+    return None
+
+
+def slot_boxes(pool, slots):
+    """槽位 -> **图像帧**框（阅读顺序用）；拿不全就返回 None（宁可不做）。
+
+    框来源按可靠性排序（实测 `case 1` 三种来源排出的阅读顺序**完全一致**）：
+      1. `pool.doc["components"][cid]["bbox_img"]` —— stage1 的**元件本体**框，最稳。
+         ★ 不要去 `pool.meta[sid]` 找框：那里只有 `{"type":...,"cid":...}`（`fusion/axis.py:652`
+         记过这个坑）；`assigned["comps"][cid]` 的 `bbox*` 也全是 None。
+      2. 退而取 `pool.region(sid)` 的 `focus`（最高分文字候选框）或 `box`（取景窗，
+         含本体，略大）。
+    """
+    body = {}
+    comps = (pool.doc or {}).get("components") or []
+    if isinstance(comps, dict):
+        comps = list(comps.values())
+    for c in comps:
+        if isinstance(c, dict):
+            b = _b4(c.get("bbox_img"))
+            if b is not None:
+                body[str(c.get("id"))] = b
+    out, src = {}, ""
+    for sid in slots:
+        parts = str(sid).split(".")
+        cid = parts[1] if len(parts) >= 3 else ""
+        b = body.get(cid)
+        if b is not None:
+            src = src or "stage1:bbox_img"
+        else:
+            r = pool.regions.get(sid) if getattr(pool, "regions", None) else None
+            b = _b4(getattr(r, "focus", None)) if r is not None else None
+            if b is None:
+                b = _b4(getattr(r, "box", None)) if r is not None else None
+            if b is not None:
+                src = src or "region:focus"
+            else:
+                return None, ""
+        out[sid] = b
+    return out, (src or "stage1:bbox_img")
+
+
+def reading_order(slots, boxes) -> List[str]:
+    """按**阅读顺序**排序：图上从上到下、同行从左到右。
+
+    图像帧 `y` 向下，所以「上」= `y` 小。**同一行必须用框的竖直重叠判**，不能直接
+    按 y 排：`case 1` 最上面那 6 颗电容 `bbox_json` 的 y 中心是
+    1034.2/1034.0/1034.0/1034.1/1034.0/1034.2（抖动 0.2px，行间距 0），直接
+    `(y,x)` 排会把 6 个号全打乱；按重叠取并查集行再行内按 x 排才是
+    `c0008,c0001,c0005,c0002,c0006,c0003`（= 真值 `C151..C156`，实测 12/12）。
+    """
+    ids = [s for s in slots if s in boxes]
+    miss = [s for s in slots if s not in boxes]
+    n = len(ids)
+    par = list(range(n))
+
+    def find(a: int) -> int:
+        while par[a] != a:
+            par[a] = par[par[a]]
+            a = par[a]
+        return a
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = boxes[ids[i]], boxes[ids[j]]
+            h = min(a[3] - a[1], b[3] - b[1])
+            if h <= 0:
+                continue
+            if min(a[3], b[3]) - max(a[1], b[1]) >= READ_ROW_OVERLAP * h:
+                par[find(i)] = find(j)
+    rows = defaultdict(list)
+    for i in range(n):
+        rows[find(i)].append(i)
+
+    def _y(g):
+        return sum((boxes[ids[i]][1] + boxes[ids[i]][3]) / 2.0 for i in g) / float(len(g))
+
+    def _x(i):
+        return (boxes[ids[i]][0] + boxes[ids[i]][2]) / 2.0
+
+    out: List[str] = []
+    for g in sorted(rows.values(), key=_y):
+        out.extend(ids[i] for i in sorted(g, key=_x))
+    return out + miss
 
 
 def split_desig(s: str) -> Tuple[str, Optional[int]]:
@@ -592,11 +771,110 @@ class Priors:
         lo, hi, cover, free, _k = ws[0]
         return lo, hi, cover, free
 
+    # ------------------------------------------------- 阅读顺序 × 连号（★新增）
+    def _run_order(self, pool, pre: str, slots: Sequence[str], no_read: set,
+                   lo: int, hi: int, best0: dict, st: dict):
+        """把「阅读顺序第 i 个槽位拿 `lo+i-1` 号」作为候选注进池子。
+
+        规矩（都写在常量注释与证据里，别改成「无脑重排」）：
+
+        1. **只给没有窗内真读数的槽位派号**；可信托位保持原号不动。
+           `RUN_ORDER_HOME=1` 时**再加**一类：窗内读数与自己的阅读位不符的槽位 ——
+           这种读数多半是串框（`case 1` 的 `c0010` 读 `C153`，而阅读顺序第 3 位
+           正是 `C153` 的家）。**注意这不是 `_cap` 那条铁律的反例**：铁律是「不能
+           把读出来的号改掉」，而这里改的是**一个已经被同族别的槽位在自己的阅读位
+           上认领的号**，且下面第一致性闸只放行「编号确实跟阅读顺序走」的图。
+        2. `no_read` 槽位只参与排位、**绝不接受派号**（`metrics.is_unkeyed` 只认
+           `^∅\d+$`/`^p\d{3,4}$`：先验只能细化读数，不能发明身份）。
+        3. **一致性闸**：窗内真读数里至少 `RUN_ORDER_AGREE` 的比例要落在自己的
+           阅读位上，否则整段放弃（不猜）。这条闸是「阅读顺序 ≠ 连号顺序」的图
+           （`case 3` 的 C = `[7,4,5,6,1,2,3]`、`case 5/7/8/9/10`）唯一的护栏。
+        4. **不过 `_cap`**：`_cap` 会把分压到窗内读数之下，而这里要修的**正是**
+           窗外那些错读数；护栏改成「可信托位根本不发候选」＋ `RUN_ORDER_BONUS`
+           只加在本槽位自己的最优分上（不抬高到别人的真读数之上）。
+        5. 数量必须配平（窗口宽 == 槽位数），否则证据不足，整段跳过。
+
+        返回一张复盘表（进 `run_prior` note），或 None（没做/不满足条件）。
+        """
+        n = hi - lo + 1
+        if n != len(slots):
+            st["run_order_skip"] = st.get("run_order_skip", 0) + 1
+            return None
+        boxes, bsrc = slot_boxes(pool, slots)
+        if not boxes:
+            st["run_order_nobox"] = st.get("run_order_nobox", 0) + 1
+            return None
+        ordered = reading_order(slots, boxes)
+        home = {sid: lo + i for i, sid in enumerate(ordered)}
+        trust: Dict[str, int] = {}
+        for sid in ordered:
+            b = best0.get(sid)
+            if b is None or not _is_read(getattr(b, "source", "")):
+                continue
+            _p, num = split_desig(str(b.value))
+            if num is not None and lo <= num <= hi:
+                trust[sid] = num
+        n_in = len(trust)
+        if n_in < RUN_ORDER_MIN_TRUST:
+            st["run_order_skip"] = st.get("run_order_skip", 0) + 1
+            return None
+        agree = sum(1 for sid, num in trust.items() if home[sid] == num)
+        if agree < RUN_ORDER_AGREE * n_in:
+            st["run_order_disagree"] = st.get("run_order_disagree", 0) + 1
+            return None
+        table, added = [], 0
+        # 已被**别的槽位的真读数**占着的号：绝不发候选去抢。
+        # ★ 这条闸补的是一个真实的洞：一致性闸只保证「多数」窗内读数落在自己的
+        #   阅读位上，落到少数派的那条读数（`trust[sid] != home[sid]`）仍会被某个
+        #   待派槽位认领作它的阅读位号 —— 两个槽位抢同一个号，而 `solve` 的增广路
+        #   **不比分数**（见 `fusion/solve.py:_assign`），真读数可能被挤掉。
+        #   读数是证据：**宁可这个待派槽位不派号。**
+        held = set(trust.values())
+        for i, sid in enumerate(ordered):
+            b = best0.get(sid)
+            cand = "%s%d" % (pre, home[sid])
+            if sid in no_read:
+                tag = "noread"
+            elif sid not in trust:
+                tag = "trade"
+            elif trust[sid] == home[sid]:
+                tag = "trust"
+            elif RUN_ORDER_HOME:
+                tag = "home"
+            else:
+                tag = "trust-keep"
+            table.append([sid.split(".")[1], i + 1, str(b.value) if b else "",
+                          home[sid], tag])
+            if tag not in ("trade", "home"):
+                continue                     # 可信托位：一个号都不动
+            if b is not None and str(b.value) == cand:
+                continue
+            if home[sid] in held:
+                table[-1][4] = tag + "-reserved"
+                st["run_order_reserved"] = st.get("run_order_reserved", 0) + 1
+                continue
+            pool.add(sid, cand,
+                     score=(_f(b.score) if b is not None else 0.0) + RUN_ORDER_BONUS,
+                     source="prior:run_order",
+                     evidence={"阅读顺序位": i + 1, "阅读位号": home[sid],
+                               "连号窗口": [lo, hi], "窗内可信": "%d/%d" % (agree, n_in),
+                               "原最优": str(b.value) if b is not None else None,
+                               "框来源": bsrc},
+                     question="元件 %s 的位号是哪一个？" % sid.split(".")[1],
+                     meta=dict(pool.meta.get(sid) or {}))
+            st["run_added"] += 1
+            st["run_order"] += 1
+            added += 1
+        if not added:
+            return None
+        return {"agree": "%d/%d" % (agree, n_in), "框来源": bsrc,
+                "表": table}
+
     # ------------------------------------------------------------ 往池子里补
     def annotate(self, pool, run_only_gaps: bool = True) -> dict:
         """给池子补先验候选。返回统计 dict（给 decision_log 用）。"""
         st = {"run_added": 0, "run_slots": 0, "run_windows": 0,
-              "run_alt_windows": 0, "pin_prior": 0, "shape_pen": 0}
+              "run_alt_windows": 0, "run_order": 0, "pin_prior": 0, "shape_pen": 0}
 
         # ---- 1 位号连号：**滑窗 + 修复变体** ------------------------------
         by_pre: Dict[str, List[str]] = defaultdict(list)
@@ -640,6 +918,9 @@ class Priors:
             if len(cover) < max(2, int(0.5 * len(slots))):
                 continue                     # 覆盖太差，窗口不可信
             used = set(cover.values())
+            # 阅读顺序先验要判「这个槽位有没有窗内真读数」，必须用**注入先验之前**
+            # 的最优候选（读数是证据）；先拍一张快照。
+            _best0 = {s: pool.best(s) for s in slots} if RUN_ORDER else {}
             # (a) 窗内的候选：**只给没有读数的槽位加成**，有读数的槽位上打成
             #     「比读数低一点」的备选。★ 实测：`prior:run_inwindow` 用
             #     `best + 0.02` 把真读数抢走，是 `0001 29.33→` 与 `0004`
@@ -697,7 +978,7 @@ class Priors:
                 s = pool.hy.slots.get(sid)
                 if s is not None:
                     s.context["连号窗口候选"] = [[lo, hi]] + alts
-            for l, h, cv, _fr, _k in ws[1:]:
+            for l, h, cv, _fr, _k in (ws[1:] if RUN_ALTWINDOW else []):
                 for sid, num in cv.items():
                     if sid not in slots or sid in no_read:
                         continue
@@ -716,9 +997,20 @@ class Priors:
                              question="元件 %s 的位号是哪一个？" % sid.split(".")[1],
                              meta=dict(pool.meta.get(sid) or {}))
                     st["run_added"] += 1
-            pool.note("run_prior", prefix=pre, lo=lo, hi=hi,
-                      covered=len(cover), slots=len(slots), free=free,
-                      windows=[[l, h] for l, h, _c, _f, _k in ws])
+            # (d) **阅读顺序 × 连号**（`FUSION_RUN_ORDER`，2026-10-09 起默认**开**）：
+            #     图上从上到下、同行从左到右的第 i 个槽位拿 `lo+i-1` 号。
+            #     这是纯形状证据，只在「这张图的编号确实跟着阅读顺序走」（一致性闸）
+            #     且「该槽位没有窗内真读数」（或 `HOME` 下的串框读数）时才动手。
+            _onote = None
+            if RUN_ORDER:
+                _onote = self._run_order(pool, pre, slots, no_read, lo, hi,
+                                         _best0, st)
+            _kw = dict(prefix=pre, lo=lo, hi=hi, covered=len(cover),
+                       slots=len(slots), free=free,
+                       windows=[[l, h] for l, h, _c, _f, _k in ws])
+            if _onote:
+                _kw["run_order"] = _onote
+            pool.note("run_prior", **_kw)
 
         # ---- 2 引脚号：一颗元件内 1..N，认不出的号由空位推出 --------------
         pins_of = (pool.doc or {}).get("pins") or {}
@@ -761,11 +1053,17 @@ class Priors:
                 st["pin_prior"] += 1
 
         # ---- 3 形状惩罚：给「不像」的候选降权（来源仍是它自己） -----------
+        #
+        # ★ `SHAPE_W > 0` 时这里**真的改分**（原先是静默 no-op，见文件头 `SHAPE_W` 注释）。
+        # 乘 `k = FLOOR + (1-FLOOR)·f` 再按 `SHAPE_W` 插值：`f=1` 时 `k=1`
+        # （**只降不升** —— 形状永远不能凭空抬高一个候选）；`f=0` 时 `k=FLOOR`。
+        # 改完**必须重排** `s.alts`，否则 `best()`（= `alts[0]`）还指着旧的第一名。
         for sid in pool.slot_ids():
             s = pool.hy.slots.get(sid)
             if s is None:
                 continue
             kind = sid.rsplit(".", 1)[-1]
+            touched = False
             for a in s.alts:
                 v = str(a.value)
                 if sid.startswith("comp.") and kind == "key":
@@ -785,6 +1083,13 @@ class Priors:
                 a.evidence = ev
                 if f <= 0.0:
                     st["shape_pen"] += 1
+                if SHAPE_W > 0.0 and f < 1.0:
+                    k = SHAPE_FLOOR + (1.0 - SHAPE_FLOOR) * f
+                    a.score *= (1.0 - SHAPE_W) + SHAPE_W * k
+                    touched = True
+                    st["shape_demote"] = st.get("shape_demote", 0) + 1
+            if touched:
+                s.alts.sort(key=lambda a: -a.score)
         return st
 
     # ------------------------------------------------------------ 体检

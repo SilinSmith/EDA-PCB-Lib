@@ -27,43 +27,65 @@
 「绝大多数槽位无冲突」的真实分布上等价于最优解，且没有 Hungarian 的 O(n³) 与
 浮点相等问题。冲突链长度实测 ≤ 2。
 """
+
 from __future__ import annotations
 
+
 import json
+
 import os
+
 import re
+
 import sys
+
 from collections import defaultdict
+
 from pathlib import Path
+
 from typing import Dict, List, Optional, Sequence, Tuple
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+
 from fusion import claims as CL          # noqa: E402
+
 from fusion import priors as PR          # noqa: E402
+
 
 # 「最优与次优差多少以内算判不出来」——比 hypo.MARGIN(0.15) 紧，因为这里的候选
 # 分数是「读法置信度 × 形状」的混合量，同一读法内部的浮动也有 0.05 量级。
 OPEN_MARGIN = float(os.environ.get("FUSION_OPEN_MARGIN", "0.10"))
+
 # 最多留几个问题给 LLM 看图裁决（每问一次约 0.3 s，但端点有并发上限）
 MAX_OPEN = int(os.environ.get("FUSION_MAX_OPEN", "24"))
+
 # 连号空洞补全：一个前缀至少有多少个已定号才敢推「这里应该有第 N 号」
 GAP_MIN_RUN = int(os.environ.get("FUSION_GAP_MIN_RUN", "4"))
+
 # 区间的**填充率**下限：`R7..R1210` 这种被垃圾读数拉开的区间不该补洞
 GAP_MIN_COVER = float(os.environ.get("FUSION_GAP_COVER", "0.45"))
+
 # 补洞候选的分数折扣（相对该前缀已定号的中位分）
 GAP_SCORE = float(os.environ.get("FUSION_GAP_SCORE", "0.90"))
+
 from envflag import env_on                       # noqa: E402  (唯一权威假值词表)
+
 # ★ 同 `fusion\run.py`：手写短词表 ⇒ `FUSION_GAP_FILL=off` 被当成开。统一。
 GAP_FILL = env_on("FUSION_GAP_FILL", "1")
+
 # A weaker duplicate read must not move an observed non-IC designator to a
 # synthetic alternative. 10GT non-coordinate validation on 2026-10-14 found
 # eight previously correct names displaced by this augmentation path.
 NONIC_READ_OWNERSHIP = env_on("FUSION_NONIC_READ_OWNERSHIP", "1")
+
 # 每个槽位最多留几个候选进匹配（含合成的）
 MAX_CANDS = int(os.environ.get("FUSION_MAX_CANDS", "8"))
 
+
 DESIG_SLOT_RE = re.compile(r"^comp\.([^.]+)\.key$")
+
 PINNUM_SLOT_RE = re.compile(r"^pin\.([^.]+)\.([^.]+)\.number$")
 
 
@@ -281,6 +303,12 @@ def gap_fill(pool, cands, assign, stats=None) -> int:
                 own_read = own_read or bool(b and b.source == "geo:axis")
             sc = min(base, own - 0.01) if own_read else base
             if sc <= 0.0:
+                # ★ **不要再让它静默**：`own_read` 为真且 `own < 0` 时（已有候选被
+                #   判成「读错了」，分数为负），`min(base, own-0.01)` 也是负的，
+                #   于是这个槽位整条补洞失效 —— 表现为「`FUSION_GAP_FILL=1` 却像
+                #   没开」。行为本身是保守的（负分 = 有反证，不该覆盖），但必须
+                #   留下计数，否则下次又要在 `stats` 里翻半天。
+                st["gap_skip_negative"] = int(st.get("gap_skip_negative", 0)) + 1
                 continue
             have_v = {v for v, _s, _src in cands.get(sid) or []}
             for n in holes:
@@ -365,11 +393,27 @@ def open_questions(pool, assign, margin: Optional[float] = None,
     margin = OPEN_MARGIN if margin is None else float(margin)
     limit = MAX_OPEN if limit is None else int(limit)
     out: List[dict] = []
+    free: List[dict] = []
     for sid in sorted(pool.slot_ids()):
         row = assign.get(sid)
         rows = [row] if row else []
         alts = pool.alts(sid)
         if not alts:
+            # ★★ boxscan ②：零候选槽位以前在这里被 `continue` 挡死 —— 而「一个候选
+            #   都没有」恰恰是最该问模型的局面（位号文字根本没进候选表）。只在**有
+            #   取景框**时才出题（没图问不了），且单独排队 + 单独限量，不挤占正常题。
+            if not FREEFORM or pool.region(sid) is None:
+                continue
+            free.append({
+                "slot": sid,
+                "question": (pool.hy.slots[sid].question or "这一项应该是什么？"),
+                "top": None,
+                "alt": None,
+                "margin": None,
+                "region": pool.region(sid).to_dict(),
+                "choices": [],
+                "free": True,
+            })
             continue
         top = rows[0] if rows else (str(alts[0].value), CL._f(alts[0].score), alts[0].source)
         # 次优：候选表里**与 top 不同值**的最高分
@@ -396,7 +440,9 @@ def open_questions(pool, assign, margin: Optional[float] = None,
     # 最不确定的排前面；同分时优先「位号/引脚号」这种最值钱的槽位
     prio = {"comp": 0, "pin": 1, "net": 2}
     out.sort(key=lambda d: (d["margin"], prio.get(d["slot"].split(".")[0], 3)))
-    return out[:limit]
+    # ★ boxscan ② 排在**正常题之后**、单独限量：零候选题的价值不如「两个候选咬得很紧」
+    #   的题确定，但也不能因为是新通道就被 `limit` 一刀切掉。
+    return out[:limit] + free[:max(0, FREEFORM_MAX)]
 
 
 # ------------------------------------------------------------------ 回写
@@ -499,6 +545,21 @@ def _demo() -> int:
         len(sol["open"]), (sol["open"][0]["slot"] + " " + str(sol["open"][0]["choices"]))
         if sol["open"] else None))
     return 1 if bad else 0
+
+
+# ★★ boxscan ②：**零候选**槽位的「去问一遍」路径。
+#
+# 改造前 `open_questions` 里是 `if not alts: continue` —— 一个候选都没有的槽位被
+# 彻底挡在门外。而「一个候选都没有」恰恰是最该问模型的局面：位号文字**根本没进
+# 候选表**（220 张实测：629 颗没配上的 GT IC 里 418 颗的重叠元件 `desig_slots` 是空的）。
+#
+# 打开后：零候选槽位**只要有取景框**（`claims.BOXSCAN` 会给每个元件建框）就出一题
+# 自由读数题，**单独排队、单独限量**，不挤占正常「二选一」题的名额。
+# `FUSION_OPEN_FREEFORM_MAX` = 每张最多几道（每题约 0.2~30 s，端点预算是硬约束）。
+FREEFORM_MAX = int(os.environ.get("FUSION_OPEN_FREEFORM_MAX", "8"))
+
+# ★★ boxscan ② 的开关（详见 `MAX_OPEN` 下面那段）。关掉即逐位退回改造前行为。
+FREEFORM = env_on("FUSION_OPEN_FREEFORM", "1")
 
 
 if __name__ == "__main__":

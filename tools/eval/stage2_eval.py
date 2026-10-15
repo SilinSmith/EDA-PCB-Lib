@@ -113,8 +113,17 @@ def main(argv=None):
                     help="无名元(∅NNN)的匹配方式，默认 gt=官方口径")
     ap.add_argument("--pin-all", action="store_true",
                     help="pin_f1 统计全部元件（旧口径），默认只统计 box")
+    ap.add_argument("--net-literal", action="store_true",
+                    help="净 hyperGraph 按字面比引脚号（**现在的默认**，官方实测口径）；"
+                         "保留此开关只为兼容旧命令行")
+    ap.add_argument("--net-collapse", action="store_true",
+                    help="净 hyperGraph 把非 box 元件的引脚号折成通配 `*`（旧口径，"
+                         "会掩盖 c/r 脚号读错，官方 10 张上虚高 7.4 分）")
     ap.add_argument("--no-canon-types", action="store_true",
                     help="不按 type_list 归一化 type")
+    ap.add_argument("--net-hard", action="store_true",
+                    help="连通性通道回到旧口径「tp = Σ 引脚交集」（历史基线都是这个口径）；"
+                         "默认是官方口径「tp = Σ 每对网的 pin-set 软 F1(Dice)」")
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--json", default=None)
     ap.add_argument("--cases", default=None,
@@ -127,6 +136,8 @@ def main(argv=None):
                      line_tol=args.line_tol, compare_text=not args.no_text,
                      unkeyed_match=args.unkeyed_match,
                      pin_box_only=not args.pin_all,
+                     net_pin_collapse_nonbox=bool(args.net_collapse),
+                     net_soft=not args.net_hard,
                      canon_types=not args.no_canon_types)
     exact, digits = build_index(args.data_root)
 

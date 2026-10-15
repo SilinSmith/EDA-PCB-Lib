@@ -157,6 +157,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# 本机 LM Studio 的 API token（`vlm/client.py` 的 key 文件来源之一，见 §5.103）
+.lmstudio_key
+
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -241,8 +244,21 @@ eda_yolo/
 !weights/pcb43_v2_from_best.pt
 !weights/textrec_best.pt
 
-# --- 3. 数据集：只保留 YAML 配置、类别表与说明文档 -------------------------
-/yolo_part/Dataset*/
+# --- 3. 数据集：图片不入库；**判题机需要的 GT 标注 json 入库** ---------------
+#   判题机（`python -m schematic_parser.evaluate`）只读 GT 的 json，不读图片；
+#   为了让队友 clone 下来就能直接跑分，三个 split 的 `*.json` 与 `type_list.md`
+#   例外放行，PNG / 训练数据仍然不入库。
+/yolo_part/Dataset*/**
+!/yolo_part/Dataset*/10GT/
+!/yolo_part/Dataset*/10GT/**/
+!/yolo_part/Dataset*/10GT/**/*.json
+!/yolo_part/Dataset*/10GT/type_list.md
+!/yolo_part/Dataset*/10_GTcase/
+!/yolo_part/Dataset*/10_GTcase/**/
+!/yolo_part/Dataset*/10_GTcase/**/*.json
+!/yolo_part/Dataset*/200_train_cases/
+!/yolo_part/Dataset*/200_train_cases/**/
+!/yolo_part/Dataset*/200_train_cases/**/*.json
 /yolo_part/training_data/images/
 /yolo_part/training_data/labels/
 /yolo_part/weights/
@@ -253,3 +269,7 @@ eda_yolo/
 /submissions/
 /work/
 *.log
+
+# --- 5. 生成器的本地备份（tools/diag/_wfbuild.py 等会写 .bakN）--------------
+*.bak
+*.bak[0-9]

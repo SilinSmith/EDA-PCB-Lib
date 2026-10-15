@@ -20,9 +20,15 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 PKGS = ["stage1", "stage2", "stage3", "fusion", "vlm", "textrec",
         "cvparts", "pipeline", "submission", "schematic_parser", "synth"]
 
-# `os.environ.get("X", "y")` / `env_on("X", "1")` / `envflag.falsey("X")`
+# `os.environ.get("X", "y")` / `env_on("X", "1")` / `envflag.falsey("X")` / 裸 `env_str("X", "y")`
+# ★ 2026-10-14：把裸 `env_str`（从 `envflag` 直接 import 的名字）也纳入 —— 否则像
+#   `stage2/libpins.py` 的 `STAGE2_CPNT_LIB` / `STAGE2_BOXIC_LIB`（库文件覆盖路径）这种
+#   「值本身就是路径、没有布尔/数值默认」的开关会整条从 KNOBS.md 里消失。
+# ★ 2026-10-12：把 `env_raw` 也纳入 —— 多档开关（如 `STAGE2_LIB_REFINE_DEGEN` 的
+#   `off|letter|shape|known`）必须用 `env_raw` 读，`env_str` 会把 `off`/`0`/`none`
+#   归一成空串、把 `off` 档静默变成默认档（§5.52 自检抓到的坑）。
 PAT = re.compile(
-    r"""(?:os\.environ\.get|env_on|env_int|env_float|envflag\.\w+)\s*\(\s*"""
+    r"""(?:os\.environ\.get|env_on|env_int|env_float|env_str|env_raw|envflag\.\w+)\s*\(\s*"""
     r"""["']([A-Z][A-Z0-9_]{3,})["']\s*(?:,\s*([^)\n]{0,60}))?""")
 
 
@@ -30,9 +36,15 @@ def scan() -> "collections.OrderedDict[str, list]":
     out = collections.OrderedDict()
     for pkg in PKGS:
         rows = {}
-        for p in sorted((ROOT / pkg).rglob("*.py")):
-            if "__pycache__" in p.parts:
-                continue
+        files = [p for p in sorted((ROOT / pkg).rglob("*.py"))
+                 if "__pycache__" not in p.parts]
+        # ★ 交付入口 `submission/agent_system` 是**没有 .py 后缀**的可执行脚本，
+        #   而它读的 `EDA_TIER_ARGS`（比赛日档位，§5.51）是真开关 ⇒ 单独点名收进来，
+        #   否则「有个决定档位的变量」这件事在 KNOBS.md 里查不到。
+        extra = ROOT / pkg / "agent_system"
+        if extra.is_file():
+            files.append(extra)
+        for p in files:
             src = p.read_text(encoding="utf-8", errors="ignore")
             for m in PAT.finditer(src):
                 line = src[:m.start()].count("\n") + 1

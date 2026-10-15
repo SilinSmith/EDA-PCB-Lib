@@ -10,7 +10,9 @@
 字符串模式提供第二重约束；类型→位号前缀先验（`work\\_text_geom.py` 在 9609 个官方
 元件上统计，例如 `r`→R 1617/1626、`box`→U 900/996、`d`→D 201/201）提供第三重。
 """
+
 from __future__ import annotations
+
 
 try:                                    # 作为包导入（submission\run.py 把 eda-pcb\ 加进 sys.path）
     from envflag import env_on      # 「假值词表」唯一实现，见 eda-pcb/envflag.py
@@ -18,16 +20,25 @@ except ImportError:                     # 直接跑脚本（python eda-pcb\stage
     import sys as _sys, os as _os       # `sys.path[0]` 是本目录，得把 eda-pcb\ 补上
     _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
     from envflag import env_on
+
 import os
+
 import math
+
 import re
+
 import sys
+
 from typing import Dict, List, Optional, Sequence, Tuple
+
 
 import numpy as np
 
+
 from . import structmatch
+
 from .expect import expect as expect_kind, fragment_score, score_expect
+
 
 # 位号前缀策略（`STAGE2_PREFIX` 环境变量切臂）。**默认 `strict`，是实测的赢家**：
 # 5 张官方图（0001/0025/0050/0059/0101）逐张权重得分之和 —— off 20.00 / **strict 26.67** / force 24.86。
@@ -37,6 +48,7 @@ from .expect import expect as expect_kind, fragment_score, score_expect
 #   strict 只信「字母已在类型预期前缀集合里」的读法（不凭空造键）
 #   force  字母不在预期集合里也强行换成首选前缀（readability 最高，但会造键）
 PREFIX_MODE = os.environ.get("STAGE2_PREFIX", "strict")
+
 
 # ★ 前缀「首字母被 CRNN 吃掉」的补救（默认 **off**，`STAGE2_PREFIX_SKEL=1` 打开）。
 # 实测（`work\_tpA_dbg`，0050 的 `v0010` = GT `TP21` @图内(3888,1864)）：
@@ -48,11 +60,15 @@ PREFIX_MODE = os.environ.get("STAGE2_PREFIX", "strict")
 # 打开后：读出的字母若是某个允许前缀的**后缀**（`P` ⊂ `TP`）就补回完整前缀。
 PREFIX_SKEL = env_on("STAGE2_PREFIX_SKEL", "0")
 
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
+
 NEAR = 16.0          # 距元件框多近算「贴在元件上」
+
 FAR = 40.0           # 多远算「网络标签」（离所有元件都远）
+
 # ★★ 归属判据的度量方式（`STAGE2_OWN_BBOX`，默认 **1** = 用「框到框」的间距）。
 #
 # 动机（10GT case `1` 的 `U1`，2026-10 实测）：`FAR=40` 原来是按**文字中心到元件框**
@@ -67,7 +83,9 @@ FAR = 40.0           # 多远算「网络标签」（离所有元件都远）
 # 只有 **21** 个，缺的正是那 5 个**最宽的**（32~36px）—— 它们全被这条长度依赖踢出去了。
 # ⇒ 「贴不贴在这颗元件上」只应取决于两框之间还有多少空白。`OWN_BBOX=0` 退回历史行为。
 OWN_BBOX = env_on("STAGE2_OWN_BBOX", "1")
+
 MAX_BOX_W = 3.0      # 位号框宽度 / 字高 之比上限（挡掉「一排字」被当成一个框）
+
 # **IC 引脚号必须离得更远也能收**（2025-11 实测，`case 1` 的 `U1`）。
 # 大 IC 的引脚号印在**符号框外**、而且离框边 29~44 px（`U1` 框左沿 x=961，
 # 号框右沿 x=937 ⇒ d=29；更远的 `101/122/15` 在 x=936 ⇒ d=42~43）。
@@ -77,14 +95,21 @@ MAX_BOX_W = 3.0      # 位号框宽度 / 字高 之比上限（挡掉「一排�
 # `pin_f1` 在 10GT 上 `missing 26`、以及 `net_hypergraph` 里 `U1` 的
 # 引脚全成 fp 的直接原因。引脚**名**（VDD/GND）在框内，不受这条影响。
 PINNUM_NEAR = float(os.environ.get("STAGE2_PINNUM_NEAR", "60"))
+
 # 引脚号的**距离惩罚系数**。`_score` 的默认 `dist_w=0.035` 会让 `-0.035*d`
 # 在 d>28 时把满分读法（`fit*conf ≈ 1.0`）直接压到 ≤0 ⇒ 被 `if s <= 0` 丢掉。
 # 引脚号天生比位号离得远（大 IC 印在框外），所以它对距离应该几乎不敏感。
 PINNUM_DISTW = float(os.environ.get("STAGE2_PINNUM_DISTW", "0.005"))
-# Resolve only uncertain, equal-length numeric disagreements with same-box
-# majority evidence. The five role reads share one recognizer, so their votes
-# do not constitute independent probabilities or justify overriding a strong read.
+
+
+# ★ 队友分支 `codex/improve-pin-network-parsing` 的「同框多角色一致票」读法
+#   （`stage2/assign.py:573`）。他们默认 1；我们**先默认 0**（要 A/B 后才谈默认值，
+#   用户 m40034 的规矩：改了识别逻辑必须 A/B）。
+#   语义：5 个识别角色（CRNN 的多路读法）里 **>=3 个**读出同一个数字串才叫一致；
+#   只有「原读法置信度 < 0.6」这种**不定**情形才允许用一致票改写，且要求位数相同
+#   （绝不靠「图纸顺序」推断数字）。作用域只在**引脚号**这一路。
 PINNUM_CONSENSUS = env_on("STAGE2_PINNUM_CONSENSUS", "1")
+
 # ★★ 2026-10：`score_of` 的**沿边距离衰减尺度**。原来写死 `/(1 + d/20)`，
 # 衰减太慢 ⇒ 单调对齐「整排挪一格」只让每对掉一点分，却能多配上一对
 # （`cover=PIN_COVER=0.15`），于是 DP 宁可错位也要多拿一对。
@@ -98,6 +123,7 @@ PINNUM_CONSENSUS = env_on("STAGE2_PINNUM_CONSENSUS", "1")
 # 把衰减加快（`d/20` → `d/PINNUM_DECAY`）能让错位的代价超过 `cover`，
 # DP 就会选择「让那个多余的触点悬空」而不是「整排挪一格」。
 PINNUM_DECAY = float(os.environ.get("STAGE2_PINNUM_DECAY", "10"))
+
 # ★★ 候选池去重半径（**默认 0 = 关**，因为它实测是**净亏**）。
 #
 # 现象上「`2(624,331) | 2(624,330) | 3(624,351) | 3(624,350)` 6 个候选其实只有
@@ -110,10 +136,12 @@ PINNUM_DECAY = float(os.environ.get("STAGE2_PINNUM_DECAY", "10"))
 #   （`tp`）、另一根是错的（`fp`），而 `pin_f1` 里丢 `tp` 比多 `fp` 更贵。
 # 所以这里保留旋钮但**默认关**，并把「去重」这个直觉记下来当作反例。
 PINNUM_DUP = float(os.environ.get("STAGE2_PINNUM_DUP", "0"))
+
 # 引脚**名**框的宽高比上限。`MAX_BOX_W=3.0` 会把 `VDDA`(64x18=3.56)、
 # `GNDA`(67x18=3.72) 这类长名判成 `wide` 直接踢出候选池 —— 而它们恰恰
 # 是 `U1` 的合法引脚名。IC 引脚名本来就比位号长，这里单独放宽。
 PINNAME_MAXW = float(os.environ.get("STAGE2_PINNAME_MAXW", "6.0"))
+
 # 位号框的宽高比上限。**同一个坑的第三次踩**：`MAX_BOX_W=3.0` 会把 3 位数字的位号
 # 整排踢出候选池 —— 位号最长 7 字符（`USB1234`），字高 18px 时 `C152` 宽 56px
 # ⇒ 宽高比 3.11 > 3.0 ⇒ `wide=True` ⇒ `if t["wide"]: continue` 直接丢掉。
@@ -124,6 +152,7 @@ PINNAME_MAXW = float(os.environ.get("STAGE2_PINNAME_MAXW", "6.0"))
 # 真正的位号过滤器是 `canon_designator`（只认 `[A-Z]{1,3}\d{1,4}`），宽高比只用来
 # 挡「一排字」。6.0 覆盖到 ~7.7 字符，足够；`STAGE2_DESIG_MAXW=3.0` 可关回旧行为。
 DESIG_MAXW = float(os.environ.get("STAGE2_DESIG_MAXW", "6.0"))
+
 # `STAGE2_PIN_ALONG`：引脚名/号绑定用**沿边距离**（左右边比 |Δy|、上下边比 |Δx|）
 # 代替 2D 中心距。文字框朝外方向的偏移随文字长度变（VDD/VDDIO/VDDREG 一起右对齐），
 # 那份噪声在 2D 距离里比沿边信号还大，实测会把整排引脚名上移一格。
@@ -131,24 +160,33 @@ DESIG_MAXW = float(os.environ.get("STAGE2_DESIG_MAXW", "6.0"))
 # 19 张 26.09→26.46、pin 0.0789→0.0935；component/netH/net_line 逐位不变）。
 # 设 `STAGE2_PIN_ALONG=0` 可关回旧行为。
 from envflag import env_on                       # noqa: E402  (唯一权威假值词表)
+
 # ★ 原来手写了 5 个词（缺 `no`/`disable`/`disabled`）—— 「差不多全」正是 drift 的
 #   温床。词表只有一处权威：`eda-pcb\envflag.py:FALSE_WORDS`。
 PIN_ALONG = env_on("STAGE2_PIN_ALONG", "1")
+
 # Stage1 may supply actual frame-contact evidence for name and number binding.
 PIN_TRUST_BIND = env_on("STAGE2_PIN_TRUST_BIND", "1")
+
 # Numbers use trust/side only and retain observed wire-row coordinates, rather
 # than the calibrated frame anchor used by names. Missing trust keeps legacy.
 PIN_NUMBER_TRUST_BIND = env_on("STAGE2_PIN_NUMBER_TRUST_BIND", "1")
+
 PIN_TEXT_ROLE_GUARD = env_on("STAGE2_PIN_TEXT_ROLE_GUARD", "1")
+
 PIN_DIGIT_ENTITY = env_on("STAGE2_PIN_DIGIT_ENTITY", "1")
+
 # Reclaim only the number role from a nearer non-IC symbol when a current
 # measured IC row and the whole external text rectangle support that role.
 # Name/value/designator ownership and existing IC-to-IC ownership stay intact.
 PIN_NUMBER_ROLE_OWNER = env_on("STAGE2_PIN_NUMBER_ROLE_OWNER", "1")
+
 MAX_ALTS = 6         # 每个元件最多保留几个位号候选（交给阶段三仲裁）
+
 # 结构化重绑定时「每配上一对」的固定加分（`stage2\\structmatch.py` 的 `cover`）：
 # 它让「一条自洽、把整排引脚都配上、每对都稍远」的方案压过「只配最近的那几对」。
 PIN_COVER = float(os.environ.get("STAGE2_PIN_COVER", "0.15"))
+
 # ★★ 引脚列窗口引导（`stage1/pincol.py`）。默认 **on**。
 # 开了之后，「第 i 个脚的号码 / 名字」直接由 pincol 算好的矩形（`out_win`/`in_win`）
 # 做包含判定归位，不再靠 `structmatch` 的整排单调对齐去猜 —— 后者在引脚数太少时
@@ -171,7 +209,9 @@ PIN_COVER = float(os.environ.get("STAGE2_PIN_COVER", "0.15"))
 #
 # 老路径（`structmatch`）在引脚点正确之后是更好的默认。
 PINCOL_GUIDE = env_on("STAGE2_PINCOL", "0")
+
 PINCOL_WIN_COVER = float(os.environ.get("STAGE2_PINCOL_COVER", "0.5"))
+
 # 「抢读」半径（用户 m06973：字要挂到元件上，用贪心解决）。
 # 原来每个文字框**只归最近的元件**，于是「C8 的位号框离邻居更近」时，
 # 真正的主人连候选都看不到（实测 468 个「没给位号」里 22% 属于这种，
@@ -182,8 +222,10 @@ PINCOL_WIN_COVER = float(os.environ.get("STAGE2_PINCOL_COVER", "0.5"))
 # 220 张实测（`work\tools\eval\stage2_eval.py`）：`STAGE2_STEAL=0` → 7.0495，
 # `=80` → **7.2441**（component F1 0.0849→0.0875，tp 823→847），所以 80 是默认。
 STEAL_R = float(os.environ.get("STAGE2_STEAL", "80"))
+
 # 自由文字也进抢读池（见下面那段长注释）。默认开；`STAGE2_FREE_STEAL=0` 关。
 FREE_STEAL = env_on("STAGE2_FREE_STEAL", "1")
+
 
 # **值兜底**。和位号那条 STEAL 同一个病：阻容的「值」字离**邻居**的元件框更近时，
 # 归属判定把它划给邻居，这颗元件连候选都没有。`STAGE2_VALUE_STEAL > 0` 时，
@@ -193,6 +235,7 @@ FREE_STEAL = env_on("STAGE2_FREE_STEAL", "1")
 # 默认 40：220 张实测 `STAGE2_VALUE_STEAL=0` → 15.4801，`=40` → **15.5567**
 # （component F1 0.1426→0.1451，tp 971→988，text_mismatch 948→931）。
 VALUE_STEAL_R = float(os.environ.get("STAGE2_VALUE_STEAL", "40"))
+
 
 # 「值」必须带单位/字母（纯数字不要）。理由见 `fit_value` 的 docstring。
 #
@@ -211,7 +254,9 @@ VALUE_STEAL_R = float(os.environ.get("STAGE2_VALUE_STEAL", "40"))
 #   ⚠️ `STAGE2_VALUE_TRIM=1` 叠加会吃掉这份收益：220 张 `UNIT=1 TRIM=1` → 25.1265
 #   （−0.038 vs 默认），所以 TRIM 仍保持 0（见下）。
 VALUE_UNIT_ON = env_on("STAGE2_VALUE_UNIT", "1")
+
 _UNIT_RE = re.compile(r"[A-Za-z\u03a9\u2126\u00b5\u03bc]")
+
 
 # 值串尾部削垃圾（`0.1uFLK` -> `0.1uF`）。理由见 `canon_value`。
 # **实测略负，默认关**（2025-10-04，官方口径 22.9068 的管线上四臂对照）：
@@ -223,6 +268,7 @@ _UNIT_RE = re.compile(r"[A-Za-z\u03a9\u2126\u00b5\u03bc]")
 # 但 `V 写了但写错` 266→275、`V GT 本来就是空、我们多写` 105→117（+21，有害）。
 # 结论：**「值读不出来」不是后处理能修的**，别在这条路上再花时间。
 VALUE_TRIM_ON = env_on("STAGE2_VALUE_TRIM", "0")
+
 
 # 「网络名当值」那一支（`fit_value` 里的 `NETNAME_RE` ⇒ 0.6）。
 # **默认 0（关）**，2025-10-04 官方口径 2×2 实测（`work\stage2_v15` 同一条 stage1）：
@@ -237,6 +283,7 @@ VALUE_TRIM_ON = env_on("STAGE2_VALUE_TRIM", "0")
 # 注意 `UNIT=1` 单独开是有害的（见 `fit_value`），两者不能想当然地配对。
 VALUE_NETNAME_ON = env_on("STAGE2_VALUE_NETNAME", "0")
 
+
 # 「值 / 器件名」这一槽的距离权重（`_score` 的 `dist_w`，全局默认 0.035）。
 # 动机（2025-11，`_valread.py` + `_submit_out220r30` 的 value 失配逐条）：1835 个
 # r/c/l/d 配对里 `diff 479` 全是「两边都是值形串但挑了别人那条」—— 例如 `0001/C15`
@@ -248,14 +295,21 @@ VALUE_NETNAME_ON = env_on("STAGE2_VALUE_NETNAME", "0")
 #   距离项再大也改不了归属。**别在这条路上再花时间。** 开关留着只为记录这个负结果。
 VALUE_DISTW = float(os.environ.get("STAGE2_VALUE_DISTW", "0.035"))
 
+
 DESIGNATOR_RE = re.compile(r"^[A-Za-z]{1,4}\d{1,4}[A-Za-z]?$")
+
 PINNUM_RE = re.compile(r"^[A-Za-z]{0,2}\d{1,3}[A-Za-z]?$")
+
 VALUE_RE = re.compile(r"^[+-]?(\d+(\.\d+)?|\.\d+)\s*[pnu\u00b5mkKMGR]?[FHV\u03a9AWRJ]?$")
+
 NETNAME_RE = re.compile(r"^[+\-]?[A-Za-z_][A-Za-z0-9_+\-\.]{0,14}$")
+
 PARTNAME_RE = re.compile(r"^(?=.*\d)[A-Za-z0-9][A-Za-z0-9_\-\./+]{3,30}$")
+
 # **电压型网络名**（`3.3V` / `5V` / `1.8V`）：`NETNAME_RE` 要求首字符是字母，
 # 所以电源网名**永远进不了**网络标签集 —— 而这恰恰是最该按名字合并的一类。
 RAILNAME_RE = re.compile(r"^[+\-]?\d+(\.\d+)?\s*(V|mV|kV|v)$")
+
 
 # ★ 网络标签候选的**尺寸闸门**（`STAGE2_NETLABEL_MIN_W/H`）。
 # 病灶实测（`work\_submit_out220w\runs\stage2\_assigned\1.json`）：case `1` 的 202 个
@@ -265,6 +319,7 @@ RAILNAME_RE = re.compile(r"^[+\-]?\d+(\.\d+)?\s*(V|mV|kV|v)$")
 # `assemble.merge_by_label` 按文本合并 ⇒ **几十条互不相干的网络被并成一条**。
 # 真标签（`GND` 约 18x30 px）远大于这些点，尺寸闸门能干净地切掉它们。
 NETLABEL_MIN_W = float(os.environ.get("STAGE2_NETLABEL_MIN_W", "12"))
+
 NETLABEL_MIN_H = float(os.environ.get("STAGE2_NETLABEL_MIN_H", "9"))
 
 
@@ -286,16 +341,25 @@ def is_netname(s: str) -> float:
         return 1.0
     return 0.0
 
+
 # type -> 允许的位号前缀（按官方 9609 个元件统计）
+# ★ `"tp"` 是 `STAGE1_MERGE_TP=1` 时 `stage1/detect.py` 出的**内部合并类**
+#   （`pin` + `testpoint`）。**必须有这一条**，否则 `canon_designator` 走到
+#   `:402 allow = TYPE_PREFIX.get(ctype, ())` 为空的兜底支（保真度 0.5、且绕过
+#   `PREFIX_MODE=strict`），位号绑不上 ⇒ 合并类拿不到 TP 号 ⇒ 会被出口闸门全丢。
+#   两者本来就共用 `TP` 前缀（见上一行的 `pin` / 下一行的 `testpoint`）。
+#   默认 off 时 `tp` 这个 ctype 根本不会出现 ⇒ 现有结果逐位不变。
 TYPE_PREFIX: Dict[str, Tuple[str, ...]] = {
     "c": ("C",), "r": ("R",), "box": ("U", "USB", "u"), "d": ("D",),
     "led": ("D", "LED"), "pin": ("TP",), "switch": ("SW", "S"), "l": ("L",),
     "mosfet": ("Q",), "bjt": ("Q",), "crystal_2pin": ("X", "Y", "C"),
     "crystal_3pin": ("X", "Y"), "crystal_4pin": ("X", "Y"), "crystal": ("X",),
-    "testpoint": ("TP",), "fuse": ("F",), "amp": ("U",), "amp_3pin": ("U",),
+    "testpoint": ("TP",), "tp": ("TP",), "fuse": ("F",), "amp": ("U",),
+    "amp_3pin": ("U",),
     "amp_5pin": ("U",), "bjt_npn": ("Q",), "bjt_pnp": ("Q",),
     "mosfet_npn": ("Q",), "mosfet_pnp": ("Q",), "v": ("TP",),
 }
+
 # 这些 type 的 key 是伪造号（∅N），纸上画的是网络名/参数，没有位号可言
 NO_DESIGNATOR = frozenset({"gnd", "v", "net_input", "net_short", "net_output",
                            "other", "net_bidirection", "m3\u87ba\u4e1d"})
@@ -654,8 +718,13 @@ def _best_read(reads: Dict[str, Tuple[str, float]], role: str,
     return best
 
 
+
 def _best_number_read(reads: Dict[str, Tuple[str, float]], fresh_color: bool = False):
-    """Use stronger same-box agreement only for an uncertain numeric glyph."""
+    """Use stronger same-box agreement only for an uncertain numeric glyph.
+
+    ★ 逐字并入队友实现（`codex/improve-pin-network-parsing:stage2/assign.py:573`），
+    `fresh_color` 参数保留但我们的默认路径不传（那一路要彩色读数语料）。
+    """
     original = _best_read(reads, "pin_number", fit_pinnum)
     if not PINNUM_CONSENSUS or original is None:
         return original
@@ -688,6 +757,7 @@ def _best_number_read(reads: Dict[str, Tuple[str, float]], fresh_color: bool = F
 
 _COLOR_TEXT_SOURCES = frozenset(("red_green_transition", "red_stub_endpoint",
                                "red_green_transition_uncertain"))
+
 _MONO_TEXT_SOURCES = frozenset(("mono_pin_name_ppocr", "mono_pin_number_ppocr"))
 
 
@@ -1196,15 +1266,27 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
     texts:      `stage2.text.TextEngine.read` 的输出
     pincol:     stage1 的引脚列记录 {cid: [record, ...]}（`stage1/pincol.py`），
                 用来把引脚号/名直接按**窗口**归位（见下面 `PINCOL_GUIDE` 那段）。
-    pin_evidence: stage1 的逐点接框证据，与 pins 顺序对应；可信点先匹配名称，
-                  待定点仅使用剩余名称，拒绝点不匹配名称。编号保持原整排路径。
-                  旧缓存可省略。
+    pin_evidence: stage1 的**逐脚图像证据** {cid: [record, ...]}（队友分支的
+                `stage1/pin_evidence.py` / `stage1/pincolor.py` 产出，字段
+                `trust/source/edge/frame_confirmed/anchor_img/point_img` + 六项测量）。
+                ★ 目前只**接收并挂到模块状态** `LAST_PIN_EVIDENCE`，供队友那五个读法
+                模块（经 `_target_index` / `_trusted_text_contact`）做保守校验；本函数
+                自己的绑定流程**尚未**消费它（队友那套 `STAGE2_PIN_TRUST_BIND` /
+                `STAGE2_PIN_DIGIT_ENTITY` 识别逻辑要单独 A/B 后才会接进来）。
 
     global_match 默认取环境变量 `STAGE2_GLOBAL_MATCH`（默认关）。
     220 张实测：见 `stage2/README.md`（这一项一直是关的，从未在当前管线上量过）。
     """
+    global LAST_PIN_EVIDENCE
+    LAST_PIN_EVIDENCE = pin_evidence or {}
     if global_match is None:
         global_match = env_on("STAGE2_GLOBAL_MATCH", "0")
+    # ★ 「不删除只削弱」：一个 case 的降权/保留池从零开始累计（`structmatch.HIST_*`），
+    #   产物 `_assigned/<case>.json` 的 `no_delete` 块读它。
+    try:
+        structmatch.clear_hist()
+    except Exception:
+        pass
     comps = []
     for c in components:
         b = c.get("bbox_img")
@@ -1334,6 +1416,9 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
     out: Dict[str, dict] = {}
     desig_cands: List[Tuple[str, str, float, dict]] = []   # (cid, 位号, 分数, 证据)
     desig_all: Dict[str, List[dict]] = {}                 # cid -> 全部候选（阶段三用）
+    # ★ 内涵「遗漏审计」暂存（`STAGE2_CONFORM_AUDIT`，恒开）：cid -> 本该挂上却
+    #   在当前规则下过不了 canon 的读法。只写报告，见下面 `LAST_CONFORM`。
+    audit_of: Dict[str, dict] = {}
 
     for c in comps:
         cid, ctype = c["id"], c["type"]
@@ -1376,7 +1461,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             if not channels or (len(channels)==1 and (cid,_caption_consensus(t,cid)) in channels):
                 clean_captions.append(t)
         dcands=clean_captions
-        if os.environ.get("STAGE2_DBG_CID") == cid:
+        if _dbg_want(cid):
             print("[dbg-D] cid=%s type=%s bbox=%s owned=%d steal=%d"
                   % (cid, ctype, c.get("bbox"), len(cands), len(steal.get(cid, []))))
             for t in dcands:
@@ -1388,25 +1473,58 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 continue
             literal = _caption_consensus(t, cid) is not None
             got = _best_read(t["reads"], "designator",
-                             lambda s, ty=ctype, lit=literal: canon_designator(s, ty, literal=lit)[1])
+                             lambda s, ty=ctype, lit=literal: (canon_designator(s, ty, literal=True)[1] if lit else canon_designator_meaning(s, ty, rescue=True)[1]))
             if not got:
                 continue
             _s, txt, conf, _f = got
-            can, fid = canon_designator(txt, ctype, literal=literal)
+            if literal:
+                can, fid = canon_designator(txt, ctype, literal=True)
+                tfix, how = None, "strict"
+            else:
+                can, fid, tfix, how = canon_designator_meaning(txt, ctype)
             if not can:
+                # ★ 内涵「遗漏检测」（`STAGE2_CONFORM_AUDIT`，恒开、**只写报告**）：
+                #   这条读法在当前开关下过不了 canon，但按内涵规则（前缀 ⇄ 类型互证、
+                #   削开头胶连）能不能反推回一个合法位号？能 ⇒ 记一笔，由
+                #   `stage2/run.py` 落到 `_assigned/<case>.json` 的
+                #   `no_delete.conform_audit`。这就是「检索遗漏的元素」：
+                #   官方 10 张上它恰好点出那 4 颗被丢掉的 LED。
+                #   ⚠ 只写旁路报告，`alts` 一个都不加 ⇒ 输出逐位不变。
+                if CONFORM_AUDIT and conf >= CONFORM_MIN_CONF and cid not in audit_of:
+                    _c2, _f2, _tf2, _h2 = canon_designator_meaning(txt, ctype, rescue=True)
+                    if _c2 and _h2:
+                        audit_of[cid] = {
+                            "read": txt, "canon": _c2, "how": _h2,
+                            "type_fix": _tf2, "type_now": ctype,
+                            "conf": round(float(conf), 4),
+                            "d": round(float(t["d"]), 1),
+                            "role": next((r for r, v in (t["reads"] or {}).items()
+                                          if v and v[0] == txt), ""),
+                            "box": [round(float(x), 1) for x in t["bbox"]],
+                        }
                 continue
             if (t['inside'] and fid<1 and any(_caption_consensus(other,cid) is not None
                     and not (other.get('designator_ocr') or {}).get('rejection_only') for other in dcands)):
                 # A printed, independently verified outside caption outranks
                 # an internal pin label whose letters had to become digits.
                 continue
+            if how and how != "strict":
+                # 内涵回收路径的两道额外闸门（`how == "strict"` 时一概不查，
+                # 保证默认臂逐位不变）：
+                #  · 置信度地板 —— 回收的前提是「读法本身可信」；
+                #  · `type` 那条要求文字框在 `FAR` 之内 —— 翻类型等于改判元件类型，
+                #    只允许用**贴着这颗元件**的印字当证据（抢读来的远端框不算）。
+                if conf < CONFORM_MIN_CONF:
+                    continue
+                if how == "type" and t["d"] > FAR:
+                    continue
             # ★ 距离项必须放宽到 `STEAL_R`（见 `_score` 的 docstring）：位号候选池里
             # 有一大半是 `d > FAR` 的抢读候选，用 `FAR` 截断会让它们全部同分。
             sc = _score(fid, conf, t["d"], t["inside"],
                         dist_clamp=max(FAR, STEAL_R))
             alts.append((sc, {"text": txt, "canon": can, "conf": conf,
                               "box": list(t["bbox"]), "d": t["d"],
-                              "fit": fid, "box_i": t.get("_i", -1)}))
+                              "fit": fid, "box_i": t.get("_i", -1), "type_fix": tfix}))
         # A nearby observed digit is stronger than inventing one from letters
         # (for example an internal UD pin label digitized into U0).
         if any(sc >= 0.02 and info["d"] <= near
@@ -1415,7 +1533,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             alts = [(sc, info) for sc, info in alts
                     if "_" in info["text"] or any(ch.isdigit() for ch in info["text"])]
         alts.sort(key=lambda x: -x[0])
-        if os.environ.get("STAGE2_DBG_CID") == cid:
+        if _dbg_want(cid):
             print("[dbg-alts] cid=%s -> %s" % (cid, [
                 (round(s, 3), i["canon"], round(i["conf"], 3), round(i["d"], 1))
                 for s, i in alts[:4]]))
@@ -1427,21 +1545,102 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
 
     if global_match:
         picked = _global_match(desig_cands, [c["id"] for c in comps])
+    elif OWN_ASSIGN:
+        picked = _own_assign_pick(desig_all)
+    elif OWN_MATCH:
+        picked = _own_match_pick(desig_all)
     else:
         # 位号去重：同一张图里位号唯一，全局按分数贪心，撞号的低分者让位。
+        # ★ 撞号判据加一条**文字框身份**（`_box_key`：`box_i` 优先、缺了退回 canon）。
+        #   两块不同的框读成同一个位号 ⇒ 仍按 canon 去重（原行为，位号确实唯一）；
+        #   同一块框被两颗元件读到两个不同 canon（罕见）⇒ 原来两票全收、同一块文字
+        #   成了两颗元件的位号，现在低分者让位。
+        #   撞框那一票作废时**照样占住 canon**（否则这块框的误读会被顶给第三个元件，
+        #   凭空造出一条今天不存在的归属）⇒ `picked` 恒为今天那份列表的**子集**。
         picked = []
         seen_txt: set = set()
-        for cid, can, sc, info in sorted(desig_cands, key=lambda x: -x[2]):
-            if can in seen_txt:
+        seen_box: set = set()
+
+        def _rank(x):
+            """撞号时的排序键：**救援性候选让位**，同组内再比分数。
+
+            ★ `CONFORM_KEY` 的「翻类型」候选（`type_fix` 非空）是**救援**性质的 ——
+              实测官方 case 4：同一颗 LED 被检出两遍（`d` 与 `led` 两块框指着
+              同一个 `box_i`），翻开 `d` 那块后它的距离更近（18.1 vs 23.7），
+              分数 0.2155 > 0.1677 就把 `LED1` 从本来就同类型的那颗手里抢走，
+              引脚 tp 25→23、该案 −1.29。本该同类型的候选必须先拿号。
+              默认关时 `type_fix` 恒为 `None` ⇒ 与今天的 `-sc` 排序逐位相同。
+            """
+            return ((x[3] or {}).get("type_fix") is not None, -x[2])
+
+        for cid, can, sc, info in sorted(desig_cands, key=_rank):
+            bi = _box_key(info)
+            if can in seen_txt or (bi is not None and bi in seen_box):
+                seen_txt.add(can)
                 continue
             seen_txt.add(can)
+            if bi is not None:
+                seen_box.add(bi)
             picked.append((cid, info))
 
     # `desig_slots` 给的是**每个元件的全部候选**（阶段三 LLM 仲裁的原料），
     # 不是「最优候选」的列表 —— 后者会让第个三阶段没有任何东西可裁。
     desig_slots: Dict[str, List[dict]] = desig_all
+    # ★ 内涵键回收（`CONFORM_KEY`）翻了类型的元件（官方 case 6 的 `d` -> `led`）：
+    #   类型既是输出的一部分（官方按精确串比 `type`），又决定引脚图章与脚名别名
+    #   （`assemble.PIN_STAMP_TYPES` / `PIN_NAME_ALIAS`），所以必须传下去 ——
+    #   ① 记进 per-cid 记录（键 `ctype_fix`），给 `assemble.py` 读；
+    #   ② 本文件后面的参数/器件名/引脚各 pass 直接用改写后的类型。
+    ctype_of: Dict[str, str] = {c["id"]: c["type"] for c in comps}
     for cid, info in picked:
         out[cid]["designator"] = info
+        _tf = (info or {}).get("type_fix")
+        if _tf and _tf != ctype_of.get(cid):
+            _old = ctype_of.get(cid)
+            ctype_of[cid] = _tf
+            out[cid]["ctype_fix"] = _tf
+            if _dbg_want(cid):
+                print("[dbg-typefix] cid=%s %s -> %s (canon=%s)"
+                      % (cid, _old, _tf, info.get("canon")))
+
+    # ★ 内涵「遗漏检测」定稿（`STAGE2_CONFORM_AUDIT`，恒开、**只写报告**）：
+    #   在**所有归属通道**（贪心/匈牙利/own.*）都跑完之后看一遍 —— 哪些元件
+    #   最终没有位号，而内涵规则（前缀 ⇄ 类型互证、削开头胶连）本来能给它一个键？
+    #   这些就是「被遗漏的元素」，由 `stage2/run.py` 落到
+    #   `_assigned/<case>.json` 的 `no_delete.conform_audit`。
+    #   与「不删除只削弱」账本同一条通道：只追加记录，`pred` 一个字节都不动。
+    if CONFORM_AUDIT:
+        clear_conform()
+        for _cid in sorted(audit_of):
+            if (out.get(_cid) or {}).get("designator"):
+                continue      # 别的通道把它救回来了 ⇒ 不算遗漏
+            rec = dict(audit_of[_cid])
+            rec["cid"] = _cid
+            LAST_CONFORM.append(rec)
+        del LAST_CONFORM[CONFORM_AUDIT_MAX:]
+        # ★ 同一通道的另一半：**「多余检测」**。内涵（官方命名约定）说
+        #   `d`/`led` 的 `Name` 槽必须是**型号**，而我方 `assemble` 对非 `box`
+        #   一律 `name = key` ⇒ 凡是我们发出去的 `d`/`led`，在官方口径下必然
+        #   判错（既不是 tp、还占一个 fp）。把它们连同器件名读数一起报出来，
+        #   换约定时可直接用；同样**只写报告**。
+        for _cid, _info in picked:
+            _ct = ctype_of.get(_cid)
+            if _ct not in EXTRA_MODELNAME_TYPES:
+                continue
+            _pn, _pnc = "", 0.0
+            # 器件名可能落在 `steal`（80px 内但没被硬划分给它）那一侧，一起看。
+            for _t in list(owned.get(_cid, [])) + list(steal.get(_cid, [])):
+                _r = (_t["reads"] or {}).get("partname")
+                if _r and _r[1] > _pnc:
+                    _pn, _pnc = _r[0], _r[1]
+            LAST_CONFORM_EXTRA.append({
+                "cid": _cid, "canon": _info.get("canon"), "type": _ct,
+                "name_emitted": _info.get("canon"), "partname_read": _pn,
+                "partname_conf": round(float(_pnc), 4),
+                "why": "%s 的 Name 槽在官方 10GT 里是型号（我方 name=key）" % _ct,
+                "box": [round(float(x), 1) for x in _info.get("box") or []],
+            })
+        del LAST_CONFORM_EXTRA[CONFORM_AUDIT_MAX:]
     # 已被选中的位号框：值兜底时必须绕开（`fit_value` 对 `C5` 这种会经 NETNAME 支给 0.6）。
     _desig_boxes = {tuple(info["box"]) for _cid, info in picked}
 
@@ -1451,9 +1650,10 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
 
     # 参数 / 器件名 / 引脚号 / 引脚名
     for c in comps:
-        cid, ctype = c["id"], c["type"]
+        cid, ctype = c["id"], ctype_of.get(c["id"], c["type"])
         cands = [t for t in owned.get(cid, []) if not t.get("designator_only")]
         rec = out[cid]
+
         plist = pins.get(cid, [])
         _pe = (structmatch.normalize_name_evidence(
             c["bbox"], plist, (pin_evidence or {}).get(cid)) if PIN_TRUST_BIND else [])
@@ -1523,7 +1723,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 _txt = canon_value(_txt) or _txt
             rec[want] = {"text": _txt, "conf": best[2],
                          "box": list(best[3]["bbox"]), "d": best[3]["d"]}
-        if os.environ.get("STAGE2_DBG_CID") == cid:
+        if _dbg_want(cid):
             print("[dbg] cid=%s type=%s want=%s bbox=%s" % (cid, ctype, want, c.get("bbox")))
             print("      owned cands=%d" % len(cands))
             for t in cands:
@@ -1800,6 +2000,117 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                         pinfo[pi]["number_selection_name"] = meta.get("previous_number_selection_name", meta["previous_name"])
                 taken_box.add(id(cc["rec"]))
 
+        # ★★ **框外补名**（`STAGE2_PINNAME_OUTSIDE`，默认 0 = 关闭）。见该常量处的长注释。
+        #
+        # 三条规则同时成立才落地，目的是对上一轮（引脚号）**零影响**：
+        #   ① 只写 `pinfo[i]["name"] is None` 的槽 —— 引脚号读出来的东西一个不动；
+        #   ② 只吃**框外**的文字（框内的已由 `pin_name` 轮处理）；
+        #   ③ 只吃**像名字**的读法：`fit_pinname` 对纯数字只给 0.15，这里要求 `f >= 0.5`。
+        #      这条最关键 —— GT 的 IC 引脚名有 **13.5% 本来就是纯数字**，而
+        #      `assemble.py:761` 的兜底 `nm = r["nm"] or num` 已经能把这种填对；
+        #      拿一块纯数字的框外文字去覆盖它，只会把对的分变成错的。
+        #
+        # 分配用「空槽 × 候选」全配对的**全局贪心**（按最终分降序，槽与候选各用一次），
+        # 不做单调对齐：框外剩下的名字往往只有零星几个，`structmatch` 的单调性假设不成立。
+        if PINNAME_OUTSIDE > 0 and plist:
+            _pool = []
+            for t in cands:
+                if not take(t) or id(t) in taken_box or t["inside"]:
+                    continue
+                if t["d"] > PINNAME_OUTSIDE:
+                    continue
+                if t.get("wide") and (t.get("wratio") or 0.0) > PINNAME_MAXW:
+                    continue
+                if t.get("cfrac", 0.0) > PINNAME_CFRAC:
+                    continue
+                got = _best_read(t["reads"], "pin_name", fit_pinname)
+                if not got:
+                    continue
+                s0, txt, conf, f = got
+                # 闸门只压在「适配度 × 置信度」上（`_best_read` 的原始分），**不压距离**：
+                # 框外的名字天然比框内远，`_score` 里那 `-0.035*d` 加 `inside` 才有
+                # `+0.15` 的算法会让 30px 外的合法名字直接算成负分（合成用例实测）。
+                # 距离只进下面的排序项，作排序用。
+                if f < 0.5 or s0 < 0.5:
+                    continue
+                s = _score(s0, conf, t["d"], False)
+                _pool.append({"text": txt, "score": s, "conf": conf,
+                              "rec": t, "center": t["center"]})
+            if _pool:
+                _pairs = []
+                for cc in _pool:
+                    for pi in range(len(plist)):
+                        if pinfo[pi]["name"] is not None:
+                            continue
+                        dx = plist[pi][0] - cc["center"][0]
+                        dy = plist[pi][1] - cc["center"][1]
+                        dp = (dx * dx + dy * dy) ** 0.5
+                        if dp > PINNUM_NEAR:
+                            continue
+                        # 排序 = 分数 **减** 距离惩罚（和 `_score` 同一套量纲）。
+                        # ★ 不能用 `score / (1 + dp/20)`：当 score 为负（框外候选的常态）时，
+                        # 除法会让**越远的分越高**，实测把 `VDDIO` 与 `VSSA` 两个名字对调。
+                        _pairs.append((cc["score"] - 0.035 * dp, pi, id(cc["rec"]), cc))
+                _pairs.sort(key=lambda x: -x[0])
+                _used_pin, _used_rec, _n_late = set(), set(), 0
+                for _s2, pi, rid, cc in _pairs:
+                    if pi in _used_pin or rid in _used_rec:
+                        continue
+                    pinfo[pi]["name"] = {"text": cc["text"], "conf": cc["conf"],
+                                         "box": list(cc["rec"]["bbox"])}
+                    taken_box.add(rid)
+                    _used_pin.add(pi)
+                    _used_rec.add(rid)
+                    _n_late += 1
+                if _n_late and _dbg_want(cid):
+                    print("[dbg] cid=%s pin_name late: 框外补名 %d 个（池 %d，空槽 %d）"
+                          % (cid, _n_late, len(_pool),
+                             sum(1 for i in range(len(plist)) if pinfo[i]["name"] is None)))
+
+        # ★★ 幻影脚点槽合并（`STAGE2_PIN_STUB_MERGE`，默认关）：见常量处的长注释。
+        # 两槽「一槽只有号、另一槽只有名」且两点近到像同一根脚时，把号搬进有名字
+        # 的那一槽（被搬空的那一槽本来就会被 `BOX_PIN_NEED_NAME` 丢掉 ⇒ 只增不减）。
+        if STUB_MERGE > 0 and len(plist) > 1:
+            _used: set = set()
+            for _i in range(len(plist)):
+                if _i in _used:
+                    continue
+                for _j in range(_i + 1, len(plist)):
+                    if _j in _used:
+                        continue
+                    # Close measured rows can be separate real pins (10px
+                    # pitch is common). The legacy phantom-slot heuristic
+                    # must not relocate a read to another confirmed contact.
+                    if any(k < len(_npe) and _npe[k].get("trust") == "trusted"
+                           and _pe[k].get("frame_confirmed") is True
+                           for k in (_i, _j)):
+                        continue
+                    _a, _b = pinfo[_i], pinfo[_j]
+                    _a_num, _a_nm = bool(_a["number"]), bool(_a["name"])
+                    _b_num, _b_nm = bool(_b["number"]), bool(_b["name"])
+                    if not (((_a_num and not _a_nm) and (_b_nm and not _b_num))
+                            or ((_b_num and not _b_nm) and (_a_nm and not _a_num))):
+                        continue
+                    _dx = plist[_i][0] - plist[_j][0]
+                    _dy = plist[_i][1] - plist[_j][1]
+                    _dd = (_dx * _dx + _dy * _dy) ** 0.5
+                    if _dd > STUB_MERGE:
+                        continue
+                    if _a_nm:                       # i 有名字、j 有号 ⇒ 号搬进 i
+                        _a["number"] = _b["number"]
+                        _b["number"] = None
+                        _a["merged_from"] = _j
+                        _keep, _drop = _i, _j
+                    else:                           # i 有号、j 有名字 ⇒ 号搬进 j
+                        _b["number"] = _a["number"]
+                        _a["number"] = None
+                        _b["merged_from"] = _i
+                        _keep, _drop = _j, _i
+                    _used.add(_drop)
+                    if _dbg_want(cid):
+                        print("[dbg] cid=%s stub merge: pin[%d] <- 号 %s（来自 pin[%d]，d=%.1f）"
+                              % (cid, _keep, pinfo[_keep]["number"]["text"], _drop, _dd))
+
     # ---- 网络标签：离所有元件都远、且不在元件框里的文字 ----
     net_labels = []
     for t in free:
@@ -1832,9 +2143,12 @@ def _selftest() -> int:
     comps = [
         {"id": "c0", "type": "r", "bbox_img": [100, 100, 140, 110]},   # 两脚电阻
         {"id": "c1", "type": "box", "bbox_img": [300, 100, 400, 300]},  # IC
+        # ★ `STAGE2_PINNAME_OUTSIDE`（框外补名）专用：这颗 IC 的**名字与号码都在框外**。
+        {"id": "c2", "type": "box", "bbox_img": [600, 100, 700, 200]},
     ]
     pins = {"c0": [[90, 105], [150, 105]],
-            "c1": [[290, 150], [290, 250], [410, 150], [410, 250]]}   # 引脚画在框外 10px
+            "c1": [[290, 150], [290, 250], [410, 150], [410, 250]],   # 引脚画在框外 10px
+            "c2": [[700, 130], [700, 170]]}
     def T(box, **reads):
         return {"bbox": tuple(box), "reads": {k: (v, 0.9) for k, v in reads.items()}}
     texts = [
@@ -1847,11 +2161,18 @@ def _selftest() -> int:
         T((282, 144, 298, 158), pin_number="12"),          # 框外引脚号
         T((402, 244, 418, 258), pin_number="13"),
         T((500, 400, 540, 414), net_label="VBUS"),         # 远处网络标签
+        T((702, 124, 716, 136), pin_number="7"),           # c2：框外号码（贴着脚）
+        T((702, 164, 716, 176), pin_number="8"),
+        T((714, 124, 752, 136), pin_name="VDDIO"),         # c2：框外**名字**，中心距框 33px
+        T((714, 164, 744, 176), pin_name="VSSA"),
+        T((640, 140, 692, 154), partname="STM32F4"),       # c2：框内器件名（别被名字抢走）
     ]
     res = assign(comps, pins, texts)
     fails = []
+    n_chk = [0]
 
     def chk(cond, msg):
+        n_chk[0] += 1
         if not cond:
             fails.append(msg)
 
@@ -1868,6 +2189,18 @@ def _selftest() -> int:
     chk(any(n["text"] == "VBUS" for n in res["net_labels"]),
         "网络标签应包含 VBUS: %r" % (res["net_labels"],))
 
+    # ★ 框外补名（`STAGE2_PINNAME_OUTSIDE`）：c2 的名字与号码都在框外。
+    # 关键断言与开关状态无关：**引脚号必须拿到 7/8**（late pass 不许饿死引脚号）；
+    # 名字槽在 `OUTSIDE=0` 时必须是空的（旧行为），开着时必须是 VDDIO/VSSA。
+    d = res["comps"]["c2"]
+    dnames = sorted(v["name"]["text"] for v in d["pins"].values() if v["name"])
+    dnums = sorted(v["number"]["text"] for v in d["pins"].values() if v["number"])
+    chk(dnums == ["7", "8"], "c2 引脚号应为 7/8（框外号码不被名字抢走）: %r" % (dnums,))
+    if PINNAME_OUTSIDE > 0:
+        chk(dnames == ["VDDIO", "VSSA"], "c2 框外引脚名应为 VDDIO/VSSA: %r" % (dnames,))
+    else:
+        chk(dnames == [], "c2 关掉框外补名时不应有引脚名: %r" % (dnames,))
+
     # 位号去重：两个元件抢同一个 R7
     dup = assign([{"id": "a", "type": "r", "bbox_img": [0, 0, 20, 10]},
                   {"id": "b", "type": "r", "bbox_img": [200, 0, 220, 10]}],
@@ -1876,10 +2209,569 @@ def _selftest() -> int:
     got = [v["designator"] for v in dup["comps"].values()]
     chk(sum(1 for g in got if g) == 1, "重复位号应只留一个: %r" % (got,))
 
-    print("自检 %d 项：%s" % (9 + 3, "全部通过" if not fails else "失败"))
+    # ★ 内涵互校验（`STAGE2_CONFORM_KEY`）：位号前缀是元件类型的**内涵** ——
+    #   读出的前缀能反过来判定类型（`LED` 只属于 `led`），而同一块文字框在
+    #   不同角色下的读法要一起看（`designator` 读垃圾、`pin_name` 读得对）。
+    #   默认关时两条回收路径都必须**完全不生效**（逐位不变）。
+    _m = canon_designator_meaning
+    chk(_m("R14", "r")[:2] == ("R14", 1.0), "strict 路径应原样: %r" % (_m("R14", "r"),))
+    if not CONFORM_KEY:
+        chk(_m("LED2", "d")[0] == "", "默认关时不许翻类型: %r" % (_m("LED2", "d"),))
+        chk(_m("7LED1", "led")[0] == "", "默认关时不许削胶连: %r" % (_m("7LED1", "led"),))
+    else:
+        # `d` 的允许前缀只有 `D`，而 `LED2` 在 `led` 下是干净位号 ⇒ 类型判错，改判 `led`
+        chk(_m("LED2", "d")[:3] == ("LED2", CONFORM_TYPE_PEN, "led"),
+            "d 上的 LED2 应翻成 led: %r" % (_m("LED2", "d"),))
+        # 开头胶连（`7`）可以削；**中间**胶连（`N7ED1`）不许猜 —— 猜出来会是 `D1`
+        chk(_m("7LED1", "led")[:3] == ("LED1", CONFORM_GLUE_PEN, None),
+            "开头胶连应削掉: %r" % (_m("7LED1", "led"),))
+        chk(_m("N7ED1", "led")[0] == "", "中间胶连不许猜: %r" % (_m("N7ED1", "led"),))
+        # `D` 是 `d`/`led` 共有前缀 ⇒ 不足以翻类型（不许把二极管改判成 LED）
+        chk(_m("D3", "d")[:2] == ("D3", 1.0), "共有前缀不得翻类型: %r" % (_m("D3", "d"),))
+
+    # ★ 内涵「遗漏检测」审计（`STAGE2_CONFORM_AUDIT` 默认开，**只写报告**）：
+    #   合成两颗「本该挂上键却挂不上」的元件 —— ① 类型判错（`d` 上的 `LED2`）；
+    #   ② 只信 `designator` 角色（同一块框的 `pin_name` 读作 `7LED1`）。
+    #   开关关时两颗都拿不到位号，但审计必须**把它们点出来**（这就是「检索遗漏」）。
+    au_comps = [{"id": "d0", "type": "d", "bbox_img": [200, 200, 220, 220]},
+                {"id": "d1", "type": "led", "bbox_img": [400, 200, 420, 220]}]
+    au_pins = {"d0": [[210, 200], [210, 220]], "d1": [[410, 200], [410, 220]]}
+    au_texts = [T((200, 224, 240, 238), designator="LED2"),
+                T((400, 224, 440, 238), designator="YXEP1", pin_name="7LED1")]
+    au_res = assign(au_comps, au_pins, au_texts)
+    _au = {r["cid"]: r for r in LAST_CONFORM}
+    if not CONFORM_KEY:
+        chk(au_res["comps"]["d0"]["designator"] is None, "关时 d0 不应挂上位号")
+        if CONFORM_AUDIT:
+            chk(_au.get("d0", {}).get("canon") == "LED2" and _au["d0"]["how"] == "type",
+                "审计应点出 d0 的遗漏(LED2/type): %r" % (_au.get("d0"),))
+            chk(_au.get("d0", {}).get("type_fix") == "led",
+                "审计应给出 d0 的类型改判: %r" % (_au.get("d0"),))
+            chk(_au.get("d1", {}).get("canon") == "LED1" and _au["d1"]["how"] == "glue",
+                "审计应借串角色点出 d1 的遗漏(LED1/glue): %r" % (_au.get("d1"),))
+            chk(_au.get("d1", {}).get("role") == "pin_name",
+                "审计应记下借用的角色: %r" % (_au.get("d1"),))
+    else:
+        chk(bool(au_res["comps"]["d0"]["designator"]), "开时 d0 应挂上 LED2")
+        chk(not _au, "开时已被回收的元件不该再进遗漏审计: %r" % (_au,))
+        # 同一通道的「多余检测」：`led` 的 Name 槽在官方 10GT 里是型号，
+        # 我方 `name = key` ⇒ 这颗必然判错，必须被点出来（带器件名读数位）。
+        _ex = {r["cid"]: r for r in LAST_CONFORM_EXTRA}
+        if CONFORM_AUDIT:
+            chk("d0" in _ex and _ex["d0"]["type"] == "led" and "型号" in _ex["d0"]["why"],
+                "多余检测应点出 d0（led 的 Name 槽口径不符）: %r" % (_ex.get("d0"),))
+
+    print("自检 %d 项：%s" % (n_chk[0], "全部通过" if not fails else "失败"))
     for f in fails:
         print("  FAIL", f)
     return 1 if fails else 0
+
+# 最近一次 `assign` 收到的逐脚图像证据（`{cid: [record, ...]}`）；给队友那五个读法
+# 模块的 `_target_index` 用，也方便离线探针复查。不参与返回签名。
+LAST_PIN_EVIDENCE: Dict[str, List] = {}
+
+# ★★ 位号通道的**全局一对一**归属（`STAGE2_OWN_ASSIGN`，默认 **0 = 关**）。
+#
+# 动机：`cvparts/own.py` 的 `assign()` 是「整体最小代价的一对一」（直接复用官方
+# `schematic_parser.metrics._assign`），但全仓库**从未被调用** —— 这正是 `own` 节点
+# 描述里「一个主张者够到多个标的 → 整体解一次一对一」那一半。
+# 现状（`OWN_ASSIGN=0`）是：每颗元件各自从候选池挑最优，再按**位号字符串**贪心去重。
+#
+# 实测（`work\tools\diag\_ownasgn.py`，官方 9 张的 `_assigned` 产物，GT 用
+# 官方 `bbox_mode='corners'` 口径近邻匹配）：现状与这一臂**都拿到 114 个位号**，
+# `dup_box`（同一块文字框被 >=2 颗元件选中）与 `dup_canon` **两臂都是 0** ——
+# 因为 `owned` 本身就是一份**划分**（每块文字只归一颗元件），一对一不变式
+# 在改造前就已经成立，这一臂只可能**重排**。重排发生在 4 个元件上，去问 GT：
+#   官方 case 2 `c0009`（GT `R6`，文字被误读成 `R5`）与 `c0013`（GT `R5`）：
+#     现状 = c0013 拿 `R5` **✓**、c0009 空；这一臂 = c0009 拿 `R5` **✗**、c0013 空。
+#   官方 case 7 `c0003`（GT `C6`，误读成 `C5`）与 `c0009`（GT `C5`）：
+#     现状 = c0009 拿 `C5` **✓**；这一臂 = c0003 拿 `C5` **✗**。
+#   ⇒ 现状 **2 对 0 错**、这一臂 **0 对 2 错**：整体求解会把被误读的那块框
+#     配给错的元件。**判负，保持 0**；机制留在代码里以便复现与后续复用。
+OWN_ASSIGN = env_on("STAGE2_OWN_ASSIGN", "0")
+
+# ★★ 位号通道的**全局一对一 + 显式弃权**（`STAGE2_OWN_MATCH`，默认 **0 = 关**）。
+#
+# 与上面 `OWN_ASSIGN`（以及 `STAGE2_GLOBAL_MATCH` 的 `_global_match`）的**唯一区别**：
+# 那两条都是一张 `n × m` 的方阵，`linear_sum_assignment` 被迫配出 `min(n, m)` 对，
+# 再拿 `thr` 事后过滤 —— **没有弃权位**，被挤掉的真实主人再也拿不回自己的位号。
+# 这里给每颗元件加一列**专属弃权列**，权值 = 该元件自己当前最优分 × `OWN_MATCH_ABSTAIN`：
+# 于是「配一块真实文字框」只有**严格优于弃权**才会被选中（最优解里不含负增益的对）。
+# 列的唯一性直接给出两条不变式：**一块文字框最多配一颗元件、一颗元件最多拿一个位号**。
+# 候选池原样复用 `desig_all`（= 每颗元件的 `owned + steal` 候选，不新造候选），
+# 权值就是贪心路径用的同一个 `_score`（见 `_own_match_pick` 的 docstring）。
+OWN_MATCH = env_on("STAGE2_OWN_MATCH", "0")
+
+OWN_MATCH_ABSTAIN = 0.5   # 弃权权值 = 该元件候选里的最高分 × 这个常数
+
+def _dbg_want(cid: str) -> bool:
+    """`STAGE2_DBG_CID` 支持逗号分隔多个 cid（调试用；不影响任何行为）。"""
+    v = os.environ.get("STAGE2_DBG_CID") or ""
+    return bool(v) and cid in [x.strip() for x in v.split(",") if x.strip()]
+
+# ★★ 引脚号的「抢读」半径（`STAGE2_PINNUM_STEAL`，**默认 0 = 关**）。
+#
+# 病（10GT case 5 的 `U3`，2026-10 实测）：`stage1` 在 AMS1117 处同时给出
+# `c0002`（YOLO，score 0.9657）与 `b0000`（`bigic` 从**一圈绿色导线**围出的伪矩形，
+# score 0.9，见 `work/_b5crop.png`）。文字归属是「到元件框的硬 argmin」，
+# 而 `b0000` 的框把 `1`/`2`/`4` 三块号框整个包在里面（`d=0`）⇒ 它们归 `b0000`；
+# `b0000` 永远拿不到位号（`DROP_UNKEYED` 直接丢）⇒ **这三块文字被静默地浪费掉**，
+# `c0002` 的 `pin_number` 候选池只剩 `3`（`[dbg] pool=2` 那是同一块文字的两次检出），
+# GT 的 `pin_1/2/4` 全部 `fn`。同类损失见 `work/tools/dev/_pinwhy.py`。
+#
+# 规则：引脚号这一轮，除了自己名下的框，还允许读**别人名下 / 无主、但离自己
+# <= `PINNUM_STEAL` 的框** —— 只抢「主人**没有位号**（= 注定被丢）或**无主**」的框，
+# 已挂键的邻居的框一根都不碰（那才是抢别人东西）。位号（`STEAL_R`）与值
+# （`VALUE_STEAL_R`）早就有这条通道，引脚号是最后一个没有的。
+PINNUM_STEAL = float(os.environ.get("STAGE2_PINNUM_STEAL", "0"))
+
+# ★★ 「纯数字文本框 = 引脚号，不是引脚名」（`STAGE2_PINNUM_INSIDE` + `STAGE2_PINNAME_NODIGIT`，
+#    **默认都 0 = 关**；两者**必须成对打开**，只开一个几乎不起作用，见下）。
+#
+# 病（10GT case 2 的 `U3`/`U4`，2026-10 实测，`STAGE2_DBG_CID=c0001`）：
+#   真脚 `pin_1`（GT `GND`）的号码 `1` 被文字检测**过检成 21x13 的大框**
+#   （同一排别的号框只有 6~8px 宽，见 `_pinnum.py` 的槽位表），框心于是落进符号框内
+#   ⇒ `t["inside"] = True`：
+#     * `pin_number` 轮要求 `not inside` ⇒ 这块文字**根本进不了号候选池**；
+#     * `pin_name` 轮要求 `inside` ⇒ 它反而进了名候选池，靠 `fit_pinname("1") = 0.15`
+#       加 `_score` 的 `inside` 奖励 0.15 拿到 `s = 0.299`，被 `structmatch` 绑给
+#       **体外假槽** `pin[0]`（该槽本来会被丢），并进 `taken_box` 被永久占用。
+#   ⇒ 真脚既没号（`fn`）、假槽白得一个「名」。`fit_pinnum` 本来就把纯数字判为
+#   `1.0`、`fit_pinname` 只给 `0.15` —— 这条判据只是没有贯穿到 `inside` 闸门上。
+#
+# 规则：① `STAGE2_PINNUM_INSIDE=1` ⇒ 号候选池接受「框心在体内、但**最佳号读法是纯
+#   数字**」的框（`d=0` 照旧参与打分，`MAX_BOX_W` 等闸门照旧）；②
+#   `STAGE2_PINNAME_NODIGIT=1` ⇒ 名候选池不再收「最佳号读法是纯数字」的框。
+#   成对使用：只开 ① 时那块框已被名轮 `taken_box` 吃掉，号轮仍拿不到它。
+PINNUM_INSIDE = env_on("STAGE2_PINNUM_INSIDE", "0")
+
+PINNAME_NODIGIT = env_on("STAGE2_PINNAME_NODIGIT", "0")
+
+
+def _pure_digit_read(t: dict):
+    """框的**最佳引脚号读法**；纯数字（`PINNUM_RE` 且 `isdigit`）返回该串，否则 `None`。
+
+    `None` = 这块框在任何角色下都不像一个「号」（读不出、或读出来不像数字）。
+    """
+    try:
+        got = _best_read(t.get("reads") or {}, "pin_number", fit_pinnum)
+    except Exception:                                                       # noqa: BLE001
+        return None
+    if not got:
+        return None
+    txt = str(got[1] or "").strip()
+    return txt if txt.isdigit() else None
+
+
+# ★★ 幻影脚点槽合并半径（`STAGE2_PIN_STUB_MERGE`，**默认 0 = 关**，单位 px）。
+#
+# 病（10GT case 5 的 `U1`，2026-10 实测，见 `work/tools/dev/_slotdbg.py`）：
+# `stage1` 的 `pintrace` 在同一根真脚上给出**两个相距 ~5px 的触点** ——
+# `pins[c0001]` 的 slot0 `(654.6,266.0)`（`pincol` 记录 idx=0，号 `3`）与
+# slot5 `(654.6,271.0)`（名 `FB`）；slot1 `(654.6,305.5)`（号 `7`）与
+# slot6 `(654.6,311.0)`（名 `P`）。两个角色轮**各绑一半**：号落在 `pincol`
+# 那个触点上、名落在另一个触点上。于是两槽都凑不齐「号 + 名」，被
+# `assemble.build_doc` 的 `STAGE2_BOX_PIN_NEED_NAME`（late 模式）**一起丢掉**：
+# GT 的 `pin_3 FB`（正解就在我们手上）直接变成 `fn`。
+#
+# 这两个触点其实在 stage1 里**已经属于同一个网**（`net_8 = {U1[0],U1[4],U1[5]}`、
+# `net_18 = {U1[1],U1[6]}`）⇒ 合并**不会改变任何网的成员**，只让那根脚能交出去
+# （`assemble.py:1144` 只把有 `num_of` 的引脚放进 `hyperGraph`）。
+#
+# 规则：两槽**互补半满**（一个只有号、一个只有名）且两点距离 <= 该半径时，
+# 把号搬进**有名字**的那一槽（名字框在符号内、几何更紧，其槽点也更贴 GT 的
+# 引脚点），号槽清空。**只搬已有读数、不新造读数**，且被搬走号的槽本来就被丢，
+# 所以对现有输出的影响面只有「多出几根脚」。
+#
+# ★ 2026-10 A/B（官方 10 张 `--no-vlm --engine official`）：关 = 59.9903（= 历史默认口径），
+#   `=12` = 59.9977（+0.0074/张；只有 case 5 变：51.9380 -> 52.0122，pin tp 22 -> 23）。
+#   与 `STAGE2_PIN_ANCHOR=12` 合用（`anb1`）= **60.5854（+0.5951/张）**，逐案
+#   case 4 +1.7946 / case 5 +1.1180 / case 8 +3.0387，**pin fp 与 netL fp 不增反降**。
+#   ⇒ 与锚点是互补机制（锚点救「号被单调剪枝清掉」，这里救「号与名落在两个幻影触点上」），
+#   默认转正为 `12`。
+STUB_MERGE = float(os.environ.get("STAGE2_PIN_STUB_MERGE", "12"))
+
+# ★★ 引脚**名**候选的「**有色墨迹**」闸门（`STAGE2_PINNAME_CFRAC`，单位 px 无关，是占比）。
+#
+# 病（10GT case 5 的 `U3`，见 `docs/RESULTS.md` §5.91）：pin1 名字框那一行有两个候选
+# —— 真名 `ADJ(GND)`（67x13）与**红点引脚标记**（8x8，CRNN 读成 `Q`、conf 0.864）。
+# 名轮把标记绑给了 pin1、把 `ADJ(GND)` 挤到 pin2（`VOUT(TAB)` 再往下挤）⇒ 两条名字都错。
+# **几何分不开**（合法名 `L` = 7x10，红点 = 8x8），**墨迹颜色分得开**：
+# 真名框的 `cfrac`（`text.py::colored_frac`）= 0.000，红点 = 0.48~0.64。
+# 于是名候选池里踢掉 `cfrac > PINNAME_CFRAC` 的框。**只压名轮**：号轮不动。
+# 该属性只在 `STAGE2_TEXT_INK=1` 时才存在 —— 两开关要**一起**开（`cfrac` 缺席时本闸门不生效）。
+PINNAME_CFRAC = float(os.environ.get("STAGE2_PINNAME_CFRAC", "0.20"))
+
+# ★ 号轮的「每字符像素宽」闸门（`STAGE2_PINNUM_PXC`，默认 0 = 关）：
+#   引脚号是 1~3 个字符，真号码框 ≈ 10~11 px/字符；而合并了上下两行、或抢到名字
+#   宽度的框会到 14+ px/字符（case 8 的 U1：`[967,701,994,711]` 27x10 读成 `26`
+#   = 13.5、`[967,470,996,485]` 29x15 读成 `11` = 14.5 ⇒ 后者的号码是错的）。
+#   只对「读出的号码含数字」的框生效，宽度取框自身 bbox。
+PINNUM_PXC = float(os.environ.get("STAGE2_PINNUM_PXC", "0"))
+
+# ★★ 「器件名框放行回名轮」的高度闸门（`STAGE2_PARTNAME_FREE_H`，px；见 §5.92）。
+# `take()` 原先无条件把器件名框赶出名轮候选池，而 `vlm/enrich.py` 改写器件名**文字**时
+# 保留旧框，于是像 case 5 的 U3 那样「框其实是 `VOUT(TAB)` 名框」的记录会把真名框也赶走。
+# 只放行**高得像一行引脚名**（≤18px）的框：10GT 引脚名行高 10~18px，而 case 4 的 U2
+# 器件名块是 53x22（两行大字块），放行会被读成 `15IO` 抢走 pin2（80.00 → 78.22）。
+# 实测三条该放行的框：case 1 U1 89x18、case 2 U3 26x10、case 5 U3 75x13。
+PARTNAME_FREE_H = float(os.environ.get("STAGE2_PARTNAME_FREE_H", "18.0"))
+
+# ★★ 「名候选必须靠近它的**最近那根脚**」与「同一块墨迹的重叠副本只留最宽的一份」
+#   （`STAGE2_PINNAME_ROWNEAR` / `STAGE2_PINNAME_DUPOV`；见 `docs/RESULTS.md` §5.93）。
+#
+# 病（10GT case 6 的 `U4`，`STMPS2141STR`）：stage1 给出 **10 个脚点**（1 上 / 3 右 / 4 下 / 2 左），
+# 而 `pincol` 那套窗口引导在这张图上**根本没产出**（`pincol_stat.comps = 0`）⇒ 名轮退回
+# `structmatch.rebind` 的**沿边**距离打分。沿边距离对「上边脚」量的是 x 方向：
+# 左侧名框 `IN`（中心 x1647）与上边脚点（x1643.8）沿边只差 3px ⇒ 它被对齐到**上边脚**上；
+# 而左侧那两根脚（行 y=208 / y=247.5）只剩下**同一块墨迹的窄副本**（8x10，CRNN 读 `N`，
+# conf 0.99 反而比 12x10 的 `IN` 0.987 高）⇒ 最终 `pin4`/`pin5` 都读成 `N`（每根 −1.67 分）。
+#
+# 两条零调用几何规则（互补，缺一条都不行）：
+#   ① 名候选只允许归到「2D 距离最近的脚」（允许 `×PINNAME_ROWTIE` 的并列）——
+#      挡住跨行/跨侧的抢读（上边脚抢左侧名框）；
+#   ② 同一行（|Δcy| ≤ `PINNAME_DUPGAP`）且 x 重叠 ≥ `PINNAME_DUPOV`（占较窄者宽度）的两块框，
+#      只留**更宽**的那份 —— 窄副本是同一块墨迹的截断裁片（§5.86 记过 `IS→S`/`EN→N`）。
+PINNAME_ROWNEAR = int(os.environ.get("STAGE2_PINNAME_ROWNEAR", "1") or 0)
+
+PINNAME_ROWTIE = float(os.environ.get("STAGE2_PINNAME_ROWTIE", "1.5"))
+
+PINNAME_DUPOV = float(os.environ.get("STAGE2_PINNAME_DUPOV", "0.60"))
+
+PINNAME_DUPGAP = float(os.environ.get("STAGE2_PINNAME_DUPGAP", "6.0"))
+
+# ★★ 2026-10-08：**框外补引脚名**的距离上限（px，`0` = 关闭）。
+# 语义 = 「引脚号那一轮跑完之后，只往**还空着**的名字槽里补框外的名字」，
+# 也就是 late pass。取值是「文字中心到元件框」的距离上限，走 `t["d"]` 那套量。
+# 实现在 `assign()` 里角色循环**之后**的那一段「★★ 框外补名」，`if PINNAME_OUTSIDE > 0:` 起。
+#
+# **为什么必须试这个**：`assign.py` 对 `pin_name` 角色有一条
+#     `if want_inside and not t["inside"]: continue`
+# 而 GT 的引脚 `point` 实测 **2220 根里 100% 落在元件 bbox 之外**
+# （到框边界 中位 9px / p75 14px / p90 35px / p99 67px），
+# 且「GT 引脚点 6px 内我们检出了文字」的那 1035 根里 **89.5% 的文本中心也在框外**
+# （`work\tools\diag\_pinlabel.py --n 60`）。结果就是产出的引脚里
+# **78.2% 的 `pinname` 回退成了引脚号本身**（`assemble.py:761 nm = r["nm"] or num`），
+# 而 GT 的 IC 引脚名 **86.5% 是真信号名**（`CS / D1/DO / GPI04 / IOVDD / VCLK`…），
+# 纯数字名只占 13.5%（`_gtpinname_stat.py`）。⇒ 引脚名这一项**结构性地对不上**。
+#
+# ★ **第一版（放宽 `pin_name`、仍在引脚号之前跑）实测判负**：19 张（官方 10GT 9 张 +
+#   训练集最差 10 张，`fast.py --no-vlm` + `FUSION_LLM=0`）`OUTSIDE=0` 均分 **30.81**
+#   （引脚 0.1987、网络 0.2612、tp 引脚 44 / 网络 214）→ `OUTSIDE=40` 均分 **30.09**
+#   （引脚 **0.1756**、网络 0.2574、tp 引脚 **42** / 网络 217）；10GT 9 张单独看引脚
+#   0.3920 → **0.3432**。机制：`pin_name` 角色在循环里**排在 `pin_number` 之前**
+#   （`:979-981`），放宽之后它先抢走框外那块文字，而 `taken_box`（`:978`）规定
+#   「同一块文字只能当一次引脚名或引脚号」⇒ **引脚号被饿死**、元件键配不上，
+#   丢掉的 `tp` 比补来的名字更贵。⇒ 所以改成 late pass，**对引脚号那一轮零影响**。
+PINNAME_OUTSIDE = float(os.environ.get("STAGE2_PINNAME_OUTSIDE", "0"))
+
+# ★★ 引脚号**残差回填**（`STAGE2_PIN_RESIDUAL`，默认 `0` = 关；>0 时是最大沿边距离，px）。
+# 动机与实测见 `stage2\structmatch.py` 里 `rebind` 的那段长注释：同一排引脚号会**分组重启**
+# （10GT case 1 的 `U1` 左列 `7 16 … 122` 之后又从 `8 67 15 9 66` 重新开始，y 544~750），
+# `monotone_keep` 把重启组当成「破坏严格单调的离群」并清零它们的收益 ⇒ 这些号明明就在
+# 候选池里、分数也不低（`8` .70 / `13` .77 / `14` .80 / `10` .81）却永远绑不上。
+# 代价（`work\tools\dev\_numcover.py`，官方 9 张 120 个 GT `box` 引脚）：**24 个（20%）**
+# 是「号读对了、脚也枚举出来了，就是没绑上」。只对 `pin_number` 角色开，`pin_name` 不动。
+PIN_RESIDUAL = float(os.environ.get("STAGE2_PIN_RESIDUAL", "0"))
+
+PIN_RESIDUAL_MIN = float(os.environ.get("STAGE2_PIN_RESIDUAL_MIN", "0"))
+
+
+# ---------------------------------------------------------------------------
+# ★ 内涵键回收（`STAGE2_CONFORM_KEY`）：位号前缀是元件类型的**内涵**，两者必须互证。
+#
+# 官方 10 张实测（`STAGE2_DBG_CID` 逐条打印 + `work/_fast_out_gen2v`）：
+# **「未挂键 ⇒ 丢弃」这条闸门丢掉的那 4 颗 LED，全部是「读得没错、判型/取证错了」**：
+#   · case 6 `c0016`/`c0017`：YOLO 判成 `d`，而印字五个角色全部读作 `LED2`/`LED1`
+#     （conf 0.98~0.99，干净读法）。但 `TYPE_PREFIX["d"] = ("D",)` 且
+#     `PREFIX_MODE=strict` ⇒ `canon_designator("LED2", "d")` 返回 `""` ⇒ 无候选
+#     ⇒ `[dbg-alts] cid=c0016 -> []` ⇒ 未挂键 ⇒ 被丢。
+#   · case 7 `c0016` / case 10 `c0018`：**只信 `designator` 角色**。标签框的
+#     `designator` 读作 `YXEP1`(0.399)/`Y7EF1`(0.458) 这种垃圾，而**同一块框**的
+#     `pin_name`/`pin_number` 读作 `7LED1`(0.698)/`N7ED1`(0.735) —— 真值就在框里，
+#     只是被角色条件的读法差异挡在门外（`_best_read` 本来就允许串角色借读，
+#     但读串「开头粘了胶连符号」，`7LED1` 过不了 `^([A-Z]{1,3})(\d{1,4})$`）。
+#
+# 两条回收路径都**只对「本来就要丢的元件」生效**（strict 路径失败的元件今天一颗
+# 都不输出）⇒ 天然是零回归的加法；但仍要过 A/B 才能转正。
+#
+# 依据（前缀归属）：`LED` 这个前缀在 `TYPE_PREFIX` 里**只有 `led` 拥有**
+# （`D` 是 `d` 与 `led` 共有 ⇒ 不足以翻类型）—— 这就是「基于维度内涵的校验」：
+# 读出的前缀反过来判定元件类型，而不是靠 YOLO 的类别。
+#
+# ★ **已上线（默认 1）**：官方 10 张 `-vlm-pin off` A/B（`work/_fast_out_pzoff`
+#   =0 与 `work/_fast_out_ckey` =1，同一批输入、逐案对比）
+#   **80.98 → 81.14（+0.16）**；逐案**只有 case 6 变了**，其余 9 张总分与四个分项
+#   逐位相同。变的就是这两颗 LED（`type` `d` → `led`，`bbox`/`pins` 完全不动）⇒
+#   `6` 的 comp **0.9474 → 1.0000**（评测口径 `protocol2` 的 `component_text_ok`：
+#   `d`/`led` **不比对 `Name`**，只比 `type` + bbox ⇒ 类型一改就 tp，与「型号」无关）。
+#   这也是为什么「多余检测」里那条「`d`/`led` 的 `Name` 槽发出去必然判错」的担心
+#   在 `protocol2` 下并不成立（它只在判题机复刻尺 `harness` 下成立）。
+#   置 `STAGE2_CONFORM_KEY=0` 可回到旧行为（那时官方 10 张 80.98）。
+CONFORM_KEY = env_on("STAGE2_CONFORM_KEY", "1")
+
+# 内涵回收路径要求的最低置信度（strict 路径不受影响）。官方 case 6 的 `LED2`
+# 是 0.992、case 7 的 `7LED1` 是 0.698 ⇒ 地板上限设在 0.5 一带。
+CONFORM_MIN_CONF = float(os.environ.get("STAGE2_CONFORM_CONF", "0.50"))
+
+# 削掉开头胶连字符（`7LED1` -> `LED1`）的保真度折扣、翻类型（`d` -> `led`）的折扣。
+CONFORM_GLUE_PEN = float(os.environ.get("STAGE2_CONFORM_GLUE_PEN", "0.85"))
+
+CONFORM_TYPE_PEN = float(os.environ.get("STAGE2_CONFORM_TYPE_PEN", "0.85"))
+
+# 允许互相纠正的类型。**必须是显式小表**：只登记「图形符号本身几乎无法区分、
+# 只能靠印字前缀区分」的对子（`d` 与 `led` 的差别只是两条出射箭头）。
+CONFORM_SIBLINGS: Dict[str, Tuple[str, ...]] = {"d": ("led",), "led": ("d",)}
+
+# ★ **恒开的「遗漏检测」（`STAGE2_CONFORM_AUDIT`，默认 1）**：不管回收开关开不开，
+#   都把「本该挂上、却因为判型/取证不对而没挂上」的元件记进 `LAST_CONFORM`，
+#   由 `stage2/run.py` 写进 `_assigned/<case>.json` 的 `no_delete.conform_audit`。
+#   **只写旁路报告，绝不改输出** —— 这正是用户 m48732 要的「基于维度内涵的识别
+#   与校验，用来检索遗漏/多余的元素」：与「不删除只削弱」的账本同一条通道。
+CONFORM_AUDIT = env_on("STAGE2_CONFORM_AUDIT", "1")
+
+CONFORM_AUDIT_MAX = int(os.environ.get("STAGE2_CONFORM_AUDIT_MAX", "400"))
+
+LAST_CONFORM: List[dict] = []
+
+# ★ 同一通道的**「多余检测」**：我方输出里那些「内涵上不可能判对」的元件 ——
+#   官方 `10GT` 的命名约定是 `c/r/l` 的 `Name` = 位号、`d`/`led`/`box` 的 `Name`
+#   = **型号**；而 `stage2/assemble.py` 只对 `box` 取器件名，其余一律 `name = key`。
+#   于是**每发出一颗 `d`/`led`，它就是一个必然判错的「多余元素」**（官方按
+#   key+type+Name+value+bbox 全对才算 tp）—— 这正是用户 m48732 要的另一半：
+#   检索「多余的元素」。记录里同时带上器件名读数，便于换约定时直接用。
+#   **只写旁路报告**，见 `stage2/run.py` 的 `no_delete.conform_extra`。
+LAST_CONFORM_EXTRA: List[dict] = []
+
+# 官方约定下 `Name` 应当放**型号**（而非位号）的类型；`box` 已经这么做了。
+EXTRA_MODELNAME_TYPES = ("d", "led")
+
+
+def clear_conform() -> None:
+    LAST_CONFORM.clear()
+    LAST_CONFORM_EXTRA.clear()
+
+
+def prefix_owners(prefix: str) -> List[str]:
+    """哪些 type 的 `TYPE_PREFIX` 里有这个前缀（用于「前缀是否唯一确定类型」）。"""
+    p = (prefix or "").upper()
+    if not p:
+        return []
+    return [t for t, ps in TYPE_PREFIX.items()
+            if p in tuple(str(x).upper() for x in ps)]
+
+
+def canon_designator_meaning(text: str, ctype: str,
+                             rescue: Optional[bool] = None):
+    """内涵互校验版的 `canon_designator`：`(位号, 保真度, 类型改写, 依据)`。
+
+    `依据` ∈ `{"strict", "glue", "type", ""}`：
+      · `strict` —— 原路径（`canon_designator` 直接认得），**行为与今天逐位相同**；
+      · `glue`   —— 削掉读串开头粘上的非字母垃圾后认得（`7LED1` -> `LED1`）；
+      · `type`   —— 该串在**另一种类型**的 `TYPE_PREFIX` 下才是干净位号，且所用
+                    前缀**只被那一种类型拥有** ⇒ 采纳该键并**把类型改成它**
+                    （`LED2` 在 `d` 上认不出、在 `led` 上是干净位号 ⇒ 类型 `d` 判错）。
+
+    `CONFORM_KEY=0`（默认）时，非 strict 的两条路径一律不生效 ⇒ 逐位不变。
+    `rescue=True` 是给**审计**用的：不管开关，都把两条救援路径跑一遍（只写报告，
+    用来检索「读得没错、却因为判型/取证不对而没挂上键」的遗漏元件）。
+    """
+    can, fid = canon_designator(text, ctype)
+    if can:
+        return can, fid, None, "strict"
+    if not (CONFORM_KEY if rescue is None else rescue):
+        return "", 0.0, None, ""
+    u = re.sub(r"[^0-9A-Za-z]", "", text or "").upper()
+    if not u:
+        return "", 0.0, None, ""
+    # (a) 开头胶连：`7LED1` -> `LED1`（只削**开头**的非字母；`N7ED1` 开头是字母，
+    #     削不动 ⇒ 老老实实认不出，见下方自检里的反例断言）。
+    u2 = re.sub(r"^[^A-Z]+", "", u)
+    if u2 and u2 != u:
+        can, fid = canon_designator(u2, ctype)
+        if can:
+            return can, fid * CONFORM_GLUE_PEN, None, "glue"
+    # (b) 前缀唯一归属另一种类型 ⇒ 翻类型（`LED` 只属于 `led`）。
+    for ty in CONFORM_SIBLINGS.get(str(ctype).lower(), ()):
+        for s in ((u2,) if u2 else ()) + (u,):
+            can, fid = canon_designator(s, ty)
+            if not can or fid < 0.9:
+                continue
+            m = re.match(r"^([A-Z]{1,3})", can)
+            ow = prefix_owners(m.group(1) if m else "")
+            if len(ow) != 1 or ow[0] != ty:
+                continue
+            return can, fid * CONFORM_TYPE_PEN, ty, "type"
+    return "", 0.0, None, ""
+
+
+def _box_key(info: dict):
+    """文字框的**物理身份**：有 `box_i`（跨元件唯一的文字框序号）就用它，
+    没有（`-1`）才退回 `canon` 字符串。读不出 canon 也没有 box_i ⇒ 返回 `None`。
+
+    ★ 去重必须认**身份**而不是只认**读法**：同一块文字框被两颗元件读到两个不同
+    的 canon 时，按 canon 去重会把这块**同一个物理标签**同时发给两颗元件
+    （官方 case 2 的 `c0009`/`c0013` 就是这种「一块框、两种读法」的邻居）。
+    """
+    try:
+        bi = int(info.get("box_i", -1))
+    except Exception:
+        bi = -1
+    if bi >= 0:
+        return ("box", bi)
+    can = info.get("canon")
+    return ("canon", can) if can else None
+
+
+def _own_assign_pick(desig_all: Dict[str, List[dict]]) -> List[Tuple[str, dict]]:
+    """★ `STAGE2_OWN_ASSIGN`：把「元件 × 位号文字框」整体解一次**一对一**。
+
+    `desig_all[cid]` 是每颗元件的**全部**位号候选（`stage2` 自己算好的，阶段三仲裁也吃它），
+    每条带 `box_i`（文字框序号，跨元件唯一）/ `box` / `canon` / `score`。
+
+    与现状的区别只有一步：现状是「每颗元件各自挑最优 + 按 `canon` 字符串贪心去重」，
+    这里是「一块文字框只能配给一颗元件，由 `cvparts.own.assign`（复用官方
+    `schematic_parser.metrics._assign`）求整体最小代价」。`canon` 唯一这道去重**保持不变**，
+    因为真图上位号确实唯一。
+
+    实测结论见 `OWN_ASSIGN` 常量处的注释：**判负**（现状 2 对 0 错，这一臂 0 对 2 错）。
+    """
+    from cvparts import own as own_mod
+
+    def _key(info: dict):
+        bi = int(info.get("box_i", -1))
+        if bi >= 0:
+            return bi
+        bx = info.get("box")
+        return tuple(round(float(v), 2) for v in bx) if bx else None
+
+    score: Dict[Tuple[str, object], float] = {}
+    info_of: Dict[object, dict] = {}
+    items: List = []
+    seen: set = set()
+    for cid, alts in desig_all.items():
+        for al in alts or []:
+            k = _key(al)
+            if k is None:
+                continue
+            score[(cid, k)] = float(al.get("score") or 0.0)
+            if k not in seen:
+                seen.add(k)
+                info_of[k] = al
+                bx = al.get("box") or (0.0, 0.0, 0.0, 0.0)
+                items.append(own_mod.Party("tb|%s" % (k,), tuple(float(v) for v in bx), "text"))
+    if not items:
+        return []
+
+    def _kk(pid: str):
+        s = pid[3:]
+        try:
+            return eval(s)  # 只吃我们自己写出来的 int / (..) 字面量
+        except Exception:
+            return None
+
+    cl = [own_mod.Party(cid, (0.0, 0.0, 0.0, 0.0), "comp")
+          for cid in desig_all if any(_key(al) is not None for al in (desig_all.get(cid) or []))]
+    got, _led = own_mod.assign(
+        cl, items,
+        gate=lambda c, i: (c.id, _kk(i.id)) in score,
+        cost=lambda c, i: -score[(c.id, _kk(i.id))])
+
+    first: List[Tuple[float, str, dict]] = []
+    for cid, iid in got.items():
+        al = info_of.get(_kk(iid))
+        if al:
+            first.append((float(al.get("score") or 0.0), cid, al))
+    first.sort(key=lambda x: -x[0])
+    picked: List[Tuple[str, dict]] = []
+    seen_canon: set = set()
+    for _sc, cid, al in first:
+        can = al.get("canon")
+        if not can or can in seen_canon:
+            continue
+        seen_canon.add(can)
+        picked.append((cid, al))
+    return picked
+
+
+def _own_match_pick(desig_all: Dict[str, List[dict]]) -> List[Tuple[str, dict]]:
+    """★ `STAGE2_OWN_MATCH`：带**显式弃权**的（元件 × 位号文字框）最大权一对一匹配。
+
+    候选池 = `desig_all`（每颗元件的 `desig_all` 条目，就是 `owned + steal` 那批
+    已经算好的候选，**不新造任何候选生成**）。权值 = 条目上的 `score`，而它正是
+    贪心路径用的同一个 `_score(fit, conf, d, inside, dist_clamp=max(FAR, STEAL_R))`
+    （`read_score` 的 `fit * (1-confit + confit*conf)` 项 × 距离衰减 × inside 加成），
+    所以这一臂与现状**只差「谁来选」**，不差打分。
+
+    矩阵：`n` 行（元件）× `m + n` 列（`m` 块文字框 + **每颗元件一列专属弃权列**）。
+      · `mat[i, j] = score(元件 i, 文字框 j)`（没候选 ⇒ `-1e9`）
+      · `mat[i, m+i] = OWN_MATCH_ABSTAIN * max_j score(i, j)`（弃权分）
+      · 别人那列弃权 = `-1e9` ⇒ 每颗元件只能弃自己的权
+    `linear_sum_assignment` 求全局最大权；列唯一 ⇒ 文字框最多用一次、元件最多拿一个
+    位号；弃权列的权值 ⇒ 只有**严格优于弃权**的候选才会被吃掉。
+    （等价写法：方形矩阵再补 `m` 行「未配对的框」，权值 0。）
+    """
+    cids = list(desig_all)
+    if not cids:
+        return []
+    bidx: Dict[object, int] = {}
+    boxes: List[object] = []
+    for cid in cids:
+        for al in desig_all.get(cid) or []:
+            k = _box_key(al)
+            if k is not None and k not in bidx:
+                bidx[k] = len(boxes)
+                boxes.append(k)
+    n, m = len(cids), len(boxes)
+    if m == 0:
+        return []
+    NEG = -1e9
+    mat = np.full((n, m + n), NEG)
+    info_of: Dict[Tuple[int, int], dict] = {}
+    abstain: List[float] = []
+    for i, cid in enumerate(cids):
+        alts = desig_all.get(cid) or []
+        best = 0.0
+        for al in alts:
+            k = _box_key(al)
+            if k is None:
+                continue
+            j = bidx[k]
+            w = float(al.get("score") or 0.0)
+            if (i, j) not in info_of or w > mat[i, j]:
+                mat[i, j] = w
+                info_of[(i, j)] = al
+            if w > best:
+                best = w
+        abstain.append(OWN_MATCH_ABSTAIN * max(0.0, best))
+        mat[i, m + i] = abstain[-1]
+
+    pairs: List[Tuple[int, int]] = []
+    try:
+        from scipy.optimize import linear_sum_assignment
+        r, c = linear_sum_assignment(-mat)
+        pairs = [(int(a), int(b)) for a, b in zip(r.tolist(), c.tolist())]
+    except Exception:                                   # 没有 scipy 就贪心兜底
+        taken: set = set()
+        order = sorted(info_of, key=lambda ij: -mat[ij[0], ij[1]])
+        for i, j in order:
+            if i in taken or j in taken:
+                continue
+            if mat[i, j] <= abstain[i]:                  # 不比弃权高就不吃
+                continue
+            taken.add(i)
+            taken.add(j)
+            pairs.append((i, j))
+
+    got: List[Tuple[float, str, dict]] = []
+    for i, j in pairs:
+        if j >= m or mat[i, j] <= NEG / 2.0:
+            continue                                         # 弃权列
+        if (i, j) not in info_of:
+            continue
+        got.append((float(mat[i, j]), cids[i], info_of[(i, j)]))
+    got.sort(key=lambda x: -x[0])
+    return [(cid, al) for _sc, cid, al in got]
 
 
 if __name__ == "__main__":

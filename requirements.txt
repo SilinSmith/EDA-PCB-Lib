@@ -23,9 +23,20 @@ psutil>=5.9               # 进程与显存查询
 nvidia-ml-py>=12.0        # gpu_mem.py：与本地 LLM 共享显存时的配额
 
 # --- 网络（VLM / LLM 端点）-------------------------------------------------
-requests>=2.31            # OpenAI 兼容端点的极薄客户端（vlm/client.py、stage1/llm.py）
-httpx>=0.27
+# ★ 交付路径只用标准库 urllib.request（vlm/client.py:129、stage1/llm.py），
+#   容器里 requests 是基础镜像自带的、httpx 不一定有（verify_imports.py 才用它，
+#   且 run.sh:51 用 `|| true` 兜着）。这两个包**不是运行期依赖**，装了也别用。
+requests>=2.31
+httpx>=0.27              # 仅 verify_imports.py 的自检脚本用
 
-# --- 分析与工具（tools/ 下的诊断脚本用）------------------------------------
-matplotlib>=3.8           # 错例裁片与曲线渲染
-polars>=1.0               # 大批量统计表
+# --- 判题机（schematic_parser/，可脱离主链路单独交付）------------------------
+# ★ 判题机**只需要 numpy + scipy**：schematic_parser/metrics.py:42 用
+#   scipy.optimize.linear_sum_assignment 做匈牙利匹配（bbox / pin / line 三处），
+#   不 import torch / cv2 / ultralytics。队友只想自评分数时：
+#     pip install "numpy>=1.26" "scipy>=1.11"
+#   然后 python -X utf8 -m schematic_parser.evaluate --pred <目录> --split 10GT
+scipy>=1.11
+
+# --- 分析与工具（tools/ 下的诊断脚本用，**交付路径不 import**）-------------
+matplotlib>=3.8           # 错例裁片与曲线渲染（install_deps.py 会装）
+polars>=1.0               # 大批量统计表（★ 容器里没装！只在 tools/ 里用，见 requirements.lock.txt）

@@ -1,17 +1,28 @@
 """Selective pin text recovery from observed geometry, never expected labels."""
+
 from __future__ import annotations
 
+
 from collections import Counter, defaultdict
+
 import math
+
 import re
 
+
 import cv2
+
 import numpy as np
 
+
 from .assign import assign
+
 from .color_crops import _remove_numeric_specks
+
 from .isolated_ocr import read_isolated_many
+
 from .pin_lane_crops import pin_lane_boxes
+
 from .pin_text_crops import _observations
 
 
@@ -144,8 +155,9 @@ def _direction_votes(reads):
     return votes, per_pin
 
 
-def read_pin_lanes(doc, reads, engine, bgr, *, include_names=True,
-                   include_numbers=True, cleanup="light", min_conf=0.0):
+def read_pin_lanes(doc, reads, engine, bgr, *, include_names: bool = True,
+                   include_numbers: bool = True, cleanup: str = "light",
+                   min_conf: float = 0.0, grey_evidence: bool = False):
     """Append targeted, role-limited reads without altering original candidates.
 
     Both raw and cleaned inputs use the same isolated sampling convention.
@@ -163,7 +175,8 @@ def read_pin_lanes(doc, reads, engine, bgr, *, include_names=True,
     if recognizer is None:
         return []
     reads = _threshold_reads(reads, min_conf)
-    candidates, clean_gray = pin_lane_boxes(doc, bgr, reads=reads)
+    candidates, clean_gray = pin_lane_boxes(doc, bgr, reads=reads,
+                                           grey_evidence=grey_evidence)
     if not candidates:
         return []
     existing = assign(doc.get("components", []), doc.get("pins", {}), reads,

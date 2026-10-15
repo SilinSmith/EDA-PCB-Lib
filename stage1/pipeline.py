@@ -16,17 +16,28 @@
 ---------------------------
 `{"case", "image", "components", "wires", "attachments", "hypotheses", "timing"}`
 """
+
 from __future__ import annotations
 
+
 import copy
+
 import json
+
 import math
+
 import os
+
 import sys
+
 import time
+
 import traceback
+
 from concurrent.futures import ProcessPoolExecutor, as_completed
+
 from pathlib import Path
+
 try:                                    # 作为包导入（python -m stage1 / submission\run.py）
     from envflag import env_on      # 「假值词表」唯一实现，见 eda-pcb/envflag.py
 except ImportError:                     # 直接跑脚本（python eda-pcb\stage1\pipeline.py 自检）：
@@ -34,29 +45,45 @@ except ImportError:                     # 直接跑脚本（python eda-pcb\stage
     _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
     from envflag import env_on
 
+
 import cv2
+
 import numpy as np
 
+
 ROOT = Path(__file__).resolve().parents[1]
+
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
 from stage1 import wires as wires_mod          # noqa: E402
+
 from stage1 import pintrace as ray_mod         # noqa: E402
+
 from stage1 import nets as nets_mod            # noqa: E402
+
 from stage1 import pincol as pincol_mod        # noqa: E402
+
 from stage1 import pin_evidence as evidence_mod  # noqa: E402
+
 from stage1 import pincolor as color_mod       # noqa: E402
+
 from stage1 import passive_pins as passive_mod  # noqa: E402
+
 from stage1.detect import Detector             # noqa: E402
+
 from stage1 import detect as det_mod           # noqa: E402
 
+
 DET = None   # 每个进程一份
+
 
 # 大 IC 几何补检（`stage1/bigic.py`）。默认 **on**：YOLO 对 `box` 类的召回不够
 # （220 张里 960 个 GT IC 框有 446 个整颗没检出），而一颗 IC 的键配不上就带走它
 # 全部引脚 —— 引脚权重 0.25，一张图直接从 25 分掉到 0。实测代价 0.02 s/张。
 BIGIC_ON = env_on("STAGE1_BIGIC", "1")
+
 
 # ★★ 引脚**列枚举**（`stage1/pincol.py`）。默认 **on**。
 # 为什么必须有：`pins.build_pins` 的主判据是「上游导线触到框边」，所以**没接线
@@ -67,13 +94,29 @@ BIGIC_ON = env_on("STAGE1_BIGIC", "1")
 #     枚举前 5px 命中   3/64   （stage1 只给 8 个点）
 #     枚举后 5px 命中  63/64   （L 32 个 pitch 9.99、R 31 个 pitch 9.96）
 PINC_ON = env_on("STAGE1_PINC", "1")
+
+
+# ★★ 彩色引脚端点实测（队友 `stage1/pincolor.py`）。**默认 off，等 A/B**。
+# 为什么需要它：stage2 那五个「引脚车道裁片 / 读数」读取器（`pin_lane_crops` /
+# `pin_lane_reading` / `pin_text_crops` / `color_crops` / `pin_number_reading`）
+# 的输入是「**已确认的彩色引脚车道**」+ `doc["pin_evidence"]`。我们原来不产这两个
+# 键 ⇒ 挂上读取器后实测**零改动**（`work/_tm_ab.ps1`：`tmoff` 71.65 vs `tmon` 71.65，
+# 逐案逐通道逐位相同）。要让它生效，必须连同这条证据链一起开。
+#   `extract_color_pins` = 只在图像上量「红色桩 + 真实绿线转折」，**不按固定距离
+#   摆引脚**（队友的硬约束：短而未连的引脚是合法的；绿色 no-connect 叉不算导线）。
+#   `STAGE1_PIN_DIRECTION_GUARD` / `STAGE1_PIN_ATTACHMENT_GUARD` 是队友另两条
+#   方向/穿体判据，他们自己默认也是 0（未定案），这里照抄默认值。
 PIN_COLOR_ON = env_on("STAGE1_PIN_COLOR", "1")
+
 NON_IC_PINS_ON = env_on("STAGE1_NON_IC_PINS", "1")
+
 MONO_FRAME_PINS_ON = env_on("STAGE1_MONO_FRAME_PINS", "1")
+
 
 # Direction and body-crossing checks are opt-in until a held-out end-to-end
 # comparison confirms they help for the detector's boxes and this drawing style.
 PIN_DIRECTION_GUARD = env_on("STAGE1_PIN_DIRECTION_GUARD", "0")
+
 PIN_ATTACHMENT_GUARD = env_on("STAGE1_PIN_ATTACHMENT_GUARD", "0")
 
 
@@ -85,6 +128,9 @@ def apply_color_pins(components, pins, pin_synth, color_records):
     On a fully confirmed red frame all sides are scanned, including sides with
     no red pin strokes. Unconfirmed sides and monochrome components keep the
     legacy candidates. The dropped guesses remain in the diagnostic ledger.
+
+    ★ 逐字并入队友实现（`codex/improve-pin-network-parsing:stage1/pipeline.py:76`），
+    只把 `math` 的用法原样保留 —— 被替换掉的旧猜测进 `ledger`，**不静默消失**。
     """
     result = {cid: list(points) for cid, points in pins.items()}
     synth = {cid: list(flags) for cid, flags in (pin_synth or {}).items()}
@@ -105,7 +151,7 @@ def apply_color_pins(components, pins, pin_synth, color_records):
             continue
         confirmed = {e for r in recs for e in r.get("confirmed_edges", [])}
         covered = {r["edge"] for r in recs}
-        if confirmed == {"top", "right", "bottom", "left"}:
+        if confirmed == {"top", "right", "bottom", "left"} and not PIN_COLOR_KEEP_MISS:
             covered = confirmed
         old = result.get(cid) or []
         old_flags = synth.get(cid) or []
@@ -124,6 +170,22 @@ def apply_color_pins(components, pins, pin_synth, color_records):
             r["point_img"] = [round(float(v), 1) for v in r["point_img"]]
             if r.get("anchor_img"):
                 r["anchor_img"] = [round(float(v), 1) for v in r["anchor_img"]]
+            # ★ `STAGE1_PIN_COLOR_CAP`（默认 0 = 逐位老行为）：把实测点沿
+            #   「框边锚点 anchor_img → 实测点」方向拉回到距锚点不超过 CAP 像素处。
+            #   动机（§5.116）：`pincolor` 的实测点落在红桩**末端**（官方 10GT 外距
+            #   中位 19.3px），而官方 GT 的引脚点外距中位 12.0px（均值 12.5，6~22），
+            #   `pin_tol=5` ⇒ 整条边被判 position_mismatch：本树该臂 65.14（引脚 0.0953），
+            #   队友树同臂 49.39（引脚 0.1332，7 张爆 0）。队友树加 CAP=12 后
+            #   57.72/引脚 0.4891（+8.33，见 §5.116），故这里也留同一个可 A/B 的闸。
+            if PIN_COLOR_CAP > 0:
+                _a = r.get("anchor_img")
+                _p = r["point_img"]
+                if isinstance(_a, (list, tuple)) and len(_a) == 2:
+                    _dx, _dy = _p[0] - _a[0], _p[1] - _a[1]
+                    _d = math.hypot(_dx, _dy)
+                    if _d > PIN_COLOR_CAP and _d > 1e-6:
+                        r["point_img"] = [round(_a[0] + _dx / _d * PIN_COLOR_CAP, 1),
+                                          round(_a[1] + _dy / _d * PIN_COLOR_CAP, 1)]
             r["trust"] = "trusted"
             measured.append(tuple(r["point_img"]))
             connections.append(r.get("connected"))
@@ -139,7 +201,10 @@ def apply_color_pins(components, pins, pin_synth, color_records):
 
 
 def overlay_color_evidence(evidence, overlays):
-    """Keep evidence exactly aligned with the post-color pin sequence."""
+    """Keep evidence exactly aligned with the post-color pin sequence.
+
+    ★ 逐字并入队友实现（`...:stage1/pipeline.py:137`）。
+    """
     result = dict(evidence)
     for cid, recs in overlays.items():
         old = result.get(cid) or [{} for _ in recs]
@@ -315,14 +380,14 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
     #   静默清零（`build_pins`/`build_nets` 抛异常时 comp_pins/nets 直接变空，
     #   端到端只会表现为「这张图这些项是 0」，与「这张图本来就没有引脚」不可区分）。
     errs: list[str] = []
-    bgr = cv2.imread(str(case.png_path), cv2.IMREAD_COLOR)
-    if bgr is None:
-        # Some Windows OpenCV builds cannot open Unicode dataset paths.
-        try:
-            encoded = np.fromfile(str(Path(case.png_path)), dtype=np.uint8)
-            bgr = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
-        except (OSError, ValueError, cv2.error):
-            bgr = None
+    # ★★ 「不删除，只削弱」账本（m40034 第四项）：**每个 case 清零**（ProcessPool 的
+    #   worker 会被复用，不清就会把上一张图的事件带进这一张）。
+    try:
+        from cvparts.hypo import reset_ledger
+        reset_ledger(case.case_id)
+    except Exception:
+        pass
+    bgr = _imread_bgr(case.png_path)
     if bgr is None:
         raise RuntimeError(f"读不出图: {case.png_path}")
     H, W = bgr.shape[:2]
@@ -406,9 +471,28 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         # 只要端点贴着已检出元件框就仍然保留。ext>=80 + rescue 8 在 6 个 case 上
         # **全部优于**不设门槛的基线（0101 0.223→0.252、0107 0.096→0.111、
         # 0001 0.158→0.165、0059 0.193→0.315、0050 0.216→0.295、0011 0.036→0.049）。
+        # ★ 2026-10-10（用户 m42009「导线等元件、元件等导线」）：**涂白口径可选**。
+        #   `all`（默认 = 历史行为）= 涂掉所有已检出元件框；
+        #   `keep` = 一根都不涂；`big` = 只涂大框（min side >= `STAGE1_OCC_BIG`，默认 60）。
+        #   28 张导线级实测（`work\tools\dev\_occpol.py`）：不涂时 GT 边覆盖 1093→1240
+        #   （**+147 条，R 0.2887→0.3275**），但假阳段多 1615 条（P 0.3577→0.2629），
+        #   F1 反而 0.3195→0.2917 ⇒ 端到端要不要换口径必须 A/B 判，不能凭通道读数定。
+        #   框内证据确实死在我们自己的框上；上游三道闸门已排除（`_prunepol.py`：框内覆盖
+        #   恒为 17/662，`min_extent`/`max_axis_dev`/`_is_frame` 一条框内边都没吃掉）。
+        _occ_mode = os.environ.get("STAGE1_OCC_MODE", "all").strip().lower()
+        _occ_boxes = [c["bbox_img"] for c in comps]
+        if _occ_mode in ("keep", "none", "off", "0", ""):
+            _occ_boxes = []
+        elif _occ_mode == "big":
+            try:
+                _occ_big = float(os.environ.get("STAGE1_OCC_BIG", "60"))
+            except ValueError:
+                _occ_big = 60.0
+            _occ_boxes = [b for b in _occ_boxes
+                          if min(float(b[2]) - float(b[0]), float(b[3]) - float(b[1])) >= _occ_big]
         w, t_w = wires_mod.extract_wires(
             bgr, max_pixels=max_pixels,
-            occlude=[c["bbox_img"] for c in comps], erase=texts, erase_pad=1.0,
+            occlude=_occ_boxes, erase=texts, erase_pad=1.0,
             drop_frame=True,
             max_axis_dev=12.0, min_extent=80.0, rescue_pad=8.0)
 
@@ -453,6 +537,9 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
     # = 0.70 分在结构上拿不到。这里补上「段 -> 连通分量 -> 挂引脚 -> net」这一步。
     comp_pins, nets, seg_groups, pin_s = {}, [], [], 0.0
     pincol_cols, pincol_stat, pin_synth = {}, {}, {}
+    # ★ 队友证据链的产物（默认空 ⇒ 下游一切如旧）：`pin_evidence` = 逐脚图像证据，
+    #   `pin_color` = 被彩色实测替换后的引脚序列（进 `pin_evidence` 的对齐用），
+    #   `color_overlays` = 与最终引脚序列**逐位对齐**的彩色记录（含 None 占位）。
     pin_evidence = {}
     color_overlays, pin_connected, pin_color = {}, {}, {}
     passive_pin_report = {}
@@ -488,11 +575,15 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                 except Exception as e:
                     traceback.print_exc()
                     errs.append(f"pincol: {type(e).__name__}: {e}")
+            # ★★ 彩色引脚端点实测（队友 `stage1/pincolor.py`，默认关）：
+            #   在「已确认的红色框」上把灰色/格点猜出来的旧引脚换成**实测端点**。
+            #   只动「彩色已确认的那几侧」，未确认侧与黑白元件保持原样；被换掉的
+            #   旧猜测进 `ledger`（诊断账本），不会静默消失。
             if PIN_COLOR_ON:
                 try:
                     color_records = color_mod.extract_color_pins(bgr, comps)
-                    comp_pins, pin_synth, color_overlays, pin_connected, pin_color = apply_color_pins(
-                        comps, comp_pins, pin_synth, color_records)
+                    comp_pins, pin_synth, color_overlays, pin_connected, pin_color = \
+                        apply_color_pins(comps, comp_pins, pin_synth, color_records)
                 except Exception as e:
                     traceback.print_exc()
                     errs.append(f"pin_color: {type(e).__name__}: {e}")
@@ -571,8 +662,14 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                 # 而 `PIN_JOIN_DIST=12` 比它还大 ⇒ 补脚会认领**隔壁脚的导线**，
                 # 把两条网络并成一条。`pin_synth` 为空时行为与历史完全一致。
                 pin_synth=pin_synth, components=comps,
-                guard_attachments=PIN_ATTACHMENT_GUARD,
-                pin_connected=pin_connected)
+                guard_attachments=PIN_ATTACHMENT_GUARD, pin_connected=pin_connected,
+                # ★★ 「抹字断口」定向桥接：`texts` 就是上面 `extract_wires(...,
+                # erase=texts)` 抹掉的那批文本框（`STAGE1_TEXT_BRIDGE>0` 才生效）。
+                # 只认「两个线端各贴住同一个被擦除文本框」的缺口，绝不认元件框 ——
+                # 抬全局容差会把电容两块极板并成一坨（见 `stage1\labels.py` 注释）。
+                bridges=([(t.get("bbox_img") if isinstance(t, dict) else t)
+                          for t in (texts or [])
+                          if (t.get("bbox_img") if isinstance(t, dict) else t)] or None))
         except Exception as e:
             traceback.print_exc()
             # ★ 审计项②：这一条是**最贵**的吞异常 —— 它把 pin(0.25)+net(0.35)
@@ -581,8 +678,11 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
             comp_pins, nets, seg_groups = {}, [], []
         pin_s = round(time.time() - t_p, 2)
 
-        # Evidence ranks the FINAL merged sequence. Failure must not erase
-        # otherwise valid pins or nets; coordinates were finalized above.
+        # ★★ 逐脚图像证据（队友 `stage1/pin_evidence.py`，默认算，成本 ~0.1 s/张）：
+        #   它必须对着**最终合并后**的引脚序列算 —— 坐标在这一行之前已经定稿。
+        #   它的失败**不能**抹掉本来有效的引脚/网络（所以自己一层 try）。
+        #   `ink` 用二维墨迹掩膜（`_ink`），`texts` 只当**软证据**（文字掩膜），
+        #   绝不擦像素；最后用 `overlay_color_evidence` 把彩色那批记录对齐回来。
         try:
             pin_evidence = evidence_mod.build_pin_evidence(
                 comps, comp_pins, _ink, texts)
@@ -590,11 +690,15 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
             traceback.print_exc()
             errs.append(f"pin_evidence: {type(e).__name__}: {e}")
             pin_evidence = {}
-        try:
-            pin_evidence = overlay_mono_evidence(pin_evidence, pin_mono, comp_pins)
-        except Exception as e:
-            traceback.print_exc()
-            errs.append(f"pin_mono_evidence: {type(e).__name__}: {e}")
+        # ★★ 黑白框实测校准留下的那行证据直接复用（队友 `overlay_mono_evidence`）：
+        #   顺序与队友一致（先 mono 后 color）。`pin_mono` 为空时**一次都不调用**，
+        #   保证 `STAGE1_MONO_FRAME_PINS=0` 的路径与历史逐位相同（无 deepcopy 开销）。
+        if pin_mono:
+            try:
+                pin_evidence = overlay_mono_evidence(pin_evidence, pin_mono, comp_pins)
+            except Exception as e:
+                traceback.print_exc()
+                errs.append(f"pin_mono_overlay: {type(e).__name__}: {e}")
         pin_evidence = overlay_color_evidence(pin_evidence, color_overlays)
 
     tm = dict(tm)
@@ -610,6 +714,9 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         "components": comps,
         "pins": {cid: [[round(float(p[0]), 1), round(float(p[1]), 1)] for p in pl]
                  for cid, pl in comp_pins.items()},
+        # ★ 队友证据链的两个键（`STAGE1_PIN_COLOR` 关时：`pin_color` 为空 dict，
+        #   `pin_evidence` 仍是逐脚实测记录 —— stage2 的读取器只认「已确认车道」，
+        #   所以证据本身不改变任何输出，只是把「为什么这么判断」留给下游）。
         "pin_evidence": pin_evidence,
         "pin_color": pin_color,
         "passive_pin_report": passive_pin_report,
@@ -654,8 +761,13 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         "pincol": pincol_cols,
         "pincol_stat": pincol_stat,
         "hypotheses": hyps.to_dict(),
-        "timing": tm,
-        # ★ 审计项②：非空就说明这张图的某一块被降级跑过（`stats` 里的 0 可能是
+        # ★★ 「不删除，只削弱」的账本（m40034 第四项）：这一张图里所有「本来会被丢掉」
+        #   的东西都在这里留痕 —— `pincol` 整颗 IC 被闸门丢掉、引脚列并入时的补脚与
+        #   未认领触点、槽位改写、候选溢出。每条都带**严格为正**的降权分
+        #   （0 在很多下游等于「删除」）+ 判据 + 重扫队列。**不参与评分**，
+        #   只是让「丢了什么」在交付前的产物里可查。
+        "no_delete": _no_delete_dump(),
+        "timing": tm,        # ★ 审计项②：非空就说明这张图的某一块被降级跑过（`stats` 里的 0 可能是
         #   「真没有」也可能是「抛异常」，看这里区分）。空列表 = 全链路正常。
         "errors": errs,
         "stats": {"n_components": len(comps), "n_texts": len(texts),
@@ -715,27 +827,164 @@ def _worker(job):
 
 
 def run_cases(cases, out_dir, workers: int = 1, **kw):
-    """cases: list[Case]。workers>1 走进程池。"""
-    import dataclasses
+    """cases: list[Case]。workers>1 走进程池。
+
+    ★ 灾难现场加固（用户 m42543）：进程池的 `f.result()` 以前**没有 try**。
+    子进程被 OOM-kill / 段错误时抛的是 `BrokenProcessPool`，它会从 `as_completed`
+    冒到调用方（`submission/run.py:233` 也没 try）⇒ **整进程死、`final_results/`
+    一份产物都没有、退出码还是 0**（最坏的「整批 0 分」）。现在：
+      1. 每个 future 的 `result()` 单独 try，坏掉的那张记 `ok: False` + 原因，其余照跑；
+      2. 池级异常（`BrokenProcessPool`/`OSError`）也兜住，**余下没跑完的图在本进程
+         串行补跑** —— 慢，但能出分。`cancel_futures=True` 防止 shutdown 时二次抛。
+    """
     jobs = [(dict(case_id=c.case_id, split=c.split,
                   png_path=c.png_path, json_path=c.json_path), str(out_dir), kw)
             for c in cases]
     results = []
+    done = set()
     if workers <= 1:
         for j in jobs:
             r = _worker(j)
             results.append(r)
-            print(f"  {r['case']:<20}{_mark(r)}  "
-                  f"{r.get('timing', {}).get('total_s', '?')} s", flush=True)
+            done.add(j[0]["case_id"])
+            _report_one(r)
         return results
-    with ProcessPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(_worker, j): j[0]["case_id"] for j in jobs}
+    ex = ProcessPoolExecutor(max_workers=workers)
+    try:
+        futs = {ex.submit(_worker, j): j for j in jobs}
         for f in as_completed(futs):
-            r = f.result()
+            j = futs[f]
+            cid = j[0]["case_id"]
+            try:
+                r = f.result()
+            except Exception as e:                                  # noqa: BLE001
+                r = {"case": cid, "ok": False,
+                     "error": "worker 崩溃（%s: %s）" % (type(e).__name__, e)}
+            done.add(cid)
             results.append(r)
-            print(f"  {r['case']:<20}{_mark(r)}  "
-                  f"{r.get('timing', {}).get('total_s', '?')} s", flush=True)
+            _report_one(r)
+    except Exception as e:                                          # noqa: BLE001
+        left = [j for j in jobs if j[0]["case_id"] not in done]
+        print("[stage1] ⚠️ 进程池整体崩溃（%s: %s）—— 余下 %d 张改在本进程串行补跑"
+              % (type(e).__name__, e, len(left)), flush=True)
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except Exception:                                           # noqa: BLE001
+            pass
+    for j in jobs:                          # 串行补跑（池没坏时 left 为空，零开销）
+        cid = j[0]["case_id"]
+        if cid in done:
+            continue
+        r = _worker(j)
+        done.add(cid)
+        results.append(r)
+        _report_one(r)
     return results
+
+
+def _no_delete_dump() -> dict:
+    """「不删除，只削弱」账本的紧凑快照（写进 `doc["no_delete"]`）。
+
+    见 `cvparts/hypo.py` 的 `Ledger`：owner m23945 的规矩是「可以削弱内容的置信度，
+    但不能轻易覆盖」「超限项必须留在系统里，附一个可比较的标量，由下游降权或复核」
+    （`docs/reports/工程哲学.md:41`、`:94`）。这里只是把账本原样交出来给复核层，
+    **不参与评分、不改任何判据**。
+    """
+    try:
+        from cvparts.hypo import LEDGER
+        return LEDGER.dump()
+    except Exception as e:              # 账本永远不该让主链挂掉
+        return {"error": "%s: %s" % (type(e).__name__, e)}
+
+# ★ 彩色实测点的**外伸量上限**（px；0 = 关，逐位老行为）。见 §5.116：
+#   `pincolor` 实测点取在红桩末端（外距中位 19.3px），官方 GT 约定只有 12.0px
+#   （均值 12.5、范围 6~22），而判分器 `pin_tol=5` ⇒ 该臂整边 position_mismatch。
+#   队友树实测：CAP=12 让他们的引脚 F1 0.1332→0.4891、总分 49.39→57.72（+8.33）。
+PIN_COLOR_CAP = float(os.environ.get("STAGE1_PIN_COLOR_CAP", "0") or 0)
+
+# ★ 四边全 confirm 时，**没有实测记录**的边是否也一并丢掉（队友原语义 = 丢）。
+#   动机（§5.119）：新 QA 承认现有 10GT 的引脚坐标不合 PDF 附件三（红绿交接处）并将更新，
+#   届时「彩色实测」是候选正解；但 `apply_color_pins` 在四边全 confirm 时把**整件**旧猜测丢掉，
+#   是它今天引脚 F1 爆 0 的直接原因。设 1 ⇒ 只丢**真有实测记录**的边，
+#   把「测量带来的收益」与「丢掉猜测造成的损失」分开评估（默认 0 = 逐位老行为）。
+PIN_COLOR_KEEP_MISS = env_on("STAGE1_PIN_COLOR_KEEP_MISS", "0")
+
+
+# ---------------------------------------------------------------- 读图（灾难现场加固）
+def _max_pixels_hard() -> int:
+    """巨图解码护栏阈值（像素数）。`STAGE1_MAX_PIXELS_HARD=0` 关掉这道护栏。"""
+    try:
+        return int(os.environ.get("STAGE1_MAX_PIXELS_HARD") or 80_000_000)
+    except Exception:                                               # noqa: BLE001
+        return 80_000_000
+
+
+def _imread_bgr(path):
+    """读成 BGR（`IMREAD_COLOR`）。**比 `cv2.imread` 多两道保险**（用户 m42543）：
+
+    1. **非 ASCII / 带空格路径**：`cv2.imread` 在 Windows 上对非 ASCII 路径会**静默
+       返回 `None`**（官方 case 名明确可能带空格），而 `np.fromfile` + `cv2.imdecode`
+       不看路径编码。读不出才退回 `imread`（保留旧行为，别把能跑的路堵死）。
+    2. **巨图护栏**：像素数超过 `STAGE1_MAX_PIXELS_HARD`（默认 8e7 = 80 MP，只看文件头，
+       不解码）时按 1/2、1/4、1/8 解码。硬 OOM 是 `except` 救不回来的死法
+       （进程被内核杀掉，整批 0 产物），宁可掉精度也要活着出分。本地最大图
+       4491x3173 = 14 MP，远在阈值下 ⇒ **正常路径逐像素不变**。
+    """
+    p = str(path)
+    buf = None
+    try:
+        buf = np.fromfile(p, dtype=np.uint8)
+    except Exception:                                               # noqa: BLE001
+        buf = None
+    if buf is not None and buf.size:
+        flag = cv2.IMREAD_COLOR
+        hw = None
+        try:
+            from PIL import Image
+            with Image.open(p) as im:                               # 只读文件头
+                hw = (im.height, im.width)
+        except Exception:                                           # noqa: BLE001
+            hw = None
+        if hw is not None:
+            lim = _max_pixels_hard()
+            pix = int(hw[0]) * int(hw[1])
+            if lim > 0 and pix > lim:
+                k = 2
+                while k < 8 and pix / float(k * k) > lim:
+                    k *= 2
+                flag = {2: cv2.IMREAD_REDUCED_COLOR_2,
+                        4: cv2.IMREAD_REDUCED_COLOR_4}.get(
+                            k, cv2.IMREAD_REDUCED_COLOR_8)
+                print("[stage1] ⚠️ 巨图 %dx%d = %.0f MP > %.0f MP，按 1/%d 解码"
+                      "（硬 OOM 会杀掉整个进程，整批 0 产物）"
+                      % (hw[1], hw[0], pix / 1e6, lim / 1e6, k), flush=True)
+        img = cv2.imdecode(buf, flag)
+        if img is not None:
+            return img
+    return cv2.imread(p, cv2.IMREAD_COLOR)
+
+
+def _blame(r):
+    """★ 失败时把 error / tb 打出来（评测机踩坑后补的：`FAIL` 后面必须有下文）。
+
+    原先 `run_cases` 只打 `_mark(r)`，`FAIL` 后面就没有下文了，而 `_worker` 早就把
+    `error` 和 `tb` 塞进了返回字典（见 `:505`）—— 于是「哪张图、为什么挂」在容器日志里
+    完全不可见（第 5 次提交就是 10 张图全是同一个 FAIL，只能从 decision_log.json 反查）。
+    这里只加日志，不改任何判定。
+    """
+    if r.get("ok"):
+        return
+    print(f"      !! error: {r.get('error')}", flush=True)
+    tb = (r.get("tb") or "").rstrip()
+    for line in tb.splitlines():
+        print(f"      !! {line}", flush=True)
+
+
+def _report_one(r):
+    print(f"  {r['case']:<20}{_mark(r)}  "
+          f"{r.get('timing', {}).get('total_s', '?')} s", flush=True)
+    _blame(r)
 
 
 if __name__ == "__main__":

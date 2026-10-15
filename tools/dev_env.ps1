@@ -29,6 +29,9 @@ $env:LLM_MODEL    = 'qwen3.5-9b'
 $env:VLM_SCALE    = '4'
 
 # 本机 LM Studio Developer 页生成的 API token（随时可在那里重新生成并替换这一行）。
-$env:LLM_API_KEY  = 'sk-lm-YPX0MZpY:YPu0ZenotNLwPeVYNJ3Q'
+# ★ 2026-10-27 轮换：旧 token `sk-lm-YPX0MZpY:...` 已失效（端点回 401）。
+#   从这一版起 `vlm/client.py` 支持**文件来源**（§5.103）：`eda-pcb\.lmstudio_key`
+#   （已 gitignore）或 `~\.lmstudio\api_key`，所以这个脚本不设 `LLM_API_KEY` 也能跑。
+$env:LLM_API_KEY  = 'sk-lm-L74IBwPJ:3xLxFOiO83R74q480gFy'
 
 Write-Host "[dev_env] LLM_BASE_URL=$env:LLM_BASE_URL  LLM_MODEL=$env:LLM_MODEL  LLM_API_KEY=$(if ($env:LLM_API_KEY) { '已设' } else { '未设' })"

@@ -8,17 +8,24 @@ The separate recovery function can add measured monochrome stroke rows or
 calibrate an existing candidate inside its own stroke band. It retains every
 old index and does not infer an electrical endpoint from monochrome ink.
 """
+
 from __future__ import annotations
 
+
 import math
+
 import copy
+
 from typing import Dict, Sequence
 
+
 import numpy as np
+
 from pinmarkers import hollow_marker_bands
 
 
 _EDGES = ("top", "right", "bottom", "left")
+
 _NORMALS = ((0, -1), (1, 0), (0, 1), (-1, 0))
 
 
@@ -456,7 +463,7 @@ def recover_frame_pins(components: Sequence[dict], comp_pins: Dict[str, list],
         for old in comp_pins[cid]:
             try:
                 valid = len(old) == 2 and all(math.isfinite(float(v)) for v in old)
-                previous_evidence.append(_one_pin(mask, old, box, frames, boxes, text_mask)
+                previous_evidence.append(_one_pin_mono(mask, old, box, frames, boxes, text_mask)
                                          if valid else None)
             except (TypeError, ValueError):
                 previous_evidence.append(None)
@@ -489,7 +496,7 @@ def recover_frame_pins(components: Sequence[dict], comp_pins: Dict[str, list],
                         source="frame_hollow_marker", frame_confirmed=True,
                         frame_coverage=band["frame_coverage"], marker=band["marker"])
                 else:
-                    evidence = _one_pin(mask, point, box, frames, boxes, text_mask,
+                    evidence = _one_pin_mono(mask, point, box, frames, boxes, text_mask,
                                         search_radius=0)
                 details = dict(band, evidence=evidence, point_img=point,
                                estimated_endpoint=True)
@@ -574,3 +581,59 @@ def recover_frame_pins(components: Sequence[dict], comp_pins: Dict[str, list],
                 log["added"].append(dict(details, index=index))
         log["new_count"] = len(output[cid])
     return output, index_map, audit
+
+
+def _one_pin_mono(ink, point, box, frames, text_boxes, text_mask, *, search_radius=3):
+    edge = _candidate_edge(point, box)
+    normal = _NORMALS[edge]
+    vertical = edge in (1, 3)
+    frame_coord, calibrated, frame_coverage = frames[edge]
+    frame_outer=_frame_outer(ink,box,edge,frames[edge])
+    tangent = point[1] if vertical else point[0]
+    paths = []
+    # The merged candidate may sit at the centre of several pixels/number ink.
+    # Search at most 3px along its own side; never migrate to another pin row.
+    for offset in range(-search_radius, search_radius + 1):
+        anchor = ((frame_coord, tangent + offset) if vertical
+                  else (tangent + offset, frame_coord))
+        probe_anchor=(frame_outer,anchor[1]) if vertical else (anchor[0],frame_outer)
+        path = _probe_path(ink, probe_anchor, normal, text_mask)
+        paths.append((anchor, path, offset))
+    anchor, path, _ = max(paths, key=lambda q: (q[1]["n_hit"], q[1]["run"],
+                                               -q[1]["branching"], -abs(q[2])))
+    run, hits = path["run"], path["n_hit"]
+    text_like = path["text_fraction"] >= 0.6 and path["branching"] >= 0.3
+    near_attached = path["first_ink"] is not None and path["first_ink"] <= 3
+    word_span, word_ink = _external_text_band(point, frame_coord, edge, text_boxes, ink)
+    detached_word = (word_span is not None and word_ink and path["text_fraction"] >= 0.6
+                     and path["first_ink"] is not None and path["first_ink"] >= 3
+                     and run <= word_span + path["first_ink"] + 2)
+    only_text_support = path["text_fraction"] >= 0.5 and run <= 14
+    trust, confidence, reason = "uncertain", 0.45, "insufficient_normal_stroke_evidence"
+    # A real short floating stub is enough. No external wire is required.
+    # Text overlap alone cannot demote an uninterrupted straight attached stub.
+    if calibrated and detached_word:
+        trust, confidence, reason = "rejected", 0.1, "detached_word_ink_outside_frame"
+    elif (calibrated and near_attached and hits >= 4 and run >= 5
+          and not text_like and not only_text_support):
+        trust, confidence, reason = "trusted", 0.88, "frame_attached_normal_stroke"
+        if path["gap"] > 0:
+            confidence, reason = 0.76, "frame_normal_stroke_with_small_gap"
+    elif calibrated and text_like and (not near_attached or path["first_ink"] >= 4):
+        trust, confidence, reason = "rejected", 0.12, "detached_character_ink_outside_frame"
+    elif not calibrated:
+        reason = "actual_frame_unconfirmed"
+    elif text_like:
+        confidence, reason = 0.3, "text_overlap_without_clean_normal_stroke"
+    return {"point_img": [round(float(v), 1) for v in point], "edge": _EDGES[edge],
+            "trust": trust, "confidence": confidence, "reason": reason,
+            "anchor_img": [round(float(v), 1) for v in anchor],
+            "frame_confirmed": calibrated,
+            "frame_coverage": round(frame_coverage, 3),
+            "frame_outer_img": frame_outer,
+            "normal_ink_run": run, "normal_ink_hits": hits,
+            "first_ink_distance": path["first_ink"],
+            "text_overlap_fraction": round(path["text_fraction"], 3),
+            "branching_fraction": round(path["branching"], 3),
+            "external_word_band": word_span is not None,
+            "external_word_ink_confirmed": word_ink}

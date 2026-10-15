@@ -236,7 +236,11 @@ class BoxPinDuplicateTests(unittest.TestCase):
                 patch.object(assemble, "BOX_PIN_DROP_MIXED_ONLY", True), \
                 patch.object(assemble, "BOX_PIN_DROP_CAP", False), \
                 patch.object(assemble, "BOX_PIN_NEED_NAME", True):
-            doc = assemble.build_doc(stage1, assigned, "8")
+            # This fixture checks the winning pin's original wire ownership;
+            # the upstream free-end trimming pass has separate geometry tests.
+            with patch.object(assemble, "EDGE_TRIM", 0), \
+                    patch.object(assemble, "EDGE_EXT_ANY", 0):
+                doc = assemble.build_doc(stage1, assigned, "8")
         self.assertEqual(doc["pins"]["U1"], {
             "pin_5": {"pinname": "VDDREG", "point": {"x": 1191., "y": 679.}}})
         self.assertEqual(doc["__pin_index"], {"c0000": {"1": "pin_5"}})

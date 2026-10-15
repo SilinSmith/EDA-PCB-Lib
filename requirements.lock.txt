@@ -1,41 +1,50 @@
-﻿anyio==4.15.1
-certifi==2026.7.22
-charset-normalizer==3.5.1
-cloudpickle==3.1.2
-contourpy==1.3.3
-cycler==0.12.1
-filelock==4.0.6
-fonttools==4.66.0
-fsspec==2026.9.0
-h11==0.16.0
-httpcore==1.0.9
-httpx==0.28.1
-idna==3.20
-Jinja2==3.1.6
-kiwisolver==1.5.1
-MarkupSafe==3.0.3
-matplotlib==3.11.2
-mpmath==1.3.0
-networkx==3.6.1
-numpy==2.4.6
-nvidia-ml-py==13.615.71
-opencv-python==5.0.0.93
-packaging==26.3
-pillow==12.3.0
-polars==1.44.2
-polars-runtime-32==1.44.2
-psutil==7.2.2
-pyparsing==3.3.3
-python-dateutil==2.9.0.post0
-PyYAML==6.0.3
-requests==2.34.2
-six==1.17.0
-sympy==1.14.0
-torch==2.13.0+cu130
-torchvision==0.28.0+cu130
-typing_extensions==4.16.0
-ultralytics==8.4.165
-ultralytics-platform==0.1.70
-ultralytics-thop==2.2.1
-urllib3==2.8.0
+# EDA 赛题六 · 评测容器运行时版本（**以官方镜像为准，不是本机**）
+# ---------------------------------------------------------------------------
+# ★ 这份文件是「文档」，构建时**没有任何脚本读它**（install_deps.py 的约束是用
+#   importlib.metadata 从基础镜像现场生成的）。所以：**不要** pip install -r 它。
+#
+# ★ 历史坑：旧版本这份 lock 钉的是开发机（Windows）那套 torch 2.13.0+cu130 /
+#   numpy 2.4.6 / opencv-python 5.0.0.93，与评测镜像（torch 2.5.1+cu121 /
+#   numpy 2.5.3 / opencv-python-headless 4.10.0.84）整套矛盾。照着它装会把
+#   headless cv2 换成普通 cv2 ⇒ 无 GUI 容器 import cv2 报 libGL.so.1。
+#
+# 基础镜像（edarace-agent-base:ubuntu24，Dockerfile:53-63 实测）
+#   python                3.12 / Ubuntu 24.04
+#   torch                 2.5.1+cu121
+#   torchvision           0.20.1+cu121
+#   numpy                 2.5.3
+#   opencv-python-headless 4.10.0.84   （cv2.__version__ = 4.10.0）
+#   pillow                12.3.0
+#   PyYAML                6.0.2
+#   psutil                7.2.2
+#   requests              2.32.3
+#
+# install_deps.py 在构建期补装（基础镜像**本来没有**）
+#   ultralytics           8.4.174   （必须 --no-deps，否则拉 opencv-python 覆盖 headless）
+#   ultralytics-thop / ultralytics-platform
+#   scipy                 1.18.1
+#   matplotlib
+#   nvidia-ml-py
+#
+# 运行期第三方 import 面（stage1/2/3 + fusion + vlm + cvparts + textrec + pipeline）
+#   只有 cv2 / numpy / PIL / scipy / torch / ultralytics。
+#   requests/httpx/yaml/psutil/matplotlib/polars 都不在交付路径上（polars 只在 tools/ 用）。
+# ---------------------------------------------------------------------------
 
+# --- 基础镜像自带（不要动）--------------------------------------------------
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+numpy==2.5.3
+opencv-python-headless==4.10.0.84
+pillow==12.3.0
+PyYAML==6.0.2
+psutil==7.2.2
+requests==2.32.3
+
+# --- install_deps.py 构建期补装（精确版本随镜像源，见上表已知值）-----------
+ultralytics==8.4.174
+scipy==1.18.1
+matplotlib
+nvidia-ml-py
+ultralytics-thop
+ultralytics-platform

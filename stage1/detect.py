@@ -97,6 +97,32 @@ NMS_IOU = float(os.environ.get("STAGE1_NMS_IOU", "0.5"))
 _STAGE1_DROP_ENV = env_str("STAGE1_DROP_TYPES", "pin,testpoint,mosfet_npn")
 DROP_TYPES = frozenset(t.strip().lower() for t in _STAGE1_DROP_ENV.split(",") if t.strip())
 
+# ★★ 把 `pin` 与 `testpoint` **在检测阶段合并成一个内部类** `tp`（默认 off）。
+#   业主原话（m00001）：「testpoint 和跟他搞混的那个则直接合并成一个（YOLO识别阶段），
+#   而在文本绑定时才决定他到底是哪个」。
+#   为什么正好是这两类（220 张 GT 普查，我自己数的）：
+#     `pin` 175 个 / 32 张、`testpoint` 43 个 / 6 张，**两者的 GT key 都是 `TPn`、
+#     bbox 都是 20x20、value 都是 null**；`schematic_parser/stamp.py:67-68` 里两者的
+#     图章也都是 `(20, 20)` ⇒ **合并完全不影响贴章**。
+#   为什么值得合并：上面 `DROP_TYPES` 的账说得很清楚 —— `pin` 的预测 98.9%、`testpoint`
+#   98.6% 是 fp，原来唯一的办法是**整类砍掉**（220 张 +0.153）。合并 + 文本闸门是想把
+#   「盲目的类型级丢弃」换成「有证据的闸门」：贴完章合成 `tp`，到 stage2 再用
+#   ①CV 的**形状证据**（`cvparts/testpoint.py:10-13` 的三种子类型 `ring3`/`hole`/`dot`；
+#     六张派生 case 实测：凡 CV 给了子类型的全部落在 GT `testpoint`，一个子类型都没有
+#     的全部落在 GT `pin`，0 例反例 ⇒ 判据是「CV 认没认出来」，不是「是不是 ring3」。
+#     用 `STAGE2_TP_CV_SUBTYPES` 选哪几个子类型算证据，默认 `ring3`）
+#   ②**有没有绑到 TP 系位号**（`stage2/assign.py:317 TYPE_PREFIX`）
+#   才落地成官方类名。没绑到的一律丢 —— 这才是「文本绑定阶段才决定」。
+#   ⚠⚠ 官方 9 张（`10_GTcase` 的 1,2,3,4,5,7,8,9,10）里 `pin` / `testpoint` **各 0 个**
+#   ⇒ **这个开关在官方评测集上是零效果**，收益只可能出现在派生档
+#   （`200_train_cases` / `10_GTcase` 之外的 19 张快档也一样得逐 case 看）。
+#   打开：`STAGE1_MERGE_TP=1`。**默认 off ⇒ 现有 19 张 / 9 张结果逐位不变。**
+MERGE_TP = env_on("STAGE1_MERGE_TP", "0")
+# 被合并掉的 YOLO 类名（小写比较）；合并后的**内部**类名 —— 它绝不许出现在交付产物里，
+# 由 `stage2/assemble.py` 的 tp 闸门折回官方类名。
+MERGE_TP_FROM = frozenset(("pin", "testpoint"))
+MERGE_TP_TO = "tp"
+
 # ★ CV 专类候选在**同槽位**竞争中直接胜出（默认 off）。
 #   为什么需要：槽位竞争只会在「所有候选折叠后同类」时自动决议（`cvparts/hypo.py`
 #   的 `auto_resolve`）；跨类（YOLO 说 `pin`、CV 说 `testpoint:hole`）一定不决议，
@@ -215,6 +241,21 @@ class Detector:
             d["_i"] = i                       # 贴章后要重排，先用它记住原始顺序
             d["box_raw"] = list(d["box"])
             d["box"] = stamp_mod.snap_box(d["box_raw"], d["name"])
+        # ★ 合并 `pin` / `testpoint` -> `tp`（`STAGE1_MERGE_TP=1`）。位置是刻意的：
+        #   ① 贴章用的是**原类名**（`snap_box(box_raw, d["name"])`），所以改写必须在
+        #      贴章**之后**（两类图章都是 20x20，所以贴章结果不受影响）；
+        #   ② 改写必须赶在下面那遍「贴章后再压一次同类重复」**之前** —— `nms()` 是按
+        #      `d["cls"]` 分组的（`for c in sorted({d["cls"] for d in dets})`），只改
+        #      `name` 不改 `cls` 的话两类仍各压各的：同一个符号被 `pin` 与 `testpoint`
+        #      各检一次就会**双双活下来**、变成两颗元件。`cls` 统一成 -2 才算真合并。
+        #   原类名留在 `merge_from` 上作证据（业主 m00001 要求「记下原类名」）。
+        if MERGE_TP:
+            for d in raw:
+                _nm = str(d.get("name") or "").strip().lower()
+                if _nm in MERGE_TP_FROM:
+                    d["merge_from"] = _nm
+                    d["name"] = MERGE_TP_TO
+                    d["cls"] = -2
         # ★ 贴章之后**再压一次同类重复**（2026-07 审计 A2）。
         #   `snap_box` 把同类的框全都换成**同一个模板**（同尺寸、同轴向）、以原框
         #   中心为中心（见 `schematic_parser/stamp.py:snap_box`），于是两个原始框
@@ -250,11 +291,20 @@ class Detector:
             gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
             t1 = time.time()
             for cname, mod in CV_PARTS.items():
+                # ★ `STAGE1_MERGE_TP=1` 时 CV 专类的候选值也折到**内部合并类**上
+                #   （`tp:ring3` / `tp:hole` / `tp:dot`，`hyps.fold("tp:ring3", "tp")`）。
+                #   这样 YOLO 的 `tp` 候选与 CV 的 `tp:*` 候选**折叠后同类**，
+                #   `cvparts/hypo.py:205-225 auto_resolve()` 的 `rule:fold` 支会直接决议，
+                #   且取**分数最高**的那个（细分标签留作证据）——
+                #   正是 0050 的 `c0032`/`c0035`：`tp:ring3` 0.850 赢 `pin` 0.615。
+                #   off 时逐字不变（`_fold_to is cname`，标签仍是 `testpoint:ring3`）。
+                _fold_to = (MERGE_TP_TO if (MERGE_TP and cname in MERGE_TP_FROM)
+                            else cname)
                 for h in mod.detect_hypotheses(gray):
                     t_cv += time.time() - t1
                     t1 = time.time()
-                    label = f"{cname}:{h['subtype']}"
-                    hyps.fold(label, cname)
+                    label = f"{_fold_to}:{h['subtype']}"
+                    hyps.fold(label, _fold_to)
                     best, best_d = None, 1e18
                     for d in raw:
                         bcx = (d["box"][0] + d["box"][2]) / 2.0
@@ -268,6 +318,16 @@ class Detector:
                                  source=f"cv:{h['subtype']}", evidence=h["evidence"],
                                  context={"cv_subtype": h["subtype"],
                                           "dist_to_yolo": round(best_d, 2)})
+                        # ★ 把 CV 的**形状证据**记到被复用的那颗元件上。原来只有
+                        #   CV **自建槽位**（下面 else 支）才带 `subtype`，YOLO 的框
+                        #   被 CV 复用时没有 —— 而合并类 `tp` 到底是 `pin` 还是
+                        #   `testpoint` 全靠它（`stage2/assemble.py` 的 `TP_CV_SUBTYPES` 闸门）。
+                        #   同一个框可能被多个子类型命中（`ring3` 0.85 + `hole` 0.43），
+                        #   取分数最高的那个，并把它当唯一证据。
+                        if MERGE_TP and cname in MERGE_TP_FROM:
+                            if float(h["score"]) > float(best.get("cv_subtype_score") or -1.0):
+                                best["cv_subtype"] = h["subtype"]
+                                best["cv_subtype_score"] = round(float(h["score"]), 4)
                         # ★ `STAGE1_CV_WIN=1` 时让 CV 的专类标签直接锁定这个槽位
                         #   （否则跨类不决议，回落成 YOLO 的 `d["name"]`）。
                         if CV_WIN:
@@ -321,14 +381,23 @@ class Detector:
             _ctype = (hyps.fold_value(sl.chosen) if sl is not None and sl.resolved()
                       else hyps.fold_value(d["name"]))
             if DROP_TYPES and str(_ctype or "").strip().lower() in DROP_TYPES:
-                continue                       # ★ 类型级丢弃，见文件顶 `DROP_TYPES`
+                # ★ `STAGE1_MERGE_TP=1` 时 `tp` 是**内部合并类**、不是官方类名，
+                #   它的去留由**文本绑定阶段**决定（有没有绑到 TP 系位号 + CV 形状
+                #   证据，见 `stage2/assemble.py` 的 tp 闸门）⇒ 这里绝不能按类型丢掉它，
+                #   否则合并就白做了。`tp` 本来也不在 `DROP_TYPES` 默认表里，
+                #   显式写出来是为了防止有人把 `STAGE1_DROP_TYPES=tp` 当同一类用。
+                if not (MERGE_TP and str(_ctype or "").strip().lower() == MERGE_TP_TO):
+                    continue                   # ★ 类型级丢弃，见文件顶 `DROP_TYPES`
             comps.append({
                 "id": d["id"],
                 "type": _ctype,
                 "proposal": sl.chosen if sl is not None and sl.resolved() else d["name"],
                 "score": round(float(d["score"]), 4),
                 "source": d["source"],
-                "subtype": d.get("subtype"),
+                # CV 形状证据：CV 自建槽位是 `d["subtype"]`；YOLO 的框被 CV 复用
+                # 时是上面补的 `d["cv_subtype"]`（`STAGE1_MERGE_TP=1` 才会有）。
+                # off 时 `cv_subtype` 从不存在 ⇒ 与原来的 `d.get("subtype")` 逐位相同。
+                "subtype": (d.get("subtype") or d.get("cv_subtype")),
                 "bbox_img": [round(float(v), 2) for v in d["box"]],
                 "bbox_json": [round(float(v), 2) for v in to_json_box(d["box"], H)],
                 # 贴图章**之前**的框。图章一律是正方形，所以「符号是横的还是竖的」
@@ -343,6 +412,11 @@ class Detector:
                 "n_alts": len(sl.alts) if sl is not None else 1,
                 "pending": bool(sl is not None and not sl.resolved()),
             })
+            if MERGE_TP and d.get("merge_from"):
+                # 原类名只作证据（业主 m00001：「记下原类名」）。**只在开关打开时
+                # 才加这个键**，保证 off 时 stage1 产物逐字节不变；它也不会流到
+                # 交付产物里（`stage2/assemble.py` 只挑它认识的那几个键）。
+                comps[-1]["merge_from"] = d["merge_from"]
         return comps, hyps, {"yolo_s": round(t_yolo, 2), "cv_s": round(t_cv, 3)}, counts
 
 

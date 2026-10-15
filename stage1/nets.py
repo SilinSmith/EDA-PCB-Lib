@@ -9,18 +9,24 @@
     一个分量 + 挂上来的引脚 = 一个 net
 
 **已知的结构性天花板（必须记住）**：官方 `pin_f1` 的键是 `(component, pin_number)`，
-`net_hypergraph` 的键也是 `(component, pin_number)`；只有 `pin_f1` 还比较 `pinname`。
+`net_hypergraph` 的键也是 `(component, pin_number)`，而且都要 `pinname` 字符串严格相等。
 **引脚号/引脚名只能靠 OCR**（第二阶段 `eda-pcb\\textrec\\`），位号（`key`）同理。
 所以这里产出的是**位置正确、编号自造**的引脚和网络：几何部分是对的，能拿分的部分
 要等第二阶段把编号和名字填进来。别把这个模块的输出当成可以直接提交的东西。
 """
+
 from __future__ import annotations
 
+
 import math
+
 import os
+
 from typing import Dict, List, Optional, Sequence
 
+
 import numpy as np
+
 
 try:                                    # 作为包导入（python -m stage1）
     from . import labels as labels_mod
@@ -29,12 +35,14 @@ except ImportError:                     # 直接跑脚本（python stage1\nets.p
     import labels as labels_mod         # noqa: F401
     import pins as pins_mod             # noqa: F401
 
+
 # 引脚点挂到导线图上时，允许的最大距离（`STAGE1_PIN_JOIN_DIST`，默认 12）。
 # ★ 这是一道**硬截断**：`build_nets` 里 `if dist[m] > join_dist: continue` 会把
 # 「离任何导线段都超过这个距离」的引脚**整个丢掉**（当成悬空脚、不进任何网络）。
 # case `1` 实测 `U1` 的 34 个脚到最近导线段的距离 p50 = 45.6px、p90 = 173px，
 # 而只有 8/34 落在 5px 以内 ⇒ 12px 这道闸门很可能是 `net_hypergraph` 召回的大漏勺。
 PIN_JOIN_DIST = float(os.environ.get("STAGE1_PIN_JOIN_DIST", "12"))
+
 # ★★ 「不丢弃，只降权」—— owner 的工程哲学落在这里（泛化，不是特例）：
 #   上面那道 `join_dist` 是**硬截断**，超出的引脚在 `_pick` 返回 -1 后由
 #   `if g < 0: continue` 直接抹掉，**下游再也看不到它存在过**。这违反 owner
@@ -47,6 +55,7 @@ PIN_JOIN_DIST = float(os.environ.get("STAGE1_PIN_JOIN_DIST", "12"))
 #     * `d > PIN_JOIN_FAR` 或无线段 ⇒ 进 `report["orphans"]`（仍然**不消失**）
 #   `PIN_JOIN_FAR = 0` 时退化成历史行为（weak 区间为空），便于对照。
 PIN_JOIN_FAR = float(os.environ.get("STAGE1_PIN_JOIN_FAR", "0"))
+
 # ★★ 「并行导线等距对齐」的紧半径（`STAGE1_PIN_JOIN_SYNTH`，默认 3px）。
 #   只作用于 `pincol` **按格点补出来**的那些脚（`pin_synth` 里标 1）。理由：
 #   IC 引脚列的实测间距是 **10.0px**（0143 的 U1：GT 64 脚 = 左 32 + 右 32，
@@ -57,6 +66,7 @@ PIN_JOIN_FAR = float(os.environ.get("STAGE1_PIN_JOIN_FAR", "0"))
 #   这一脚。**这条不是调参，是把「没有导线」这件事表达了出来的唯一办法。**
 #   设 `STAGE1_PIN_JOIN_SYNTH` 为负数或 ≥ `PIN_JOIN_DIST` 即退回历史行为。
 PIN_JOIN_SYNTH = float(os.environ.get("STAGE1_PIN_JOIN_SYNTH", "3"))
+
 # ★ 引脚归属模式（`STAGE1_PIN_ATTR`）：
 #   `nearest`（默认）= 挂到「最近的那一条段」所属的连通分量（历史行为）。
 #   `longest`        = 在 `join_dist + PIN_ATTR_SLACK` 半径内，改挂到**总长最大**的分量。
@@ -65,7 +75,9 @@ PIN_JOIN_SYNTH = float(os.environ.get("STAGE1_PIN_JOIN_SYNTH", "3"))
 # 右侧 5 条本该被同一根竖线并起来 —— 见 `work\README.md`）。
 # `longest` 只是「在同样够得着的前提下，优先相信更长的那条线」，不动任何阈值。
 PIN_ATTR = os.environ.get("STAGE1_PIN_ATTR", "nearest").strip().lower()
+
 PIN_ATTR_SLACK = float(os.environ.get("STAGE1_PIN_ATTR_SLACK", "6"))
+
 # 少于这么多引脚的「网络」丢掉（孤立毛刺）。注意它同时也就是「空网丢弃」的开关：
 # `MIN_NET_PINS = 1` 已经把 0 引脚的网挡在 `build_nets` 外面，所以不再需要单独的
 # `DROP_EMPTY` 常量（2026-07 审计删掉了那个只写不读的装饰常量）。
@@ -163,7 +175,7 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
                join_far: float = PIN_JOIN_FAR, report=None,
                pin_synth=None, join_synth: float = PIN_JOIN_SYNTH,
                components=None, guard_attachments: bool = False,
-               pin_connected=None):
+               pin_connected=None, bridges=None, bridge=None, bridge_pad=None):
     """返回 (nets, seg_groups)。
 
     `comp_pins`: `{comp_id: [(x, y), ...]}`（图像坐标）
@@ -227,7 +239,8 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
         segs, tol=tol, ext=ext, ext_nearest=ext_nearest,
         weld=weld, perp_tol=perp_tol, cos_tol=cos_tol, over=over,
         ink=(ink if getattr(labels_mod, "WIRE_INK", True) else None),
-        ink_frac=getattr(labels_mod, "WIRE_INK_FRAC", 0.5))
+        ink_frac=getattr(labels_mod, "WIRE_INK_FRAC", 0.5),
+        bridges=bridges, bridge=bridge, bridge_pad=bridge_pad)
 
     # 收集所有引脚点，并记住它属于哪个元件、第几个脚
     pts, owner, jd, strict_synth, disconnected = [], [], [], [], []
@@ -366,6 +379,7 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
     #   由上一条 `if len(pin_list) < min_pins: continue` 完成（`MIN_NET_PINS = 1`）。
     #   读代码的人会以为这儿有个开关，其实没有。常量一并删掉。
     return nets, seg_groups
+
 
 
 def summarise(comp_pins, nets) -> str:
