@@ -12,13 +12,18 @@
 两种模式：
   --mode agree （默认含）与 GT 锚点比：逐组中位是否一致(≤2px) + 把该估计当作平移施行后的 pin_f1
                             （GT 在这里只是量尺；施行分才代表「真能换成涨分吗」）
-  --mode stats GT 完全不参与：覆盖率 / 交点距离中位·p90 / 组内稳定性(dev≤2 的组占比)
-                —— 用来回答「新 GT 真按交点定锚点时，检测器本身够不够用」
+  --mode stats GT 不参与几何量：覆盖率 / 交点距离中位·p90 / 组内稳定性(dev≤2 的组占比)
+                —— 用来回答「新 GT 真按交点定锚点时，检测器本身够不够用」。
+                口径说明：配对（哪些脚进统计）仍借 GT 的 (元件,边) 分组，但被统计的
+                覆盖率/距离/稳定性只读图像与我们自己的锚点，**不读 GT 坐标**。
 
 用法：
   python -X utf8 eda-pcb/tools/diag/_juncprobe.py --mode both
   python -X utf8 eda-pcb/tools/diag/_juncprobe.py --mode stats --min-n 3
+  python -X utf8 eda-pcb/tools/diag/_juncprobe.py --mode stats --back 4   # 放宽「内侧贴 maroon」窗口
   python -X utf8 eda-pcb/tools/diag/_juncprobe.py --mode agree --show --cases 1,5,10
+（--half 默认 26px、--lat 默认 ±2px、--back 默认 1..2px = 严格口径。放宽 --back 到 4 时覆盖与
+  组内稳定性明显上升，而 --lat 放宽无收益 ⇒ 新 GT 上两种 --back 都要看，见 §5.152 补。）
 """
 import argparse
 import copy
@@ -45,12 +50,17 @@ DEFAULT_RUN = r"Y:\workspace\EDA\work\_fast_out_deterministic_default"
 CASES = [str(i) for i in range(1, 11)]
 
 
-def probe(img, q, u, half, want_maroon):
-    """在 q 邻域沿 ±u 搜索目标像素（图像坐标）。返回 (t, dx, dy) 或 None。"""
+def probe(img, q, u, half, want_maroon, lat=2, back=2):
+    """在 q 邻域沿 ±u 搜索目标像素（图像坐标）。返回 (t, dx, dy) 或 None。
+
+    lat  = 横向搜索半径（±px）；back = 「内侧贴 maroon」的窗口（内侧 1..back px）。
+    默认 (2, 2) = §5.151/§5.152 用过的严格口径；放宽到 back=4 时覆盖 37.9%→53.2%、
+    组内恒定 19.2%→50.0%（§5.152 补），所以新 GT 上两种口径都要看。
+    """
     h, w = img.shape[0], img.shape[1]
     cands = []
     for t in range(-half, half + 1):
-        for s in (-2, -1, 0, 1, 2):
+        for s in range(-lat, lat + 1):
             x = int(round(q[0] + u[0] * t - u[1] * s))
             y = int(round(q[1] + u[1] * t + u[0] * s))
             if x < 1 or y < 1 or x >= w - 1 or y >= h - 1:
@@ -59,18 +69,20 @@ def probe(img, q, u, half, want_maroon):
                 continue
             if want_maroon:
                 ok = False
-                for back in (1, 2):
-                    if PA._classify(img, int(round(x - u[0] * back)),
-                                    int(round(y - u[1] * back))) == "m":
+                for b in range(1, back + 1):
+                    if PA._classify(img, int(round(x - u[0] * b)),
+                                    int(round(y - u[1] * b))) == "m":
                         ok = True
                         break
                 if not ok:
                     continue
-            cands.append((abs(t), t, x - q[0], y - q[1]))
+            # 选点次序：先「沿轴向最近」再「横向离射线最近」再「t 升序」——同一条 t 上有多个
+            # 候选时，贴轴的那个才可能是真交点（旧版按 dx/dy 排序，等价于按 s 降序，是任意的）。
+            cands.append((abs(t), abs(s), t, x - q[0], y - q[1]))
     if not cands:
         return None
     cands.sort()
-    return cands[0][1:]
+    return cands[0][2:]
 
 
 def scan(a, cfg, index, mode):
@@ -103,8 +115,8 @@ def scan(a, cfg, index, mode):
             for num, pt, gpt, td in g["td"]:
                 st["n_pin"] += 1
                 q = (pt[0], h - pt[1])
-                pn = probe(img, q, u, a.half, False)
-                pc = probe(img, q, u, a.half, True)
+                pn = probe(img, q, u, a.half, False, lat=a.lat, back=a.back)
+                pc = probe(img, q, u, a.half, True, lat=a.lat, back=a.back)
                 if pn:
                     st["n_jn"] += 1
                     st["d_jn"].append((pn[1] ** 2 + pn[2] ** 2) ** 0.5)
@@ -199,10 +211,16 @@ def main():
     ap.add_argument("--min-n", type=int, default=2,
                     help="成组/一致率所需最少脚数（stats 组统计通常用 3）")
     ap.add_argument("--half", type=int, default=26)
+    ap.add_argument("--back", type=int, default=2,
+                    help="「内侧贴 maroon」窗口 1..back px（默认 2 = 严格口径；放宽到 4 时"
+                         "覆盖 37.9%%→53.2%%、组内恒定 19.2%%→50.0%%，见 §5.152 补）")
+    ap.add_argument("--lat", type=int, default=2, help="横向搜索半径 ±px（默认 2；放宽无收益）")
     ap.add_argument("--show", action="store_true")
     a = ap.parse_args()
     cfg = EvalConfig()
     index = {str(c.case_id): c for c in discover()}
+    print("口径：half=%d, lat=±%d, back=1..%d, min-n=%d, run-dir=%s"
+          % (a.half, a.lat, a.back, a.min_n, a.run_dir))
     rows, st = scan(a, cfg, index, a.mode)
     if a.mode in ("agree", "both"):
         report_rows(rows)

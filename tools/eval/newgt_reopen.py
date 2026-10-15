@@ -6,8 +6,10 @@
     * **与口径无关**（新 GT 不必重跑）：检出率、元件键、脚号读取、网络挂接的候选生成；
     * **会重新开闸**（新 GT 必须重跑）：① 引脚锚点约定（当前 = bbox 内 d_bbox 中位 10.0px；
       若改成「红绿导线交点」，§5.129 的「锚点占错项 82%」与 §5.131 的「每(元件,边)恒定偏移」都要重算）；
-      ② 库补号闸门（§5.133 要求「库里的号必须与图上读到的号一致」，闸门未实装）。
-  因此本脚本只跑：GT 指纹、两把尺子的新基线、锚点诊断、池侧对照——**不做判断，只记录基线**。
+      ② 库补号闸门（§5.133 要求「库里的号必须与图上读到的号一致」；闸门已实装并默认关闭 =
+      `STAGE2_LIB_PINS_NUMGATE`，见 §5.150 §4(B)，在现 10GT 上净效应 0、待新 GT 复验）。
+  因此本脚本只跑：GT 指纹、两把尺子的新基线、锚点诊断、交点锚点探针、池侧对照
+  ——**不做判断，只记录基线**。
   新 GT 上的通过/否决一律用**相对 A/B**（净增益 > 0 且对照不降），不用旧 GT 的绝对阈值。
 
 用法：
@@ -20,11 +22,13 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import pathlib
+import re
 import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PY = [sys.executable, "-X", "utf8"]
+KNOWN_FP = "db9a9b7b36a89391"      # §5.149/§5.150 记录的现 10GT 指纹（变了才是新 GT）
 
 
 def run(cmd: list[str], logdir: pathlib.Path, name: str, dry: bool) -> tuple[int, str]:
@@ -73,10 +77,21 @@ def main() -> int:
                            capture_output=True, text=True).stdout.strip()
     print("HEAD=%s  工作树脏行=%d  输出目录=%s" % (head, len(dirty.splitlines()), logdir))
 
-    # 1) GT 指纹（变了才说明这是新 GT）
+    # 1) GT 指纹（变了才说明这是新 GT）——直接与记录值比，避免自欺
     rc, out = run(PY + ["tools/eval/gt_retest.py", "--fingerprint-only"], logdir, "1_fingerprint", a.dry)
     fp = [ln for ln in out.splitlines() if "指纹" in ln or "fingerprint" in ln.lower()]
-    notes.append("1) GT 指纹: %s" % (fp[-1].strip() if fp else "(见 1_fingerprint.log)"))
+    m = re.search(r"[0-9a-f]{16}", out)
+    fpv = m.group(0) if m else ""
+    if a.dry:
+        notes.append("1) GT 指纹: (dry 未执行；已知值 %s)" % KNOWN_FP)
+    elif fpv == KNOWN_FP:
+        notes.append("1) GT 指纹: %s = 已知的现 10GT（未变）⇒ 除 4/4b 之外这些读数都已记录过" % fpv)
+    elif fpv:
+        notes.append("1) GT 指纹: %s ≠ 已知 %s ⇒ **GT 已变**，下面每一步都要当新基线读"
+                     % (fpv, KNOWN_FP))
+    else:
+        notes.append("1) GT 指纹: 抓不到 16 位指纹，见 1_fingerprint.log：%s"
+                     % (fp[-1].strip() if fp else ""))
 
     # 2) 确定性尺子基线（新 GT 上的起点）
     rc, out = run(PY + ["tools/eval/gt_retest.py", "--arms", "default", "--rulers", "deterministic"]
@@ -106,6 +121,21 @@ def main() -> int:
         const = [ln for ln in out.splitlines() if "恒定" in ln]
         notes.append("4) 锚点诊断: %s" % (const[-1].strip() if const else "(见 4_anchor.log)"))
 
+    # 4b) 交点锚点探针：若新 GT 把锚点定在「红引线→绿导线交点」上，这一步直接回答
+    #     ① 我们的交点检测器覆盖/稳定到什么程度（stats，几何量不读 GT 坐标）
+    #     ② 交点口径与（新）GT 锚点差多少、能不能换成涨分（agree）。
+    #     现 10GT 基线见 §5.152：junc 覆盖 37.9%、组内恒定 19.2%（jnear 57.3% / 46.2%）。
+    if not run_dir.exists():
+        notes.append("4b) 交点锚点探针: 跳过（找不到 %s；先跑确定性尺子）" % run_dir)
+    else:
+        rc, out = run(PY + ["tools/diag/_juncprobe.py", "--mode", "both", "--min-n", "3",
+                            "--run-dir", str(run_dir)]
+                      + (["--cases", a.cases] if a.cases else []),
+                      logdir, "4b_junc", a.dry)
+        jl = [ln for ln in out.splitlines() if ln.startswith("组内恒定") or "覆盖" in ln]
+        notes.append("4b) 交点锚点探针: %s" % (" / ".join(x.strip() for x in jl[-3:]) if jl
+                                             else "(见 4b_junc.log)"))
+
     # 5) 池侧对照（同一把尺子上的 200 案泛化面，供新 GT 前后对照；很慢，默认不跑）
     if a.with_pool:
         rc, out = run(PY + ["tools/eval/gt_retest.py", "--pool", "--arms", "default",
@@ -119,13 +149,18 @@ def main() -> int:
         print("  " + n)
     print("""
 接下来**必须做的两件事**（都不是跑分，而是 A/B）：
-  (A) 锚点约定：若新 GT 把引脚锚点改成「红绿导线交点」，用 `tools/diag/_pinanchor.py` 重算
-      「每 (元件,边) 恒定偏移」占比；只有当 GT-blind 的偏移估计能在**对照不降**的前提下
-      把 pin_f1 抬起来，才谈实装（旧 GT 上：恒定边占 68.3%、真值修正 +1.74 分，
-      但色转折探针施行 −9.32 分 ⇒ 旧 GT 上不可 GT-blind 估计）。
-  (B) 库补号闸门：`stage2/libpins.py` 目前用库给号（§5.133 记 `TPS2553DBVR` 库 `/FAULT`=4
-      而 case6 GT 写 3 ⇒ 一处 −0.16）。必须加「库里的号要出现在图上读到的号里」这道闸，
-      再用 `--arms` A/B；判据 = 净增益 > 0 且两口径对照不降。
+  (A) 锚点约定：若新 GT 把引脚锚点改成「红绿导线交点」，顺序是
+      ① 看 4b 的 stats（交点检测器覆盖/稳定性够不够用；几何量不读 GT 坐标，
+         旧 GT 基线 junc 37.9% / 组内恒定 19.2%，见 §5.152）；
+      ② 看 4b 的 agree（新 GT 的锚点到底是不是交点）；
+      ③ 用 `tools/diag/_pinanchor.py` 重算「每 (元件,边) 恒定偏移」占比。
+      只有当 GT-blind 的偏移估计能在**对照不降**的前提下把 pin_f1 抬起来，才谈实装。
+      旧 GT 上的事实：恒定边占 68.3%、真值修正 +1.74 分，但四种估计器（色转折射线 §5.131、
+      导线端点、交点 jnear/junc §5.151/§5.152）全部换不成涨分 ⇒ 旧 GT 上不可 GT-blind 估计。
+  (B) 库补号闸门：闸门**已实装、默认关闭**（`STAGE2_LIB_PINS_NUMGATE=conflict|seen`，arms
+      `libnumgate` / `libnumgate_seen`，见 §5.150 §4(B)）。在现 10GT 上与 default 逐位相同
+      （80.62，因为交付路径没触发补号），所以它是一件**留给新 GT 的预置**：新 GT 上按
+      「净增益 > 0 且两口径对照不降」重新 A/B 一次即可定去留。
   * 其余通道（检出/元件键/脚号读取/网络挂接）已证与 GT 口径无关（§5.127/§5.137/§5.149），新 GT 不必重跑。""")
     if not a.dry:
         (logdir / "report.md").write_text(
