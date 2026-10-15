@@ -15092,3 +15092,33 @@ Python 自写的是 UTF-8 ⇒ 解析器必须按 BOM 自适应（`tools/dev/run_
 3. **不建议**在没有新尺子的情况下直接加臂 D：它会被同一把主终点尺子判为「证据不足」，白烧一轮 GPU。
 
 **产物**：`work/_ovgen.py`（GT-blind 普查脚本，未入库；读数已入本节）。
+## §5.175 人类裁定与开跑前最后一道自检：三臂 mix 对照干净，A/B 已「一条命令」就绪（本轮按人类要求未启动）
+
+**人类裁定（本轮回话）**：在 §5.173/§5.174 的两条证据摆出后，人类选择 **A —— 开跑冻结的三臂 A/B**，但同时要求 **「先打住」**。⇒ 本节**不启动训练**，只把开跑前的最后一道自检做完，让下一轮（或下一条人类回话）可以零摩擦开跑。
+
+**自检动机（本轮才发现的事实）**：三臂此前只有 `real.jsonl`，**`<arm>/manifest.jsonl` 从未生成过**——也就是说 §5.166 冻结设计里「同一合成池、同一 val、只差真实面」这一条，此前只在 `real.jsonl` 层面被审计过（`work/_abcheck_r8.py`），**混合后的清单从未核对**。所以本轮先跑 `--stage mix`（不训练），再逐条核对。
+
+**命令**：`python -X utf8 tools/dev/run_fullpop_ab.py --arm both --stage mix`（三臂各 `tools/dev/mix_crnn_manifest --seed 0`）。
+
+**核对（`work/_abcheck_r8m.py`，逐条 key = image + bbox + role + text）**
+
+| arm | manifest 总行 | 合成 | 真实 train | val | 真实 train 里 `value`≥5 |
+|---|---|---|---|---|---|
+| control | 24,546 | 22,000 | 1,746 | 800 | 75 |
+| treatment_long | 24,808 | 22,000 | 2,008 | 800 | 337 |
+| treatment | 25,955 | 22,000 | 3,155 | 800 | 337 |
+
+- **合成面逐条相同**：三臂对称差 **0**（22,000 行完全一致）⇒ 对照干净，处理效应只来自真实行。
+- **val 同一把尺子**：三臂对称差 **0**（800 行完全一致）。
+- **charset 一致**：三臂 `charset.json` 的 md5 相同（`chars` 71 字，`meta` 相同）。
+- **嵌套无丢失**：control 独有行 = 0（treatment ⊃ treatment_long ⊃ control）。
+- **增量与冻结设计逐条一致**：treatment_long − control = **262** 条，**262/262 全部**是 `role=value` 且长度 ≥5；treatment − control = **1,409** 条，**1,409/1,409 全部**是 `role=value`（其中 262 条 ≥5）。
+- **行数注记**：manifest 含 val，故上表总数 = §5.165 步数预算（train-only 23,746 / 24,008 / 25,155）**+ 800**，两处口径一致，无矛盾。
+
+**待执行（一条命令，≈45–70 min）**：`cd eda-pcb; python -X utf8 tools/dev/run_fullpop_ab.py --arm both`
+- 起点统一 `work/ocr_mix/runs/last.pt`，12 epoch，batch 128，workers 6；产物各臂 `<arm>/run/best.pt`、`<arm>/ruler_eval.log`、`<arm>/ruler_errors.jsonl`，跑完自动打印 §5.166 的配对判据（主终点 Δ + 95% 配对 CI + 精确 McNemar + 三护栏 + 四档读法）。
+- **开跑后不得中途改判据**；读数一律按 §5.166 冻结口径 + §5.172 的采纳规则。
+
+**功效提醒（写在这里，防止事后误读）**：主判据要求 Δ ≥ **+0.05**，而 n=389 在 20% 不一致率下的配对 MDE ≈ **0.0668**（§5.165/§5.174）。若读数落在「**证据不足**」档（CI 含 0 但方向为正），**不能**据此判「长串训练侧无效」，只能判「这把尺子测不动」；此时按 §5.174 第 2 条造第二把尺子（长串/重叠更多、n≥600），而不是放弃该线。
+
+**产物**：`work/_abcheck_r8m.py`（三臂混合清单对照自检）；三臂 `manifest.jsonl` + `charset.json`（均已生成，确定性的，重跑同结果）。
