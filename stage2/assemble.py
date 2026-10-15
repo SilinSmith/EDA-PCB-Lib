@@ -2464,7 +2464,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             # 依据：`_libsim.py --fixname` 官方 9 张改名 4 处 **4/4 正确**
             # （pin F1 0.4951→0.5936）；号是多实例聚合过的，一个号对应多个名字时
             # 猜错 = fp+fn 双罚，所以多候选一律不动手。
-            if _LIB_CTX is not None and ctype == "box" and str(num).isdigit():
+            if (_LIB_CTX is not None and _libpins.LIB_PINS_NAMEFILL
+                    and ctype == "box" and str(num).isdigit()):
                 _lkey = _LIB_CTX.key_for(name)
                 _lnames = _LIB_CTX.names_of(_lkey)
                 if not (_lnames and _libpins.norm(nm) in _lnames):

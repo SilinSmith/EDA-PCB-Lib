@@ -73,6 +73,15 @@ except ImportError:                           # 直接跑脚本自检
 # `STAGE2_LIB_PINS`（默认 "1"=开，2026-10-09 翻）：本通道总闸。见模块 docstring。
 LIB_PINS = env_on("STAGE2_LIB_PINS", "1")
 
+# §5.150 (B) 的**细闸**：把本模块的两条规则分别关掉，用来给「库的整体贡献」做归属。
+# 两条都**默认 1**（与历史逐位相同），只在 A/B 臂里显式设 0。
+#   * `STAGE2_LIB_PINS_NUMFILL=0`  ⇒ 只关**规则 A**（`complete_pins`：按名字补号）
+#   * `STAGE2_LIB_PINS_NAMEFILL=0` ⇒ 只关**规则 B**（`names_for`：按号补名，assemble 那条路）
+# 注意：`librefine` 走的是 `LibCtx.name_for_num` 方法，不走 `names_for`，
+# 所以 `NAMEFILL=0` **只**影响 assemble 的规则 B —— 这正是做归属需要的正交性。
+LIB_PINS_NUMFILL = env_on("STAGE2_LIB_PINS_NUMFILL", "1")
+LIB_PINS_NAMEFILL = env_on("STAGE2_LIB_PINS_NAMEFILL", "1")
+
 # 库文件路径。**2026-10-14 起默认是官方 box/IC 库 `BoxICLibrary_200cases.json`**
 # （用户 m42932「以新的这个为参考」）：官方 `pin_f1` 只考 box 元件，而这份库就是
 # box/IC 那一档（360 键），同口径实测比 `cpntLibrary`（337 键）好 —— 官方 9 张
@@ -119,6 +128,9 @@ def has_digit(s) -> bool:
 
 #: `STAGE2_LIB_REFINE_DEGEN` 的合法档位（语义见 `stage2/librefine.py` 的模块 docstring）。
 DEGEN_MODES = ("off", "letter", "shape", "known", "known2")
+
+#: `STAGE2_LIB_PINS_NUMGATE` 的合法档位（语义见 `numgate_mode` 的 docstring）。
+NUMGATE_MODES = ("0", "off", "conflict", "seen")
 
 
 def degen_block(ctx, mode: str, cur, ref) -> bool:
@@ -198,6 +210,28 @@ def degen_mode() -> str:
     """
     v = (env_raw("STAGE2_LIB_REFINE_DEGEN", "known2") or "known2").strip().lower()
     return v if v in DEGEN_MODES else "known2"
+
+
+def numgate_mode() -> str:
+    """库补**号**的一致性闸门档位（`STAGE2_LIB_PINS_NUMGATE`，**默认 `0`=关**）。
+
+    为什么要有它：规则 A 会把「读到的名字」换算成库里的号。库里那份 `name ↔ number`
+    是**真实器件**的编号，而标注里的编号不一定是它 —— §5.133 记的 `TPS2553DBVR`
+    就是现成例子：库 `/FAULT`=4，而 case6 的 GT 写 3，于是把本来正确的
+    `pin_3 FAULT` 改成 `pin_4 /FAULT`，**一处 −0.16 分**。
+
+    档位（`env_raw`，因为 `0`/`off` 本身是合法档位）：
+      * `0` / `off` —— 关闭（默认；与历史行为逐位相同）。
+      * `conflict`  —— **图上与库冲突就不补**：若该元件图上**真读**到过这个号、
+        且那个号读到的名字与本次要补的名字不是同一个（按 `norm()` 比），
+        说明图上自己给出了另一套配对 ⇒ 信图，放弃这次补号。
+        这条是**纯否定**判据：图没读到那个号时它不干涉（库仍是唯一证据）。
+      * `seen`      —— 在 `conflict` 之上再加一条：库给的号必须出现在该元件图上
+        **真读到的号**集合里，否则放弃。更保守，但也更可能丢掉本该补对的号
+        （图上只读到少数几个号时尤其明显），所以默认不开，只作 A/B 臂。
+    """
+    v = (env_raw("STAGE2_LIB_PINS_NUMGATE", "0") or "0").strip().lower()
+    return v if v in NUMGATE_MODES else "0"
 
 
 def lib_path() -> Path:
@@ -417,7 +451,7 @@ def complete_pins(comp_name, stubs: Sequence[dict],
          有效号**占用（`used`）。撞了就放弃，绝不改别的号 —— 补号的目的是把
          **假号**换成一个真号，不是把两个真脚挤到同一个 `pin_<号>` 键上。
     """
-    if not LIB_PINS or not stubs:
+    if not LIB_PINS or not LIB_PINS_NUMFILL or not stubs:
         return 0
     ctx = ctx or LibCtx()
     n = 0
@@ -425,6 +459,19 @@ def complete_pins(comp_name, stubs: Sequence[dict],
     if not key:
         return 0
     used = used if used is not None else set()
+    gate = numgate_mode()
+    # 图上自己给出的 (号 → 名) 配对，只取**真读**（非位置补号、且通过检查）：
+    seen: set = set()
+    read_pair: Dict[str, str] = {}
+    if gate:
+        for r in stubs:
+            s = str(r.get("num") or "").strip()
+            if not s or r.get("fill") or not r.get("kept", True):
+                continue
+            seen.add(norm(s))
+            nmr = str(r.get("nm") or "").strip()
+            if nmr:
+                read_pair.setdefault(norm(s), norm(nmr))
     for r in stubs:
         # 「号没读出来」：空的，或者是位置补位号（`fill`）；**读出来且通过检查的号不动**
         if str(r.get("num") or "").strip() and not r.get("fill") and r.get("kept", True):
@@ -435,6 +482,15 @@ def complete_pins(comp_name, stubs: Sequence[dict],
         num = ctx.num_for_name(key, nm)
         if not num or num in used:
             continue
+        if gate:
+            nu = norm(num)
+            if nu in read_pair and read_pair[nu] != norm(nm):
+                # 图上给这个号读到了**别的名字** ⇒ 图上与库冲突，信图（§5.133 的 −0.16 就是这一类）
+                ctx.stats["numgate_conflict"] = ctx.stats.get("numgate_conflict", 0) + 1
+                continue
+            if gate == "seen" and seen and nu not in seen:
+                ctx.stats["numgate_notseen"] = ctx.stats.get("numgate_notseen", 0) + 1
+                continue
         r["num"] = num
         r["kept"] = True                   # 换成真号 ⇒ 不该再被当「没读出号」丢掉
         r["fill"] = False
@@ -451,7 +507,7 @@ def names_for(comp_name, num, ctx: Optional[LibCtx] = None) -> Optional[str]:
     返回的是**库里的原始写法**（如 `VDD`、`PA00`），不是 `norm()` 后的串 —— 交付
     产物要拿它直接当 `pinname` 用。
     """
-    if not LIB_PINS:
+    if not LIB_PINS or not LIB_PINS_NAMEFILL:
         return None
     ctx = ctx or LibCtx()
     key = ctx.key_for(comp_name)
