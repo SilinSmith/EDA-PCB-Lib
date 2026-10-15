@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import re
 import subprocess
 import sys
@@ -88,7 +90,62 @@ def parse_arm(log: Path) -> dict:
     return out
 
 
-def verdict(res: dict, treat: str = "treatment") -> list:
+def _row_key(r: dict) -> tuple:
+    """评测行的唯一键：图名 + bbox（0.1px 取整）+ role + GT 文本。"""
+    return (Path(r["image"]).name,
+            tuple(round(float(x), 1) for x in r["bbox"]),
+            r["role"], r.get("text") or r.get("gt") or "")
+
+
+def load_wrong(path: Path):
+    """读 eval_real.py --dump 写的错样本集（键集合）；文件不存在返回 None。"""
+    if not path.exists():
+        return None
+    keys = set()
+    for ln in _read_text(path).splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        d = json.loads(ln)
+        keys.add((Path(d["image"]).name,
+                  tuple(round(float(x), 1) for x in d["bbox"]),
+                  d["role"], d.get("gt") or ""))
+    return keys
+
+
+def paired_test(ruler: Path, wrong_c, wrong_t, role: str = "value", min_len: int = 5) -> dict:
+    """目标格的**配对**比较（McNemar）：b=control 错/treat 对，c=control 对/treat 错。
+
+    为什么需要它：主终点在现 ruler 上只有 94 条（`work/_power.py`：独立样本 MDE=0.18、
+    配对 MDE(20% 不协调)=0.15），只看两个点估计的差就是在噪声里读结论。这里给出
+    b/c、Δ 的配对 95% CI 与精确 McNemar p。
+    """
+    rows = [json.loads(ln) for ln in ruler.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    rows = [r for r in rows if r.get("role") == role and len(r.get("text", "")) >= min_len]
+    n = b = c = 0
+    for r in rows:
+        k = _row_key(r)
+        wc, wt = (k in wrong_c), (k in wrong_t)
+        n += 1
+        if wc and not wt:
+            b += 1
+        elif wt and not wc:
+            c += 1
+    if n == 0:
+        return {}
+    delta = (b - c) / n
+    disc = b + c
+    se = math.sqrt(max(0.0, disc - (b - c) ** 2 / n)) / n if disc else 0.0
+    # 精确双侧 McNemar（b+c 很小，直接算二项尾）
+    p = 1.0
+    if disc:
+        k = min(b, c)
+        p = min(1.0, 2 * sum(math.comb(disc, i) for i in range(0, k + 1)) / (2.0 ** disc))
+    return {"n": n, "b": b, "c": c, "disc": disc, "delta": delta,
+            "ci": (delta - 1.96 * se, delta + 1.96 * se), "p": p}
+
+
+def verdict(res: dict, treat: str = "treatment", paired: dict = None) -> list:
     """按 §5.162 判据给出结论行（主判据 + 护栏，逐条）。"""
     lines = []
     c, t = res.get("control", {}), res.get(treat, {})
@@ -99,6 +156,14 @@ def verdict(res: dict, treat: str = "treatment") -> list:
     dv = tv - cv
     lines.append("主判据 value>=5：control %.4f → treatment %.4f，Δ%+.4f（需要 ≥ +0.0500）⇒ %s"
                  % (cv, tv, dv, "通过" if dv >= 0.05 else "未通过"))
+    if paired:
+        lo, hi = paired["ci"]
+        lines.append("   └ 配对核查（n=%d，不协调 %d：control 错/treat 对 %d，反向 %d，Δ%+.4f）"
+                     " 95%%CI [%+.4f, %+.4f]，精确 McNemar p=%.4f"
+                     % (paired["n"], paired["disc"], paired["b"], paired["c"],
+                        paired["delta"], lo, hi, paired["p"]))
+        if paired["disc"] and paired["p"] > 0.05:
+            lines.append("   └ 注意：不协调对数太少/太偏，本判据在现 ruler 上**不足以**分辨 Δ（见 §5.165 功效分析）")
     ca, ta = c.get("ALL_ge5"), t.get("ALL_ge5")
     if ca is not None and ta is not None:
         da = ta - ca
@@ -156,7 +221,7 @@ def main(argv=None) -> int:
         if a.stage in ("eval", "all"):
             run([sys.executable, "-X", "utf8", "-m", "textrec.eval_real",
                  "--ckpt", d / "run" / "best.pt", "--manifest", ruler,
-                 "--no-ov", "--by-len"],
+                 "--no-ov", "--by-len", "--dump", d / "ruler_errors.jsonl"],
                 d / "ruler_eval.log", a.dry)
 
     if a.stage in ("compare", "all") and (a.arm == "both" or a.stage == "compare"):
@@ -183,7 +248,15 @@ def main(argv=None) -> int:
         for treat in ("treatment_long", "treatment"):
             if any(res[treat].get("roles")):
                 print("\n  ---- 判定（%s，§5.162 预注册判据）----" % treat)
-                for ln in verdict(res, treat):
+                wc = load_wrong(out / "control" / "ruler_errors.jsonl")
+                wt = load_wrong(out / treat / "ruler_errors.jsonl")
+                paired = {}
+                if wc is None or wt is None:
+                    print("  （缺少 %s —— 评测时加 --dump 才能做配对核查）"
+                          % "ruler_errors.jsonl")
+                else:
+                    paired = paired_test(ruler, wc, wt)
+                for ln in verdict(res, treat, paired or None):
                     print("  " + ln)
     return 0
 
