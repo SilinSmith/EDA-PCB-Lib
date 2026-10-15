@@ -14514,3 +14514,29 @@ GT），结尾清单 (A)② 相应改成先看 4b-f 再看 4b-g。
 端到端 `python -X utf8 -m textrec.train --smoke --resume Y:\workspace\EDA\work\ocr_mix\runs\last.pt --out Y:\workspace\EDA\work\_charsetguard_smoke --manifest Y:\workspace\EDA\work\textrec_merged.jsonl`：`[charset] 来源 checkpoint 自带字表 …` → `71 chars + blank = 72 classes` → `[resume] 从 … 的第 61 轮继续` → `1 轮 × 31 步`，rc 0。
 
 **边界。** 护栏只比对 checkpoint 的 `charset` 字段（与 `infer.py` 同源）；无 `--resume` 时行为与改动前完全一致（仍回落 `data/charset.json`）。同名字段缺失（老 checkpoint）时退回旧行为并打印一行提示。
+## §5.161 更正 §5.159：所谓「held-out 2,813」不是没见过的框，而是训练清单按 role 规则丢掉的框
+
+**机械结论仍成立。** 按「图像 basename + bbox」比对，评测 real split（`eda-pcb/textrec/data/manifest.jsonl` 里 `split=="real"`，6,642 行）与训练清单 `Y:\workspace\EDA\work\ocr_real\manifest.jsonl`（3,829 行）有 **3,782 行（56.9%）** 是同一个框（坐标取整到 0.1px 时本轮读数；§5.159 用另一种取整得 3,829/57.6%，两者同源），剩下 **2,860 行不在训练清单里**。
+
+**但它的来源不是「没见过的图」而是「被规则丢掉的框」。** 回查每张 sheet 的 `CVJsonStd` 的 `texts[].details` 字段（`tools/data/ocr_manifest.py:39` 的 `ROLE_MAP` 用它定 role）：
+
+| 被判 held-out 的 2,860 行 | `texts[].details` | 条数 |
+| --- | --- | --- |
+| 框在 texts[] 里、details 为空串 | `''` | 2,667 |
+| 框在 texts[] 里、details = `searchName` | `searchName` | 121 |
+| 框在 texts[] 里根本找不到 | — | 72 |
+| **details ∈ ROLE_MAP（该工具本会保留）** | — | **0** |
+
+而 `tools/data/ocr_manifest.py:90` 写着 `if role == "note": continue  # 说明性长文本…且把字符表撑到 425`：**这 2,860 行全部被它当 `note` 丢掉**，训练清单里从来没有它们。评测清单给这批行的 role 是 `value` 2,734 / `note` 88 / 其它 38。
+
+**所以 §5.159 的 30.0pp 要改读。** in-train `value`（`details` 有角色名，426 条）exact 0.8426 vs held-out `value` 0.5424，差距的主体是**覆盖缺口 + 人口差异**，不能读作「记住了留出样本」：评测的 `value` 人口 3,160 条里 **2,734 条 = 86.5%** 是「`details` 为空」这个种群，而训练清单里同种群只有 426 条（其余被丢弃）。两份清单口径不一致（训练侧保字符表、评测侧默认给 `value`），是先前的盲点。
+
+**干净尺子只能是「按 sheet 留出」。** 32 张 sheet 全都进过训练（`ocr_real` 用了全部 32 张），所以在**现交付模型**上不存在干净的 sheet 基线；干净比较必须来自「同一 recipe 的两臂」，或「新模型 vs 新模型去掉新数据」。设计（判据先写死）：
+
+1. **ruler**：选 N 张 sheet（暂定 5 张）**永不进训练**；评测直接喂清单 —— `python -X utf8 -m textrec.eval_real --ckpt <候选> --manifest <ruler.jsonl>`（`textrec/eval_real.py:68` 按 `split == "real"` 取行，所以 ruler 清单里这些行的 `split` 写 `"real"`）。
+2. **两臂同源**：都从 `Y:\workspace\EDA\work\ocr_mix\runs\last.pt` 出发，同一合成池（`textrec/data/manifest.jsonl` 里 `split=="train" and src!="real"`）、同一 val（取自**训练 sheet**，绝不取 ruler）、同一超参。
+   * control = 旧规则：只有 `details ∈ ROLE_MAP` 的框（即今天的 `ocr_real`）；
+   * treatment = 训练 sheet 上**全部** `texts[]` 框（`details` 为空 → role `value`）。
+3. **判据**：ruler 上 `value` 的 exact 提升，且 5+ 字 exact 不降、其它 role 不降超过 1pp。
+
+**下一步命令骨架**（下一轮执行）：先按 sheet 生成两臂清单（train/val/ruler 三档 `split`），再 `python -X utf8 -m tools.dev.mix_crnn_manifest --real <arm.jsonl> --out work/fullpop/<arm> --charset-from Y:\workspace\EDA\work\ocr_mix\runs\last.pt`，然后 `python -X utf8 -m textrec.train --resume Y:\workspace\EDA\work\ocr_mix\runs\last.pt --manifest work/fullpop/<arm>/manifest.jsonl --out work/fullpop/<arm>/run`（`--charset` 留空，护栏会自动取 checkpoint 那张 71 字表，§5.160），最后用 `eval_real.py --manifest <ruler.jsonl>` 出两臂对比。
