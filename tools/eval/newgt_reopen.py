@@ -124,7 +124,7 @@ def main() -> int:
     # 4b) 交点锚点探针：若新 GT 把锚点定在「红引线→绿导线交点」上，这一步直接回答
     #     ① 我们的交点检测器覆盖/稳定到什么程度（stats，几何量不读 GT 坐标）
     #     ② 交点口径与（新）GT 锚点差多少、能不能换成涨分（agree）。
-    #     现 10GT 基线见 §5.152：junc 覆盖 37.9%、组内恒定 19.2%（jnear 57.3% / 46.2%）。
+    #     现 10GT 基线见 §5.152：junc 覆盖 37.9%、组内恒定 19.2%（jnear 57.3% / 50.0%）。
     if not run_dir.exists():
         notes.append("4b) 交点锚点探针: 跳过（找不到 %s；先跑确定性尺子）" % run_dir)
     else:
@@ -135,6 +135,21 @@ def main() -> int:
         jl = [ln for ln in out.splitlines() if ln.startswith("组内恒定") or "覆盖" in ln]
         notes.append("4b) 交点锚点探针: %s" % (" / ".join(x.strip() for x in jl[-3:]) if jl
                                              else "(见 4b_junc.log)"))
+
+    # 4c) 锚点口径判别（量尺侧，故意读 GT 锚点）：直接回答「新 GT 的脚锚点钉在四个候选参照
+    #     （我方锚点 / 引线外端 tip / 红绿交点 junc / 首绿 green）里的哪一个」。
+    #     现 10GT 基线见 §5.153：GT 锚点与我方**同口径**（沿外向轴残差中位 −0.15px、逐边恒定
+    #     24/26 = 92.3%），tip / junc / green 分别偏 −8.10 / −9.60 / −9.60px ⇒ 都不是现口径。
+    if not run_dir.exists():
+        notes.append("4c) 锚点口径判别: 跳过（找不到 %s；先跑确定性尺子）" % run_dir)
+    else:
+        rc, out = run(PY + ["tools/diag/_anchormode.py", "--run-dir", str(run_dir)]
+                      + (["--cases", a.cases] if a.cases else []),
+                      logdir, "4c_anchormode", a.dry)
+        al = [ln for ln in out.splitlines()
+              if ln.startswith("判别") or ln.startswith("参考") or "⇒" in ln]
+        notes.append("4c) 锚点口径判别: %s" % (" / ".join(x.strip() for x in al[-4:]) if al
+                                              else "(见 4c_anchormode.log)"))
 
     # 5) 池侧对照（同一把尺子上的 200 案泛化面，供新 GT 前后对照；很慢，默认不跑）
     if a.with_pool:
@@ -149,11 +164,15 @@ def main() -> int:
         print("  " + n)
     print("""
 接下来**必须做的两件事**（都不是跑分，而是 A/B）：
-  (A) 锚点约定：若新 GT 把引脚锚点改成「红绿导线交点」，顺序是
-      ① 看 4b 的 stats（交点检测器覆盖/稳定性够不够用；几何量不读 GT 坐标，
-         旧 GT 基线 junc 37.9% / 组内恒定 19.2%，见 §5.152）；
-      ② 看 4b 的 agree（新 GT 的锚点到底是不是交点）；
-      ③ 用 `tools/diag/_pinanchor.py` 重算「每 (元件,边) 恒定偏移」占比。
+  (A) 锚点约定：若新 GT 把引脚锚点改成别的参照（红绿导线交点 / 引线外端 / 别的），顺序是
+      ① 先看 4c 的**口径判别**（`tools/diag/_anchormode.py`：GT 锚点到底钉在哪个参照上；
+         现 10GT 的结论是「与我方同口径、中位 −0.15px」⇒ 现 GT 的问题是**精度**不是口径，见 §5.153）；
+      ② 看 4b 的 stats（交点检测器覆盖/稳定性够不够用；几何量不读 GT 坐标，
+         旧 GT 基线 junc 37.9% / 组内恒定 19.2%，放宽 --back 4 后 53.2% / 53.8%，见 §5.152；
+         覆盖率分母含「整图无绿/无红像素」的灰阶案例会被系统性压低——4c 会另报「有颜色子集」
+         口径，现 10GT 排除 case1 后 junc 48.0% / green 72.4% / tip 100.0%）；
+      ③ 看 4b 的 agree（新 GT 的锚点到底是不是交点）；
+      ④ 用 `tools/diag/_pinanchor.py` 重算「每 (元件,边) 恒定偏移」占比。
       只有当 GT-blind 的偏移估计能在**对照不降**的前提下把 pin_f1 抬起来，才谈实装。
       旧 GT 上的事实：恒定边占 68.3%、真值修正 +1.74 分，但四种估计器（色转折射线 §5.131、
       导线端点、交点 jnear/junc §5.151/§5.152）全部换不成涨分 ⇒ 旧 GT 上不可 GT-blind 估计。

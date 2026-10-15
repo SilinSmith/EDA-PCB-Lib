@@ -61,8 +61,11 @@ def _tip(img, q, u, half):
 
 
 def scan(a, cfg, index):
-    acc = {r: dict(res=[], perp=[], undef=0, sat=0, n=0) for r in REFS}
+    acc = {r: dict(res=[], res_color=[], perp=[], undef=0, sat=0, n=0, n_color=0, app=0)
+           for r in REFS}
     group_dev = {r: [0, 0] for r in REFS}          # [恒定组数, n>=3 组数]
+    n_color_pins = n_maroon_pins = n_green_pins = 0
+    blind = []
     rows = []
     for cid in a.cases:
         case = index.get(str(cid))
@@ -80,12 +83,26 @@ def scan(a, cfg, index):
             continue
         img = np.array(Image.open(case.png_path).convert("RGB"))
         h = img.shape[0]
+        # 颜色盲区自检：绿/红两类像素一个都没有的案例（例如纯灰阶渲染）对颜色类参照天然失明，
+        # 必须另报「有颜色子集」分母，否则覆盖率会被这类案例系统性压低（现 10GT 的 case 1 就是这样）。
+        ri = img.astype("int16")
+        has_green = bool(((ri[:, :, 1] > ri[:, :, 0] + 30) & (ri[:, :, 1] > ri[:, :, 2] + 30)).any())
+        has_maroon = bool(((ri[:, :, 0] > ri[:, :, 1] + 30) & (ri[:, :, 0] > ri[:, :, 2] + 30)).any())
+        has_colour = has_green and has_maroon
+        if not has_colour:
+            blind.append(str(cid))
         n_pin = 0
         res_by_group = {rf: {} for rf in REFS}
         for (ck, edge), g in r["groups"].items():
             u = PA._outward_img(edge)
             for num, pt, gpt, _d in g["td"]:
                 n_pin += 1
+                if has_colour:
+                    n_color_pins += 1
+                if has_maroon:
+                    n_maroon_pins += 1
+                if has_green:
+                    n_green_pins += 1
                 q = (pt[0], h - pt[1])
                 gt_q = (gpt[0], h - gpt[1])
                 along, perp = _proj(q, gt_q, u)
@@ -97,12 +114,19 @@ def scan(a, cfg, index):
                         "green": None if p_g is None else p_g[0]}
                 for rf in REFS:
                     c = cand[rf]
+                    applies = {"ours": True, "tip": has_maroon, "junc": has_green,
+                               "green": has_green}[rf]
+                    if applies:
+                        acc[rf]["app"] += 1
                     if c is None:
                         acc[rf]["undef"] += 1
                         continue
                     acc[rf]["n"] += 1
                     acc[rf]["res"].append(along - c)
                     acc[rf]["perp"].append(perp)
+                    if has_colour:
+                        acc[rf]["n_color"] += 1
+                        acc[rf]["res_color"].append(along - c)
                     res_by_group[rf].setdefault((ck, edge), []).append(along - c)
                 if t_tip is not None and abs(t_tip) >= a.half - 1:
                     acc["tip"]["sat"] += 1
@@ -117,10 +141,19 @@ def scan(a, cfg, index):
                     if PA._axis_dev([(0.0, float(x)) for x in v]) <= 2.0:
                         group_dev[rf][0] += 1
         print("case %-3s 可配对脚 %3d" % (cid, n_pin))
-    return acc, group_dev, rows
+    return acc, group_dev, rows, n_color_pins, blind, n_maroon_pins, n_green_pins
 
 
-def report(acc, group_dev, n_pin, a):
+def report(acc, group_dev, n_pin, a, n_color_pins=0, blind=None,
+           n_maroon_pins=0, n_green_pins=0):
+    blind = blind or []
+
+    def _stats(vals):
+        v = np.array(vals, dtype=float)
+        if v.size and np.isfinite(v).any():          # 空集别丢给 nanmedian，否则触 All-NaN RuntimeWarning
+            return (float(np.nanmedian(v)), float(np.nanpercentile(v, 10)),
+                    float(np.nanpercentile(v, 90)), float(np.mean(np.abs(v) <= 2.0)))
+        return float("nan"), float("nan"), float("nan"), 0.0
     print()
     print("脚总数 %d；口径：half=%d, lat=±%d, back=1..%d, run-dir=%s"
           % (n_pin, a.half, a.lat, a.back, a.run_dir))
@@ -130,10 +163,7 @@ def report(acc, group_dev, n_pin, a):
     order = []
     for rf in REFS:
         d = acc[rf]
-        res = np.array(d["res"]) if d["res"] else np.array([np.nan])
-        med = float(np.nanmedian(res))
-        p10, p90 = float(np.nanpercentile(res, 10)), float(np.nanpercentile(res, 90))
-        share = float(np.mean(np.abs(res) <= 2.0))
+        med, p10, p90, share = _stats(d["res"])
         gs, gn = group_dev[rf]
         note = []
         if rf == "tip" and d["sat"]:
@@ -144,8 +174,21 @@ def report(acc, group_dev, n_pin, a):
               % (rf, d["n"], 100.0 * d["n"] / max(1, n_pin), med, p10, p90,
                  100.0 * share, gs, gn, 100.0 * gs / max(1, gn), " ".join(note)))
         order.append((rf, d["n"] / max(1, n_pin), abs(med), p90 - p10, med))
-    usable = [x for x in order if x[1] >= 0.60 and x[0] != "ours"]
-    tight = min([x for x in order if x[0] != "ours"], key=lambda x: x[3])
+    if blind and n_color_pins:
+        print("  —— 有颜色子集（排除无绿/无红的 %s）分母 = %d 根脚：颜色类参照的真实覆盖"
+              % (",".join("case%s" % b for b in blind), n_color_pins))
+        for rf in REFS:
+            d = acc[rf]
+            med, p10, p90, share = _stats(d["res_color"])
+            print("  %-6s %5d (%5.1f%%)   %+7.2f   (%+6.2f,%+6.2f)   %5.1f%%"
+                  % (rf, d["n_color"], 100.0 * d["n_color"] / max(1, n_color_pins),
+                     med, p10, p90, 100.0 * share))
+    usable = [x for x in order if x[1] >= 0.60 and x[0] != "ours" and np.isfinite(x[3])]
+    fin = [x for x in order if x[0] != "ours" and np.isfinite(x[3])]
+    if not fin:
+        print("判别：所有候选参照在本批**全部无定义** ⇒ 先修检测器（或换口径），没有可判别的东西。")
+        return
+    tight = min(fin, key=lambda x: x[3])
     print("参考：所有候选里跨度最小的是 %s（可用率 %.1f%%、残差中位 %+.2f、跨度 %.2f px，"
           "但可能大量无定义/顶上限）。" % (tight[0], 100.0 * tight[1], tight[4], tight[3]))
     if not usable:
@@ -161,6 +204,30 @@ def report(acc, group_dev, n_pin, a):
     else:
         print("      ⇒ 所有候选参照里跨度最小的 %s 也有 %.2f px（> 4px）：本批 GT 的锚点**不落在**任何"
               "候选参照上，需要人类说明口径，别硬凑。" % (tight[0], tight[3]))
+    if blind:
+        # 颜色类参照在「整图没有绿/红像素」的案例上天然不适用（不是检测失败），这些脚不该算进它的覆盖率分母，
+        # 否则可用率被系统性低估。现 10GT 的 case1 就是纯灰阶渲染。
+        bases = {"ours": n_pin, "tip": n_maroon_pins, "junc": n_green_pins, "green": n_green_pins}
+        txt = "、".join("%s %d/%d (%.1f%%)" % (rf, acc[rf]["n"], bases[rf],
+                                              100.0 * acc[rf]["n"] / max(1, bases[rf]))
+                       for rf in REFS)
+        print("      ※ 颜色盲区修正（%s 整图无绿/无红像素）：按「该参照适用的脚」为分母，可用率 = %s"
+              % (",".join("case%s" % b for b in blind), txt))
+        usa = []
+        for rf in REFS:
+            if rf == "ours":
+                continue
+            med2, p102, p902, _s = _stats(acc[rf]["res"])
+            if np.isfinite(p902 - p102):
+                usa.append((rf, acc[rf]["n"] / max(1, bases[rf]), p902 - p102))
+        if usa:
+            t2 = min(usa, key=lambda x: x[2])
+            u2 = [x for x in usa if x[1] >= 0.60]
+            print("      ⇒ 按此口径：可用率 >=60%% 的是 %s；跨度最小的仍是 %s（%.2f px）%s"
+                  % (", ".join("%s %.1f%%" % (x[0], 100.0 * x[1]) for x in u2) or "无",
+                     t2[0], t2[2],
+                     "≤4px ⇒ 判别翻转，得先看它" if t2[2] <= 4.0
+                     else ">4px ⇒ 结论不变（锚点不落在任何候选参照上）"))
 
 
 def main():
@@ -176,7 +243,7 @@ def main():
     a.cases = [c.strip() for c in a.cases.split(",") if c.strip()]
     cfg = EvalConfig()
     index = {str(c.case_id): c for c in discover()}
-    acc, group_dev, rows = scan(a, cfg, index)
+    acc, group_dev, rows, n_color_pins, blind, n_maroon_pins, n_green_pins = scan(a, cfg, index)
     n_pin = max(acc["ours"]["n"] + acc["ours"]["undef"], 1)
     if a.show:
         print()
@@ -188,7 +255,7 @@ def main():
                      "-" if r[6] is None else "%d" % r[6],
                      "-" if r[7] is None else "%d" % r[7],
                      "-" if r[8] is None else "%d" % r[8]))
-    report(acc, group_dev, n_pin, a)
+    report(acc, group_dev, n_pin, a, n_color_pins, blind, n_maroon_pins, n_green_pins)
 
 
 if __name__ == "__main__":
