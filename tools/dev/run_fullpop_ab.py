@@ -64,22 +64,56 @@ def _read_text(path: Path) -> str:
 
 
 def parse_arm(log: Path) -> dict:
-    """从评测日志里抓 by-len 表的关键格（value / ALL 的 >=5 列与 n）与主表 ALL 行。"""
-    out: dict = {}
+    """从评测日志里抓 by-len 表（role / >=5 列 / n）、主表 ALL 行。"""
+    out: dict = {"roles": {}}
     if not log.exists():
         return out
     txt = _read_text(log)
+    row = re.compile(r"^(\S+)\s+(?:[0-9.-]+\s+){5}\|\s+([0-9.]+|-)\s+(\d+)\s*$", re.M)
+    for m in row.finditer(txt):
+        role = m.group(1)
+        out["roles"][role] = {
+            "ge5": None if m.group(2) == "-" else float(m.group(2)),
+            "n": int(m.group(3)),
+        }
     for name in ("value", "ALL"):
-        m = re.search(r"^%s\s+.*\|\s+([0-9.]+|-)\s+(\d+)\s*$" % name, txt, re.M)
-        if m:
-            out["%s_ge5" % name] = None if m.group(1) == "-" else float(m.group(1))
-            out["%s_ge5_n" % name] = int(m.group(2))
+        if name in out["roles"]:
+            out["%s_ge5" % name] = out["roles"][name]["ge5"]
+            out["%s_ge5_n" % name] = out["roles"][name]["n"]
     m = re.search(r"^%s\s+(\d+)\s+([0-9.]+)\s+([0-9.]+)\s+\d+\s*$" % "ALL", txt, re.M)
     if m:
         out["ALL_n"] = int(m.group(1))
         out["ALL_cer"] = float(m.group(2))
         out["ALL_exact"] = float(m.group(3))
     return out
+
+
+def verdict(res: dict) -> list:
+    """按 §5.162 判据给出结论行（主判据 + 护栏，逐条）。"""
+    lines = []
+    c, t = res.get("control", {}), res.get("treatment", {})
+    cv, tv = c.get("value_ge5"), t.get("value_ge5")
+    if cv is None or tv is None:
+        return ["读数不足，无法判定（缺 value 的 >=5 格）"]
+    dv = tv - cv
+    lines.append("主判据 value>=5：control %.4f → treatment %.4f，Δ%+.4f（需要 ≥ +0.0500）⇒ %s"
+                 % (cv, tv, dv, "通过" if dv >= 0.05 else "未通过"))
+    ca, ta = c.get("ALL_ge5"), t.get("ALL_ge5")
+    if ca is not None and ta is not None:
+        da = ta - ca
+        lines.append("护栏 ALL>=5：Δ%+.4f（不得 < -0.0100）⇒ %s"
+                     % (da, "通过" if da >= -0.01 else "未通过"))
+    for role in sorted(set(c.get("roles", {})) | set(t.get("roles", {}))):
+        if role in ("value", "ALL"):
+            continue
+        crc, trc = c.get("roles", {}).get(role), t.get("roles", {}).get(role)
+        if not crc or not trc or crc["ge5"] is None or trc["ge5"] is None:
+            continue
+        d = trc["ge5"] - crc["ge5"]
+        flag = "OK" if d >= -0.01 else "**降超 1pp**"
+        lines.append("护栏 role %-11s：Δ%+.4f（n %d→%d）⇒ %s"
+                     % (role, d, crc["n"], trc["n"], flag))
+    return lines
 
 
 def main(argv=None) -> int:
@@ -126,21 +160,24 @@ def main(argv=None) -> int:
     if a.stage in ("compare", "all") and (a.arm == "both" or a.stage == "compare"):
         print("\n=== 对比（ruler，判据见 §5.162）===")
         res = {arm: parse_arm(out / arm / "ruler_eval.log") for arm in ARMS}
+        print("  %-10s %-9s %-9s %-8s %-6s %-6s"
+              % ("role", "control", "treatment", "Δ", "n_c", "n_t"))
+        for role in sorted(set(res["control"].get("roles", {})) | set(res["treatment"].get("roles", {}))):
+            crc = res["control"].get("roles", {}).get(role) or {}
+            trc = res["treatment"].get("roles", {}).get(role) or {}
+            c5, t5 = crc.get("ge5"), trc.get("ge5")
+            d = "-" if (c5 is None or t5 is None) else "%+.4f" % (t5 - c5)
+            print("  %-10s %-9s %-9s %-8s %-6s %-6s"
+                  % (role, "%.4f" % c5 if c5 is not None else "-",
+                     "%.4f" % t5 if t5 is not None else "-", d,
+                     crc.get("n", "-"), trc.get("n", "-")))
         for arm in ARMS:
             r = res[arm]
-            if not r:
-                print("  %-10s （无读数）" % arm)
-                continue
-            print("  %-10s ALL n=%s exact=%s CER=%s | value>=5 exact=%s (n=%s) | ALL>=5 exact=%s (n=%s)"
-                  % (arm, r.get("ALL_n"), r.get("ALL_exact"), r.get("ALL_cer"),
-                     r.get("value_ge5"), r.get("value_ge5_n"),
-                     r.get("ALL_ge5"), r.get("ALL_ge5_n")))
-        c, t = res["control"], res["treatment"]
-        if c.get("value_ge5") is not None and t.get("value_ge5") is not None:
-            dv = t["value_ge5"] - c["value_ge5"]
-            da = (t.get("ALL_ge5") or 0) - (c.get("ALL_ge5") or 0)
-            print("  Δ(value>=5) = %+.4f   Δ(ALL>=5) = %+.4f   ⇒ 主判据 %s"
-                  % (dv, da, "通过" if dv >= 0.05 and da >= -0.01 else "未通过"))
+            if r.get("ALL_n"):
+                print("  [%s] ALL n=%s exact=%s CER=%s" % (arm, r.get("ALL_n"), r.get("ALL_exact"), r.get("ALL_cer")))
+        print("\n  ---- 判定（§5.162 预注册判据）----")
+        for ln in verdict(res):
+            print("  " + ln)
     return 0
 
 
