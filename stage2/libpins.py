@@ -464,10 +464,13 @@ def complete_pins(comp_name, stubs: Sequence[dict],
         return 0
     used = used if used is not None else set()
     gate = numgate_mode()
+    # ★ 注意：档位 `"0"` 是非空**字符串**（真值）⇒ 不能写 `if gate:`，否则「关」档也会跑冲突规则。
+    # 这个坑是本节自检抓出来的（官方 10 张上冲突规则从不触发，所以 A/B 看不出来）。
+    gated = gate in ("conflict", "seen")
     # 图上自己给出的 (号 → 名) 配对，只取**真读**（非位置补号、且通过检查）：
     seen: set = set()
     read_pair: Dict[str, str] = {}
-    if gate:
+    if gated:
         for r in stubs:
             s = str(r.get("num") or "").strip()
             if not s or r.get("fill") or not r.get("kept", True):
@@ -486,7 +489,7 @@ def complete_pins(comp_name, stubs: Sequence[dict],
         num = ctx.num_for_name(key, nm)
         if not num or num in used:
             continue
-        if gate:
+        if gated:
             nu = norm(num)
             if nu in read_pair and read_pair[nu] != norm(nm):
                 # 图上给这个号读到了**别的名字** ⇒ 图上与库冲突，信图（§5.133 的 −0.16 就是这一类）
@@ -633,6 +636,68 @@ def _selftest() -> int:
                 ("letter", "VIN", "3", True)):
             if degen_block(ctx, mode, cur, ref) is not want:
                 bad.append("degen_block(%r,%r,%r) 应为 %s" % (mode, cur, ref, want))
+        # ★ 库补**号**闸门 `numgate_mode`：档位读取（默认关、大小写/空白容错、乱写回落 0）
+        for mode, want in ((None, "0"), ("", "0"), ("off", "off"), ("0", "0"),
+                           ("conflict", "conflict"), ("SEEN", "seen"),
+                           (" seen ", "seen"), ("乱写", "0")):
+            if mode is None:
+                os.environ.pop("STAGE2_LIB_PINS_NUMGATE", None)
+            else:
+                os.environ["STAGE2_LIB_PINS_NUMGATE"] = mode
+            if numgate_mode() != want:
+                bad.append("numgate_mode(%r) 应为 %r，得到 %r" % (mode, want, numgate_mode()))
+        # ★ 闸门行为（官方 10 张上它一次都不触发 ⇒ 只能靠这里保证新 GT 上真能用）：
+        #   图上给同一个号读到了**别的名字** ⇒ conflict/seen 都不补，默认档照补（旧行为）。
+        def _gate(mode, stubs):
+            if mode is None:
+                os.environ.pop("STAGE2_LIB_PINS_NUMGATE", None)
+            else:
+                os.environ["STAGE2_LIB_PINS_NUMGATE"] = mode
+            c2 = LibCtx(f)
+            return complete_pins("AA1", stubs, c2, used=set()), stubs, c2
+
+        n, s, _c = _gate(None, [{"num": "", "nm": "VDD"},
+                                {"num": "1", "nm": "PA00", "kept": True}])
+        if n != 1 or s[0]["num"] != "1":
+            bad.append("numgate 默认关：与图冲突时也要照补（旧行为）")
+        for mode in ("conflict", "seen"):
+            n, s, c2 = _gate(mode, [{"num": "", "nm": "VDD"},
+                                    {"num": "1", "nm": "PA00", "kept": True}])
+            if n != 0 or s[0]["num"] != "" or c2.stats.get("numgate_conflict") != 1:
+                bad.append("numgate=%s：图上该号读到别的名字时不该补" % mode)
+        # 图上只给了一个「没名字的号」：conflict 管不着，seen 必须挡住（库号在图上没见过）
+        n, s, c2 = _gate("seen", [{"num": "", "nm": "VDD"},
+                                  {"num": "5", "nm": "", "kept": True}])
+        if n != 0 or c2.stats.get("numgate_notseen") != 1:
+            bad.append("numgate=seen：库号在图上没见过时不该补")
+        n, s, _c = _gate("conflict", [{"num": "", "nm": "VDD"},
+                                      {"num": "5", "nm": "", "kept": True}])
+        if n != 1 or s[0]["num"] != "1":
+            bad.append("numgate=conflict：只差 seen 的那一类不该被挡")
+        n, s, _c = _gate("seen", [{"num": "", "nm": "VDD"},
+                                  {"num": "1", "nm": "", "kept": True}])
+        if n != 1 or s[0]["num"] != "1":
+            bad.append("numgate=seen：库号确实在图上读到过就该放行")
+        # 「真读」的判据：位置补位号（fill）与没通过检查（kept=False）的号都不算证据。
+        # 注意这两个桩**自身**也是「号没读出来」⇒ 两桩都会被补（这正是位置号规则的本意），
+        # 关键判据是 **不记 numgate_conflict**。
+        for extra in ({"num": "1", "nm": "PA00", "kept": False, "fill": True},
+                      {"num": "1", "nm": "PA00", "kept": False}):
+            n, s, c2 = _gate("conflict", [{"num": "", "nm": "VDD"}, dict(extra)])
+            if n != 2 or s[0]["num"] != "1" or "numgate_conflict" in c2.stats:
+                bad.append("numgate：fill/kept=False 的号不算真读，不该被当成冲突（应两桩都补）")
+        os.environ.pop("STAGE2_LIB_PINS_NUMGATE", None)
+        if numgate_mode() != "0":
+            bad.append("numgate_mode 收尾应回到默认 0")
+        # ★ 两个细闸确实挂在对应的对外接口上
+        globals()["LIB_PINS_NUMFILL"] = False
+        if complete_pins("AA1", [{"num": "", "nm": "VDD"}], LibCtx(f), used=set()) != 0:
+            bad.append("LIB_PINS_NUMFILL=0 时规则A不该动手")
+        globals()["LIB_PINS_NUMFILL"] = True
+        globals()["LIB_PINS_NAMEFILL"] = False
+        if names_for("AA1", "1", LibCtx(f)) is not None:
+            bad.append("LIB_PINS_NAMEFILL=0 时规则B不该动手")
+        globals()["LIB_PINS_NAMEFILL"] = True
     print("libpins 自检：%s" % ("全部通过" if not bad else "失败 " + " / ".join(bad)))
     return 1 if bad else 0
 
