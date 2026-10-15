@@ -136,11 +136,53 @@ def _balance_pin_number(recs: List[dict], max_bucket: int = 3) -> List[dict]:
     return out
 
 
+def _ckpt_charset(path: str):
+    """读 checkpoint 自带字表（list[str] 或 None）。读不动就返回 None（由调用方回落到默认表）。"""
+    try:
+        ck = torch.load(path, map_location="cpu", weights_only=False)
+    except Exception as e:                                     # noqa: BLE001
+        print("[charset] 预读 %s 失败（%s），按 --charset / 默认表走" % (path, e))
+        return None
+    cs = ck.get("charset") if isinstance(ck, dict) else None
+    if isinstance(cs, dict):
+        cs = cs.get("chars")
+    return list(cs) if cs else None
+
+
+def resolve_charset(charset_arg: str, resume: str) -> Charset:
+    """决定这次训练用哪张字符表（索引即标签，换表 = 标签全错，必须在开跑前炸掉）。
+
+    * `--charset` 显式给出 → 用它；若同时 `--resume` 且 checkpoint 自带字表与之不同 → 直接拒绝。
+    * `--charset` 留空且 `--resume` → 用 checkpoint 自带字表（唯一安全的默认）。
+    * 两者都没有 → 仓库默认 `textrec/data/charset.json`（从零训练的口径），并提示它不是交付模型那张。
+    """
+    ck_chars = _ckpt_charset(resume) if resume else None
+    if charset_arg:
+        cs = Charset.load(Path(charset_arg))
+        if ck_chars is not None and list(cs.chars) != ck_chars:
+            only_ck = "".join(sorted(set(ck_chars) - set(cs.chars)))
+            only_cs = "".join(sorted(set(cs.chars) - set(ck_chars)))
+            raise SystemExit(
+                "[charset] 拒绝开跑：--charset（%d 字）与 checkpoint 自带字表（%d 字）不一致；"
+                "checkpoint 独有 %r / 表独有 %r。resume 必须用 checkpoint 那张表"
+                "（可留空 --charset 自动取用），或用 tools/dev/mix_crnn_manifest.py --charset-from <ckpt> 导出。"
+                % (len(cs.chars), len(ck_chars), only_ck, only_cs))
+        print("[charset] 来源 --charset %s" % charset_arg)
+        return cs
+    if ck_chars is not None:
+        print("[charset] 来源 checkpoint 自带字表 %s（--charset 留空，自动取用）" % resume)
+        return Charset(ck_chars)
+    cs = Charset.load(Path(C.CHARSET_PATH))
+    print("[charset] 来源仓库默认 %s（**不是**交付模型那张表；只有从零训练才该走这条）" % C.CHARSET_PATH)
+    return cs
+
+
 def main(argv=None) -> int:
     d = C.DEFAULTS
     ap = argparse.ArgumentParser(description="训练 textrec CRNN+CTC")
     ap.add_argument("--manifest", default=str(C.MANIFEST))
-    ap.add_argument("--charset", default=str(C.CHARSET_PATH))
+    ap.add_argument("--charset", default="",
+                    help="字符表 json；留空时：有 --resume 用 checkpoint 自带字表，否则用 data/charset.json")
     ap.add_argument("--out", default=str(C.RUNS_DIR))
     ap.add_argument("--epochs", type=int, default=d["epochs"])
     ap.add_argument("--batch", type=int, default=d["batch"])
@@ -180,7 +222,7 @@ def main(argv=None) -> int:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
 
-    charset = Charset.load(Path(args.charset))
+    charset = resolve_charset(args.charset, args.resume)
     print("[charset] " + charset.describe().replace("\n", " "))
 
     recs = load_manifest(Path(args.manifest))

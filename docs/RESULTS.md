@@ -14495,3 +14495,22 @@ GT），结尾清单 (A)② 相应改成先看 4b-f 再看 4b-g。
 **⑤ 工具。** `eda-pcb/tools/diag/_encsplit.py` 新增 `--holdout-from <manifest>`：按 basename+bbox 把评测框标成 in-train / held-out，分两块打印同一套表（held-out 块带缺字 census）。183 行、LF、无 BOM。
 
 **边界与诚实条款。** ① 的「进过训练」判据是 **basename + bbox**（不是图像内容），故只认「同一个框」；同一张图上**别的框**、以及别的图上**相同文字**仍可能构成较轻的文本泄漏，本节不做进一步剔除。② held-out 里没有非 `value`/`note` 的 role，是语料本身的性质，不是抽样造成的。③ 长度用 GT 文字长度，只用于判分；in-train/held-out 标签同样只用于判分，解码路径不含任何 GT 信息。
+## §5.160 字符表口径护栏：`train.py` 拒绝「resume 却用错字符表」
+
+**风险（§5.158 ⑤ 记过，本节闭掉）。** 交付模型自带 **71 字**（` %+-./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyzΩ∅`），而仓库默认 `eda-pcb/textrec/data/charset.json` 是 **67 字**（模型独有 `%/qvwΩ`、表独有 `丝螺`）。`train.py` 原先 `--charset` 默认就指向那张 67 字表，`--resume` 只做 `model.load_state_dict(ck["model"])`：计数不同会**响亮地炸**（72 vs 68 形状不匹配），但**计数恰好相同就会静默错标**（索引即标签）；从零训练更隐蔽——直接训出一个永远吐不出 `%` `/` `q` `v` `w` `Ω` 的模型。`infer.py` 一直用 `Charset(ck["charset"])`，所以推理侧没问题，风险只在训练侧。
+
+**改动（`eda-pcb/textrec/train.py`）。** 新增 `_ckpt_charset(path)`（读 checkpoint 的 `charset` 字段，读不动返回 `None`）与 `resolve_charset(charset_arg, resume)`，`--charset` 默认值改为空串：
+
+1. `--charset` 显式给了 → 用它；**同时 `--resume` 且 checkpoint 自带字表不同 → `SystemExit` 拒绝开跑**，报文打印双方各自独有的字符；
+2. `--charset` 留空且 `--resume` → 自动取 checkpoint 自带字表（唯一安全的默认）；
+3. 都没有 → 回落仓库默认 `data/charset.json`，并明确打印「**不是**交付模型那张表；只有从零训练才该走这条」。
+
+**验证（本机实测）。** 单元级 4 例（直接调 `resolve_charset`）：
+* A) 留空 + `--resume work/ocr_mix/runs/last.pt` → 71 字，打印「来源 checkpoint 自带字表」；
+* B) `--charset data/charset.json` + 同一 resume → **拒绝**，报文含 `checkpoint 独有 '%/qvwΩ' / 表独有 '丝螺'`；
+* C) 无 resume 无 charset → 67 字仓库默认（带提示）；
+* D) `--charset work/ocr_real/charset.json`（71 字，与 checkpoint 一致）+ resume → 放行。
+
+端到端 `python -X utf8 -m textrec.train --smoke --resume Y:\workspace\EDA\work\ocr_mix\runs\last.pt --out Y:\workspace\EDA\work\_charsetguard_smoke --manifest Y:\workspace\EDA\work\textrec_merged.jsonl`：`[charset] 来源 checkpoint 自带字表 …` → `71 chars + blank = 72 classes` → `[resume] 从 … 的第 61 轮继续` → `1 轮 × 31 步`，rc 0。
+
+**边界。** 护栏只比对 checkpoint 的 `charset` 字段（与 `infer.py` 同源）；无 `--resume` 时行为与改动前完全一致（仍回落 `data/charset.json`）。同名字段缺失（老 checkpoint）时退回旧行为并打印一行提示。
