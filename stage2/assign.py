@@ -2131,6 +2131,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         net_labels.append({"text": txt, "conf": conf, "box": list(t["bbox"]),
                            "d": t["d"]})
 
+    from stage2.power_values import assign_power_values
+    assign_power_values(comps, owned, out)
     return {"comps": out, "net_labels": net_labels, "desig_slots": desig_slots,
             "struct_slots": struct_slots,
             "n_texts": len(texts), "n_owned": sum(len(v) for v in owned.values()),

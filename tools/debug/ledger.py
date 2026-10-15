@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""逐条对账：把官方 `metrics.py` 的打分过程**一条一条摊开**。
+"""逐条对账：把本地重建评分器 `metrics.py` 的打分过程**一条一条摊开**。
 
-官方的 `assign_components` / `pin_f1` / `net_hypergraph_f1` / `net_line_f1`
+本地重建评分器的 `assign_components` / `pin_f1` / `net_hypergraph_f1` / `net_line_f1`
 只返回 `tp/fp/fn` 三个计数，看不到「到底是哪一条错了、为什么错」。
 本模块把这些函数的判定逻辑**原样重写一遍**，但每判一条就记一条明细，
-最后拿官方 `evaluate_case` 的计数做**自校验**（不一致会在报告里报警）。
+最后拿本地 `evaluate_case` 的计数做**自校验**（不一致会在报告里报警）。
 
 用法：
     from ledger import build_ledger
@@ -15,27 +15,29 @@
 from __future__ import annotations
 
 import math
+from dataclasses import asdict
 import os
 import sys
 from pathlib import Path
 
-_REPO = Path(__file__).resolve().parents[3] / "eda-pcb"
+_REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from schematic_parser.metrics import (  # noqa: E402
     IC_TYPES, VALUE_TYPES, WEIGHTS, EvalConfig, F1,
     _assign, _box, _centre, _edge_points, _point, _seg_distance,
-    bbox_ok, canon_type, component_text_ok, evaluate_case, is_unkeyed,
+    bbox_ok, canon_type, component_text_ok, component_pairs, evaluate_case,
+    flat_scored_pins, _net_sets, net_hypergraph_f1,
     match_nets, net_pin_set, normalise_doc, pin_key_to_number,
 )
 
 # 四个指标的中文名与「这一项为什么会丢分」的一句话解释
 METRIC_META = {
     "component": ("元件", 0.30, "键 / 类型 / 外框 / 文字 四道关，任何一道不过就 **fp+1 且 fn+1**（一笔亏三处）"),
-    "pin":       ("引脚", 0.25, "只算 GT 里 type=box 的元件；引脚号必须存在、`pinname` 全等、点距 ≤5px"),
-    "net_hypergraph": ("网络（超图）", 0.35, "按「网络包含哪些引脚」集合算 micro-F1：预测网络的引脚与 GT 网络的交集才算 tp"),
-    "net_line":  ("网络导线", 0.10, "同一网络内逐条导线段配几何，端点 unordered 距离 ≤5px 算一对"),
+    "pin":       ("引脚", 0.25, "只算 GT 里 type=box 的元件；引脚号必须存在、`pinname` 全等、点距不超过配置的引脚容差（默认20px）"),
+    "net_hypergraph": ("网络（超图）", 0.35, "普通元件按元件、IC按引脚比较；默认按配对网络集合的软F1计分"),
+    "net_line":  ("网络导线", 0.10, "同一网络内逐条导线段配几何，端点 unordered 距离不超过配置的端点容差（默认20px） 算一对"),
 }
 
 
@@ -85,81 +87,27 @@ def ledger_components(gt, pred, cfg):
     pred_used, gt_used = set(), set()
     pairs = []
 
-    # ---- 1) 键匹配
-    for key in set(gc) & set(pc):
-        pairs.append((key, key, "key"))
-        gt_used.add(key)
-        pred_used.add(key)
-    for key in gc:
-        if key not in gt_used:
-            r = dict(gc.get(key) or {})
-            rows.append({"verdict": "missing", "stage": "键匹配", "gt_key": key,
-                         "gt_type": ctype_of(gc.get(key)),
-                         "gt_value": r.get("value"), "gt_name": r.get("Name"),
-                         "gt_bbox": _box(r.get("bbox")),
-                         "pred_key": None, "pred_type": None,
-                         "pred_value": None, "pred_name": None, "pred_bbox": None,
-                         "reason": "GT 有这个元件，我们的输出里**根本没有这个键**"})
-    for key in pc:
-        if key not in pred_used:
-            r = dict(pc.get(key) or {})
-            rows.append({"verdict": "extra", "stage": "键匹配", "gt_key": None,
-                         "gt_type": None, "gt_value": None, "gt_name": None,
-                         "gt_bbox": None,
-                         "pred_key": key, "pred_type": ctype_of(pc.get(key)),
-                         "pred_value": r.get("value"), "pred_name": r.get("Name"),
-                         "pred_bbox": _box(r.get("bbox")),
-                         "reason": "我们输出了这个键，GT 里没有"})
-
-    n_missing_key = sum(1 for r in rows if r["verdict"] == "missing")
-    n_extra_key = sum(1 for r in rows if r["verdict"] == "extra")
-
-    # ---- 2) 坐标匹配（无名元）
-    coord_matched = 0
-    if cfg.unkeyed_match != "off":
-        if cfg.unkeyed_match == "gt":
-            left_g = [k for k in gc if k not in gt_used and is_unkeyed(k)]
-            left_p = [k for k in pc if k not in pred_used]
-        else:
-            left_g = [k for k in gc if k not in gt_used]
-            left_p = [k for k in pc if k not in pred_used]
-        if left_g and left_p:
-            INF = float("inf")
-            cost = []
-            for pk in left_p:
-                pb = _box((pc.get(pk) or {}).get("bbox"))
-                pt = ctype_of(pc.get(pk))
-                row = []
-                for gk in left_g:
-                    gb = _box((gc.get(gk) or {}).get("bbox"))
-                    if pb is None or gb is None:
-                        row.append(INF); continue
-                    d = math.hypot(pb[0] - gb[0], pb[1] - gb[1])
-                    if bbox_ok(gb, pb, cfg) is not True and d > cfg.coord_gate:
-                        row.append(INF); continue
-                    row.append(d + (0.0 if pt == ctype_of(gc.get(gk))
-                                    else cfg.coord_type_penalty))
-                cost.append(row)
-            for i, j in _assign(cost):
-                gk, pk = left_g[j], left_p[i]
-                if cost[i][j] >= cfg.coord_type_penalty:
-                    continue
-                pairs.append((gk, pk, "coord"))
-                gt_used.add(gk); pred_used.add(pk)
-                coord_matched += 1
-                if gk not in pc:      # 撤销第 1 步记下的 fn
-                    for r in rows:
-                        if r["verdict"] == "missing" and r["gt_key"] == gk:
-                            r["verdict"] = "_revoked"; r["stage"] = "坐标匹配救回"
-                            r["reason"] = "GT 无名元 `%s`：键对不上，但**中心距 ≤%.0fpx 且类型相同**，坐标匹配救回" % (gk, cfg.coord_gate)
-                            break
-                if pk not in gc:
-                    for r in rows:
-                        if r["verdict"] == "extra" and r["pred_key"] == pk:
-                            r["verdict"] = "_revoked"; r["stage"] = "坐标匹配救回"
-                            r["reason"] = "预测无名元 `%s`：被坐标匹配到 GT 的 `%s`" % (pk, gk)
-                            break
-                rows = [r for r in rows if r["verdict"] != "_revoked"]
+    pairs = component_pairs(gt, pred, cfg)
+    gt_used = {g for g, _, _ in pairs}
+    pred_used = {p for _, p, _ in pairs}
+    for key in sorted(set(gc) - gt_used):
+        r = gc[key] or {}
+        rows.append({"verdict": "missing", "stage": "元件匹配", "gt_key": key,
+                     "gt_type": ctype_of(r), "gt_value": r.get("value"),
+                     "gt_name": r.get("Name"), "gt_bbox": _box(r.get("bbox")),
+                     "pred_key": None, "pred_type": None, "pred_value": None,
+                     "pred_name": None, "pred_bbox": None,
+                     "reason": "未找到满足身份与几何条件的元件；电源/地还须类别和值一致"})
+    for key in sorted(set(pc) - pred_used):
+        r = pc[key] or {}
+        rows.append({"verdict": "extra", "stage": "元件匹配", "gt_key": None,
+                     "gt_type": None, "gt_value": None, "gt_name": None, "gt_bbox": None,
+                     "pred_key": key, "pred_type": ctype_of(r), "pred_value": r.get("value"),
+                     "pred_name": r.get("Name"), "pred_bbox": _box(r.get("bbox")),
+                     "reason": "预测元件没有满足条件的GT对应；不以电源自动编号判定身份"})
+    n_missing_key = sum(r["verdict"] == "missing" for r in rows)
+    n_extra_key = sum(r["verdict"] == "extra" for r in rows)
+    coord_matched = sum(how != "key" for _, _, how in pairs)
 
     # ---- 3) 逐对判定
     for gk, pk, how in pairs:
@@ -167,7 +115,7 @@ def ledger_components(gt, pred, cfg):
         if g is None or p is None:
             continue
         tg, tp_ = ctype_of(g), ctype_of(p)
-        rec = {"stage": "逐对判定（%s）" % ("键匹配" if how == "key" else "坐标匹配"),
+        rec = {"stage": "逐对判定（%s）" % ({"key": "键匹配", "coord": "坐标匹配", "power": "电源类别/值/几何匹配"}[how]),
                "gt_key": gk, "pred_key": pk, "gt_type": tg, "pred_type": tp_,
                "gt_value": g.get("value"), "pred_value": p.get("value"),
                "gt_name": g.get("Name"), "pred_name": p.get("Name"),
@@ -228,18 +176,9 @@ def ledger_pins(gt, pred, cfg):
         if box_comps is not None and comp not in box_comps and isinstance(group, dict):
             skipped += len(group)
 
-    def flat(section):
-        out = {}
-        for comp, group in section.items():
-            if box_comps is not None and comp not in box_comps:
-                continue
-            if not isinstance(group, dict):
-                continue
-            for pk, info in group.items():
-                out[(comp, pin_key_to_number(pk))] = (pk, info)
-        return out
+    gf = {k: ("pin_" + k[1], v) for k, v in flat_scored_pins(gt, gt, cfg).items()}
+    pf = {k: ("pin_" + k[1], v) for k, v in flat_scored_pins(pred, gt, cfg).items()}
 
-    gf, pf = flat(gt["pins"]), flat(pred["pins"])
     rows = []
     shared = sorted(set(gf) & set(pf), key=lambda k: (str(k[0]), str(k[1])))
     for key in shared:
@@ -305,11 +244,10 @@ def ledger_pins(gt, pred, cfg):
 
 
 def ledger_nets(gt, pred, cfg):
-    g_nets = [(n, frozenset(net_pin_set(v)) if isinstance(v, dict) else frozenset())
-              for n, v in gt["nets"].items()]
-    p_nets = [(n, frozenset(net_pin_set(v)) if isinstance(v, dict) else frozenset())
-              for n, v in pred["nets"].items()]
-    pairs = match_nets(g_nets, p_nets)
+    g_nets = _net_sets(gt["nets"], gt["components"], cfg.net_pin_collapse_nonbox)
+    types = pred["components"] if cfg.legacy_identity_rules else {**pred["components"], **gt["components"]}
+    p_nets = _net_sets(pred["nets"], types, cfg.net_pin_collapse_nonbox)
+    pairs = match_nets(g_nets, p_nets, soft=cfg.net_soft)
     rows = []
     for i, j in pairs:
         pn, ps = p_nets[i]
@@ -347,9 +285,8 @@ def ledger_nets(gt, pred, cfg):
 
     total_pred = sum(len(s) for _, s in p_nets)
     total_gt = sum(len(s) for _, s in g_nets)
-    tp = sum(len(ps & gs) for i, j in pairs for ps in [p_nets[i][1]] for gs in [g_nets[j][1]])
-    fp = total_pred - tp
-    fn = total_gt - tp
+    score, _ = net_hypergraph_f1(gt, pred, cfg)
+    tp, fp, fn = score.tp, score.fp, score.fn
     buckets = {}
     for r in rows:
         buckets[r["verdict"]] = buckets.get(r["verdict"], 0) + 1
@@ -362,7 +299,7 @@ def ledger_nets(gt, pred, cfg):
 
 
 def ledger_lines(gt, pred, cfg, pairs):
-    """`pairs` 用 `ledger_nets` 现算一遍（官方 `net_line_f1` 收的是同一个）。"""
+    """`pairs` 用 `ledger_nets` 现算一遍（本地 `net_line_f1` 收的是同一个）。"""
     g_nets = list(gt["nets"].items())
     p_nets = list(pred["nets"].items())
     rows = []
@@ -431,25 +368,27 @@ def build_ledger(gt_doc, pred_doc, case_id="", cfg=None, split=""):
     gt, pred = normalise_doc(gt_doc), normalise_doc(pred_doc)
 
     comp_rows, comp_s = ledger_components(gt, pred, cfg)
-    pin_rows, pin_s = ledger_pins(gt, pred, cfg)
 
-    # 网络要在 rewrite_keys 之后的预测上算（和官方一致）
+    # 网络要在 rewrite_keys 之后的预测上算（和评分器一致）
     from schematic_parser.metrics import rewrite_keys
     # 重新走一遍键匹配拿 keymap（纯函数，无副作用）
     _, keymap = ledger_components_keymap(gt, pred, cfg)
     pred2 = rewrite_keys(pred, keymap)
+    pin_rows, pin_s = ledger_pins(gt, pred2, cfg)
     net_rows, net_s = ledger_nets(gt, pred2, cfg)
-    g_nets = [(n, frozenset(net_pin_set(v)) if isinstance(v, dict) else frozenset())
-              for n, v in gt["nets"].items()]
-    p_nets = [(n, frozenset(net_pin_set(v)) if isinstance(v, dict) else frozenset())
-              for n, v in pred2["nets"].items()]
-    pairs = match_nets(g_nets, p_nets)
+    _, pairs = net_hypergraph_f1(gt, pred2, cfg)
     line_rows, line_s = ledger_lines(gt, pred2, cfg, pairs)
 
     parts = []
     for name, stats in (("component", comp_s), ("pin", pin_s),
                         ("net_hypergraph", net_s), ("net_line", line_s)):
         cn, w, why = METRIC_META[name]
+        if name == 'pin':
+            why = ('只统计box引脚' if cfg.pin_box_only else '历史口径：统计全部引脚') + '；名称、编号严格比较，点距≤%gpx' % cfg.pin_tol
+        elif name == 'net_hypergraph':
+            why = ('普通元件按整体、IC按pin' if cfg.net_pin_collapse_nonbox else '历史口径：全部按pin') + ('；配对网络软F1' if cfg.net_soft else '；配对网络交集')
+        elif name == 'net_line':
+            why = '配对网络内比较导线端点，容差%gpx' % cfg.line_tol
         f1 = _f1_of(stats["tp"], stats["fp"], stats["fn"])
         parts.append({
             "key": name, "cn": cn, "weight": w, "why": why,
@@ -462,18 +401,19 @@ def build_ledger(gt_doc, pred_doc, case_id="", cfg=None, split=""):
             "stats": stats,
         })
 
-    # ---- 自校验：和官方 evaluate_case 比
+    # ---- 自校验：和本地 evaluate_case 比
     official = evaluate_case(gt_doc, pred_doc, case_id, cfg)
     check = []
     for p in parts:
         o = getattr(official, p["key"] if p["key"] != "net_hypergraph" else "net_hypergraph")
-        ok = (o.tp, o.fp, o.fn) == (p["tp"], p["fp"], p["fn"])
+        ok = all(math.isclose(a, b, abs_tol=1e-10) for a, b in zip(
+            (o.tp, o.fp, o.fn), (p["tp"], p["fp"], p["fn"])))
         check.append({"metric": p["key"], "ok": ok,
                       "official": [o.tp, o.fp, o.fn], "ledger": [p["tp"], p["fp"], p["fn"]]})
 
     return {
         "case": case_id, "split": split,
-        "score": {"total": round(sum(p["pts"] for p in parts), 4),
+        "score": {"total": round(official.score, 4),
                   "official": round(official.score, 4),
                   "parts": parts},
         "components": comp_rows,
@@ -481,15 +421,12 @@ def build_ledger(gt_doc, pred_doc, case_id="", cfg=None, split=""):
         "nets": net_rows,
         "lines": line_rows,
         "selfcheck": check,
-        "config": {"bbox_tol": cfg.bbox_tol, "pin_tol": cfg.pin_tol, "line_tol": cfg.line_tol,
-                   "bbox_mode": cfg.bbox_mode, "unkeyed_match": cfg.unkeyed_match,
-                   "net_mode": cfg.net_mode, "compare_text": cfg.compare_text,
-                   "pin_box_only": cfg.pin_box_only, "coord_gate": cfg.coord_gate},
+        "config": asdict(cfg),
     }
 
 
 def ledger_components_keymap(gt, pred, cfg):
-    """只取官方 `assign_components` 的 keymap（给 `rewrite_keys` 用）。"""
+    """只取本地 `assign_components` 的 keymap（给 `rewrite_keys` 用）。"""
     from schematic_parser.metrics import assign_components
     return assign_components(gt, pred, cfg)
 

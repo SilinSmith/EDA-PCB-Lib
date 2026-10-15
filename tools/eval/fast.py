@@ -25,8 +25,8 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve()
-ROOT = HERE.parents[3]                      # Y:\workspace\EDA  （eval -> tools -> work -> EDA）
-EDA = ROOT / "eda-pcb"
+ROOT = HERE.parents[2]
+EDA = ROOT
 sys.path.insert(0, str(EDA))
 sys.path.insert(0, str(HERE.parent))
 
@@ -51,8 +51,8 @@ BASE_DIR = ROOT / "work" / "_fast_base"
 METRICS = ["component", "pin", "net_hypergraph", "net_line"]
 SHORT = {"component": "元件", "pin": "引脚", "net_hypergraph": "网络", "net_line": "导线"}
 
-# ★ 打分引擎（2026-10-14 换默认）：
-#   `protocol2`（**新默认**，别名 `soft`）= `schematic_parser/metrics.py` 的
+# ★ latest 默认采用2026-10-15四项书面更新；以下三种仅用于历史复现。
+#   `protocol2`（历史，别名 `soft`）= `schematic_parser/metrics.py` 的
 #   `evaluate_case` + 官方书面口径 **且** 2026-10-14 用真实判分产物标定过的两处口径：
 #   bbox 20px、pin/line 5px、**GT 的 `∅NNN` 走坐标匹配**（评测 Q5）、
 #   **pin_f1 只统计 box 元件**（评测 Q2）、**连通性 tp = Σ 每对网的 pin-set 软 F1**
@@ -66,8 +66,8 @@ SHORT = {"component": "元件", "pin": "引脚", "net_hypergraph": "网络", "ne
 #   也进 pin_f1。业主明确说过「之前的判题机写错了」（bbox 20px 那处）⇒ 这台只作
 #   历史对照；同一批产物在它上面会给出**相反**的结论（电源/地符号 −10.48 vs +12.49）。
 #   完整证据链与读数见 `docs/RESULTS.md` §5.20 / §5.21。
-ENGINE = "protocol2"
-_ENGINE_ALIAS = {"protocol2": "protocol2", "soft": "protocol2",
+ENGINE = "latest"
+_ENGINE_ALIAS = {"latest": "latest", "protocol2": "protocol2", "soft": "protocol2",
                  "protocol": "protocol", "legacy": "protocol",
                  "harness": "harness", "official": "harness"}
 
@@ -214,10 +214,11 @@ def main(argv=None):
     ap.add_argument("--save", default="", help="把本次成绩存为基线 <名字>")
     ap.add_argument("--cmp", default="", help="和基线 <名字> 比")
     ap.add_argument("--list", action="store_true", help="只打印默认 case 列表")
-    ap.add_argument("--engine", default="protocol2",
-                    choices=("protocol2", "soft", "protocol", "harness",
+    ap.add_argument("--engine", default="latest",
+                    choices=("latest", "protocol2", "soft", "protocol", "harness",
                              "legacy", "official"),
-                    help="protocol2（默认，别名 soft）= 书面口径 + 官方实测标定的连通性口径"
+                    help="latest（默认）= 2026-10-15规则：共用20px、普通元件按整体、IC按pin、电源按类别/值/几何匹配；"
+                         "protocol2（历史，别名 soft）= 旧书面口径 + 官方实测标定的连通性口径"
                          "（bbox20 / ∅ 坐标匹配 / 只算 box 引脚 / tp=Σ 软 F1(Dice) / refs 字面比）；"
                          "protocol（别名 legacy）= 旧口径（tp=Σ 交集、非 box 引脚折算 `*`，"
                          "2026-10-14 前的基线都是它）；"
@@ -250,10 +251,7 @@ def main(argv=None):
         if not run_pipeline(names, extra):
             print("!! 管线没跑成功，下面是已有产物的分数")
 
-    if ENGINE == "protocol2":
-        cfg = EvalConfig()                      # net_soft=True（软 Dice）、refs 字面比
-    else:
-        cfg = EvalConfig(net_soft=False, net_pin_collapse_nonbox=True)
+    cfg = EvalConfig.for_profile(ENGINE if ENGINE != "harness" else "protocol2")
     rows = score(names, cfg)
     base = None
     if a.cmp:
@@ -265,6 +263,7 @@ def main(argv=None):
             if be and ENGINE not in be:
                 print("!! 基线 %s 是用 %s 尺子打的，本次是 %s ⇒ Δ 不可比，重打基线！"
                       % (a.cmp, "/".join(sorted(be)), ENGINE))
+                base = None  # Do not display misleading cross-profile score deltas.
         else:
             print("! 找不到基线 %s" % bp)
     table(rows, base)

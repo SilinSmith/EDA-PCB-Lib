@@ -1,0 +1,54 @@
+{
+  "scope": "Local reconstructed latest official written rules; same ten images, unchanged GT. Not official competition scores.",
+  "base_commit": "e425ac7b0275183bedc0c892dfd68272d91d9431",
+  "configuration": {
+    "bbox_tol": 20.0,
+    "pin_tol": 20.0,
+    "line_tol": 20.0,
+    "bbox_mode": "corners",
+    "bbox_iou_min": 0.5,
+    "net_mode": "micro",
+    "net_soft": true,
+    "compare_text": true,
+    "line_unordered": true,
+    "unkeyed_match": "gt",
+    "power_symbol_match": true,
+    "legacy_identity_rules": false,
+    "coord_gate": 40.0,
+    "coord_type_penalty": 10000.0,
+    "pin_box_only": true,
+    "net_pin_collapse_nonbox": true,
+    "canon_types": true
+  },
+  "before_same_rules": {
+    "cases": 10,
+    "mean_score": 66.6733,
+    "component_f1": 0.52101,
+    "pin_f1": 0.784722,
+    "net_hypergraph_f1": 0.673738,
+    "net_line_f1": 0.784412
+  },
+  "after_same_rules": {
+    "cases": 10,
+    "mean_score": 84.6511,
+    "component_f1": 0.896298,
+    "pin_f1": 0.784722,
+    "net_hypergraph_f1": 0.864016,
+    "net_line_f1": 0.790353
+  },
+  "tests_passed": 1018,
+  "historical_profile_exact_case_checks": 20,
+  "full_inference_verification": {
+    "returncode": 0,
+    "elapsed_seconds": 142.8,
+    "source_unchanged": true,
+    "official_files_unchanged": true,
+    "weights_unchanged": true,
+    "n_predictions": 10
+  },
+  "only_value_changes": 99,
+  "all_ten_pin_and_net_sections_unchanged": true,
+  "ledger_selfchecks_passed": 10,
+  "scorer_sha256": "2d02bad2057f31bd22756bd6fe1c3fa9052f10500376c746588786f65ecf1ede",
+  "evidence_directory": "D:\\codex-work\\output\\scoring-rules-20261015"
+}

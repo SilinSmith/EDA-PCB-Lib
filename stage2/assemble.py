@@ -35,6 +35,7 @@ except ImportError:                     # 直接跑脚本（python eda-pcb\stage
 
 
 from stage2 import structmatch
+from stage2.power_values import published_power_value
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -863,6 +864,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             vv = (info.get("value") or {}).get("text")
             if vv and VALUE_LIKE.search(vv):
                 val = vv
+        elif ctype in {"gnd", "v", "vcc", "vdd", "power"}:
+            val = published_power_value(ctype, info)
         components[key] = {"Name": name, "type": ctype, "value": val,
                            "bbox": [round(float(x), 2) for x in bbox]}
 

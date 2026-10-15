@@ -146,9 +146,11 @@ def main(argv=None):
                     choices=('corners', 'center', 'iou'))
     ap.add_argument('--net-mode', default='micro', choices=('micro', 'exact'))
     ap.add_argument('--out', default=None, help='write per-case JSON here')
+    ap.add_argument('--profile', choices=('latest', 'protocol2', 'protocol'), default='latest')
     args = ap.parse_args(argv)
 
-    cfg = EvalConfig(bbox_mode=args.bbox_mode, net_mode=args.net_mode)
+    cfg = EvalConfig.for_profile(args.profile)
+    cfg.bbox_mode, cfg.net_mode = args.bbox_mode, args.net_mode
     if args.self_test:
         self_test(args.data_root, cfg)
         return 0

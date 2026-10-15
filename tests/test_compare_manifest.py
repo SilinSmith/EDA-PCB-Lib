@@ -101,6 +101,17 @@ class CompareManifestTests(unittest.TestCase):
         self.assertEqual(row["prediction_sha256"], hashlib.sha256((self.before / "a_Pred.json").read_bytes()).hexdigest())
         self.assertEqual(saved["manifest"]["sha256"], hashlib.sha256(self.manifest.read_bytes()).hexdigest())
 
+    def test_explicit_profile_changes_tolerance_and_records_configuration(self):
+        shifted = copy.deepcopy(self.doc)
+        shifted['pins']['U1']['pin_1']['point']['x'] += 10
+        self.write(self.before / 'a_Pred.json', shifted)
+        current = compare_manifest.compare(self.manifest, [('p', self.before)], group='dev')
+        old = compare_manifest.compare(self.manifest, [('p', self.before)], group='dev', profile='protocol2')
+        self.assertEqual(current['predictions']['p']['aggregate']['pin_f1'], 1)
+        self.assertEqual(old['predictions']['p']['aggregate']['pin_f1'], 0)
+        self.assertEqual(current['evaluator']['profile'], 'latest')
+        self.assertEqual(old['evaluator']['config']['pin_tol'], 5)
+
 
 if __name__ == "__main__":
     unittest.main()

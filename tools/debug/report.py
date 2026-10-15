@@ -443,9 +443,9 @@ def render(led, meta):
              % items) if items else
             '<div class="dim">这一项已经没有可归类的错误。</div>')
     if bad:
-        rows.insert(0, '<div class="warnbox">⚠ <b>自校验没通过</b>：本页的逐条统计与官方 '
+        rows.insert(0, '<div class="warnbox">⚠ <b>自校验没通过</b>：本页的逐条统计与本地评分器 '
                        '<code>evaluate_case</code> 不一致 —— %s。'
-                       '报告数字以官方为准，不要用本页的明细。</div>'
+                       '报告数字以本地评分器复算为准，不要用本页的明细。</div>'
                        % esc(json.dumps(bad, ensure_ascii=False)))
 
     # ---------- 一句话诊断 ----------
@@ -532,10 +532,10 @@ def render(led, meta):
         '     ｜ 预测 <code>' + pred_esc + '</code></div></div>\n'
         '  <div style="margin-left:auto;text-align:right">\n'
         '    <div class="big mono" style="color:' + color + '">' + ("%.2f" % total) + '</div>\n'
-        '    <div class="dim">/ 100 （官方复算 ' + ("%.2f" % off) + '）</div></div>\n'
+        '    <div class="dim">/ 100 （本地复算 ' + ("%.2f" % off) + '）</div></div>\n'
         '</div>\n'
         '<h2>一、这 100 分是怎么没的</h2>\n'
-        '<div class="notebox">官方口径是一个 <b>加权 F1 之和</b>，不是正确率：'
+        '<div class="notebox">此处为书面规则的本地重建评分，非官方成绩；分数是 <b>加权 F1 之和</b>，不是正确率：'
         '<code>100 × (0.30·元件F1 + 0.25·引脚F1 + 0.35·网络F1 + 0.10·导线F1)</code>。'
         '每一项的 F1 都是<b>整张图</b>算的：图上物品越多，错几个就越致命。'
         '点每一行展开，看这一类错误具体是哪几条、修好能涨多少。</div>\n'

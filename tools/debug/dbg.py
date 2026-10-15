@@ -25,10 +25,10 @@ import sys
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-_REPO = _HERE.parents[2]
+_REPO = _HERE.parents[1]
 sys.path.insert(0, str(_HERE))
-sys.path.insert(0, str(_REPO / "eda-pcb"))
-sys.path.insert(0, str(_REPO / "work" / "tools" / "eval"))
+sys.path.insert(0, str(_REPO))
+sys.path.insert(0, str(_REPO / "tools" / "eval"))
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -95,7 +95,7 @@ def build_stages(case, runs: Path, log_entry):
                                 c["n_net"], c["n_pin"])})
         else:
             out.append({"name": name, "n": "（这一版没有这个阶段的产物）"})
-    out.append({"name": "⑤ 官方打分", "n": "见上"})
+    out.append({"name": "⑤ 本地评分", "n": "见上"})
     return {"steps": out, "detail_html": ""}
 
 
@@ -157,7 +157,7 @@ def write_index(rows, outdir, pred_dir, runs):
     bad = [r for r in rows if not r["selfcheck_ok"]]
     warn = ("")
     if bad:
-        warn = ('<div class="w">⚠ %d 张的自校验与官方 <code>evaluate_case</code> 不一致：%s'
+        warn = ('<div class="w">⚠ %d 张的自校验与本地 <code>evaluate_case</code> 不一致：%s'
                 '</div>' % (len(bad), ", ".join(r["case"] for r in bad[:20])))
     CAPS = {"component": "元件", "pin": "引脚", "net_hypergraph": "网络", "net_line": "导线"}
     body = "".join(
@@ -198,12 +198,16 @@ def main(argv=None):
     ap.add_argument("--log", default=str(_REPO / "work" / "_submit_out220z" / "decision_log.json"))
     ap.add_argument("--out", default=str(_REPO / "work" / "debug"))
     ap.add_argument("--data-root", default=DEFAULT_DATA_ROOT)
-    ap.add_argument("--bbox-tol", type=float, default=20.0)
-    ap.add_argument("--pin-tol", type=float, default=5.0)
-    ap.add_argument("--line-tol", type=float, default=5.0)
+    ap.add_argument("--profile", choices=("latest", "protocol2", "protocol"), default="latest")
+    ap.add_argument("--bbox-tol", type=float, default=None)
+    ap.add_argument("--pin-tol", type=float, default=None)
+    ap.add_argument("--line-tol", type=float, default=None)
     args = ap.parse_args(argv)
 
-    cfg = EvalConfig(bbox_tol=args.bbox_tol, pin_tol=args.pin_tol, line_tol=args.line_tol)
+    cfg = EvalConfig.for_profile(args.profile)
+    for field in ("bbox_tol", "pin_tol", "line_tol"):
+        if getattr(args, field) is not None:
+            setattr(cfg, field, getattr(args, field))
     pred_dir, runs, outdir = Path(args.pred), Path(args.runs), Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
     exact, digits = build_index(args.data_root)
@@ -255,7 +259,7 @@ def main(argv=None):
             "file": out.name,
             "selfcheck_ok": all(c["ok"] for c in led["selfcheck"]),
         })
-        print("%-24s %7.3f  (官方 %7.3f)  元件 %5.3f  引脚 %5.3f  网络 %5.3f  导线 %5.3f  → %s"
+        print("%-24s %7.3f  (评分器 %7.3f)  元件 %5.3f  引脚 %5.3f  网络 %5.3f  导线 %5.3f  → %s"
               % (case.case_id, s["total"], s["official"], parts["component"]["f1"],
                  parts["pin"]["f1"], parts["net_hypergraph"]["f1"],
                  parts["net_line"]["f1"], out.name))

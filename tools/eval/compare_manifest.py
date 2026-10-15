@@ -123,13 +123,15 @@ def _delta(before, after):
     return out
 
 
-def compare(manifest_path, prediction_dirs, group="all", self_check=False, output=None):
+def compare(manifest_path, prediction_dirs, group="all", self_check=False, output=None,
+            profile="latest"):
     """Evaluate selected files and optionally write one fresh report.
 
     Raises ValueError for missing files, duplicate arms, input/output aliases,
     malformed documents, manifest hash drift, or absent SciPy. No input is
     modified, and all selected files are preflighted before any evaluation.
     """
+    config = metrics.EvalConfig.for_profile(profile)
     if not metrics._HAVE_SCIPY:
         raise ValueError("SciPy Hungarian matching is required; refusing the greedy fallback")
     import scipy
@@ -181,13 +183,13 @@ def compare(manifest_path, prediction_dirs, group="all", self_check=False, outpu
         "manifest": {"path": str(manifest_path), "sha256": manifest_hash},
         "selection": {"requested_group": group, "cases": len(samples), "groups": dict(Counter(s["group"] for s in samples))},
         "matching": {"backend": "scipy_hungarian", "scipy_version": scipy.__version__},
-        "evaluator": {"config": asdict(metrics.EvalConfig()), "weights": metrics.WEIGHTS},
+        "evaluator": {"profile": profile, "config": asdict(config), "weights": metrics.WEIGHTS},
         "predictions": {},
         "comparisons": {},
     }
     sample_by_id = {s["case_id"]: s for s in samples}
     if self_check:
-        scores = [metrics.evaluate_case(docs[s["case_id"]], docs[s["case_id"]], s["case_id"]) for s in samples]
+        scores = [metrics.evaluate_case(docs[s["case_id"]], docs[s["case_id"]], s["case_id"], config) for s in samples]
         bad = [s.case_id for s in scores if abs(s.score - 100) > 1e-8]
         if bad:
             raise ValueError("GT self-check did not score 100: " + ", ".join(bad))
@@ -198,7 +200,7 @@ def compare(manifest_path, prediction_dirs, group="all", self_check=False, outpu
             cid = sample["case_id"]
             pp = directory / f"{cid}_Pred.json"
             pred, pred_hash = _read_doc(pp, f"prediction for {name}/{cid}")
-            score = metrics.evaluate_case(docs[cid], pred, cid)
+            score = metrics.evaluate_case(docs[cid], pred, cid, config)
             scores.append(score)
             cases.append(dict(score.as_dict(), group=sample["group"], gt=str(sample["gt_path"]), gt_sha256=gt_hashes[cid], prediction=str(pp), prediction_sha256=pred_hash))
         report["predictions"][name] = dict(_summary(scores, samples), directory=str(directory), cases=cases)
@@ -242,10 +244,11 @@ def main(argv=None):
     parser.add_argument("--group", choices=("dev", "verification", "all"), default="all")
     parser.add_argument("--prediction-dir", action="append", type=_prediction_arg, default=[], metavar="NAME=PATH")
     parser.add_argument("--self-check", action="store_true", help="Require selected GT documents to score 100 against themselves")
+    parser.add_argument("--profile", choices=metrics.RULE_PROFILES, default="latest")
     parser.add_argument("--json", "--output", dest="output", type=Path, help="Optional fresh JSON report path (never overwritten)")
     args = parser.parse_args(argv)
     try:
-        report = compare(args.manifest, args.prediction_dir, args.group, args.self_check, args.output)
+        report = compare(args.manifest, args.prediction_dir, args.group, args.self_check, args.output, args.profile)
     except (ValueError, OSError) as exc:
         parser.error(str(exc))
     _print_report(report)

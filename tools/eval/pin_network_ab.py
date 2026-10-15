@@ -79,6 +79,7 @@ def main(argv=None):
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--gt-root", required=True, type=Path,
                         help="Official 10GT directory containing 1/1.json ... 10/10.json")
+    parser.add_argument("--profile", choices=metrics.RULE_PROFILES, default="latest")
     parser.add_argument("--prediction-dir", action="append", default=[],
                         type=_prediction_arg, metavar="NAME=PATH",
                         help="Repeat for each final_results directory; exact 1_Pred.json "
@@ -114,13 +115,14 @@ def main(argv=None):
             }
 
         gt_docs = {cid: load_json(str(path)) for cid, path in gt_files.items()}
-        config = metrics.EvalConfig()
+        config = metrics.EvalConfig.for_profile(args.profile)
         report = {
             "evaluator": {
                 "implementation": "schematic_parser.metrics",
                 "status": "Repository reconstructed evaluator; not an official scorer",
                 "matching_backend": "scipy_hungarian" if metrics._HAVE_SCIPY else "greedy_fallback",
                 "config": asdict(config),
+                "profile": args.profile,
                 "weights": dict(metrics.WEIGHTS),
                 "aggregation": "Arithmetic mean of per-case scores and per-case F1",
             },

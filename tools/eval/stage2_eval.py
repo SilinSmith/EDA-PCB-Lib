@@ -15,7 +15,7 @@ Designer` 的数字别名是 `0025`，而 `200_train_cases\\0025` 的 case_id �
 
 用法：
     python work\\tools\\eval\\stage2_eval.py <pred_dir> [--data-root ...] [--no-text]
-        [--bbox-tol 20] [--pin-tol 5] [--line-tol 5]
+        [--profile latest] [--bbox-tol 20] [--pin-tol 20] [--line-tol 20]
         [--unkeyed-match {off,gt,all}] [--pin-all] [--no-canon-types]
         [--json out.json]
 """
@@ -46,7 +46,7 @@ def TIERS() -> dict:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception:                                       # noqa: BLE001
         return {}
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "eda-pcb"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from schematic_parser.data import DEFAULT_DATA_ROOT, SPLITS, discover, load_json  # noqa: E402
 from schematic_parser.metrics import EvalConfig, aggregate, evaluate_case  # noqa: E402
@@ -70,7 +70,7 @@ def build_index(data_root):
 
 
 def resolve(stem, exact, digits):
-    """精确优先；找不到才用唯一数字别名。歧义时优先**纯数字 case_id**，仍歧义返回 ``None``。
+    r"""精确优先；找不到才用唯一数字别名。歧义时优先**纯数字 case_id**，仍歧义返回 ``None``。
 
     ⚠️ 这条兜底是必须的：`final_results` 导出的文件名是 `<case>_Pred.json`，而
     `10_GTcase` 里有形如 `0025-Altium Designer` 的 case（数字别名也是 `0025`），
@@ -105,20 +105,19 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="stage2 产物评测（按文件名精确配对）")
     ap.add_argument("pred")
     ap.add_argument("--data-root", default=DEFAULT_DATA_ROOT)
-    ap.add_argument("--bbox-tol", type=float, default=20.0)
-    ap.add_argument("--pin-tol", type=float, default=5.0)
-    ap.add_argument("--line-tol", type=float, default=5.0)
+    ap.add_argument("--profile", choices=("latest", "protocol2", "protocol"), default="latest")
+    ap.add_argument("--bbox-tol", type=float, default=None)
+    ap.add_argument("--pin-tol", type=float, default=None)
+    ap.add_argument("--line-tol", type=float, default=None)
     ap.add_argument("--no-text", action="store_true", help="不比器件名/参数（只考几何与键）")
     ap.add_argument("--unkeyed-match", default="gt", choices=("off", "gt", "all"),
                     help="无名元(∅NNN)的匹配方式，默认 gt=官方口径")
     ap.add_argument("--pin-all", action="store_true",
                     help="pin_f1 统计全部元件（旧口径），默认只统计 box")
     ap.add_argument("--net-literal", action="store_true",
-                    help="净 hyperGraph 按字面比引脚号（**现在的默认**，官方实测口径）；"
-                         "保留此开关只为兼容旧命令行")
+                     help="历史对照：普通元件也按具体引脚号比较")
     ap.add_argument("--net-collapse", action="store_true",
-                    help="净 hyperGraph 把非 box 元件的引脚号折成通配 `*`（旧口径，"
-                         "会掩盖 c/r 脚号读错，官方 10 张上虚高 7.4 分）")
+                     help="普通元件按元件整体、IC按pin比较（latest默认）")
     ap.add_argument("--no-canon-types", action="store_true",
                     help="不按 type_list 归一化 type")
     ap.add_argument("--net-hard", action="store_true",
@@ -132,13 +131,20 @@ def main(argv=None):
                     help="只评 tiers.json 里的某一档（low/mid/high/gt9）")
     args = ap.parse_args(argv)
 
-    cfg = EvalConfig(bbox_tol=args.bbox_tol, pin_tol=args.pin_tol,
-                     line_tol=args.line_tol, compare_text=not args.no_text,
-                     unkeyed_match=args.unkeyed_match,
-                     pin_box_only=not args.pin_all,
-                     net_pin_collapse_nonbox=bool(args.net_collapse),
-                     net_soft=not args.net_hard,
-                     canon_types=not args.no_canon_types)
+    if args.net_literal and args.net_collapse:
+        ap.error("--net-literal and --net-collapse are mutually exclusive")
+    cfg = EvalConfig.for_profile(args.profile)
+    for field in ("bbox_tol", "pin_tol", "line_tol"):
+        if getattr(args, field) is not None:
+            setattr(cfg, field, getattr(args, field))
+    cfg.compare_text = not args.no_text
+    cfg.unkeyed_match = args.unkeyed_match
+    cfg.pin_box_only = not args.pin_all
+    cfg.canon_types = not args.no_canon_types
+    if args.net_literal or args.net_collapse:
+        cfg.net_pin_collapse_nonbox = bool(args.net_collapse)
+    if args.net_hard:
+        cfg.net_soft = False
     exact, digits = build_index(args.data_root)
 
     pred_dir = Path(args.pred)
@@ -215,7 +221,7 @@ def main(argv=None):
         tp = sum(getattr(s, attr).tp for s in scores)
         fp = sum(getattr(s, attr).fp for s in scores)
         fn = sum(getattr(s, attr).fn for s in scores)
-        print("  %-14s F1 %.4f  P %.4f  R %.4f  tp %d fp %d fn %d"
+        print("  %-14s F1 %.4f  P %.4f  R %.4f  tp %.6g fp %.6g fn %.6g"
               % (k, summary.get(k + "_f1", 0.0),
                  tp / max(1e-9, tp + fp), tp / max(1e-9, tp + fn), tp, fp, fn))
     # `evaluate_case` 里 detail 是**共享**的一份，四个 F1 各自快照；net_line 那份

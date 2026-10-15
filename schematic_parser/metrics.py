@@ -25,8 +25,13 @@ Metrics and weights (``Score_Accuracy_SingleCase``)::
 * **最新 QA（2026-10，用户转述）** —— 「非 box 元件 pinnumber 不计分，所以 rcl 等在
   hygraph 中相当于**不区分引脚** 1.2；gnd/vcc 同理；vcc 和 gnd 默认属于同一个 net；
   输出规范**参考 10gt**」。⇒ 净 hyperGraph 的节点对非 box 元件折叠成
-  ``组件.*``（:attr:`EvalConfig.net_pin_collapse_nonbox`，官方 9 张上 +1.08 分）。
+  ``组件.*``（:attr:`EvalConfig.net_pin_collapse_nonbox`）。
   输出侧：电源符号按 10GT 的样子给（单个 `∅NNN` 元件 + 一个 pin + `value` 写 `GND`/`VCC`）。
+
+2026-10-15 用户确认的官方更新覆盖旧判题机：bbox/IC引脚/导线端点均20px；
+普通元件pin位置免评、网络按元件整体对齐；电源/地按类别、值和几何匹配。
+默认实现这一书面口径；``EvalConfig.for_profile`` 保留历史评分，不宣称与未取得的
+新版官方可执行程序逐位一致。电源的几何配对沿用可配置bbox距离定义。
 """
 from __future__ import annotations
 
@@ -45,6 +50,11 @@ except Exception:  # pragma: no cover
     _HAVE_SCIPY = False
 
 WEIGHTS = {'component': 0.30, 'pin': 0.25, 'net_hypergraph': 0.35, 'net_line': 0.10}
+RULE_PROFILES = ('latest', 'protocol2', 'protocol')
+POWER_SYMBOL_TYPES = frozenset({
+    'gnd', 'gnda', 'gndd', 'agnd', 'dgnd', 'pgnd', 'gnd_ref', 'earth',
+    'v', 'vcc', 'vdd', 'vbus_in', 'power',
+})
 
 # ---------------------------------------------------------------------------
 # 官方 type 归一化（`10GT/type_list.md`，33 类，不区分引脚数与极性）
@@ -84,8 +94,8 @@ def is_unkeyed(key: str) -> bool:
 @dataclass
 class EvalConfig:
     bbox_tol: float = 20.0
-    pin_tol: float = 5.0
-    line_tol: float = 5.0
+    pin_tol: float = 20.0
+    line_tol: float = 20.0
     # 'corners'  all four bbox numbers within bbox_tol
     # 'center'   centre distance within bbox_tol (size ignored)
     # 'iou'      IoU >= bbox_iou_min
@@ -112,6 +122,12 @@ class EvalConfig:
     #   'gt'  只有 GT 侧是 ∅NNN 的元件走坐标匹配（**官方口径**）
     #   'all' 所有键没配上的元件都再走一轮坐标匹配（宽松上界）
     unkeyed_match: str = 'gt'
+    # Latest rule: power symbols bypass key matching, including equal auto keys.
+    # False is reserved for reproducing the historical protocol/protocol2.
+    power_symbol_match: bool = True
+    # Preserve the old GT-only IC whitelist / predicted-type net nodes solely
+    # for historical reproduction; independent of power matching configuration.
+    legacy_identity_rules: bool = False
     # 坐标匹配的可用距离（中心距，px）；超过就置 INF 不配
     coord_gate: float = 40.0
     # 类型不同时的代价惩罚，让匈牙利优先配同类
@@ -119,14 +135,23 @@ class EvalConfig:
     # pin_f1 是否只统计 box（评测 Q2「非 box 类型元器件 pin name, pin number
     # 不参与评分」）；设 False 回到旧口径（全部元件）
     pin_box_only: bool = True
-    # 净 hyperGraph 的**节点口径**：把非 box 元件的引脚号折成通配 `*`。
-    # ★ 2026-10-14 官方产物标定：官方**不折算**（case 1/7/2/3 的 `soft_tp`/`f1`
-    # 只在「字面 refs」下逐位复现；折算后 netH 差 0.033/张）⇒ 默认关。
-    # 折算会把「我们把 c/r 的脚号读错」这一事实掩盖掉，官方 10 张上虚高 7.4 分。
-    # 设 True 回到旧口径（2026-10-14 之前的基线都是它）。
-    net_pin_collapse_nonbox: bool = False
+    # Two-level connectivity: non-box component identity, box pin identity.
+    # This does not merge separate nets across the two ends of a component.
+    net_pin_collapse_nonbox: bool = True
     # type 是否按 type_list 归一化
     canon_types: bool = True
+
+    @classmethod
+    def for_profile(cls, name: str = 'latest') -> 'EvalConfig':
+        """Explicit profiles keep historical comparisons reproducible."""
+        if name == 'latest':
+            return cls()
+        if name not in RULE_PROFILES:
+            raise ValueError('Unknown scoring profile: %s' % name)
+        return cls(pin_tol=5.0, line_tol=5.0, power_symbol_match=False,
+                   legacy_identity_rules=True,
+                   net_pin_collapse_nonbox=(name == 'protocol'),
+                   net_soft=(name == 'protocol2'))
 
 
 @dataclass
@@ -236,7 +261,7 @@ def component_text_ok(gt: dict, pred: dict, cfg: EvalConfig) -> bool:
     ctype = canon_type(gt.get('type')) if cfg.canon_types else gt.get('type')
     if ctype in IC_TYPES:
         return pred.get('Name') == gt.get('Name')
-    if ctype in VALUE_TYPES:
+    if ctype in VALUE_TYPES or (cfg.power_symbol_match and ctype in POWER_SYMBOL_TYPES):
         return pred.get('value') == gt.get('value')
     return True
 
@@ -305,50 +330,54 @@ def _assign(cost: List[List[float]]) -> List[Tuple[int, int]]:
 # ---------------------------------------------------------------------------
 # the four metrics
 
-def assign_components(gt: dict, pred: dict, cfg: EvalConfig,
-                      detail: Optional[Dict[str, int]] = None
-                      ) -> Tuple[F1, Dict[str, str]]:
-    """Match components and score them.
+def component_pairs(gt: dict, pred: dict, cfg: EvalConfig):
+    """Shared, deterministic one-to-one pairing for scoring and diagnostics.
 
-    Returns ``(component_F1, keymap)`` where ``keymap`` maps a *prediction*
-    component key onto the *ground-truth* key it was matched to.  The caller
-    rewrites the prediction with ``keymap`` before the pin/net metrics, so the
-    coordinate-matched ``∅NNN`` objects line up downstream too.
+    Power symbols use category, literal value and bbox geometry, regardless
+    of their key spelling. Other named components retain designator matching.
+    The older anonymous-key fallback is available to historical profiles.
     """
     gc, pc = gt['components'], pred['components']
-    res = F1()
-    keymap: Dict[str, str] = {}
-
     def ctype_of(rec):
         t = (rec or {}).get('type')
         return canon_type(t) if cfg.canon_types else t
+    power_g = {k for k, rec in gc.items()
+               if cfg.power_symbol_match and ctype_of(rec) in POWER_SYMBOL_TYPES}
+    power_p = {k for k, rec in pc.items()
+               if cfg.power_symbol_match and ctype_of(rec) in POWER_SYMBOL_TYPES}
+    pairs = [(k, k, 'key') for k in sorted(set(gc) & set(pc))
+             if k not in power_g and k not in power_p]
+    gt_used = {g for g, _, _ in pairs}
+    pred_used = {p for _, p, _ in pairs}
+    if power_g and power_p:
+        left_g, left_p = sorted(power_g), sorted(power_p)
+        cost = []
+        for pk in left_p:
+            p = pc[pk] or {}
+            pb = _box(p.get('bbox'))
+            row = []
+            for gk in left_g:
+                g = gc[gk] or {}
+                gb = _box(g.get('bbox'))
+                if (ctype_of(g) != ctype_of(p) or g.get('value') != p.get('value')
+                        or bbox_ok(gb, pb, cfg) is not True):
+                    row.append(float('inf'))
+                else:
+                    row.append(max(abs(gb[i] - pb[i]) for i in range(4)))
+            cost.append(row)
+        for i, j in _assign(cost):
+            gk, pk = left_g[j], left_p[i]
+            pairs.append((gk, pk, 'power'))
+            gt_used.add(gk); pred_used.add(pk)
 
-    pred_used = set()
-    gt_used = set()
-    pairs: List[Tuple[str, str]] = []           # (gt_key, pred_key)
-
-    # ---- 1) 键匹配 -------------------------------------------------------
-    for key in set(gc) & set(pc):
-        pairs.append((key, key))
-        gt_used.add(key)
-        pred_used.add(key)
-    for key in gc:
-        if key not in gt_used:
-            res.fn += 1
-            _bump(detail, 'component.missing')
-    for key in pc:
-        if key not in pred_used:
-            res.fp += 1
-            _bump(detail, 'component.extra')
-
-    # ---- 2) 坐标匹配（无名元） -------------------------------------------
+    # Retain the earlier anonymous fallback, but never let it bypass the
+    # category/value gate of an unmatched power symbol in the latest profile.
     if cfg.unkeyed_match != 'off':
         if cfg.unkeyed_match == 'gt':
-            left_g = [k for k in gc if k not in gt_used and is_unkeyed(k)]
-            left_p = [k for k in pc if k not in pred_used]
-        else:                                    # 'all'
-            left_g = [k for k in gc if k not in gt_used]
-            left_p = [k for k in pc if k not in pred_used]
+            left_g = [k for k in gc if k not in gt_used and k not in power_g and is_unkeyed(k)]
+        else:
+            left_g = [k for k in gc if k not in gt_used and k not in power_g]
+        left_p = [k for k in pc if k not in pred_used and k not in power_p]
         if left_g and left_p:
             INF = float('inf')
             cost = []
@@ -371,24 +400,59 @@ def assign_components(gt: dict, pred: dict, cfg: EvalConfig,
                 cost_ij = cost[i][j]
                 if cost_ij >= cfg.coord_type_penalty:
                     continue                      # 类型都对不上，别硬配
-                pairs.append((gk, pk))
+                pairs.append((gk, pk, 'coord'))
                 gt_used.add(gk); pred_used.add(pk)
-                # 撤销第 1 步里为这两个键记下的 fp/fn
-                if gk not in pc:
-                    res.fn -= 1
-                    _bump(detail, 'component.missing', -1)
-                if pk not in gc:
-                    res.fp -= 1
-                    _bump(detail, 'component.extra', -1)
-                _bump(detail, 'component.coord_matched')
+    return pairs
 
-    # ---- 3) 逐对判定 -----------------------------------------------------
-    for gk, pk in pairs:
+
+def assign_components(gt: dict, pred: dict, cfg: EvalConfig,
+                      detail: Optional[Dict[str, int]] = None
+                      ) -> Tuple[F1, Dict[str, str]]:
+    """Score shared component pairs; return an injective prediction key map."""
+    gc, pc = gt['components'], pred['components']
+    pairs = component_pairs(gt, pred, cfg)
+    res = F1()
+    keymap = {pk: gk for gk, pk, _ in pairs}
+    gt_used, pred_used = {g for g, _, _ in pairs}, set(keymap)
+    for gk in gc:
+        if gk not in gt_used:
+            res.fn += 1; _bump(detail, 'component.missing')
+    for pk in pc:
+        if pk not in pred_used:
+            res.fp += 1; _bump(detail, 'component.extra')
+    # An unmatched power key must not accidentally identify a GT power symbol
+    # downstream (e.g. same auto key but wrong voltage), or overwrite a match
+    # when two automatically numbered symbols exchange identities.
+    occupied = set(gc) | set(pc) | set(pred['pins']) | set(keymap.values())
+    for net in pred['nets'].values():
+        if isinstance(net, dict):
+            occupied.update(c for c, _ in net_pin_set(net))
+    for pk in sorted(set(pc) - pred_used):
+        rec = pc[pk] or {}
+        gt_rec = gc.get(pk) or {}
+        if cfg.power_symbol_match and (canon_type(rec.get('type')) in POWER_SYMBOL_TYPES
+                                      or canon_type(gt_rec.get('type')) in POWER_SYMBOL_TYPES
+                                      or pk in keymap.values()):
+            alias = '__unmatched_component_0'
+            index = 0
+            while alias in occupied:
+                index += 1
+                alias = '__unmatched_component_%d' % index
+            occupied.add(alias)
+            keymap[pk] = alias
+            _bump(detail, 'keymap.unmatched_aliases')
+
+    for gk, pk, how in pairs:
         g, p = gc.get(gk), pc.get(pk)
         if g is None or p is None:
             continue
-        keymap[pk] = gk
-        if ctype_of(g) != ctype_of(p):
+        if how != 'key':
+            _bump(detail, 'component.coord_matched')
+        if how == 'power':
+            _bump(detail, 'component.power_matched')
+        tg = canon_type(g.get('type')) if cfg.canon_types else g.get('type')
+        tp = canon_type(p.get('type')) if cfg.canon_types else p.get('type')
+        if tg != tp:
             res.fp += 1; res.fn += 1
             _bump(detail, 'component.type_mismatch')
             continue
@@ -443,25 +507,29 @@ def rewrite_keys(doc: dict, keymap: Dict[str, str]) -> dict:
     return out
 
 
-def pin_f1(gt: dict, pred: dict, cfg: EvalConfig,
-           detail: Optional[Dict[str, int]] = None) -> F1:
-    """官方口径：**只统计 GT 里 type 为 box 的元件**的引脚（评测 Q2）。"""
-    box_comps = None
-    if cfg.pin_box_only:
-        box_comps = {k for k, v in gt['components'].items()
-                     if canon_type((v or {}).get('type')) in IC_TYPES}
+def flat_scored_pins(doc: dict, gt: dict, cfg: EvalConfig) -> dict:
+    """Use GT identity for known components; count extra predicted IC pins.
 
-    def flat(section):
-        out = {}
-        for comp, group in section.items():
-            if box_comps is not None and comp not in box_comps:
-                continue
-            if not isinstance(group, dict):
-                continue
+    Historical profiles retain their original GT-only whitelist. Latest mode
+    must not hide an extra IC, or exclude a known IC misclassified as passive.
+    """
+    out = {}
+    for comp, group in doc['pins'].items():
+        rec = gt['components'].get(comp)
+        if rec is None and not cfg.legacy_identity_rules:
+            rec = doc['components'].get(comp)
+        if cfg.pin_box_only and canon_type((rec or {}).get('type')) not in IC_TYPES:
+            continue
+        if isinstance(group, dict):
             for pk, info in group.items():
                 out[(comp, pin_key_to_number(pk))] = info
-        return out
-    gf, pf = flat(gt['pins']), flat(pred['pins'])
+    return out
+
+
+def pin_f1(gt: dict, pred: dict, cfg: EvalConfig,
+           detail: Optional[Dict[str, int]] = None) -> F1:
+    """Score box pins only by default; non-box name/number/position exempt."""
+    gf, pf = flat_scored_pins(gt, gt, cfg), flat_scored_pins(pred, gt, cfg)
 
     res = F1()
     for key in set(gf) | set(pf):
@@ -549,7 +617,11 @@ def net_hypergraph_f1(gt: dict, pred: dict, cfg: EvalConfig,
                       ) -> Tuple[F1, List[Tuple[int, int]]]:
     g_nets = _net_sets(gt['nets'], gt.get('components'),
                        cfg.net_pin_collapse_nonbox)
-    p_nets = _net_sets(pred['nets'], pred.get('components'),
+    # A known IC remains a pin-level node even if prediction type is wrong.
+    pred_types = pred.get('components')
+    if not cfg.legacy_identity_rules:
+        pred_types = {**(pred_types or {}), **gt.get('components', {})}
+    p_nets = _net_sets(pred['nets'], pred_types,
                        cfg.net_pin_collapse_nonbox)
     pairs = match_nets(g_nets, p_nets, soft=bool(getattr(cfg, 'net_soft', True)))
     res = F1()
