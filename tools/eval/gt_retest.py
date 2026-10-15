@@ -62,6 +62,11 @@ ARMS: "dict[str, dict]" = {
     "nodesolve_fit14": {"PSKEL_NODE_SOLVE": "1", "PSKEL_NODE_SOLVE_FIT": "14.0"},
     # 2026-10-14 起 `PSKEL_NODE_SOLVE` 默认已是 1（§5.123），这条臂用来复现旧行为
     "nodesolve_off": {"PSKEL_NODE_SOLVE": "0"},
+    # §5.126 端点归因消融：逐个关掉 stage2 端点链上的算子，看**自由端沿轴位移**
+    "nltrim0": {"STAGE2_EDGE_TRIM": "0"},
+    "nlcorner0": {"STAGE2_EDGE_CORNER": "0"},
+    "nlext0": {"STAGE2_EDGE_EXT": "0", "STAGE2_EDGE_EXT_ANY": "0"},
+    "nlpskel0": {"STAGE1_SPLIT_JUNC_NODES": "0"},
 }
 ARM_DOC = {
     "default": "现行默认：常数 12px 外伸猜测",
@@ -76,6 +81,10 @@ ARM_DOC = {
     "nodesolve_fit8": "同上，方向拟合从结点外 8px 起算",
     "nodesolve_fit14": "同上，方向拟合从结点外 14px 起算",
     "nodesolve_off": "关掉结点位置重解（复现 2026-10-14 之前的旧行为；两口径均 −0.14）",
+    "nltrim0": "§5.126 归因：关掉自由端回缩 `STAGE2_EDGE_TRIM`（默认 3px）",
+    "nlcorner0": "§5.126 归因：关掉拐角合拢 `STAGE2_EDGE_CORNER`（默认 12px）",
+    "nlext0": "§5.126 归因：关掉两个外推算子 `STAGE2_EDGE_EXT`(20) + `STAGE2_EDGE_EXT_ANY`(25)",
+    "nlpskel0": "§5.126 归因：关掉 `STAGE1_SPLIT_JUNC_NODES`（只在 pskel 真结点处切）",
 }
 # 口径 = 透传给 submission/run.py 的额外参数
 RULERS: "dict[str, list]" = {

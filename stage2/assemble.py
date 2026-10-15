@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -2630,15 +2631,19 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             continue
         v["hyperGraph"] = "(" + ",".join("%s.%s" % t for t in refs) + ")"
         out_nets["net_%d" % (len(out_nets) + 1)] = v
+    _trace_dump("00.pre", out_nets, H, case_id)
     out_nets = attach_orphan_rails(out_nets, pins)
     out_nets = merge_shared_pins(out_nets)
+    _trace_dump("04.snap3", out_nets, H, case_id)
     if EDGE_SNAP > 0:
         # ★ 端点吸附放在**最后**：这时 net 的成员已经定下来，同 net 里能拿来当
         # 结点的邻居最全（离线实验就是在最终文档上做的，顺序必须一致）。
         snap_edge_ends(out_nets, EDGE_SNAP, EDGE_SNAP_ANG)
+    _trace_dump("01.snap3", out_nets, H, case_id)
     if NET_WELD > 0:
         # ★ 跨网焊接（默认关）必须在**吸附之后**：离线实验就是在吸附后的最终文档上量的。
         out_nets = weld_nets(out_nets, components, stage1.get("texts") or (), H, pins)
+    _trace_dump("02.weld", out_nets, H, case_id)
     if NET_DROP_PWRONLY:
         # ★ 「整条网只有电源/地符号」的孤立网：GT 里不存在这种网（每个电源符号都挂在
         # 一条有真实元件的网络上），所以它只可能是 FP。**必须放在全部合并之后**——
@@ -2669,25 +2674,31 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # ★ 跨网顶点切分（`STAGE2_EDGE_SPLIT_XNET`，见长注释）：同一位置 —— 切分/去重之后、
         #   回缩之前。`split_dedup_edges` 只看本网，漏掉「别的网的导线搭在这条线上」的切点。
         split_edges_at_xnet(out_nets)
+    _trace_dump("05.split", out_nets, H, case_id)
     if EDGE_TRIM > 0:
         # ★ 自由端回缩（`STAGE2_EDGE_TRIM`，默认 3.0 px，见长注释）：必须在切分/去重
         #   **之后**跑 —— 结点是在切分那一步才定下来的，先回缩会把结点也拉动。
         trim_free_ends(out_nets)
+    _trace_dump("06.trim", out_nets, H, case_id)
     if EDGE_CORNER > 0:
         # ★ L/T 拐角合拢（`STAGE2_EDGE_CORNER`，默认 12）：必须跑在 `extend_ends_to_evidence` /
         #   `extend_edge_ends` **之前** —— 先把各条腿搬回真结点，后面两个外推算子才有正确起点
         #   （离线实测：先 corner 80.75，夹在中间 80.50，放最后 80.48）。
         snap_ends_to_crossings(out_nets)
+    _trace_dump("07.extfree", out_nets, H, case_id)
     if EDGE_EXT_FREE > 0:
         # ★ 自由端外推（`STAGE2_EDGE_EXT_FREE`）：必须跑在 `extend_edge_ends` **之前** ——
         #   离线实验里顺序反过来（ext;overlap;extfree）会把已对齐的端点再推过头，收益从 +0.42 掉到 +0.13。
         extend_free_ends(out_nets, pins)
+    _trace_dump("08.extany", out_nets, H, case_id)
     if EDGE_EXT_ANY > 0:
         # ★ 证据外推（`STAGE2_EDGE_EXT_ANY`）：在「同网他边」外推之前跑，先用全图几何把端点拉到交叉/汇合/引脚根。
         extend_ends_to_evidence(out_nets, pins)
+    _trace_dump("09.ext", out_nets, H, case_id)
     if EDGE_EXT > 0:
         # ★ 端点外推（`STAGE2_EDGE_EXT`）：回缩之后跑（先治过冲，再补不足）。
         extend_edge_ends(out_nets)
+    _trace_dump("10.pinsnap_box", out_nets, H, case_id)
     if PIN_SNAP:
         # ★ 自由端吸附到引脚（`STAGE2_PIN_SNAP`）：放在所有外推**之后** —— 否则外推会把
         #   刚吸附好的端点又推走。
@@ -2696,10 +2707,12 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # ★ 引脚端推进到元件框边（`STAGE2_END_TO_BOX`，见长注释）：放在**所有回缩/外推之后** ——
         #   回缩（trim）会把自由端往里收 3px，先推进会被它再收回去；GT 的端点就落在框边上。
         extend_ends_to_box(out_nets, pins, components)
+    _trace_dump("11.overlap", out_nets, H, case_id)
     if EDGE_OVERLAP > 0:
         # ★ 近共线重叠边合并（`STAGE2_EDGE_OVERLAP`，默认 10 度）：必须最后跑 —— 它会改变边的跨度，
         #   放在切分/回缩之前会把切点与自由端判定带歪。
         merge_overlapping_edges(out_nets)
+    _trace_dump("12.final", out_nets, H, case_id)
     if PIN_LEAD_ATTACH or PIN_LEAD_MOVE:
         # ★ 2-pin 符号的「引脚引线」吸附/迁移：必须放在**最末尾** —— 离线取证就是在
         #   出口文档（几何全部定型）上做的，落在这里才能与离线读数逐位一致。
@@ -2710,6 +2723,64 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         _pidx.setdefault(_c, {})[str(_k)] = _pk
     return {"case": case_id, "components": components, "pins": pins,
             "nets": out_nets, "__pin_index": _pidx}
+
+
+def _trace_pts(raw):
+    """边在装配层内部的形态是 `[[x, y], ...]`（图像坐标）或 `{'points': [...]}`。"""
+    if isinstance(raw, dict):
+        raw = raw.get("points")
+    if not isinstance(raw, (list, tuple)):
+        return None
+    out = []
+    for p in raw:
+        if isinstance(p, dict):
+            if "x" not in p:
+                return None
+            out.append((float(p["x"]), float(p["y"])))
+        elif isinstance(p, (list, tuple)) and len(p) >= 2:
+            out.append((float(p[0]), float(p[1])))
+        else:
+            return None
+    return out
+
+
+_TRACE_DIR = env_str("STAGE2_TRACE_DUMP", "").strip()
+_TRACE_N = [0]
+_TRACE_CASE = [""]
+
+
+def _trace_dump(tag, out_nets, h, case_id=""):
+    """提取器内部端点归因（§5.126）：把每一步之后的边端点快照写到
+    `$STAGE2_TRACE_DUMP/<case>.<NN>.<tag>.json`。
+
+    只在 `STAGE2_TRACE_DUMP` 设了目录时才写，默认不设 ⇒ 零开销、产物逐位不变。
+    坐标是**图像坐标**（左上原点），读的时候按 `y_doc = h - y_img` 翻到文档坐标。
+    """
+    if not _TRACE_DIR:
+        return
+    try:
+        if case_id:
+            _TRACE_CASE[0] = case_id
+        rows = []
+        for nk, v in (out_nets or {}).items():
+            e = (v or {}).get("edges") or {}
+            vals = e.values() if isinstance(e, dict) else e
+            for ei, edge in enumerate(vals):
+                p = _trace_pts(edge)
+                if p and len(p) >= 2:
+                    rows.append([nk, ei, list(p[0]), list(p[-1]), len(p)])
+        _TRACE_N[0] += 1
+        os.makedirs(_TRACE_DIR, exist_ok=True)
+        fp = os.path.join(_TRACE_DIR, "%s.%02d.%s.json"
+                          % (_TRACE_CASE[0], _TRACE_N[0], tag))
+        with open(fp, "w", encoding="utf-8") as fh:
+            json.dump({"tag": tag, "h": h, "edges": rows}, fh)
+    except Exception:
+        pass
+
+
+def _trace_step(tag, out_nets, h, case_id=""):
+    _trace_dump(tag, out_nets, h, case_id)
 
 
 RAIL_NAMES = frozenset((
