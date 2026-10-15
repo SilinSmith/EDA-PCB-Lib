@@ -14540,3 +14540,57 @@ GT），结尾清单 (A)② 相应改成先看 4b-f 再看 4b-g。
 3. **判据**：ruler 上 `value` 的 exact 提升，且 5+ 字 exact 不降、其它 role 不降超过 1pp。
 
 **下一步命令骨架**（下一轮执行）：先按 sheet 生成两臂清单（train/val/ruler 三档 `split`），再 `python -X utf8 -m tools.dev.mix_crnn_manifest --real <arm.jsonl> --out work/fullpop/<arm> --charset-from Y:\workspace\EDA\work\ocr_mix\runs\last.pt`，然后 `python -X utf8 -m textrec.train --resume Y:\workspace\EDA\work\ocr_mix\runs\last.pt --manifest work/fullpop/<arm>/manifest.jsonl --out work/fullpop/<arm>/run`（`--charset` 留空，护栏会自动取 checkpoint 那张 71 字表，§5.160），最后用 `eval_real.py --manifest <ruler.jsonl>` 出两臂对比。
+## §5.162 预注册：真实语料「人口口径」两臂 A/B（§5.159/§5.161 的干净版验证）
+
+**要回答的问题（单一变量）。** 训练用的真实语料只取了「`details` 命中角色表」的行（2,573 条），
+把同一批 sheet 上 `details` 为空的行（2,734 条，§5.159 已证它们**从不进训练**）整批丢掉了。
+补上它们能不能提升长串（尤其 `value`）的识别？
+
+**臂的定义（唯一变量 = 真实语料入选口径）。**
+
+| | 真实语料（train） | 合成池 | val | 起点 ckpt | 超参 |
+|---|---|---|---|---|---|
+| `control` | 旧规则：`details ∈ ROLE_MAP` → 2,573 条（`value` 386） | 同一份（`tools/dev/mix_crnn_manifest.py` 分层抽样） | **同一份 800 条**（两臂共用，取训练 sheet 上真实行） | `work/ocr_mix/runs/last.pt` | `--batch 128 --workers 6` 其余默认 |
+| `treatment` | 全人口：训练 sheet 上**全部**行，`details` 为空 → role `value` → 4,853 条（`value` 2,666） | 同上 | 同上 | 同上 | 同上 |
+
+**ruler（永远不进训练、不参与早停）** = 32 张带标注 sheet 里**每 6 张取 1**（按路径排序）= 6 张：
+`0059-Datasheet` / `0113-jlc` / `0125-jlc` / `0149-jlc` / `0179-jlc` / `2d0a5d19…b04`，
+**989 框**（`value` 361、`designator` 47、`pin_name` 189、`pin_number` 219、`net_label` 166、`note` 7；
+长度 1-2 552 / 3-4 239 / ≥5 198）。清单：`Y:\workspace\EDA\work\fullpop\ruler.jsonl`。
+
+**ruler 基线（交付模型 `weights/textrec_best.pt`，`--no-ov --by-len`；注意它见过这 6 张）。**
+
+| role | 1-2 | 3-4 | 5-7 | 8-11 | 12+ | ≥5 | n≥5 |
+|---|---|---|---|---|---|---|---|
+| designator | 0.8929 | 1.0000 | - | - | - | - | 0 |
+| net_label | 0.8803 | 0.9167 | 0.8846 | 0.8182 | - | 0.8649 | 37 |
+| note | - | - | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 7 |
+| pin_name | 0.9677 | 0.9900 | 0.8868 | 0.4000 | - | 0.8448 | 58 |
+| pin_number | 0.8465 | 0.5000 | 0.0000 | - | - | 0.0000 | 2 |
+| **value** | 0.5839 | 0.5283 | 0.3673 | **0.0000** | 0.0000 | **0.1915** | **94** |
+| ALL | 0.7862 | 0.7782 | 0.6617 | 0.2391 | 0.0000 | 0.5000 | 198 |
+
+全表 `ALL n=989 CER 0.2708 exact 0.7270`；位号 `designator n=47 exact 0.9362`。
+
+**判据（跑之前写死，只看这两行）。**
+
+1. **主判据**：ruler 上 `value` 的 **≥5 字 exact**（n=94）满足 `treatment ≥ control + 0.05`；
+2. **护栏**：ruler `ALL` 的 ≥5 字 exact 不低于 control 超 1pp（`≥ control − 0.01`），且**其它 role 各自**的
+   ≥5 字 exact 不降超过 1pp；
+3. 分辨率诚实条款：n=94 时二项标准差 ≈ 0.041（1 s.e. ≈ 4.1pp）⇒ **5pp 门槛是刻意选的**（低于它无法与噪声区分）；
+   若差值落在 0～5pp 区间，只能记为「方向性证据」并**追加种子**（≥3 seeds）后才算通过。
+
+**跑法（一条命令；`--dry` 先看命令）。**
+
+```
+cd Y:\workspace\EDA\eda-pcb
+python -X utf8 tools/dev/run_fullpop_ab.py --arm both          # mix → train → eval → 对比
+python -X utf8 tools/dev/run_fullpop_ab.py --stage compare     # 只重算对比
+```
+
+日志落 `work/fullpop/<arm>/{mix.log,train.log,ruler_eval.log}`；对比步骤解析 `ruler_eval.log` 并打印
+`Δ(value>=5)` / `Δ(ALL>=5)` 与「通过/未通过」。**工具坑**：pwsh 的 `>` 重定向写 **UTF-16LE**，
+Python 自写的是 UTF-8 ⇒ 解析器必须按 BOM 自适应（`tools/dev/run_fullpop_ab.py:_read_text`）。
+
+**诚实边界。** 单种子；ruler 与训练 sheet 同源同字体族（考的是**同分布长串**，不是新域泛化）；
+`note`（n=7）没有统计意义；对照臂也会被重训，所以对比的是「两套语料口径」而不是「新旧权重」。

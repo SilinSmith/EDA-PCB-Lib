@@ -47,6 +47,13 @@ def _area(a) -> float:
     return max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
 
 
+def _lenbucket(t: str) -> str:
+    """GT 长度分桶（与 §5.156 / §5.161 的验收判据同一口径）。"""
+    n = len(t)
+    return ("1-2" if n <= 2 else "3-4" if n <= 4 else
+            "5-7" if n <= 7 else "8-11" if n <= 11 else "12+")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="在真实语料上评 textrec")
     ap.add_argument("--ckpt", default=str(C.RUNS_DIR / "best.pt"))
@@ -60,6 +67,8 @@ def main(argv=None) -> int:
     ap.add_argument("--ov-strong", type=float, default=0.30,
                     help="强重叠桶阈值（同一个包含度口径）")
     ap.add_argument("--no-ov", action="store_true", help="不打印重叠分桶")
+    ap.add_argument("--by-len", action="store_true", dest="by_len",
+                    help="额外打印 role × GT 长度分桶表（验收判据口径，见 §5.161）")
     args = ap.parse_args(argv)
 
     rec = Recognizer.load(Path(args.ckpt), device=args.device)
@@ -100,6 +109,7 @@ def main(argv=None) -> int:
 
     # 逐图跑，一次把该图所有文字行批量喂进去。
     stats = defaultdict(lambda: [0, 0, 0, 0])       # ed, len, n, exact
+    stats_len = defaultdict(lambda: [0, 0, 0, 0])   # (role, 长度桶) -> ed, len, n, exact
     errors: List[dict] = []
     per_item: List[tuple] = []                      # (role, pred, gt, conf)
     for k in keys:
@@ -114,6 +124,12 @@ def main(argv=None) -> int:
             s[1] += max(1, len(gt))
             s[2] += 1
             s[3] += int(pred == gt)
+            if args.by_len:
+                t = stats_len[(r["role"], _lenbucket(gt))]
+                t[0] += levenshtein(pred, gt)
+                t[1] += max(1, len(gt))
+                t[2] += 1
+                t[3] += int(pred == gt)
             per_item.append((r["role"], pred, gt, conf, r.get("ov", -1.0)))
             if pred != gt and args.dump:
                 errors.append({"image": k, "case": r["case"], "role": r["role"],
@@ -132,6 +148,38 @@ def main(argv=None) -> int:
     tot_ex = sum(v[3] for v in stats.values())
     print("%-12s %7d %8.4f %9.4f %9d"
           % ("ALL", tot_n, tot_ed / max(1, tot_ln), tot_ex / max(1, tot_n), tot_ex))
+
+    # ---- role × GT 长度：验收判据（§5.156 人类裁定 / §5.161 预注册）看的表 ----
+    if args.by_len and stats_len:
+        buckets = ("1-2", "3-4", "5-7", "8-11", "12+")
+        print("\nrole × GT 长度（格内 = exact，判据只看 >=5 那一列）")
+        print("%-12s %8s %8s %8s %8s %8s | %8s %7s"
+              % ("role", *buckets, ">=5", "n>=5"))
+        for role in sorted({k[0] for k in stats_len}):
+            cells, ge5n, ge5ex = [], 0, 0
+            for b in buckets:
+                v = stats_len.get((role, b))
+                cells.append("%8.4f" % (v[3] / v[2]) if v and v[2] else "       -")
+                if b not in ("1-2", "3-4") and v:
+                    ge5n += v[2]
+                    ge5ex += v[3]
+            print("%-12s %s | %8s %7d"
+                  % (role, " ".join(cells),
+                     ("%.4f" % (ge5ex / ge5n)) if ge5n else "       -", ge5n))
+        cells, ge5n, ge5ex = [], 0, 0
+        for b in buckets:
+            n = ex = 0
+            for k2, v in stats_len.items():
+                if k2[1] == b:
+                    n += v[2]
+                    ex += v[3]
+            cells.append("%8.4f" % (ex / n) if n else "       -")
+            if b not in ("1-2", "3-4"):
+                ge5n += n
+                ge5ex += ex
+        print("%-12s %s | %8s %7d"
+              % ("ALL", " ".join(cells),
+                 ("%.4f" % (ge5ex / ge5n)) if ge5n else "       -", ge5n))
 
     # ---- 位号：真正决定分数的那个数字 ----
     d = stats.get("designator")
