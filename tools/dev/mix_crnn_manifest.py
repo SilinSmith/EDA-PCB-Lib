@@ -167,7 +167,7 @@ def main(argv=None) -> int:
     pn = [r for r in picked if r["role"] == "pin_number"]
     print("        pin_number 长度: " + str(dict(sorted(Counter(
         min(len(str(r["text"])), 3) for r in pn).items()))))
-    print("[out] val %d（沿用真实 785，同一把尺子）" % len(val))
+    print("[out] val %d（沿用 --real 里的 val 划分，两臂共用同一把尺子）" % len(val))
     print("[out] " + str(out / "manifest.jsonl"))
 
     if args.charset_from:
