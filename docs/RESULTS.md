@@ -14460,3 +14460,38 @@ GT），结尾清单 (A)② 相应改成先看 4b-f 再看 4b-g。
 **⑥ 对计划的影响。** 长串训练数据的靶子收窄为 **`value`（表内 8–11 字 179 条 / 12+ 69 条；train 里 `value` 8–11 仅 2,207 条 = 1.6%）**；那 521 条表外样本走**另一个决策**（扩标签空间 + 中文注释数据；`note` 是否属于产品口径也要先定，`note` 目前只影响 `eval_real` 的整体读数，不影响 component/pin/net 三条通道），**不在本轮训练实验范围内**。
 
 **边界与诚实条款。** ① 的「表外」判据用**模型自带字表**（71 字），不是 `charset.json`——第一版用 `charset.json` 得到 786 条表外，其中 265 条（含 `/`、`%`、`q/v/w`、`Ω`）其实是模型会的，反过来 4 条含 `丝/螺` 的被误判为表内；⇒ 报告「可表示性」时必须声明字表来源，这也是 ⑤ 那条隐患的另一面。③ 的长度用的是 GT 文字长度，只用于判分；表内/表外标签同样只用于判分，切点与解码决策仍全部 GT-blind。
+## §5.159 评测尺子被训练集重叠污染：eval real 有 57.6% 进过训练/验证；干净子集上 `value` exact 只有 0.5424
+
+**怎么发现的。** 追查交付模型的训练语料（`work/ocr_real/train.log`、`work/ocr_mix/train_log.txt`）时发现交付权重 `eda-pcb/weights/textrec_best.pt`（=`work/ocr_mix/runs/best.pt`）的**训练集含真实语料**：`[data] train 27958 (丢弃未知字符 75)  val 785 (丢弃 11)`，且 val 就是 `work/ocr_real/manifest.jsonl` 里的真实裁片；更早的出厂模型是 `[data] train 2977 / val 785`（纯真实语料）。而评测用的 `textrec/data/manifest.jsonl` 的 `split=="real"`（6,642 条）与它是**同一批 Dataset300 裁片**。
+按「图像 basename + bbox（四舍五入 0.1px）」比对：`work/ocr_real/manifest.jsonl` **3,829 条全部命中** eval real（bbox 与 text 多重集都逐条相同）⇒ **57.6% 的评测框进过训练或验证**。
+
+**切分（`eda-pcb/tools/diag/_encsplit.py --holdout-from work\ocr_real\manifest.jsonl`，交付权重，判据字表 = 模型自带 71 字）：**
+
+| 子集 | n | 占比 |
+|---|---|---|
+| in-train（训练/验证用过） | 3,829 | 57.6% |
+| **held-out（未出现，干净的尺子）** | **2,813** | **42.4%** |
+
+**① 干净尺子上剩下什么。** held-out 的 2,813 条**只有 `value` 2,725 与 `note` 88**：`designator` / `pin_name` / `pin_number` / `net_label` 的框**全部**都在训练/验证里 ⇒ **这四个 role 目前没有任何 held-out 读数**，§5.156/§5.157/§5.158 里它们的 exact（designator 0.9531、pin_name 0.8627、pin_number 0.8918、net_label 0.8496）都是 **in-train 读数，不能当作泛化能力引用**。
+
+**② 干净读数 vs 训练集读数（表内可表示 enc / 表外 unencodable）：**
+
+| 子集 | enc n | enc exact | enc CER | unenc n | unenc exact | unenc CER |
+|---|---|---|---|---|---|---|
+| held-out（干净） | 2,359 | **0.5409** | 0.3293 | 454 | **0.0000** | 0.9332 |
+| in-train（虚高） | 3,762 | 0.8804 | 0.0735 | 67 | 0.0000 | 0.8010 |
+
+分 role：held-out `value` enc 2,345 → **0.5424** / CER 0.3296、`note` enc 14 → 0.2857；对照 in-train `value` enc 432 → **0.8426** / 0.0651 ⇒ **`value` 上有 30.0pp 的记忆差**，交付模型「real split exact 0.7496」这个总数字主要是被 in-train 框抬起来的。
+
+**③ `value` 的干净读数按长度（held-out，表内 enc，n / exact）：** 1–2 字 1,086/0.7486、3–4 字 779/0.5340、**5–7 字 234/0.1368、8–11 字 177/0.0339、12+ 字 69/0.0725**。对照 in-train 的 `value` 长度分布只有 1–2 字 14/1.0000、3–4 字 261/0.9004、5–7 字 155/0.7419（8–11 只有 2 条）⇒ **长 `value` 在训练集里几乎没有**，而它正是 held-out 上塌得最狠的地方（`value` 5 字以上合计 480 条 / exact 0.0625）。
+
+**④ 结论（更正此前各节的口径，不删旧数字但不再引用作泛化）**
+1. **本线的尺子必须换成 held-out 2,813 条**（`_encsplit.py --holdout-from`），否则任何改动都会被 in-train 框的虚高读数淹没。
+2. 目前**唯一有泛化读数的弱项是 `value`**（干净 enc exact 0.5424，5+ 字仅 0.0625）；`note` 的弱一半是字符表墙（§5.158）。
+3. `designator`/`pin_name`/`pin_number`/`net_label` 的泛化能力**未知**（无 held-out 框）——这是语料覆盖问题，不是模型问题；要拿到这四个 role 的干净读数，只能另找未被训练过的真实语料。
+4. §5.157 ③「训练覆盖缺口」的方向仍成立，但靶子数字要用本节：`value` 长串在训练集里 8–11 字仅 2,207 条（占 1.6%），而 held-out 上 5+ 字 exact 只有 0.0625。
+5. §5.158 的字符表墙在干净子集上依然成立：held-out 454/2,813 = **16.1%** 表外（exact 恒 0.0000），缺字仍是 `创/立/嘉/Ñ/日/图/期/页` 这类（品牌名与手册标注）。
+
+**⑤ 工具。** `eda-pcb/tools/diag/_encsplit.py` 新增 `--holdout-from <manifest>`：按 basename+bbox 把评测框标成 in-train / held-out，分两块打印同一套表（held-out 块带缺字 census）。183 行、LF、无 BOM。
+
+**边界与诚实条款。** ① 的「进过训练」判据是 **basename + bbox**（不是图像内容），故只认「同一个框」；同一张图上**别的框**、以及别的图上**相同文字**仍可能构成较轻的文本泄漏，本节不做进一步剔除。② held-out 里没有非 `value`/`note` 的 role，是语料本身的性质，不是抽样造成的。③ 长度用 GT 文字长度，只用于判分；in-train/held-out 标签同样只用于判分，解码路径不含任何 GT 信息。
