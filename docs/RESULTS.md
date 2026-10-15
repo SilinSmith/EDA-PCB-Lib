@@ -13916,7 +13916,7 @@ python -u -X utf8 -m textrec.train --manifest work\textrec_merged.jsonl --charse
 * 新增 `tools/eval/newgt_reopen.py`（提交 **`72edc6d`**，`1 file changed / +139`，`git status` 0 行）：一条命令五步跑完，日志落 `work/_newgt_reopen/<时间戳>/N_*.log`，末尾写 `report.md`。
 * 自检（2026-10-15 20:43）**逐位复现账上基线**：确定性 `default` **80.62**｜元件 0.9355｜引脚 0.7385｜网络 0.8095｜导线 0.5764｜引脚 tp **90**；GT 指纹与逐案哈希与历史记录一致（当前 GT 未改动）。
 * 锚点三曲线：真实（全部边）**+2.25**｜真实（只动恒定边）**+1.30**｜图像估计（GT-blind）**−7.84** ⇒ 当前口径**仍不可 GT-blind 估计**（与 §5.131 同向）。
-* 库补号闸门**尚未入库、未 A/B**：只有工作区里一份**未提交**草稿（`stage2/libpins.py` 的 `numgate_mode()`，默认 `0` = 关）；本文只把它记成「新 GT 落地后的下一步」，**不是已完成项**。
+* **(B) 库补号闸门已有实测**（提交 **`ebb72d6`**，所有新开关默认值 = 历史行为）：库在官方 10 张上的**全部活效应 = 补名，值 +0.87 分**（引脚 tp 90 vs 86）；而「库号一致性闸门」的 `conflict` / `seen` 两档**净效应 0.00** ⇒ 保持默认关，只作新 GT 后的预留闸（详见 §4B）。
 
 ### §1 为什么新 GT 只需要重开两件事
 
@@ -14000,17 +14000,36 @@ python -X utf8 tools/eval/newgt_reopen.py [--cases 1,8] [--skip-slow] [--with-po
 
 **(B) 库补号闸门**
 
-1. 现状：`stage2/libpins.py` **直接用库给号**（§5.133：`TPS2553DBVR` 库 `/FAULT` = **4** 而 case6 GT 写 **3** ⇒ 一处 **−0.16**）。
-2. 要加：**库里的号必须出现在「图上读到的号」里**这道闸（建议 env `STAGE2_LIB_PINS_NUMGATE`，默认 **0**），再用 `--arms` 做 A/B。
-3. 判据：**净增益 > 0** 且**两把尺子对照不降**。
-4. **状态：未入库、未 A/B ⇒ 仍按「下一步」对待，不是已完成项。** 落账时工作区里有一份**未提交**草稿：`stage2/libpins.py` 新增 `NUMGATE_MODES = ("0", "off", "conflict", "seen")` 与 `numgate_mode()`（`env_raw("STAGE2_LIB_PINS_NUMGATE", "0")`，默认 `0` = 关 ⇒ **与历史行为逐位相同**），并在 `complete_pins` 里挂了 `seen` / `read_pair`（只取**真读**的「号→名」配对；`conflict` = 图上与库冲突就不补，`seen` = 库给的号必须出现在图上真读到的号集合里，更保守）。`git status` 显示 `M stage2/libpins.py`（+47 行），另有 `M tools/eval/gt_retest.py`（+8 行）同样未提交——后者正是它的 A/B 臂：**`libnumgate`**（`STAGE2_LIB_PINS_NUMGATE=conflict`）、**`libnumgate_seen`**（`=seen`）、以及对照 **`libpins0`**（`STAGE2_LIB_PINS=0`，量「库补号通道现在到底贡献了多少」）。**闸门与 A/B 都还没有跑** ⇒ 不计为已完成项。
+1. **源码已入库**：提交 **`ebb72d6`**（`3 files`：`stage2/libpins.py` +58/−2、`stage2/assemble.py` +2/−1、`tools/eval/gt_retest.py` +22；`git status` 0 行）。**所有新增开关的默认值都等于历史行为** ⇒ `default` 臂逐位不变（下表第一行实测）。
+2. **实测**（官方 10 张 / 确定性口径 / GT 指纹 `db9a9b7b36a89391` / 同一批逐案）：
+
+| 臂 | 开关 | 总分 | 引脚 | 引脚 tp |
+| --- | --- | --- | --- | --- |
+| `default` | — | **80.62** | 0.7385 | 90 |
+| `libpins0` | `STAGE2_LIB_PINS=0` | 80.62 (+0.00) | 0.7385 | 90 |
+| `librefine0` | `STAGE2_LIB_REFINE=0` | 80.62 (+0.00) | 0.7385 | 90 |
+| `libnumfill0` | `STAGE2_LIB_PINS_NUMFILL=0`（规则 A：按名补号） | 80.62 (+0.00) | 0.7385 | 90 |
+| `libnamefill0` | `STAGE2_LIB_PINS_NAMEFILL=0`（assemble 规则 B：按号补名） | 80.62 (+0.00) | 0.7385 | 90 |
+| **`libnamefill0_refine0`** | 规则 B + `librefine` 一起关 | **79.76 (−0.87)** | **0.7038** | **86** |
+| **`liball0`** | `STAGE2_LIB_PINS=0` + `STAGE2_LIB_REFINE=0` | **79.76 (−0.87)** | 0.7038 | 86 |
+| `libnumgate` | `STAGE2_LIB_PINS_NUMGATE=conflict` | 80.62 (+0.00) | 0.7385 | 90 |
+| `libnumgate_seen` | 同上 `seen` 档 | 80.62 (+0.00) | 0.7385 | 90 |
+
+（另有控制臂 `libnumfill0_refine0` = 80.62 (+0.00)：关规则 A + 关 `librefine` 也不动。）
+
+3. **归因（三条）**：
+   * **库在官方 10 张上的全部活效应 = 补名，值 +0.87 分（引脚 tp 90 vs 86）。** 两条补名路径——`stage2/assemble.py:2467` 的内联「规则 B」（`_LIB_CTX.name_for_num`）与 `stage2/librefine.py`——**互为完全替补**：各自单独关都是 +0.00，只有一起关才掉到 **79.76**，且与整条通道关掉（`liball0`）**逐位相同**。
+   * **规则 A（按名补号 `complete_pins`）净贡献 0**（`libnumfill0` = +0.00）。原因：`libpins.names_for()` 全仓只有定义（`stage2/libpins.py:504`）与自检（`:585`）两个引用，**没有管线调用点**，所以早先挂在它上面的 `STAGE2_LIB_PINS_NAMEFILL` 是**空开关**——首轮 `work/_gt_retest/libattrib` 里 `libnamefill0_refine0` 正是 **+0.00**；把它改挂到真实位置 `stage2/assemble.py:2467` 后重跑（`work/_gt_retest/libattrib2`）才出现 **−0.87**。★ 附带一条文档口径不一致（**待改**）：`stage2/libpins.py:79` 与 `stage2/librefine.py:6` 仍把规则 B 说成 `names_for`，实际生效的是 `assemble.py:2467` 的 `_libpins.LIB_PINS_NAMEFILL` + `_LIB_CTX.name_for_num`。
+   * **产物差异只出现在顶层 `pins[<元件>][<pin_key>].pinname`。** 独立复核（`work/_libdiff_chk.py`，`default` vs `libnamefill0_refine0` 的 `final_results`）：10 案里 **13 处** pinname 改变、**0 处**其他字段改变，`components[*].pins` 与 `nets` **逐字节相同**。逐处（`default` → 关掉库后）：case5 U1/U2 `pin_7 PP→P`、case5 U3 `pin_1 1→ADIGND`、`pin_2 2→VCUTABD`；case6 U3 `pin_1 IN→D`、`pin_2 GND→C`、`pin_3 OUT→D`；case7 U1 `pin_4 GND→D`；case8 U1 `pin_12 MISO→P`、`pin_7 VDDIO→NC`、`pin_8 GNDIO→MOST`；case10 U1 `pin_1 VIN→U1`、`pin_6 VB→V`。⇒ **库只把「图上读到的乱码/退化读数」换成真名**（这就是 +0.87 的来源）；§5.133 记的「库把正确的 `pin_3 FAULT` 改成 `pin_4 /FAULT`」那种**改号**在本管线里**并不发生**（那是离线探针的产物）。
+4. **判据与结论**：库号一致性闸门（`STAGE2_LIB_PINS_NUMGATE`，默认 **0**）在官方 10 张上**无可归因的净效应**（`conflict` / `seen` 两档都 +0.00）⇒ 按「默认关 + 两口径 A/B + 有净增益才翻默认」**保持默认关**，并把它写成**新 GT 落地后才可能有用**的预留闸。**不要再引用「库号一致性闸门」当既有收益来源。**
+5. **新 GT 上的重跑清单**：① `default` vs **`libnamefill0_refine0`**（这条量的是「补名通道整体值多少」，当前 **+0.87**）；② `STAGE2_LIB_REFINE_DEGEN` 的**档位扫描**（退化库名守卫在 `stage2/libpins.py` 的 `degen_block`，默认 **`known2`**）。
 
 ### §5 顺带确认（与 §5.148 / §5.149 呼应，不重复大段）
 
 * 两把尺子（GT 未变，仍然有效）：确定性 **80.62**、交付 **85.0848**。
 * 池侧旧值 **27.6754**（`--with-pool` 可复算，很慢；四通道与 382 个键命中 IC 的分解见 §5.148）。
 * 权重仍是交付版：`eda-pcb/weights/textrec_best.pt` SHA256 **DEA45F915DB3C0101689A6FBE2B84AFA102D3C58D67E38B296BCA948F3A03B64**；候选版留在 `eda-pcb/textrec/runs/official_pool/best.pt`（**E9BCB9DAC6E2DAA093B9982C95D1C72FE62066E20A3F505CC634A263956683C5**，**未采用**）。
-* 仓库状态：任务下发时 `HEAD = 72edc6d`、`ahead 1`（含本次工具提交）；落账时 `HEAD` = 本账提交（叠在主的 `a1c0274`「交接文档：补新 GT 重开清单工具入口 + --cases 语义坑」之上）、`ahead 3`。**提交面**源码除新工具外零改动；**工作区**另有未提交改动：`stage2/libpins.py`（+47，即上面的 numgate 草稿）与 `tools/eval/gt_retest.py`（+8）。
+* 仓库状态：任务下发时 `HEAD = 72edc6d`、`ahead 1`（含本次工具提交）；本次修订落账时提交序列为 `72edc6d`（工具）→ `a1c0274`（交接文档）→ `866e013`（§5.150 初版）→ `ebb72d6`（库通道源码 + A/B 臂）→ 本账提交，`ahead 5`，`git status` 0 行。**§5.150 初版里写的「工作区有未提交草稿」已被 `ebb72d6` 转正**（见 §4B）。
 
 ### §6 产物与口径
 
@@ -14025,4 +14044,4 @@ python -X utf8 tools/eval/newgt_reopen.py [--cases 1,8] [--skip-slow] [--with-po
 * `--cases` = **逗号分隔的案例号**（不是 split 名）；留空 = 官方 10 张。
 * GT 是否变更：只认**逐案哈希**（不看整批 sha1；整批值随跑了哪几张而变）。
 * 判据：默认 `default` 全跑 + 两口径 A/B + **有净增益才翻默认**。
-* ★ **编号更正**：`gt_retest.py:291` 生成的 `report.md` 把这条判据标成「**§5.107 定的规矩**」，但 §5.107 实为「图像级导线骨架（交叉处的洞）——机制查清，粗修未入库」，与判据无关；该编号是**笔误**。判据内容以本文 §4 为准（`tools/eval/newgt_reopen.py:11` 与 `:128` 的同类表述没有带编号，是对的）。
+* ★ **编号待改**：`tools/eval/gt_retest.py:291` 生成的 `report.md` 把这条判据标成「**§5.107 定的规矩**」，但 §5.107 实为「图像级导线骨架（交叉处的洞）——机制查清，粗修未入库」，与判据无关 ⇒ 该编号是**笔误，源码文案本次未改（待改）**。**判据出处**：本项目「默认关 + 两口径 A/B + 有净增益才翻默认」的惯例（`tools/eval/newgt_reopen.py:11` 与 `:128` 的同类表述不带编号，是对的）；判据内容以本文 §4 为准。
