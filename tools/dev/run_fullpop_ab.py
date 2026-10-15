@@ -231,7 +231,12 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=str(DEFAULT_OUT), help="清单/产物根目录")
     ap.add_argument("--arm", default="both",
                     choices=("control", "treatment", "treatment_long", "both"))
-    ap.add_argument("--stage", default="all", choices=("mix", "train", "eval", "compare", "all"))
+    ap.add_argument("--stage", default="all", help=(
+        "要跑的阶段，**可用逗号分隔**：mix/train/eval/compare/all（默认 all）。"
+        "例：`--stage train,eval,compare` 复用已生成的 manifest，只跑训练/评测/对比"))
+    ap.add_argument("--save-every", type=int, default=0, help=(
+        "透传给 textrec.train：每 N 轮另存 ckpt_e%%03d.pt（默认 0 = 不存）。"
+        "§5.181 需要它把「口径偏好 vs 轮次」画成曲线"))
     ap.add_argument("--start-ckpt", default=str(DEFAULT_START))
     ap.add_argument("--epochs", type=int, default=0,
                     help="绝对轮数上限（>0 时原样传给 train.py；一般别用，用 --add-epochs）")
@@ -252,16 +257,22 @@ def main(argv=None) -> int:
         return 2
     arms = ARMS if a.arm == "both" else (a.arm,)
     bad_arms: list = []
+    stages = ({"mix", "train", "eval", "compare"} if a.stage == "all"
+              else {s.strip() for s in a.stage.split(",") if s.strip()})
+    unknown = stages - {"mix", "train", "eval", "compare"}
+    if unknown:
+        print("!! 未知阶段 %s（可选 mix/train/eval/compare/all，可逗号分隔）" % sorted(unknown))
+        return 2
 
     for arm in arms:
         d = out / arm
         print("\n=== %s ===" % arm)
-        if a.stage in ("mix", "all"):
+        if "mix" in stages:
             run([sys.executable, "-X", "utf8", "-m", "tools.dev.mix_crnn_manifest",
                  "--real", d / "real.jsonl", "--out", d,
                  "--charset-from", a.start_ckpt],
                 d / "mix.log", a.dry)
-        if a.stage in ("train", "all"):
+        if "train" in stages:
             st = 0 if a.epochs else start_epoch_of(a.start_ckpt)
             ep = a.epochs or (st + a.add_epochs)
             cmd = [sys.executable, "-X", "utf8", "-m", "textrec.train",
@@ -269,6 +280,8 @@ def main(argv=None) -> int:
                    "--manifest", d / "manifest.jsonl",
                    "--batch", a.batch, "--workers", a.workers,
                    "--epochs", ep]
+            if a.save_every:
+                cmd += ["--save-every", a.save_every]
             print("  [epochs] 绝对上限 %d（起点第 %d 轮 + %d 轮）"
                   % (ep, st, ep - st))
             run(cmd, d / "train.log", a.dry)
@@ -276,13 +289,13 @@ def main(argv=None) -> int:
                 print("  !! 没产出 best.pt —— 该臂无效，跳过 eval（看 %s）" % (d / "train.log"))
                 bad_arms.append(arm)
                 continue
-        if a.stage in ("eval", "all"):
+        if "eval" in stages:
             run([sys.executable, "-X", "utf8", "-m", "textrec.eval_real",
                  "--ckpt", d / "run" / "best.pt", "--manifest", ruler,
                  "--no-ov", "--by-len", "--dump", d / "ruler_errors.jsonl"],
                 d / "ruler_eval.log", a.dry)
 
-    if a.stage in ("compare", "all") and (a.arm == "both" or a.stage == "compare"):
+    if "compare" in stages and (a.arm == "both" or stages == {"compare"}):
         print("\n=== 对比（ruler，判据见 §5.162/§5.163）===")
         if bad_arms:
             print("  !! 本轮有臂无效（没产出 best.pt）：%s —— 下面的读数不可作为判据"

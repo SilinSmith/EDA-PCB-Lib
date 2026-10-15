@@ -15449,3 +15449,32 @@ Python 自写的是 UTF-8 ⇒ 解析器必须按 BOM 自适应（`tools/dev/run_
 2. `eda-pcb/textrec/train.py`：新增 `--save-every N`（默认 **0 = 不存**，行为不变），每 N 轮另存 `ckpt_e%03d.pt`，用来把「口径偏好 vs 轮次」这条曲线一次跑出来（否则永远只有 best/last 两个点，就是本节的处境）。
 
 **产物**：`work/_convcheck.py`（口径核对，输出 `work/_convcheck.txt`）；ckpt 元数据由一段 `torch.load` 脚本读出（见本节 (B) 表）；`work/ocr_mix/runs/history.json`（发散证据）。
+
+## §5.182 预注册：从**交付权重**（e56）重跑同一套三臂（唯一改动 = 起点），主表放交付口径
+
+**动机**：§5.181 更正了 §5.180 的起点问题 —— 冻结 A/B 从末段发散的 e60 起步，于是「长串增量的效应」与「从坏起点恢复」混在一起，交付面上也没有任何终点为正。**「在交付口径上，加上真实的长串 `value` 行到底有没有增益」这个问题，至今没有干净的答案。** 所以重跑一次，把它问干净。
+
+### 设计（与 §5.166 逐字相同，只有一处不同）
+
+| 项 | 值 |
+| --- | --- |
+| 起点 | **`eda-pcb/weights/textrec_best.pt`（e56，val CER 0.16978）** ← 唯一改动（§5.166 用的是 `work/ocr_mix/runs/last.pt` e60，val 0.21529） |
+| 臂 | 同三臂：control 1,746 真实行 / treatment_long 2,008 / treatment 3,155（增量 = 262 条全 ≥5 / 1,409 条全 `value`） |
+| 清单 | 复用 `work/fullpop_r8/<arm>/manifest.jsonl`（§5.175 已核对：合成面 22,000 行对称差 0、val 800 行差 0、charset 71 字 md5 相同）——**不重跑 mix 阶段**，`--stage train,eval,compare` |
+| 配方 | 12 轮上限、batch 128、workers 6、`mix_crnn_manifest --seed 0`、lr 由 OneCycle 按 185–197 步/轮算 |
+| 命令 | `cd eda-pcb; python -X utf8 tools/dev/run_fullpop_ab.py --out Y:\workspace\EDA\work\fullpop_r8_e56 --arm both --stage mix,train,eval,compare --save-every 6`<br>（**必须换 `--out`**：eval 阶段会覆盖 `<arm>/ruler_errors.jsonl`，而 `work/fullpop_r8` 里的四把尺子 dump 是 §5.180/§5.181 的证据，不能动。换目录后 mix 阶段会按同一 `--seed 0` 重建三份 manifest，§5.175 已验证它与旧目录逐条相同） |
+| 预算 | ≈45–70 min（三臂 × 186/188/197 步 × 12 轮，§5.167 的步数账） |
+| 额外存档 | 加 `--save-every 6`（§5.181 新增的闸门），把「口径偏好 vs 轮次」曲线一次跑出来：中间 ckpt 在 `ruler_clean` 与 `ruler_clean_tight` 上各读一次 |
+
+### 判据（主表放**交付口径**，对照 = **交付权重自身**）
+
+* **主终点**：`work/pool_r1/ruler_clean.jsonl`（184 case / 4,068 行 / 外扩框）的 `designator`（n=2,160）—— 全池唯一 n≥1,000 的角色通道，配对 MDE ≈ **0.0278**（§5.176）。判据：**Δ ≥ +0.02 且 95% 配对 CI 下界 > 0**（对照 delivered）。这一条直接对应目标验收里的「失败组位号 exact」通道（位号 = designator）。
+* **次终点（只报告，不充当证据）**：`ruler_clean` 的 `value`≥5（n=440，MDE 0.0636 ⇒ 功效不足，§5.176）；`ruler_clean` 的 `value` 全部（n=1,159）；旧冻结尺子 A 的 `value`≥5（n=389）用于与 §5.166/§5.180 连续对照。
+* **护栏**：① `ruler_clean` 的 `ALL` 相对 delivered 不低超过 −0.01；② 各 role 的 ≥5 格相对 delivered 降幅 ≤1pp；③ **口径轴必须同报**：每个 ckpt 在 `ruler_clean`（外扩）与 `ruler_clean_tight`（紧框）上的配对读数（同 4,068 行、同标签），用来判断任何增益是「真能力」还是「口径位移」（§5.176/§5.180/§5.181 的教训：这条轴值 ±30pp，比在研的效应大一个量级）。
+* **判定规则**（照 §5.172 的写法）：① 主终点过线 → **仍需在 `ruler_big`（紧框 20,343 行，`value`≥5 n=1,749，MDE 0.0309）上同向复核**，才允许提「换模型」；② 主终点不过线但次终点同向改善 → 记为「机制成立、幅度不足」，关闭「长串真实行」这条线；③ 全部无改善 → 关闭该线，并把结论交给「口径/管线」方向（§5.178 的检测器族 pad 定点）。
+
+### 分析
+
+一条命令出表：`python -X utf8 tools/diag/_abmatrix.py --spec work/fullpop_r8_e56/_abmatrix_spec.json`（spec 结构复用 §5.180 的四把尺子，三臂 dump 换成 `work/fullpop_r8_e56` 的产物，`delivered` 行仍指向旧目录的 `work/fullpop_r8/baseline/*_errors.jsonl`）。**注意 eval 阶段只读旧冻结尺子 A**：交付口径那三把池尺子的 dump 要另跑 `python -X utf8 work\_poolread.py --eval --out work\fullpop_r8_e56 --ruler <ruler_clean|ruler_clean_tight|ruler_big>`（同一脚本、同一口径，见 §5.180(C)/(D) 的来源）。**报告必须同时给点估计差与配对 Δ**（两者不同：点估计差 = 两个 exact 相减，配对 Δ 只数翻转格）。
+
+**状态**：本预注册**只登记设计，不自动开跑**（人类口径：训练需明示发令）。开跑后本节补读数，或另起 §5.183。
