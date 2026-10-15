@@ -124,7 +124,7 @@ def scan(a, cfg, index):
                     acc[rf]["n"] += 1
                     acc[rf]["res"].append(along - c)
                     acc[rf]["perp"].append(perp)
-                    if has_colour:
+                    if applies:
                         acc[rf]["n_color"] += 1
                         acc[rf]["res_color"].append(along - c)
                     res_by_group[rf].setdefault((ck, edge), []).append(along - c)
@@ -154,6 +154,10 @@ def report(acc, group_dev, n_pin, a, n_color_pins=0, blind=None,
             return (float(np.nanmedian(v)), float(np.nanpercentile(v, 10)),
                     float(np.nanpercentile(v, 90)), float(np.mean(np.abs(v) <= 2.0)))
         return float("nan"), float("nan"), float("nan"), 0.0
+    # 每个参照**各自适用的脚**：ours 全部、tip 只要有 maroon、junc/green 只要有绿。
+    # 按参照分别判分母（不再用「绿红都缺才算盲区」的 AND 口径），否则将来出现「只有绿没有红」
+    # 的渲染时，连本来适用的 green/junc 覆盖率也会被一起压低。
+    bases = {"ours": n_pin, "tip": n_maroon_pins, "junc": n_green_pins, "green": n_green_pins}
     print()
     print("脚总数 %d；口径：half=%d, lat=±%d, back=1..%d, run-dir=%s"
           % (n_pin, a.half, a.lat, a.back, a.run_dir))
@@ -175,13 +179,15 @@ def report(acc, group_dev, n_pin, a, n_color_pins=0, blind=None,
                  100.0 * share, gs, gn, 100.0 * gs / max(1, gn), " ".join(note)))
         order.append((rf, d["n"] / max(1, n_pin), abs(med), p90 - p10, med))
     if blind and n_color_pins:
-        print("  —— 有颜色子集（排除无绿/无红的 %s）分母 = %d 根脚：颜色类参照的真实覆盖"
-              % (",".join("case%s" % b for b in blind), n_color_pins))
+        print("  —— 适用子集（颜色类参照各按适用性排除：本例 %s 整图无绿/无红）分母 = \
+ours %d / tip %d / junc|green %d 根脚：颜色类参照的真实覆盖"
+              % (",".join("case%s" % b for b in blind), bases["ours"], bases["tip"],
+                 bases["green"]))
         for rf in REFS:
             d = acc[rf]
             med, p10, p90, share = _stats(d["res_color"])
             print("  %-6s %5d (%5.1f%%)   %+7.2f   (%+6.2f,%+6.2f)   %5.1f%%"
-                  % (rf, d["n_color"], 100.0 * d["n_color"] / max(1, n_color_pins),
+                  % (rf, d["n_color"], 100.0 * d["n_color"] / max(1, bases[rf]),
                      med, p10, p90, 100.0 * share))
     usable = [x for x in order if x[1] >= 0.60 and x[0] != "ours" and np.isfinite(x[3])]
     fin = [x for x in order if x[0] != "ours" and np.isfinite(x[3])]
@@ -206,8 +212,7 @@ def report(acc, group_dev, n_pin, a, n_color_pins=0, blind=None,
               "候选参照上，需要人类说明口径，别硬凑。" % (tight[0], tight[3]))
     if blind:
         # 颜色类参照在「整图没有绿/红像素」的案例上天然不适用（不是检测失败），这些脚不该算进它的覆盖率分母，
-        # 否则可用率被系统性低估。现 10GT 的 case1 就是纯灰阶渲染。
-        bases = {"ours": n_pin, "tip": n_maroon_pins, "junc": n_green_pins, "green": n_green_pins}
+        # 否则可用率被系统性低估。分母按参照各自的适用性取（见 report 开头的 bases）。
         txt = "、".join("%s %d/%d (%.1f%%)" % (rf, acc[rf]["n"], bases[rf],
                                               100.0 * acc[rf]["n"] / max(1, bases[rf]))
                        for rf in REFS)
