@@ -13,12 +13,12 @@ module is allowed to write `H - y` by hand.
 from __future__ import annotations
 
 import os
-import sys
+from pathlib import Path
 
 # ---------------------------------------------------------------- paths
 
-REPO = r'Y:\workspace\EDA\eda-pcb'
-EDA_ROOT = r'Y:\workspace\EDA'
+REPO = str(Path(__file__).resolve().parents[1])
+EDA_ROOT = str(Path(REPO).parent)
 DATA_ROOT = os.path.join(REPO, 'yolo_part', 'Dataset(waitforpreprocess)')
 REF_ROOT = os.path.join(REPO, 'yolo_part', 'Dataset300我不知道干嘛用的先放置')
 SYNTH_ROOT = os.path.join(EDA_ROOT, '合成原理图demo')
@@ -27,9 +27,6 @@ DOCS = os.path.join(EDA_ROOT, 'docs')
 
 YOLO_BEST = os.path.join(
     REPO, 'yolo_part', 'runs', 'detect', 'pcb43_yolo11m_im1024-2', 'weights', 'best.pt')
-
-if REPO not in sys.path:
-    sys.path.insert(0, REPO)
 
 # ---------------------------------------------------------------- geometry
 

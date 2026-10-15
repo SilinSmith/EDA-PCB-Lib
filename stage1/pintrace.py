@@ -28,11 +28,10 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import cv2
 import numpy as np
-
-sys.path.insert(0, r"Y:\workspace\EDA\eda-pcb")
 
 INK = 170
 BAND = 16.0          # 在框外多远之内找引脚桩
@@ -396,12 +395,11 @@ def _dedup_segs(segs, tol=2.0):
 # --------------------------------------------------------------- 自检
 def _main():
     from schematic_parser.data import discover, DEFAULT_DATA_ROOT
-    sys.path.insert(0, r"Y:\workspace\EDA\work")
-    from stage1_wires_eval import seg_arrays, dist_pts_to_segs, sample_polyline
+    from tools.eval.stage1_wires_eval import seg_arrays, dist_pts_to_segs, sample_polyline
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--out", default=r"Y:\workspace\EDA\work\stage1_pintrace")
+    ap.add_argument("--out", default=str(Path(__file__).resolve().parents[1] / "work" / "stage1_pintrace"))
     ap.add_argument("--save", action="store_true", help="把射线也写成 json 便于和骨架合起来评")
     ap.add_argument("--stage1", default="",
                     help="用这个 stage1 产物目录里的**检测框**（而不是 GT 框）来找引脚")
@@ -513,4 +511,7 @@ def _main():
 
 
 if __name__ == "__main__":
+    root = str(Path(__file__).resolve().parents[1])
+    if root not in sys.path:
+        sys.path.insert(0, root)
     _main()

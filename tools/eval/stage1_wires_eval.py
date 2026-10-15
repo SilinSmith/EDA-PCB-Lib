@@ -20,8 +20,10 @@ from pathlib import Path
 
 import numpy as np
 
-sys.stdout.reconfigure(encoding='utf-8')
-sys.path.insert(0, r'Y:\workspace\EDA\eda-pcb')
+if __package__ in (None, ''):
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
 
 from schematic_parser.data import discover, DEFAULT_DATA_ROOT  # noqa: E402
 
@@ -67,7 +69,7 @@ def sample_polyline(p, q, n=16):
 
 
 def main():
-    out_dir = sys.argv[1] if len(sys.argv) > 1 else r'Y:\workspace\EDA\work\stage1_all2'
+    out_dir = sys.argv[1] if len(sys.argv) > 1 else str(Path(__file__).resolve().parents[2] / 'work' / 'stage1_all2')
     tol = 5.0
     if '--tol' in sys.argv:
         tol = float(sys.argv[sys.argv.index('--tol') + 1])
@@ -197,4 +199,6 @@ def main():
 
 
 if __name__ == '__main__':
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
     main()

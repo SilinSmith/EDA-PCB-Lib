@@ -328,7 +328,6 @@ def main(argv=None) -> int:
                 _log(fp, "警告：-vlm %s 但补强未执行（端点不可用），导出的产物**未经 VLM 补强**"
                      % a.vlm)
         except Exception as exc:                    # noqa: BLE001
-            import traceback
             traceback.print_exc()
             vlm_err = "%s: %s" % (type(exc).__name__, exc)
             _log(fp, "⚠️ VLM 补强整段失败：%s —— 继续用**未补强**的阶段三产物导出" % vlm_err)
