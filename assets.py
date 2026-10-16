@@ -9,9 +9,12 @@
 两个权重：
 
 * **YOLO 元件检测** `pcb43_v2_from_best`：随仓库一起提交，在 `yolo_part/runs/` 下。
-* **CRNN 文字识别** `ocr_mix/runs/best.pt`（2026-10-11 起；此前是 `ocr_real/runs/best.pt`，
-  e51）：训练产物原本落在 `work\\`（**不在包内**），已复制一份到 `weights/textrec_best.pt`
-  随仓库提交（e57，md5 `7559096C9979`）。
+* **CRNN 文字识别** `weights/textrec_best.pt`（2026-10-16 起，md5 `744AA3F0598E`，31,068,221 B）：
+  来源是 `work/fullpop_r8/ab61_base/run/best.pt`（§5.210：**起点改成交付权重**而非发散的
+  `ocr_mix/runs/last.pt`、沿用人口配方、再训 12 轮）。换它以前是 `ocr_mix/runs/best.pt`
+  （2026-10-11 起；再往前 `ocr_real/runs/best.pt` e51，md5 `7559096C9979`，备份在
+  `work\\weights_backup\\textrec_best.ocr_e57.pt`，**`work\\` 不进仓库、不进镜像**）。
+  换权重的判据与数字见 `docs/RESULTS.md` §5.211（全量 220 案配对 +0.47，升 103/降 74，p=0.035）。
 * **官方元器件库 `cpntLibrary`**（1,755,587 B / 337 键的 JSON，`stage2/libpins.py` 的引脚
   先验要靠它）：原本只放在本机的 `WORKSPACE\work\data\`（`work\` **不进仓库、不进镜像**）
   ⇒ 容器里按旧默认路径去找必然不存在，`STAGE2_LIB_PINS` 虽然默认开，也只会印一行
