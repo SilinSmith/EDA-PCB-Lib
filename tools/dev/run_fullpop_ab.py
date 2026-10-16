@@ -229,6 +229,9 @@ def verdict(res: dict, treat: str = "treatment", paired: dict = None) -> list:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(DEFAULT_OUT), help="清单/产物根目录")
+    ap.add_argument("--ruler", default="", help=(
+        "评测/配对用的 ruler.jsonl（默认 <out>/ruler.jsonl）。重跑到新 --out 目录时用它"
+        "复用冻结尺子，省掉重建清单"))
     ap.add_argument("--arm", default="both",
                     choices=("control", "treatment", "treatment_long", "both"))
     ap.add_argument("--stage", default="all", help=(
@@ -251,9 +254,10 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
 
     out = Path(a.out)
-    ruler = out / "ruler.jsonl"
+    ruler = Path(a.ruler) if a.ruler else (out / "ruler.jsonl")
     if not ruler.exists():
-        print("!! 缺少 %s —— 先跑 tools/dev/mk_fullpop_manifest.py" % ruler)
+        print("!! 缺少 %s —— 先跑 tools/dev/mk_fullpop_manifest.py，"
+              "或用 `--ruler <已有的 ruler.jsonl>` 复用冻结尺子" % ruler)
         return 2
     arms = ARMS if a.arm == "both" else (a.arm,)
     bad_arms: list = []
