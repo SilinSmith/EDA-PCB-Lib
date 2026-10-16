@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -51,7 +52,15 @@ if str(EDA) not in sys.path:
 
 Box = Tuple[float, float, float, float]
 
-INK = 170            # gray < INK 算墨
+def _env_int(name: str, default: int) -> int:
+    """§5.207.5：让交付链路能整体 A/B 墨迹阈值（默认 170 = 历史行为）。"""
+    try:
+        return int(os.environ.get(name, "") or default)
+    except Exception:
+        return default
+
+
+INK = _env_int("EDA_TEXTBOX_INK", 170)            # gray < INK 算墨
 LINE_LEN = 21        # 开运算结构元长度：>= 它的连续笔画会被当"长直线"减掉
 MIN_H, MAX_H = 4, 34     # 字形高度范围
 MIN_W, MAX_W = 1, 70     # 字形宽度范围

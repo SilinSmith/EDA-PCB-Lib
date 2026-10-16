@@ -225,6 +225,12 @@ def read_stage1_texts(stage1_doc: dict) -> List[Box]:
         b = t.get("bbox_img") if isinstance(t, dict) else t
         if b and len(b) == 4:
             out.append((float(b[0]), float(b[1]), float(b[2]), float(b[3])))
+    # §5.208.4(a)：`texts_wide`（`EDA_TEXTBOX_INK_WIDE`）是**只给读数用**的额外文字框，
+    # 原样追加、不做几何去重（§5.207.2：框级去重会把冗余投票扔掉）。
+    for t in stage1_doc.get("texts_wide") or []:
+        b = t.get("bbox_img") if isinstance(t, dict) else t
+        if b and len(b) == 4:
+            out.append((float(b[0]), float(b[1]), float(b[2]), float(b[3])))
     return out
 
 

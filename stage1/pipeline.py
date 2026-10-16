@@ -439,11 +439,28 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
     # 没有它「悬空导线」判不出来（jlc 风格靠 net label 连网，只有元件框一个锚点时
     # 全部真导线都会被误判成悬空：实测悬空元件 75 → 1、suspect 占比 20.5% → 3.9%）。
     t_txt = 0.0
+    texts2 = []
     if do_text:
         from cvparts.textbox import detect_boxes as _tb
         t1 = time.time()
         texts = _tb(bgr)
         t_txt = time.time() - t1
+        # §5.208.4(a)：**解耦**用。`texts`（本函数下文所有用途：涂墨、导线锚点）保持默认阈值；
+        # 这里额外按 `EDA_TEXTBOX_INK_WIDE` 再检一份，只存进 doc 供**读数**侧追加
+        # （`stage2.text.read_stage1_texts`），不改掩膜、不改锚点。默认 0 = 关，行为逐位不变。
+        try:
+            import os as _os
+            _wide = int(_os.environ.get("EDA_TEXTBOX_INK_WIDE", "0") or 0)
+        except Exception:
+            _wide = 0
+        if _wide:
+            from cvparts import textbox as _txb
+            _old = _txb.INK
+            _txb.INK = _wide
+            try:
+                texts2 = _tb(bgr)
+            finally:
+                _txb.INK = _old
     else:
         texts = []
     w = {"n_segments": 0, "n_endpoints": 0, "n_junctions": 0, "segments": [],
@@ -691,6 +708,10 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                       "n_dropped": len(own_ledger), "ledger": own_ledger},
         "texts": [{"id": f"t{i:04d}", "bbox_img": [round(float(v), 1) for v in b]}
                   for i, b in enumerate(texts)],
+        # §5.208.4(a) 解耦通道：`EDA_TEXTBOX_INK_WIDE` 打开的额外文字框（**只给读数用**，
+        # 不参与本阶段的涂墨/锚点）。默认空列表。
+        "texts_wide": [{"id": f"w{i:04d}", "bbox_img": [round(float(v), 1) for v in b]}
+                       for i, b in enumerate(texts2)],
         "wires": {k: v for k, v in w.items() if k not in ("segments", "endpoints",
                                                           "junctions", "polylines")},
         "wire_detail": {"segments": w.get("segments", []),
