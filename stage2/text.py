@@ -227,10 +227,21 @@ def read_stage1_texts(stage1_doc: dict) -> List[Box]:
             out.append((float(b[0]), float(b[1]), float(b[2]), float(b[3])))
     # §5.208.4(a)：`texts_wide`（`EDA_TEXTBOX_INK_WIDE`）是**只给读数用**的额外文字框，
     # 原样追加、不做几何去重（§5.207.2：框级去重会把冗余投票扔掉）。
+    #
+    # §5.208.5(4)：`EDA_TEXTBOX_INK_WIDE_MODE=replace` 改成**替换式** —— 把与 wide 框
+    # IoU ≥ `STAGE2_WIDE_TOL`（默认 0.5）的旧框丢掉再放 wide 框，**框总数基本不变**，
+    # 只让内容更准（本线在检测侧最后一个「不加框」的动作）。
+    wide: List[Box] = []
     for t in stage1_doc.get("texts_wide") or []:
         b = t.get("bbox_img") if isinstance(t, dict) else t
         if b and len(b) == 4:
-            out.append((float(b[0]), float(b[1]), float(b[2]), float(b[3])))
+            wide.append((float(b[0]), float(b[1]), float(b[2]), float(b[3])))
+    if wide:
+        mode = os.environ.get("EDA_TEXTBOX_INK_WIDE_MODE", "append").strip().lower()
+        if mode == "replace":
+            tol = float(os.environ.get("STAGE2_WIDE_TOL", "0.5"))
+            out = [b for b in out if not any(_iou(b, w) >= tol for w in wide)]
+        out.extend(wide)
     return out
 
 
