@@ -46,6 +46,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1327,6 +1328,79 @@ def _run(a) -> int:
         except Exception as exc:                               # noqa: BLE001
             _log(fp, "  ⚠️ %s 端点内收失败：%s: %s" % (cid, type(exc).__name__, exc))
 
+    # ★ §5.261 `FUSION_PINKEY_FIX`（非法脚号改键，默认 **1** = 开）：见 `_pinkey_step`。
+    #   它不改任何几何、不改名字语义，只把 `pin_<非数字>` 收成 `pin_<空闲数字>`，
+    #   并把 `hyperGraph` 成员同步改名 —— 契约层的修正，判分上只会去掉 fp。
+    pinkey_rows = []
+    _pinkey_on = os.environ.get("FUSION_PINKEY_FIX", "1").strip().lower() not in (
+        "", "0", "false", "off", "none")
+    if _pinkey_on:
+        _log(fp, "非法脚号改键通道：开（FUSION_PINKEY_FIX=1）")
+
+    def _pinkey_step(cid):
+        """把**非法脚号键**收成合法数字键（§5.261）；失败一律不影响导出。
+
+        病：`work/_contract.py` 的契约自检在 200 池六块里查出 166 个非法引脚键
+        （`pin_+1V8`、`pin_220nF`、`pin_1_2`、`pin_U6`、`pin_C1`），来源是「号」被读成了
+        网名/值/型号/BGA 焊盘名。它们是纯 fp，而且会把垃圾成员带进 `hyperGraph`
+        （真实输出里出现过 `(U6.U6,...)`、`(U5.+1V8,...)`）。
+
+        口径：只保留 `^\\d{1,3}$` 的脚号；非法键改号到该元件下一个空闲号（原名文本
+        若名字空着就写进 `pinname`，信息不丢），并把 `hyperGraph` 里对应成员一起改名 ——
+        这样既不丢引脚，也不留非法键。`FUSION_PINKEY_FIX=0` 可关。
+        """
+        if not _pinkey_on:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            doc = json.loads(dst_j.read_text(encoding="utf-8"))
+        except Exception:                                       # noqa: BLE001
+            return
+        pins = doc.get("pins") or {}
+        remap = {}
+        n_fix = 0
+        for comp, grp in pins.items():
+            if not isinstance(grp, dict) or not grp:
+                continue
+            used = set()
+            for pk in grp:
+                s = str(pk)[4:] if str(pk).startswith("pin_") else str(pk)
+                if re.fullmatch(r"\d{1,3}", s):
+                    used.add(int(s))
+            nxt = (max(used) + 1) if used else 1
+            for pk in list(grp):
+                s = str(pk)[4:] if str(pk).startswith("pin_") else str(pk)
+                if re.fullmatch(r"\d{1,3}", s):
+                    continue
+                while nxt in used:
+                    nxt += 1
+                new_pk = "pin_%d" % nxt
+                used.add(nxt)
+                nxt += 1
+                rec = grp.pop(pk)
+                if isinstance(rec, dict) and not str(rec.get("pinname") or "").strip():
+                    rec["pinname"] = s
+                grp[new_pk] = rec
+                remap[(str(comp), s)] = str(new_pk)[4:]
+                n_fix += 1
+        if not n_fix:
+            return
+        for net in (doc.get("nets") or {}).values():
+            hg = net.get("hyperGraph")
+            if not isinstance(hg, str) or not (hg.startswith("(") and hg.endswith(")")):
+                continue
+            mem = [x.strip() for x in hg[1:-1].split(",") if x.strip()]
+            out = []
+            for x in mem:
+                c, _, p = x.partition(".")
+                out.append("%s.%s" % (c, remap[(c, p)]) if (c, p) in remap else x)
+            net["hyperGraph"] = "(%s)" % ",".join(out)
+        _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
+        pinkey_rows.append({"case": cid, "rekeyed": n_fix, "map": remap})
+        _log(fp, "  %-28s 非法脚号改键 %d（%s）"
+             % (cid, n_fix, "；".join("%s.%s→%s" % (c, o, n) for (c, o), n in
+                                     list(remap.items())[:6])))
+
     def _pinname_step(cid, png):
         """在**已经落盘**的 `<cid>_Pred.json` 上补一层引脚名复读；失败一律不影响导出。"""
         if not _pinname_on:
@@ -1451,6 +1525,7 @@ def _run(a) -> int:
                     _compdedup_step(cid)
                     _pwrclip_step(cid)
                     _edgecal_step(cid)
+                    _pinkey_step(cid)
                     continue
             except Exception as exc:                        # noqa: BLE001
                 _log(fp, "  ⚠️ %s 引脚名重读失败：%s: %s" % (cid, type(exc).__name__, exc))
@@ -1462,6 +1537,7 @@ def _run(a) -> int:
         _compdedup_step(cid)
         _pwrclip_step(cid)
         _edgecal_step(cid)
+        _pinkey_step(cid)
         if _broke and not (_valread_on or _pinname_on):
             _reread_skipped.append((cid, _p))
     _log(fp, "导出 %d 份 <case>_Pred.json%s"

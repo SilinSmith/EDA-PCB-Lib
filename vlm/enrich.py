@@ -756,6 +756,14 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
                 # ★ 合并：**号用我们自己的**（几何/CRNN），只把模型读到的名并进来。
                 newpins[pk] = {"pinname": name or old_name, "point": info["point"]}
                 continue
+            # ★ §5.261：模型给的「号」必须真的是数字。`work/_contract.py` 全量自检在 200 池上
+            #   查出 164 个非法引脚键（1.4%）：`pin_+1V8`、`pin_220nF`、`pin_1_2`、
+            #   `pin_ATSAM-D11-D14A-MUT` —— 模型把**网名/值/型号**当成脚号回填，
+            #   于是 `hyperGraph` 里出现 `U5.+1V8` 这种成员，判分侧既不是合法脚键、
+            #   还会把垃圾拼进网络成员。口径：只认 `^\d{1,3}$`（可用 `VLM_PIN_NUM_RE` 覆盖），
+            #   不认就退回「号没读出来」的原键 —— 与本节既有「宁可保留原样」一致。
+            if num and not _PIN_NUM_RE.match(num):
+                num = ""
             if num and num in used:
                 num = ""
             if num:
@@ -836,6 +844,8 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
 # 87.5%、`both_ok` 63.2%），瓶颈在**名**（`_namefix.py`：逐字相等只有 48.4%）。
 _PIN_MERGE_ENV = os.environ.get("VLM_PIN_MERGE", "0").strip().lower()
 PIN_MERGE = _PIN_MERGE_ENV not in ("", "0", "false", "off", "none")
+# 模型回填的脚号必须是纯数字（§5.261；见 `read_and_merge` 里的用法）。
+_PIN_NUM_RE = re.compile(os.environ.get("VLM_PIN_NUM_RE", r"^\d{1,3}$"))
 
 # ★ `VLM_PIN_REBUILD`（默认开）：replacement 模式会把引脚键 `pin_13` 改成 `pin_113`，
 # 但 `nets[*].hyperGraph` 是**字符串** `"(U1.13,...)"`。不改它，读对的引脚就
