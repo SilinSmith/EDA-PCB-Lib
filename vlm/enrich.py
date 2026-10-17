@@ -278,7 +278,16 @@ def read_designator(bgr, ib, opts, stat, ctype=""):
         x1 = min(w, int(ib[2] + m)); y1 = min(h, int(ib[3] + m))
         if x1 <= x0 or y1 <= y0:
             continue
-        txt, _dt = client.ask(bgr[y0:y1, x0:x1], prompt, model=opts["model"])
+        # 裁片放大再问（§5.243）：同一批 GT 框上 1×/2×/3× 的严格命中率是
+        # 52.6% / **66.7%** / 61.4%（57 颗，`work/_desigcrop.py --scale`），2× 最优。
+        # `VLM_DESIG_SCALE=1` 逐位退回旧行为。
+        _crop = bgr[y0:y1, x0:x1]
+        _sc = float(os.environ.get("VLM_DESIG_SCALE", "2.0") or 1.0)
+        if _sc > 1.001 and _crop.size:
+            _nh = max(8, int(_crop.shape[0] * _sc))
+            _nw = max(8, int(_crop.shape[1] * _sc))
+            _crop = cv2.resize(_crop, (_nw, _nh), interpolation=cv2.INTER_CUBIC)
+        txt, _dt = client.ask(_crop, prompt, model=opts["model"])
         stat["desig"] += 1
         lines = (txt or "").strip().splitlines()
         t = re.sub(r"[^0-9A-Za-z?]", "", lines[0]) if lines else ""
