@@ -202,6 +202,16 @@ def main(argv=None) -> int:
                          "220 张里这类元件 2601 个，其中 92%% 在 10px 内就有文字框，"
                          "但 `assign.py` 的全局去重把那个框判给了别人；而 pNNN 键"
                          "永远不可能和 GT 对上，换掉只有赚没有赔。")
+    ap.add_argument("-vlm-desig-all", "--vlm-desig-all",
+                    dest="vlm_desig_all", default="off", choices=("on", "off"),
+                    help="位号补读的覆盖面：`off`（默认）= 只读 IC + 兜底键 `pNNN`；"
+                         "`on` = **所有**带位号的元件都问一次 VLM（`enrich.py` 的 "
+                         "`desig_all`）。动机：§5.219–§5.222 证明位号墙是唯一的瓶颈，"
+                         "而 `desig_slots` 一个候选都没有的元件有 418 颗（56%）；"
+                         "代价是位号调用数翻倍（20 张 461 次 → 约 1 000 次），"
+                         "交付口径 24.08 s/张 会涨到约 40 s/张 ⇒ 220 张 88 分钟 → 约 150 分钟，"
+                         "所以**默认关**，只在能证明赚钱时开。")
+
     ap.add_argument("-fusion", "--fusion", dest="fusion", default="on",
                     choices=("off", "on", "llm"),
                     help="融合层（21 节点架构的落地）：先验 + 解 + 合理性检查。"
@@ -398,6 +408,7 @@ _CASE_ARGV_MAP = (
     ("vlm_name", "-vlm-name"), ("vlm_name_margin", "-vlm-name-margin"),
     ("vlm_pin", "-vlm-pin"), ("vlm_pin_name", "-vlm-pin-name"),
     ("vlm_desig_fallback", "-vlm-desig-fallback"),
+    ("vlm_desig_all", "-vlm-desig-all"),
     ("fusion", "-fusion"), ("llm_max_slots", "-llm-max-slots"),
     ("gpu_frac", "-gpu-frac"), ("gpu_headroom", "-gpu-headroom"),
 )
@@ -1006,7 +1017,8 @@ def _run(a) -> int:
                           "value_cols": a.vlm_value_cols,
                           "name": (a.vlm_name == "on"), "name_margin": a.vlm_name_margin,
                           "pin": (a.vlm_pin == "on"),
-                          "desig_fallback": (a.vlm_desig_fallback == "on")},
+                          "desig_fallback": (a.vlm_desig_fallback == "on"),
+                          "desig_all": (a.vlm_desig_all == "on")},
                     cases=[c.case_id for c in cases if c.case_id in ok1])
                 s3_dir = s3v                       # 补强后的目录成为导出源
                 _log(fp, "VLM 补强完成：补强 %d 张、失败 %d 张｜改名 %d 个元件｜位号调用 %d 次"
