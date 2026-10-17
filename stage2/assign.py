@@ -518,6 +518,32 @@ def _near_rev_cfg() -> Tuple[float, float, float]:
 
 NEAR_REV_W, NEAR_REV_R, NEAR_REV_MIN_SPAN = _near_rev_cfg()
 
+
+def _name_shape_pen() -> float:
+    """器件名「字形闸」的罚分（`STAGE2_NAME_SHAPE`，**默认 0 = 关**）。
+
+    §5.248 的离线审计（blk1 34 案、配上的 IC 37 颗）：我们的 `Name` 对 11 / 错 26，
+    错的名字里 65% 是**根本不是型号**的串——`LDO`/`OUT`/`AGND`/`3.3V`/`PA11`，也有
+    直接拿了**自己的位号**（`U7`/`U1`）。这条给出一个只依赖字符串形状的惩罚项：
+
+      * 一个数字都没有（`LDO`、`OUT`、`AGND`、`VREFA+`）；
+      * 形如「数字+电压/单位」（`3.3V`、`5V`）；
+      * 与这颗元件已选定的**位号串完全相同**（`U1`、`U7`）。
+
+    硬拒绝会把对的名字一起杀掉（审计里误杀 5/11），所以只做**排序惩罚**，让它退到
+    第二位候选去。默认 0.0 ⇒ 逐位不变。
+    """
+    raw = (os.environ.get("STAGE2_NAME_SHAPE") or "").strip()
+    if not raw:
+        return 0.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 0.0
+
+
+NAME_SHAPE_PEN = _name_shape_pen()
+
 # 「值」必须带单位/字母（纯数字不要）。理由见 `fit_value` 的 docstring。
 #
 # ★ 默认 **1（开）**。本条在 2025-10-04 曾被判「有害」并关掉（15.2514 vs 22.9068），
@@ -1650,6 +1676,16 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             s, txt, conf, f = got
             sc = _score(s, conf, t["d"], t["inside"],
                         dist_w=(VALUE_DISTW if want == "value" else 0.035))
+            if want == "partname" and NAME_SHAPE_PEN > 0.0:      # §5.248 字形闸（默认关）
+                _bad = 0.0
+                _tx = str(txt or "").strip()
+                if not any(ch.isdigit() for ch in _tx):
+                    _bad = 1.0                       # `LDO`/`OUT`/`AGND`
+                elif re.match(r"^\d+(?:\.\d+)?\s*[VvMm]$", _tx):
+                    _bad = 1.0                       # `3.3V`/`5V`
+                if rec["designator"] and _tx == str(rec["designator"]["text"]).strip():
+                    _bad = 1.0                       # 拿了自己的位号当型号（`U7`）
+                sc -= NAME_SHAPE_PEN * _bad
             if best is None or sc > best[0]:
                 best = (sc, txt, conf, t)
         if best is None and want == "value" and VALUE_STEAL_R > 0:
