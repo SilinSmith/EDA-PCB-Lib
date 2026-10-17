@@ -487,6 +487,33 @@ FREE_STEAL = env_on("STAGE2_FREE_STEAL", "1")
 # （component F1 0.1426→0.1451，tp 971→988，text_mismatch 948→931）。
 VALUE_STEAL_R = float(os.environ.get("STAGE2_VALUE_STEAL", "40"))
 
+
+# ---- §5.222 贴中罚（GT-blind；默认**关**，逐位不变） ----------------------------
+# 依据（`docs/RESULTS.md` §5.222.3）：位号形态的已认串按「离最近 GT 元件多远」量，
+# 真位号 `d_raw`（中心距 / span）均值 **1.029**、非位号（引脚名/脚号/网名/值）**0.667**，
+# 即「几乎压在元件中心的那条串」**更不像**位号；AUC 0.753（方向与现役 `near` 相反）。
+# 但绝对半径会误伤小件：0402 的位号本来就贴着自己的符号（`d_raw≈0.3`），
+# 故只在 `span >= NEAR_REV_MIN_SPAN` 的元件上开火（§5.222.7 分档后两带损失同时变小）。
+# 剂量-反应（`work/_gen220_m24bind.py` v47–v56，读集 `m9_texts_sc_ab1.json`）：
+#   `1.5,0.9,20` 时失败带 失3/得17（Δ+0.60pp，p=2.6e-03），matched 带 −7 ⇒ 净 +7/3565。
+# ⚠ 这只是**绑定器层离线指标**；进交付前必须过 per-case A/B × `--engine protocol2`
+#   （判据 Δ≥+0.05 且 p<0.05，见 §5.222.8）。用 `STAGE2_NEAR_REV="1.5,0.9,20"` 打开。
+def _near_rev_cfg() -> Tuple[float, float, float]:
+    raw = os.environ.get("STAGE2_NEAR_REV", "").strip()
+    if not raw:
+        return 0.0, 0.9, 20.0
+    try:
+        parts = [float(x) for x in raw.replace(";", ",").split(",") if x.strip()]
+    except ValueError:
+        return 0.0, 0.9, 20.0
+    w = parts[0] if parts else 0.0
+    r = parts[1] if len(parts) > 1 else 0.9
+    m = parts[2] if len(parts) > 2 else 20.0
+    return max(0.0, w), max(1e-6, r), max(0.0, m)
+
+
+NEAR_REV_W, NEAR_REV_R, NEAR_REV_MIN_SPAN = _near_rev_cfg()
+
 # 「值」必须带单位/字母（纯数字不要）。理由见 `fit_value` 的 docstring。
 #
 # ★ 默认 **1（开）**。本条在 2025-10-04 曾被判「有害」并关掉（15.2514 vs 22.9068），
@@ -1389,6 +1416,17 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             # 有一大半是 `d > FAR` 的抢读候选，用 `FAR` 截断会让它们全部同分。
             sc = _score(fid, conf, t["d"], t["inside"],
                         dist_clamp=max(FAR, STEAL_R))
+            _dr = -1.0
+            if NEAR_REV_W > 0.0:                                  # §5.222 贴中罚（默认关）
+                _cb = c.get("bbox") or [0.0, 0.0, 0.0, 0.0]
+                _span = 0.5 * (abs(_cb[2] - _cb[0]) + abs(_cb[3] - _cb[1])) + 1.0
+                if _span >= NEAR_REV_MIN_SPAN:
+                    _tcx = 0.5 * (t["bbox"][0] + t["bbox"][2])
+                    _tcy = 0.5 * (t["bbox"][1] + t["bbox"][3])
+                    _ccx = 0.5 * (_cb[0] + _cb[2])
+                    _ccy = 0.5 * (_cb[1] + _cb[3])
+                    _dr = (((_tcx - _ccx) ** 2 + (_tcy - _ccy) ** 2) ** 0.5) / _span
+                    sc -= NEAR_REV_W * (max(0.0, NEAR_REV_R - _dr) / NEAR_REV_R)
             alts.append((sc, {"text": txt, "canon": can, "conf": conf,
                               "box": list(t["bbox"]), "d": t["d"],
                               "fit": fid, "box_i": t.get("_i", -1),
