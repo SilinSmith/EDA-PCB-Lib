@@ -21046,3 +21046,19 @@ component tp 310 → **306（−4）**，net_hyper tp −1.29。
 
 `VLM_DESIG_DBG` 只是环境变量门控的打印（缺省关），已并入 `vlm/enrich.py` 作为以后复核的工具；
 `desig_all` 的 CLI 缺省仍是 off（`vlm/enrich.py:866` DEFAULTS）。
+
+## §5.257 自检：仓内 40 个测试文件跑一遍（28 过 / 12 是「未并入分支」的闸门）
+
+本段动过 `vlm/enrich.py`（位号裁片放大 + `VLM_DESIG_DBG`）与 `stage2/assign.py`
+（`NAME_SHAPE_PEN`，缺省 0）。收尾时把 `tests/test_*.py` 全跑了一遍（`PYTHONPATH` 含仓根与
+`tests/`，逐文件子进程）：
+
+- **通过 28 / 失败 12**；
+- 失败的 12 个全部是**队友未并入 main** 的门：`test_bigic_borders`/`test_black_frame_binding`/
+  `test_box_pin_duplicates`/`test_trusted_pin_binding` 等在 `setUpModule` 里 `import _unmerged_gate`
+  后主动 gate，`test_pin_number_row_binding` 报
+  `AttributeError: <module 'stage2.assign'> does not have the attribute 'PIN_NUMBER_TRUST_BIND'`
+  —— 都是既有状态，与本段改动无关（这些属性本仓从未有过）。
+- 与本段直接相关的只有 `tests/test_vlm_retry.py`：**7 tests OK**。
+- 缺省态确认：`stage2.assign.NAME_SHAPE_PEN = 0.0`、`vlm.enrich.DEFAULTS["desig_all"] = False`、
+  `VLM_DESIG_SCALE` 未设（= 走 1.0）。
