@@ -19133,3 +19133,74 @@ python -X utf8 work\_gen220_m24bind.py --only v25,v49,v52,v53,v54,v55,v56
 ```
 
 产物：`work/_gen220/m24bind.json`（覆盖式）。
+### §5.222.9 生产侧接入（`stage2/assign.py`）与 8 案冒烟：1:1 平手
+
+§5.222.7 的离线信号（drev 贴中罚 `1.5/0.9/20`）已接进**交付侧**绑定器，代码提交 `14c8e53`，
+**默认关**（`STAGE2_NEAR_REV` 未设 ⇒ 权重 0 ⇒ 交付行为逐位不变）。替身/开关：
+
+```bat
+:: 关（默认，交付口径）
+set STAGE2_NEAR_REV=
+:: 开（W=1.5, R=0.9, MINSPAN=20）
+set STAGE2_NEAR_REV=1.5,0.9,20
+```
+
+实现只有两处，共 +38 行，都在 `eda-pcb/stage2/assign.py`：
+
+1. `VALUE_STEAL_R` 之后新增 `_near_rev_cfg()`（解析 `"W,R,MINSPAN"`，缺省/解析失败 → `0.0,0.9,20.0`）
+   与 `NEAR_REV_W, NEAR_REV_R, NEAR_REV_MIN_SPAN = _near_rev_cfg()`。
+2. `assign()` 里 `sc = _score(fid, conf, t["d"], t["inside"], dist_clamp=max(FAR, STEAL_R))` 之后，
+   按候选文本框中心与元件框中心的欧氏距 `/ span` 得 `d_raw`，`d_raw < R` 时
+   `sc -= W * (R - d_raw) / R`；只有 `span >= NEAR_REV_MIN_SPAN` 的元件开火（§5.222.7 的分档作用域）。
+
+#### 冒烟 1：0014 单案 —— 逐字节相同
+
+`--engine protocol2 --no-vlm --cases 0014`，开关前后都是 **33.94** 分，
+`final_results\0014_Pred.json` 逐字节相同（产物 `work\_fast_out_nrchk0` / `work\_fast_out_nrchk1`）。
+0014 的元件都是大件（连接器 40×290、`span` 数百），`d_raw` 落在 1.0–1.3，`0.9` 半径擦不到边 ⇒ 本就不该变。
+
+#### 冒烟 2：8 案 —— 2 颗位号翻转，1 修对 / 1 改错
+
+8 案 = `0001,0002,0014,0020,0048,0087,0092,0103`（产物 `work\_fast_out_nr0b` / `work\_fast_out_nr1b`）。
+tp 合计：元件 194 / 引脚 28 / 网络 89 / 导线 43 → 元件 193 / 引脚 28 / 网络 **82** / 导线 43。
+位号级 diff 只有 2 颗（全案仅此两处，其余逐位相同）：
+
+| 案 | cid | 关 | 开 | GT 实况 | 裁决 |
+|---|---|---|---|---|---|
+| 0001 | c0003 | `U580` | `U1` | GT 有 `U1`（`bbox [360,248,527,915]`），无 `U580` | **修对** |
+| 0087 | c0004 | `U24` | `U7` | GT 有 `U24`（`bbox [1220,260,1380,890]`），无 `U7` | **改错** |
+
+**净额 1:1，但不是对等 1:1**：改错的 `U24` 是大 IC（`span` 320），一颗键错连带丢 **7 个网络 tp**；
+修对的 `U1` 那侧只换了名字、没有网络级增益。⇒ **键错误的代价随引脚数放大**，
+把「1 修 1 错」当成零和是错的，冒烟口径的净读数是 **−7 网络 tp**。
+
+#### 为什么离线 +0.20pp 没有在交付侧变正
+
+`d_raw` 的 AUC 0.753 只说明**两类分布整体错开**（真位号均值 1.029、非位号 0.667），
+不保证**逐案可分**：大件（`span>=20`）里确有一批真位号就压在中心附近（`d_raw < 0.9`），
+罚项对它们和「引脚名/脚号压中心」是同等待遇，于是产生一对一的误伤。
+这条与 §5.222.7 的警告一致：作用域收窄只是把损失从「全案」缩到「近中心档」，并没有消除。
+
+#### 判据与现状
+
+- 预注判据（§5.222.8）：220/210 案 `--engine protocol2` 配对，`Δ ≥ +0.05` 且 `p < 0.05` 才启用；
+  `Δ ∈ [−0.02, +0.05)` 记「仍在噪声」；负则回滚。
+- 210 案 A/B 已起（`--cases` = `1..10` + `200_train_cases` 全部 200 个目录名；两臂 `--save nr220_base`
+  / `--save nr220_on --cmp nr220_base`），产物 `work\_fast_out_nr220b` / `work\_fast_out_nr220n`；
+  本节的 1:1 冒烟是它之前的小样本，**不替代**该 A/B。
+- 交付默认值不动：开关留着，文档写明「未过 A/B 前不启用」。
+
+#### 推送状态（需人类侧操作）
+
+本机对外网络不可达：`git push origin HEAD` 报
+`fatal: unable to access 'https://github.com/SilinSmith/eda-pcb.git/': Failed to connect to github.com:443 after 21092 ms: Could not connect to server`。
+累计 **78 个提交**（含本节与 §5.222.7–.8、§5.221、§5.220、§5.219）已在本地，待人类侧推送。
+
+```bat
+:: 生产侧接入的最小复现
+cd /d Y:\workspace\EDA\eda-pcb
+python -X utf8 tools\eval\fast.py --cases 0001,0002,0014,0020,0048,0087,0092,0103 --no-vlm --engine protocol2 --out nr0b
+set STAGE2_NEAR_REV=1.5,0.9,20
+python -X utf8 tools\eval\fast.py --cases 0001,0002,0014,0020,0048,0087,0092,0103 --no-vlm --engine protocol2 --out nr1b
+:: 位号级 diff 用 python 读 runs\stage2\_assigned\*.json 的 comps[cid].designator.canon
+```
