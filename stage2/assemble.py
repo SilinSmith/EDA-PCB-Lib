@@ -2154,6 +2154,19 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     # `<case>.pinindex.json`，交付文档本身保持逐字节不变。
     pin_pk: Dict[Tuple[str, int], str] = {}
     ct_by_cid: Dict[str, str] = {c["id"]: (c.get("type") or "other") for c in comps}
+    # ★ `STAGE2_BOX_ALONE_U1`（默认 **0 = 先 A/B**）：整页只有一颗 `box`、它又没读到位号时，
+    #   按惯例命名为 `U1`。动机：`10_GTcase`（datasheet 派生 10 张）里 6 张**不印位号**、
+    #   只印型号（`0065` 印的是 `LM2578A` 和脚号 1..8，见图），GT 仍按惯例叫 `U1`；
+    #   我们发兜底键 `pNNN` ⇒ 该元件配不上 GT，且它的引脚被 `PIN_DROP_UNKEYED`
+    #   **整颗丢掉**（实测 `0065`/`0059`/`0042` 的 box 引脚发 0 个），pin F1 直接爆 0
+    #   （派生 10 张里 7 张 pin F1 = 0，见 §5.262）。
+    BOX_ALONE_U1 = env_on("STAGE2_BOX_ALONE_U1", "1")
+    _n_box = 0
+    for _c0 in comps:
+        _a0 = a.get(_c0["id"]) or {}
+        _t0 = str(_a0.get("ctype_fix") or _c0.get("type") or "other").strip().lower()
+        if _t0 == "box":
+            _n_box += 1
     # `tp` 闸门的台账（只在本函数内累计，退出前打印；`STAGE2_TP_LEDGER=1` 时）。
     _tp_ledger: List[dict] = []
 
@@ -2209,8 +2222,16 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             #   `=1` 退回旧行为（判题机复刻尺下 +10.48，那把尺子已被业主认定为写错）。
             if DROP_UNKEYED:
                 continue
-            key = "p%03d" % i
-            _unkeyed = True
+            _ct_here = str(info.get("ctype_fix") or c.get("type") or "other").strip().lower()
+            if (BOX_ALONE_U1 and _ct_here == "box" and _n_box == 1
+                    and "U1" not in components):
+                key = "U1"
+                _unkeyed = False
+                if os.environ.get("STAGE2_DBG_PINS"):
+                    print("[boxalone] cid=%s 整页唯一 box 且无位号 → 命名 U1" % cid)
+            else:
+                key = "p%03d" % i
+                _unkeyed = True
         elif PIN_DROP_LAUNDERED and FKEY_RE.match(str(key)):
             # ★★ 2026-1x 修：兜底键**不总是这里发的** —— 融合/求解层会把已经发过的
             #   `pNNN` 当成「读出来的位号」回填（`assigned[cid]["designator"]["canon"]`，
