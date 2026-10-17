@@ -278,11 +278,13 @@ def read_designator(bgr, ib, opts, stat, ctype=""):
         x1 = min(w, int(ib[2] + m)); y1 = min(h, int(ib[3] + m))
         if x1 <= x0 or y1 <= y0:
             continue
-        # 裁片放大再问（§5.243）：同一批 GT 框上 1×/2×/3× 的严格命中率是
-        # 52.6% / **66.7%** / 61.4%（57 颗，`work/_desigcrop.py --scale`），2× 最优。
-        # `VLM_DESIG_SCALE=1` 逐位退回旧行为。
+        # 裁片放大再问（§5.243 / §5.247）：同一批 GT 框上 1×/2×/3× 的严格命中率是
+        # 52.6% / **66.7%** / 61.4%（57 颗，`work/_desigcrop.py --scale`），2× 读得最准。
+        # 但管线兑现不出来：200 池六块配对只有 **+0.1687（p 0.14，84胜/54负/62平）**，
+        # 40 案那档 +0.298 是块的抖动（§5.247）。按本房判据（Δ≥+0.05 且 p<0.05）不成立，
+        # 所以缺省仍是 **1.0**（逐位回到旧行为）；要复核时 `VLM_DESIG_SCALE=2` 即可。
         _crop = bgr[y0:y1, x0:x1]
-        _sc = float(os.environ.get("VLM_DESIG_SCALE", "2.0") or 1.0)
+        _sc = float(os.environ.get("VLM_DESIG_SCALE", "1.0") or 1.0)
         if _sc > 1.001 and _crop.size:
             _nh = max(8, int(_crop.shape[0] * _sc))
             _nw = max(8, int(_crop.shape[1] * _sc))
