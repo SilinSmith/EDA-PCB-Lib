@@ -128,6 +128,11 @@ _CALLS = 0       # 真正发出去的 ask() 次数
 _REFUSED = 0     # 因预算被拒的 ask() 次数
 _ERRORS = 0      # 返回 "ERR:..." 的次数（只作日志用）
 _RETRIES = 0     # 传输层重试**次数**（`VLM_RETRY` 触发，用来判断「今天端点是不是在限流」）
+# ★ 2026-10-13（§5.228.7）：**空答案**与**截断**各自计数。220 张批里「调用次数一样、答案被接受
+#   的比例掉 3–6 倍」到底掉在哪一步，光看 `errors` 看不出来（空串既不是错误也不是成功）：
+#   端点被锤饱时最常见的就是 HTTP 200 + 空/半截正文。
+_EMPTY = 0       # 最终文本为空（或只有空白）的 ask() 次数
+_LENGTH = 0      # 因 `finish_reason=="length"` 打到上限而没拿全的 ask() 次数
 # ★ 外部推理的 **token 用量**（服务端 `usage` 块的累计）。赛题评分里
 #   `FinalScore_Accuracy = 0.95·Score_Accuracy + 0.05·(m/M)·Score_Token` 而
 #   `Score_Token` 是**消耗越少排名越高**（见 `docs/COMPETITION_RULES.md`）——
@@ -141,7 +146,7 @@ def stats() -> dict:
     """预算、token 与调用统计（给日志/决策日志用）。"""
     return {"budget_s": round(BUDGET, 1), "used_s": round(_USED, 1),
             "calls": _CALLS, "refused": _REFUSED, "errors": _ERRORS,
-            "retries": _RETRIES,
+            "retries": _RETRIES, "empty": _EMPTY, "length": _LENGTH,
             "exhausted": budget_exhausted(), "base": BASE, "model": MODEL,
             "tokens": {"prompt": _TOK_IN, "completion": _TOK_OUT,
                        "total": _TOK_ALL}}
@@ -150,11 +155,14 @@ def stats() -> dict:
 def reset_budget() -> None:
     """清零累计用量与会计数（预算语义由调用方决定：整进程 or 每案例）。"""
     global _USED, _CALLS, _REFUSED, _ERRORS, _RETRIES, _TOK_IN, _TOK_OUT, _TOK_ALL
+    global _EMPTY, _LENGTH
     _USED = 0.0
     _CALLS = 0
     _REFUSED = 0
     _ERRORS = 0
     _RETRIES = 0
+    _EMPTY = 0
+    _LENGTH = 0
     _TOK_IN = 0
     _TOK_OUT = 0
     _TOK_ALL = 0
@@ -359,7 +367,7 @@ def ask(img_bgr, prompt, model=None, timeout=None, max_tokens=None):
     另：每次响应里的 `usage` 都累进 `stats()["tokens"]` —— 赛题的 `Score_Token` 是
     **排名项**（`0.05·(m/M)·Score_Token`，消耗越少越高），用量必须可见。
     """
-    global _USED, _CALLS, _REFUSED, _ERRORS
+    global _USED, _CALLS, _REFUSED, _ERRORS, _EMPTY, _LENGTH
     if budget_exhausted():
         _REFUSED += 1
         return "", 0.0
@@ -379,9 +387,13 @@ def ask(img_bgr, prompt, model=None, timeout=None, max_tokens=None):
             if txt and fin != "length":
                 return _close(t0, txt)
             last = txt
+            if fin == "length":
+                _LENGTH += 1
             if budget >= 16384 or budget_exhausted():
                 break
             budget = min(16384, budget * 2)
+        if not str(last or "").strip():
+            _EMPTY += 1
         return _close(t0, last)
     except Exception as e:  # noqa: BLE001
         _ERRORS += 1

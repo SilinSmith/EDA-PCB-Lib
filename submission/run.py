@@ -146,9 +146,12 @@ def main(argv=None) -> int:
                     help="阶段二之后的 VLM 补强（读 IC 位号 + 引脚号/名）。"
                          "auto = 先探一次端点收不收图；需要视觉模型。实测 +0.565。")
     ap.add_argument("-vlm-workers", "--vlm-workers", dest="vlm_workers", type=int,
-                    default=4, help="VLM 并发数。默认从 6 降到 4：LM Studio 与管线"
-                                    "同卡时，并发请求会让 LLM 自己的 KV cache 成倍涨。"
-                                    "实测 4~6 路都可用，4 更稳。")
+                    default=2, help="VLM 并发数。**默认 2**（2026-10-13，§5.229）："
+                                    "40 张批上 1 并发与 2 并发**逐案逐位相同**（10GT 83.64），"
+                                    "而 4 并发在同一个 40 张批上掉到 81.09（10GT comp f1 "
+                                    "0.9955→0.9446），且客户端看不到任何失败/空答案/截断 —— "
+                                    "是服务端在 4 路交错时把答案串了。2 并发比 4 只慢 ~25%"
+                                    "（40 张批 515.5s vs 452.5s），换来读数可信。")
     ap.add_argument("-vlm-margin", "--vlm-margin", dest="vlm_margin", type=float,
                     default=60.0, help="读位号时元件框外扩的像素。")
     ap.add_argument("-vlm-value", "--vlm-value", dest="vlm_value",
@@ -1045,8 +1048,10 @@ def _run(a) -> int:
                        % (_bs["used_s"], _bs["budget_s"], _bs["refused"])
                        if _bs["budget_s"] > 0 else "预算 0 = 不限")
                 _log(fp, "外部推理：发出 %d 次｜失败 %d 次｜%s"
+                         "｜空答案 %d 次｜截断 %d 次｜重试 %d 次"
                          "｜token 入 %d / 出 %d / 合计 %d%s"
                      % (_bs["calls"], _bs["errors"], _bd,
+                        _bs.get("empty", 0), _bs.get("length", 0), _bs.get("retries", 0),
                         _tk["prompt"], _tk["completion"], _tk["total"],
                         "（⚠️ 已降级成纯 CV：后续调用不再发出）"
                         if _bs["exhausted"] else ""))
