@@ -20533,3 +20533,13 @@ keymap 建不起来 ⇒ 引脚/网络一起陪葬。**位号墙不只吃 30% 的
 的输出 `work/_fast_out_dsc1off/final_results/1_Pred.json` 与 §5.229 的 `b40w2` 同案产物
 **sha256 前 16 位相同（`4d95adad345ff6a7`）、字节数相同（14,885）、`pins["U1"]` 同为 26 个**。
 ⇒ 关掉放大等于回到改动前，逐位不变。
+
+### §5.244.1 先把开关挂上（默认关、已验逐位不变）
+
+`vlm/enrich.py` 的 `read_pins` 里加 `VLM_PIN_SCALE`（默认 **1.0**）：`crop_dir` 出图、画完
+标记之后按该倍数放大。默认 1.0 时不做任何 resize，实测 `--cases 1`（2 并发）输出
+`work/_fast_out_pinoff1/final_results/1_Pred.json` 与 `b40w2` 同案产物 **sha256 相同
+（`4d95adad345ff6a7`）、14,885 字节**。
+
+这样下一步只需要标定倍数（建议先在 GT 引脚框上量「编号:名称」严格命中率，
+扫 1.0 / 1.5 / 2.0），不必再写代码。

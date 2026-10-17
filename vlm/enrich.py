@@ -517,6 +517,12 @@ def read_pins(bgr, points, ctr, win, opts, stat, bbox=None):
             continue
         im, rel = c
         mark(im, rel, opts["mr"], opts["mt"], COLORS[opts["color"]])
+        # 引脚裁片是目前唯一**不放大**就送图的通道（§5.244）。这里预留同一套放大开关：
+        # 默认 1.0 = 逐位不变；标定好比例（1.5/2.0）再改默认值，不要先拍数。
+        _ps = float(os.environ.get("VLM_PIN_SCALE", "1.0") or 1.0)
+        if _ps > 1.001 and im.size:
+            im = cv2.resize(im, (max(8, int(im.shape[1] * _ps)), max(8, int(im.shape[0] * _ps))),
+                            interpolation=cv2.INTER_CUBIC)
         crops.append(im); idx.append(i)
     ans = {}
     per, cols = opts["per"], opts["cols"]
