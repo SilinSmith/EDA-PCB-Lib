@@ -1369,6 +1369,8 @@ def _run(a) -> int:
 
     _n_seen = 0
     _fail_probe = 0
+    _reread_skipped = []
+    _broke = False
     try:
         _break_after = max(1, int(os.environ.get("VLM_BREAK_AFTER", "2")))
     except Exception:                                          # noqa: BLE001
@@ -1393,6 +1395,7 @@ def _run(a) -> int:
                              % (_fail_probe, _break_after))
                     if _fail_probe >= _break_after:
                         _valread_on = _pinname_on = False
+                        _broke = True
                         _log(fp, "⚠️ VLM 端点中途失效 ⇒ 熔断：关闭值/引脚名复读通道（余下 %d 张）"
                              % (len(items) - _n_seen + 1))
                 else:
@@ -1454,8 +1457,43 @@ def _run(a) -> int:
         _compdedup_step(cid)
         _pwrclip_step(cid)
         _edgecal_step(cid)
+        if _broke and not (_valread_on or _pinname_on):
+            _reread_skipped.append((cid, _p))
     _log(fp, "导出 %d 份 <case>_Pred.json%s"
          % (n_export, ("（另有 %d 份空壳兜底）" % n_shell) if n_shell else ""))
+
+    # ------------------------------------------------- 复读第二遍（熔断后补救）
+    # ★ 2026-10-13（§5.228）：熔断是**整批**的，而值/引脚名复读的价值是实打实的
+    #   —— 220 张那一批里端点崩在融合层之后，211 张再没跑过复读，10GT 从 84.17 掉到
+    #   76.89（−7.28）。端点崩掉往往只是一段负载（LM Studio 换模型/回收显存），
+    #   等一会儿就活。所以跑完主循环后：**冷却 + 重探**，活了就把没跑过复读的案子补跑一遍。
+    #   `_valread_step`/`_pinname_step` 都是从 `runs/**/_assigned` 重算再覆盖 dst，
+    #   重复执行是幂等的，不会把两层改写叠加。
+    if _reread_skipped and _broke and not (_valread_on or _pinname_on):
+        try:
+            _cool = float(os.environ.get("VLM_REREAD_COOLDOWN", "25"))
+        except Exception:                                      # noqa: BLE001
+            _cool = 25.0
+        _log(fp, "⚠️ 有 %d 张没跑过值/引脚名复读（熔断）；冷却 %.0fs 后重探端点，"
+                 "活了就补跑" % (len(_reread_skipped), _cool))
+        _revived = False
+        try:
+            time.sleep(max(0.0, _cool))
+            from vlm import client as _vc3                         # noqa: PLC0415
+            _revived = bool(_vc3.probe(timeout=60.0))
+        except Exception as _e:                                    # noqa: BLE001
+            _log(fp, "⚠️ 复读第二遍探测失败：%s: %s" % (type(_e).__name__, _e))
+        if _revived:
+            _valread_on = _pinname_on = True
+            _log(fp, "✅ 端点已恢复 ⇒ 第二遍补跑 %d 张的值/引脚名复读" % len(_reread_skipped))
+            _n2 = 0
+            for cid2, _p2 in _reread_skipped:
+                _valread_step(cid2, _p2)
+                _pinname_step(cid2, _p2)
+                _n2 += 1
+            _log(fp, "第二遍补跑完成：%d 张" % _n2)
+        else:
+            _log(fp, "⚠️ 端点仍未恢复 ⇒ 放弃第二遍（%d 张保持无复读）" % len(_reread_skipped))
 
     # ---------------------------------------------------------- 决策日志
     cases_log = []

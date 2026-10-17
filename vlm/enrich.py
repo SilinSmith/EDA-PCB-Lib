@@ -720,6 +720,7 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
         # 实测会让 `pin.missing` 302→308、总分倒退）。
         newpins = {}
         used = set()
+        _pin_ren_before = dict(_pin_ren.get(key) or {})
         _merge = bool(opts.get("pin_merge"))
         for i, (pk, info) in enumerate(keep):
             num = name = ""
@@ -734,16 +735,42 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
                 num = ""
             if num:
                 used.add(num)
-                newpins["pin_%s" % num] = {"pinname": name or old_name,
-                                           "point": info["point"]}
-                n_pin += 1
-                if ("pin_%s" % num) != pk:
+                # ★ 2026-10-13（§5.228）：**改名撞键不许吃脚**。旧写法直接
+                #   `newpins["pin_%s" % num] = ...`，而 `else` 分支又会把「号没读出来/
+                #   号被去重」的引脚按**原键**塞回同一个 dict —— 只要某个原键恰好等于
+                #   别人刚读出的新键，后者就把前者**覆盖掉**，这颗元件的引脚数静默减少。
+                #   实测（220 张批 vs 20 张串行，同参数同案子）`10GT/1` 的 U1 少了 7 个脚
+                #   （26 → 19）、该案 −19.75 分；批里「改写引脚」350 次 vs 串行 156 次，
+                #   撞键机会正比于改写量。这里改成撞了就让位（退回原键，仍撞就加后缀）。
+                _tgt = "pin_%s" % num
+                if _tgt in newpins:
+                    _tgt = pk
+                    if _tgt in newpins:
+                        _j = 2
+                        while "%s_%d" % (pk, _j) in newpins:
+                            _j += 1
+                        _tgt = "%s_%d" % (pk, _j)
+                if _tgt != pk:
                     _pin_ren.setdefault(key, {})[
                         pk[4:] if pk.startswith("pin_") else pk] = num
+                newpins[_tgt] = {"pinname": name or old_name, "point": info["point"]}
+                n_pin += 1
             else:
                 newpins[pk] = info
         if newpins:
-            pins[key] = newpins
+            # ★ 2026-10-13（§5.228）：最后一道保险 —— 改写后引脚数**变少**就整颗放弃改写。
+            #   一颗粒 IC 少一个脚 = 多一条 `pin.missing`，而 `pin.f1` 是 0.25 权重；
+            #   实测 `10GT/1` 在负载饱和的批里就丢过 7 个脚（−19.75 分）。
+            #   宁可保留「号没读对」的原样，也不接受「少一个脚」。
+            if len(newpins) >= len(keep):
+                pins[key] = newpins
+            else:
+                # 改写被否 ⇒ 这颗元件的引脚改名记录也必须回滚，否则
+                # `nets[*].hyperGraph` 会被改成**不存在的**新脚号（比不改更糟）。
+                if _pin_ren_before:
+                    _pin_ren[key] = _pin_ren_before
+                else:
+                    _pin_ren.pop(key, None)
 
     # ★ 引脚键改名后必须同步 `nets[*].hyperGraph`（`VLM_PIN_REBUILD`，默认开）。
     # 不改的话，被 VLM 读对号的那些引脚**进不了任何网络**：实测 `net.pred_pins`
