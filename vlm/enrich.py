@@ -602,6 +602,14 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
                 continue
             if g in renames:               # 占用者自己也要搬走 -> 位子腾出来了
                 renames[old] = g
+        if os.environ.get("VLM_DESIG_DBG"):
+            _dup = {g: ks for g, ks in claims.items() if len(ks) > 1}
+            _free = sum(1 for g in solo if g not in comps)
+            print("[desig dbg] case=%s comps=%d reads=%d solo=%d dup_groups=%d "
+                  "dup_comps=%d ren_free=%d ren_holder=%d"
+                  % (pred.get("case"), len(comps), len(reads), len(solo), len(_dup),
+                     sum(len(v) for v in _dup.values()), _free, len(renames) - _free),
+                  flush=True)
         if renames:
             comps = {renames.get(k, k): v for k, v in comps.items()}
             pins = {renames.get(k, k): v for k, v in pins.items()}
