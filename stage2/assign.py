@@ -488,7 +488,7 @@ FREE_STEAL = env_on("STAGE2_FREE_STEAL", "1")
 VALUE_STEAL_R = float(os.environ.get("STAGE2_VALUE_STEAL", "40"))
 
 
-# ---- §5.222 贴中罚（GT-blind；默认**关**，逐位不变） ----------------------------
+# ---- §5.222 贴中罚（GT-blind；**已按 §5.222.10 的 A/B 转默认开**） -----------------
 # 依据（`docs/RESULTS.md` §5.222.3）：位号形态的已认串按「离最近 GT 元件多远」量，
 # 真位号 `d_raw`（中心距 / span）均值 **1.029**、非位号（引脚名/脚号/网名/值）**0.667**，
 # 即「几乎压在元件中心的那条串」**更不像**位号；AUC 0.753（方向与现役 `near` 相反）。
@@ -496,17 +496,21 @@ VALUE_STEAL_R = float(os.environ.get("STAGE2_VALUE_STEAL", "40"))
 # 故只在 `span >= NEAR_REV_MIN_SPAN` 的元件上开火（§5.222.7 分档后两带损失同时变小）。
 # 剂量-反应（`work/_gen220_m24bind.py` v47–v56，读集 `m9_texts_sc_ab1.json`）：
 #   `1.5,0.9,20` 时失败带 失3/得17（Δ+0.60pp，p=2.6e-03），matched 带 −7 ⇒ 净 +7/3565。
-# ⚠ 这只是**绑定器层离线指标**；进交付前必须过 per-case A/B × `--engine protocol2`
-#   （判据 Δ≥+0.05 且 p<0.05，见 §5.222.8）。用 `STAGE2_NEAR_REV="1.5,0.9,20"` 打开。
+# 过闸（§5.222.10，210 案 × `--engine protocol2` 配对，产物 `work/_fast_out_nr220b|n`）：
+#   均分 **30.1801 → 30.2863**，Δ=**+0.1063**（噪声底 ±0.02 的 5 倍），
+#   配对 t **p=0.0441**、逐案 胜24/负12/平174（符号检验 p=0.0652，偏弱）⇒ 判据 Δ≥+0.05 且
+#   p<0.05 **成立**，默认值改为 `1.5,0.9,20`。要退回旧行为设 `STAGE2_NEAR_REV=0`。
+# ⚠ 命中方式是**同一批点位上换归属**（如 0132 的 SW2/SW3/SW4 轮转、0135 的 U1 在两颗间挪），
+#   不是新救回位号；收益靠大引脚件（键对了引脚/网络跟着对）兑现，故逐案是 2:1 而非全胜。
 def _near_rev_cfg() -> Tuple[float, float, float]:
     raw = os.environ.get("STAGE2_NEAR_REV", "").strip()
     if not raw:
-        return 0.0, 0.9, 20.0
+        return 1.5, 0.9, 20.0
     try:
         parts = [float(x) for x in raw.replace(";", ",").split(",") if x.strip()]
     except ValueError:
-        return 0.0, 0.9, 20.0
-    w = parts[0] if parts else 0.0
+        return 1.5, 0.9, 20.0
+    w = parts[0] if parts else 1.5
     r = parts[1] if len(parts) > 1 else 0.9
     m = parts[2] if len(parts) > 2 else 20.0
     return max(0.0, w), max(1e-6, r), max(0.0, m)
@@ -1417,7 +1421,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             sc = _score(fid, conf, t["d"], t["inside"],
                         dist_clamp=max(FAR, STEAL_R))
             _dr = -1.0
-            if NEAR_REV_W > 0.0:                                  # §5.222 贴中罚（默认关）
+            if NEAR_REV_W > 0.0:                                  # §5.222 贴中罚（默认开，§5.222.10）
                 _cb = c.get("bbox") or [0.0, 0.0, 0.0, 0.0]
                 _span = 0.5 * (abs(_cb[2] - _cb[0]) + abs(_cb[3] - _cb[1])) + 1.0
                 if _span >= NEAR_REV_MIN_SPAN:
