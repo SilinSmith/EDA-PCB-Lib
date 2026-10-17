@@ -1549,6 +1549,27 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
     #   ① 记进 per-cid 记录（键 `ctype_fix`），给 `assemble.py` 读；
     #   ② 本文件后面的参数/器件名/引脚各 pass 直接用改写后的类型。
     ctype_of: Dict[str, str] = {c["id"]: c["type"] for c in comps}
+    # ---- ★ 低置信具名键降级成 `pNNN`（`STAGE2_DEMOTE_CONF`，默认 0 = 关）----
+    # 依据（§5.236/§5.237，blk1 34 案 324 颗具名元件，按我们自己的读置信度分桶，
+    # GT 只当尺子）：cf≥0.95 正确率 **91.6%**（225 颗）、0.80–0.95 **72.2%**（72 颗）、
+    # 0.60–0.80 **50.0%**（16 颗）、<0.60 **45.5%**（11 颗）。
+    # 官方 keymap 的坐标兜底只对**无名**元件开放（`metrics.py:347`），所以一个「像位号
+    # 但读错」的具名键会把原本可以被坐标救回的元件彻底判死，连它的引脚/网络一起
+    # （§5.236 实测：补位臂元件 tp +7，网络 −0.006）。反过来，低置信时**退回 `pNNN`**
+    # 是几乎免费的：框通常是对的，坐标兜底照样能配上。
+    _DEMOTE = float(os.environ.get("STAGE2_DEMOTE_CONF", "0") or 0.0)
+    if _DEMOTE > 0.0:
+        _keep = []
+        for cid, info in picked:
+            _cf = float((info or {}).get("conf") or 0.0)
+            if _cf < _DEMOTE:
+                if _dbg_want(cid):
+                    print("[dbg-demote] cid=%s %s conf=%.3f < %.2f → pNNN"
+                          % (cid, (info or {}).get("canon"), _cf, _DEMOTE))
+                continue
+            _keep.append((cid, info))
+        picked = _keep
+
     for cid, info in picked:
         out[cid]["designator"] = info
         _tf = (info or {}).get("type_fix")
