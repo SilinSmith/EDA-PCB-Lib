@@ -1345,6 +1345,39 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
     #   在当前规则下过不了 canon 的读法。只写报告，见下面 `LAST_CONFORM`。
     audit_of: Dict[str, dict] = {}
 
+    # ---- ★ 零候选补位（`STAGE2_SHAPE_FILL`，默认 0 = 关）------------------
+    # 实测（§5.235）：blk1 34 案里 89 颗「框像素级正确、位号错」的元件，**53 颗（59.6%）
+    # 的 `desig_slots` 是空的** —— 连被抢的资格都没有。这一带确有印字也进了 `dcands`，
+    # 但 `_best_read(... "designator")` 一条都读不出「位号形态 + 前缀互证」，`alts` 为空
+    # ⇒ 元件退化成 `pNNN` ⇒ 官方 keymap 不给有名元件坐标兜底（`metrics.py:347` 只对
+    # `is_unkeyed` 开放）⇒ missing + extra 各记一次。
+    # 本支只在**一个合法候选都没有**时补一条「形状是位号形」的兜底，分数压到 0 以下
+    # （`STAGE2_SHAPE_PEN`），永远抢不过正常候选 ⇒ 默认关时逐位不变。
+    _SHAPE_FILL = env_on("STAGE2_SHAPE_FILL", "0")
+    _SHAPE_PEN = float(os.environ.get("STAGE2_SHAPE_PEN", "0.60") or 0.60)
+    _SHAPE_MINCONF = float(os.environ.get("STAGE2_SHAPE_MINCONF", "0.90") or 0.90)
+    _SHAPE_RE = re.compile(r"^[A-Za-z]{1,3}\d{1,4}$")
+
+    def _shape_canon(t):
+        """从候选框的所有读法里挑一条**形状**像位号的串（不做前缀/类型互证）。
+
+        返回 ``(串, 该串的读置信度)``；置信度取该读法自己的，用于 `STAGE2_SHAPE_MINCONF`
+        这道闸——实测（§5.236）低置信的「像位号的错串」会把 `pNNN` 换掉，而具名元件
+        拿不到官方的坐标兜底（`metrics.py:347`），反而把引脚/网络一起害死。
+        """
+        seen = []
+        for v in (t.get("reads") or {}).values():
+            if isinstance(v, (tuple, list)) and v and v[0]:
+                seen.append((str(v[0]), float(v[1] or 0.0)))
+        for key in ("text", "txt", "read"):
+            if t.get(key):
+                seen.append((str(t[key]), 0.0))
+        for s, cf in seen:
+            s2 = re.sub(r"\s+", "", s).upper()
+            if _SHAPE_RE.match(s2):
+                return s2, cf
+        return "", 0.0
+
     for c in comps:
         cid, ctype = c["id"], c["type"]
         cands = owned.get(cid, [])
@@ -1436,6 +1469,27 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                               "fit": fid, "box_i": t.get("_i", -1),
                               "type_fix": tfix}))
         alts.sort(key=lambda x: -x[0])
+        if not alts and _SHAPE_FILL:
+            # 零候选补位：只在「一个合法候选都没有」时启用；分数 = 常规项 − 罚
+            _fb = []
+            for t in dcands:
+                if _too_wide(t, DESIG_MAXW):
+                    continue
+                _sh, _cf = _shape_canon(t)
+                if not _sh or _cf < _SHAPE_MINCONF:
+                    continue
+                _sc = _score(t.get("fit") or 0.0, _cf, t["d"], t["inside"],
+                             dist_clamp=max(FAR, STEAL_R)) - _SHAPE_PEN
+                _fb.append((_sc, {"text": _sh, "canon": _sh, "conf": _cf,
+                                  "box": list(t["bbox"]), "d": t["d"],
+                                  "fit": t.get("fit") or 0.0,
+                                  "box_i": t.get("_i", -1), "type_fix": None,
+                                  "shape_only": True}))
+            _fb.sort(key=lambda x: -x[0])
+            alts = _fb
+            if _dbg_want(cid):
+                print("[dbg-shape] cid=%s 零候选补位 -> %s"
+                      % (cid, [(round(s, 3), i["canon"]) for s, i in alts[:3]]))
         if _dbg_want(cid):
             print("[dbg-alts] cid=%s -> %s" % (cid, [
                 (round(s, 3), i["canon"], round(i["conf"], 3), round(i["d"], 1))
