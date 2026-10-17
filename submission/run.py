@@ -1368,6 +1368,11 @@ def _run(a) -> int:
             _log(fp, "  ⚠️ %s 值重读失败：%s: %s" % (cid, type(exc).__name__, exc))
 
     _n_seen = 0
+    _fail_probe = 0
+    try:
+        _break_after = max(1, int(os.environ.get("VLM_BREAK_AFTER", "2")))
+    except Exception:                                          # noqa: BLE001
+        _break_after = 2
     for cid, _p in items:
         # ★ 熔断：`vlm_ok` 只在开跑前探过一次。复读通道每槽一次调用、失败**不抛异常**
         #   （`ask()` 返回 `"ERR:..."`），所以端点若在跑批途中死掉（LM Studio 崩、显存爆），
@@ -1377,10 +1382,24 @@ def _run(a) -> int:
         if (_valread_on or _pinname_on) and _n_seen % 5 == 0:
             try:
                 from vlm import client as _vc2                     # noqa: PLC0415
+                # ★ 2026-10-13（§5.225/§5.227）：**单次探测失败不再熔断**，要连续
+                #   `VLM_BREAK_AFTER` 次（默认 2）探不通才关。理由：§5.225 实测端点被
+                #   别的任务占住时，第一次 `probe(timeout=30)` 会假失败，而熔断一旦触发
+                #   就是**整批**失去值/引脚名两个通道（那台 220 张的机器上余下 216 张全没了，
+                #   同参数同案子因此掉了 6.75 分）。代价：真死掉时多等一次探测（≤30 s）。
                 if not _vc2.probe(timeout=30.0):
-                    _valread_on = _pinname_on = False
-                    _log(fp, "⚠️ VLM 端点中途失效 ⇒ 熔断：关闭值/引脚名复读通道（余下 %d 张）"
-                         % (len(items) - _n_seen + 1))
+                    _fail_probe += 1
+                    _log(fp, "⚠️ VLM 复读通道探测失败（第 %d 次，阈值 %d）"
+                             % (_fail_probe, _break_after))
+                    if _fail_probe >= _break_after:
+                        _valread_on = _pinname_on = False
+                        _log(fp, "⚠️ VLM 端点中途失效 ⇒ 熔断：关闭值/引脚名复读通道（余下 %d 张）"
+                             % (len(items) - _n_seen + 1))
+                else:
+                    if _fail_probe:
+                        _log(fp, "✅ VLM 复读通道探测恢复正常（连续失败清零，此前 %d 次）"
+                             % _fail_probe)
+                    _fail_probe = 0
             except Exception as _e:                                # noqa: BLE001
                 _log(fp, "⚠️ 复读通道熔断探测本身失败：%s: %s" % (type(_e).__name__, _e))
         # 导出优先序：融合层 > VLM 补强 > 阶段三 > 阶段二。
