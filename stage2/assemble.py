@@ -191,6 +191,21 @@ TP_LEDGER: List[dict] = []
 # 两者输出相同），但把「71 对 1 错」从「全错」救回「71 对」。
 BOX_PIN_PARTIAL = env_on("STAGE2_BOX_PIN_PARTIAL", "1")
 
+# ★ `STAGE2_BOX_ALONE_U1`（默认 **1**，§5.262）：整页只有一颗 `box`、它又没读到位号时，
+#   按惯例命名为 `U1`。动机：`10_GTcase`（datasheet 派生 10 张）里 6 张**不印位号**、
+#   只印型号（`0065` 印的是 `LM2578A` 和脚号 1..8），GT 仍按惯例叫 `U1`；我们发兜底键
+#   `pNNN` ⇒ 该元件配不上 GT，且它的引脚被 `PIN_DROP_UNKEYED` **整颗丢掉**（`0065`/`0059`/
+#   `0042` 的 box 引脚发 0 个），pin F1 直接爆 0（派生 10 张里 7 张 pin F1 = 0，见 §5.262）。
+#   实测：派生 10 张 +0.73；池里触发 13 案 **+3.98（t 2.77）**、整体 +0.24（t 1.78）；
+#   官方 10 张逐位不变（§5.263）。
+BOX_ALONE_U1 = env_on("STAGE2_BOX_ALONE_U1", "1")
+
+# ★ `STAGE2_BOX_GAP_U1`（默认 **0，判负**，§5.264）：把上面那条放宽到「整页 box 数 k、
+#   读出 U 号正好 k-1 个、且都在 1..k 里」⇒ 缺的那个号补给没读到号的那颗。
+#   `work/_ugap.py` 审计 26 次触发里补对 20 / 补错 6（77%），但实测 blk1 **−0.122（1胜6负）**
+#   ⇒ 判负，代码保留、默认关。
+BOX_GAP_U1 = env_on("STAGE2_BOX_GAP_U1", "0")
+
 # `STAGE2_BOX_PIN_DROP_UNREAD`：`box`(IC) 元件里**没读出号、靠位置补出来**的引脚桩
 # 不再写进引脚表（也不进网络），而不是给它发明一个位置号（`8`/`9`/…）。
 #
@@ -2154,19 +2169,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     # `<case>.pinindex.json`，交付文档本身保持逐字节不变。
     pin_pk: Dict[Tuple[str, int], str] = {}
     ct_by_cid: Dict[str, str] = {c["id"]: (c.get("type") or "other") for c in comps}
-    # ★ `STAGE2_BOX_ALONE_U1`（默认 **0 = 先 A/B**）：整页只有一颗 `box`、它又没读到位号时，
-    #   按惯例命名为 `U1`。动机：`10_GTcase`（datasheet 派生 10 张）里 6 张**不印位号**、
-    #   只印型号（`0065` 印的是 `LM2578A` 和脚号 1..8，见图），GT 仍按惯例叫 `U1`；
-    #   我们发兜底键 `pNNN` ⇒ 该元件配不上 GT，且它的引脚被 `PIN_DROP_UNKEYED`
-    #   **整颗丢掉**（实测 `0065`/`0059`/`0042` 的 box 引脚发 0 个），pin F1 直接爆 0
-    #   （派生 10 张里 7 张 pin F1 = 0，见 §5.262）。
-    BOX_ALONE_U1 = env_on("STAGE2_BOX_ALONE_U1", "1")
-    # ★ `STAGE2_BOX_GAP_U1`（默认 **0 = 先 A/B**）：把上面那条从「整页唯一 box」放宽到
-    #   「整页 box 数 k、读出 U 号正好 k-1 个、且这些号都落在 1..k 里」——缺的那一个号
-    #   就补给没读到号的那颗。`work/_ugap.py`（220 案、GT 当尺子）实测：条件成立 26 次，
-    #   **补对 20 / 补错 6**（含 3 次 GT 本身无名）。补对一次能救回该 IC 的全部脚与网
-    #   （§5.263 里那几个 +12~+14 的案子就是同类），所以值得单独 A/B。
-    BOX_GAP_U1 = env_on("STAGE2_BOX_GAP_U1", "0")
+    # ★ `BOX_ALONE_U1` / `BOX_GAP_U1` 的定义已上移到模块顶层（`:201` / `:207`），
+    #   这样 `work/_verify.py` 能直接读生效缺省、做「缺省漂移」检查。
     _n_box = 0
     _used_u: set = set()
     for _c0 in comps:

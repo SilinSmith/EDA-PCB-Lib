@@ -21529,3 +21529,44 @@ GT 里成员 ≥2 的网共 **775** 个，按我方（键重写后）网集合�
 缺 `PIN_NUMBER_TRUST_BIND`）。本会话唯一受影响的 `test_mono_pin_pipeline.py` 已按新语义更新：
 旧断言「OCR 关掉就一个脚都不许有」在 `STAGE2_BOX_ALONE_U1` 之后不成立，改成
 「`_assigned` 里不许有任何 OCR 文本（`number.text`/`name.text` 全空）」—— 更强也更准。
+
+## §5.269 一条命令体检（`work/_verify.py`）+ 缺省可见性 + 台账索引
+
+### §5.269.1 `work/_verify.py`：缺省漂移 / 契约 / 基线，一次跑完
+
+```
+python -X utf8 work\_verify.py            # 默认检查 u1blk1..6 + gt10 + gtcase10
+```
+
+三段：
+
+1. **缺省漂移**：导入 `stage2.assemble` / `vlm.enrich`，把本会话动过的开关的**生效值**与期望对照：
+   `BOX_ALONE_U1=True`、`BOX_GAP_U1=False`、`_PIN_NUM_RE=^\d{1,3}$`、`PIN_MERGE=False`；
+2. **契约**：8 个产物目录逐份验「脚号是整数 / 点合法 / 脚名非空 / `hyperGraph` 成员都指向
+   真实 `(comp,pin)`」；
+3. **基线均分**：`gt10=83.6432`、`gtcase10=38.0674`、`u1d10=38.8004` 三条对账。
+
+首次运行就抓到一处真问题：`BOX_ALONE_U1`/`BOX_GAP_U1` 原来定义在 `build_doc()` **函数体内**，
+外部读不到（`AttributeError`）⇒ 任何「缺省对不对」的自动检查都做不了。已把两个常量上移到
+`stage2/assemble.py:201/207` 模块顶层（函数里只读），并复验行为中性：同一案（`0065-Datasheet`、
+`--no-vlm`）改前改后 `0065-Datasheet_Pred.json` **sha256 `1eeb804280754162`、7,909 字节，逐字节相同**。
+
+最终输出：
+
+```
+== 缺省漂移 ==   4 项全 ✓
+== 契约 ==       u1blk1..6 / gt10 / gtcase10：18,718 个引脚、问题 0
+== 基线均分 ==   gt10 83.6432 / gtcase10 38.0674 / u1d10 38.8004 全 ✓
+PASS：缺省、契约、基线全部一致
+```
+
+### §5.269.2 台账索引
+
+`docs/RESULTS_INDEX.md`（自动生成，只收标题）：**260 个一节**、44.8 KB，按出现顺序列出
+所有 `##` / `###`。1.77 MB 的台账从此可以按标题扫，不必全文检索。
+
+### §5.269.3 本轮状态
+
+- HEAD 之后新增：`work/_verify.py`（体检命令）、`stage2/assemble.py`（两常量上移）、
+  `docs/RESULTS_INDEX.md`（索引）；
+- 四轴归因与天花板见 §5.268，本轮无算法改动、无分数变化。
