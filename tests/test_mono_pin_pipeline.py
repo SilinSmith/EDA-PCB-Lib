@@ -115,13 +115,23 @@ class MonoPinPipelineTests(unittest.TestCase):
         return final, assigned, index, report, reader, loader, engine
 
     def test_no_ocr_does_not_call_reader_or_load_optional_runtime(self):
-        final, _, _, report, reader, loader, engine = self.pipeline(do_ocr=False, mode="on")
+        final, assigned, _, report, reader, loader, engine = self.pipeline(do_ocr=False, mode="on")
         reader.assert_not_called()
         loader.assert_not_called()
         engine.read.assert_not_called()
         self.assertEqual(report["n_pin_name"], 0)
         self.assertEqual(report["n_pin_number"], 0)
-        self.assertFalse(any(final["pins"].values()))
+        # ★ §5.262 起「整页唯一 box 且没读到号」会按惯例命名 `U1`（`STAGE2_BOX_ALONE_U1`，
+        #   默认 1），于是这颗元件的脚**不再**被 `PIN_DROP_UNKEYED` 整颗丢掉 —— 旧断言
+        #   「一个脚都不许有」已不成立（脚名还可能来自器件库，例如 `GND`）。
+        #   真正的不变式是：**没跑 OCR 就不许有 OCR 出来的内容** —— 拿 `_assigned` 里的
+        #   原始读数当证据：每个引脚的 `number.text` / `name.text` 都必须是空的。
+        for _cid, _comp in (assigned.get("comps") or {}).items():
+            for _k, _rec in (_comp.get("pins") or {}).items():
+                for _fld in ("name", "number"):
+                    self.assertEqual(
+                        str((_rec.get(_fld) or {}).get("text") or ""), "",
+                        "OCR 关掉后 %s.%s.%s 不该有读出文本" % (_cid, _k, _fld))
 
     def test_off_mode_preserves_old_final_output_without_optional_load(self):
         final, assigned, index, _, reader, loader, engine = self.pipeline(mode="off")
