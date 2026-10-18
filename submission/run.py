@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -1402,6 +1403,137 @@ def _run(a) -> int:
              % (cid, n_fix, "；".join("%s.%s→%s" % (c, o, n) for (c, o), n in
                                      list(remap.items())[:6])))
 
+    # ★ §5.283 `FUSION_DESEG`（线段去重描 + T 型结点切分，默认 **1** = 开）：见 `_degeom_step`。
+    #   病一：同一根线被描了两遍、方向相反且不完全重合（用户 2026-06 指出的「来回线」）。
+    #   病二：A→B→C 是一条直线、B 处挂了一条支线时，我们画成 A→C 一条长线，
+    #         判分要求两端点各 ≤5px，于是 GT 的 A→B、B→C 两段**都**判错。
+    _geo_on = os.environ.get("FUSION_DESEG", "1").strip().lower() not in (
+        "", "0", "false", "off", "none")
+    _geo_dup = os.environ.get("FUSION_DESEG_DUP", "1").strip().lower() not in (
+        "", "0", "false", "off", "none")
+    _geo_split = os.environ.get("FUSION_DESEG_SPLIT", "1").strip().lower() not in (
+        "", "0", "false", "off", "none")
+    _geo_tol = float(os.environ.get("FUSION_DESEG_TOL", "4.0") or 4.0)
+    _geo_min = float(os.environ.get("FUSION_DESEG_MINLEN", "6.0") or 6.0)
+
+    def _degeom_step(cid):
+        """线段层两步清理（§5.283）：去掉「来回重描」、在真结点处把长线切开。"""
+        if not _geo_on:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            doc = json.loads(dst_j.read_text(encoding="utf-8"))
+        except Exception:                                       # noqa: BLE001
+            return
+
+        def _seg_of(raw):
+            try:
+                return [(float(raw[0]["x"]), float(raw[0]["y"])),
+                        (float(raw[1]["x"]), float(raw[1]["y"]))]
+            except (KeyError, IndexError, TypeError, ValueError):
+                return None
+
+        def _len(s):
+            return math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1])
+
+        def _unit(s):
+            L = _len(s) or 1.0
+            return (s[1][0] - s[0][0]) / L, (s[1][1] - s[0][1]) / L, L
+
+        def _proj(pt, s):
+            ux, uy, _ = _unit(s)
+            return (pt[0] - s[0][0]) * ux + (pt[1] - s[0][1]) * uy
+
+        def _perp(pt, s):
+            ux, uy, _ = _unit(s)
+            return abs(-(pt[0] - s[0][0]) * uy + (pt[1] - s[0][1]) * ux)
+
+        def _cover(a, b):
+            """b 在 a 上的覆盖率（要求 b 两端垂距都 ≤ tol）。"""
+            L = _len(a)
+            if L < 1e-6:
+                return 0.0
+            ts = []
+            for p in b:
+                if _perp(p, a) > _geo_tol:
+                    return 0.0
+                ts.append(_proj(p, a))
+            return max(0.0, min(L, max(ts)) - max(0.0, min(ts))) / L
+
+        n_dup = n_split = 0
+        for net in (doc.get("nets") or {}).values():
+            edges = net.get("edges") or {}
+            segs = [s for s in (_seg_of(v) for v in edges.values()) if s]
+            if len(segs) < 2:
+                continue
+            # 病一：来回重描 —— 方向近反向、垂距小、重叠大；保留更长的一条
+            keep = [True] * len(segs)
+            for i in range(len(segs)):
+                if not keep[i]:
+                    continue
+                ui = _unit(segs[i])
+                for j in range(i + 1, len(segs)):
+                    if not keep[j]:
+                        continue
+                    uj = _unit(segs[j])
+                    if ui[2] < _geo_min or uj[2] < _geo_min:
+                        continue
+                    if ui[0] * uj[0] + ui[1] * uj[1] > -0.87:     # 夹角 < 150°
+                        continue
+                    if max(_cover(segs[i], segs[j]), _cover(segs[j], segs[i])) < 0.5:
+                        continue
+                    if ui[2] >= uj[2]:
+                        keep[j] = False
+                    else:
+                        keep[i] = False
+                        break
+                    n_dup += 1
+            segs = [s for s, k in zip(segs, keep) if k]
+            # 病二：T 型结点 —— 别的线段端点落在本线段内部（离两端 ≥ min_len）
+            # 只认**方向不同**的端点（真支线）；同向端点多半是同一根线被切过，切它只会增 fp。
+            ends = []
+            for s in segs:
+                ux, uy, _ = _unit(s)
+                ends.append((s[0], (ux, uy)))
+                ends.append((s[1], (-ux, -uy)))
+            out = []
+            for s in segs:
+                L = _len(s)
+                if L < 2 * _geo_min + 1e-6:
+                    out.append(s)
+                    continue
+                ux, uy, _ = _unit(s)
+                cuts = set()
+                for e, (ex, ey) in ends:
+                    if abs(ux * ex + uy * ey) > 0.87:            # 与本体夹角 < 30°，不算支线
+                        continue
+                    d = _perp(e, s)
+                    if d > _geo_tol:
+                        continue
+                    t = _proj(e, s)
+                    if _geo_min <= t <= L - _geo_min:
+                        cuts.add(round(t, 3))
+                if not cuts:
+                    out.append(s)
+                    continue
+                ux, uy, _ = _unit(s)
+                seq = [0.0] + sorted(cuts) + [L]
+                for t0, t1 in zip(seq, seq[1:]):
+                    if t1 - t0 < 1e-6:
+                        continue
+                    out.append([(s[0][0] + ux * t0, s[0][1] + uy * t0),
+                                (s[0][0] + ux * t1, s[0][1] + uy * t1)])
+                n_split += len(seq) - 2
+            if len(out) == len(segs):
+                continue
+            net["edges"] = {"edge_%d" % (k + 1): [
+                {"x": round(a[0], 2), "y": round(a[1], 2)},
+                {"x": round(b[0], 2), "y": round(b[1], 2)}] for k, (a, b) in enumerate(out)}
+        if not (n_dup or n_split):
+            return
+        _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
+        _log(fp, "  %-28s 线段清理：去重描 %d、切结点 %d" % (cid, n_dup, n_split))
+
     def _pinname_step(cid, png):
         """在**已经落盘**的 `<cid>_Pred.json` 上补一层引脚名复读；失败一律不影响导出。"""
         if not _pinname_on:
@@ -1527,6 +1659,7 @@ def _run(a) -> int:
                     _pwrclip_step(cid)
                     _edgecal_step(cid)
                     _pinkey_step(cid)
+                    _degeom_step(cid)
                     continue
             except Exception as exc:                        # noqa: BLE001
                 _log(fp, "  ⚠️ %s 引脚名重读失败：%s: %s" % (cid, type(exc).__name__, exc))
@@ -1539,6 +1672,7 @@ def _run(a) -> int:
         _pwrclip_step(cid)
         _edgecal_step(cid)
         _pinkey_step(cid)
+        _degeom_step(cid)
         if _broke and not (_valread_on or _pinname_on):
             _reread_skipped.append((cid, _p))
     _log(fp, "导出 %d 份 <case>_Pred.json%s"
