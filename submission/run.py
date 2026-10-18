@@ -1403,8 +1403,59 @@ def _run(a) -> int:
              % (cid, n_fix, "；".join("%s.%s→%s" % (c, o, n) for (c, o), n in
                                      list(remap.items())[:6])))
 
-    # ★ §5.283 `FUSION_DESEG`（线段去重描 + T 型结点切分，默认 **1** = 开）：见 `_degeom_step`。
-    #   病一：同一根线被描了两遍、方向相反且不完全重合（用户 2026-06 指出的「来回线」）。
+    # ★ §5.285 `FUSION_SYM_YSHIFT`（GND/电源符号的框整体上/下移，默认 0 = 关）
+    #   病：`work/_errlist.py` 逐条对账发现，GT 的 gnd 符号框与我们差一个**恒定偏移**
+    #   （案例 1 的四个 GND：GT y 43/454/868/…，我们 57/469/882/…，恒定 +14px），
+    #   因为我们是拿「GND」这三个字母的文本框当符号框，而真正的地符号画在字的**上方**。
+    #   偏移量按 JSON y（向上为正）计：我们偏大 ⇒ 传负值把它压下去。
+    _sym_shift = float(os.environ.get("FUSION_SYM_YSHIFT", "0") or 0.0)
+
+    def _symshift_step(cid):
+        """把 gnd/v 符号的 bbox（以及它的脚点）整体平移 `FUSION_SYM_YSHIFT` px。"""
+        if abs(_sym_shift) < 0.5:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            doc = json.loads(dst_j.read_text(encoding="utf-8"))
+        except Exception:                                       # noqa: BLE001
+            return
+        comps = doc.get("components") or {}
+        pins = doc.get("pins") or {}
+        moved = []
+        for name, rec in comps.items():
+            if not isinstance(rec, dict):
+                continue
+            if str(rec.get("type") or "").lower() not in ("gnd", "v", "vcc"):
+                continue
+            b = rec.get("bbox")
+            if not isinstance(b, (list, tuple)) or len(b) < 4:
+                continue
+            try:
+                b = [float(t) for t in b[:4]]
+            except (TypeError, ValueError):
+                continue
+            b[1] += _sym_shift
+            b[3] += _sym_shift
+            rec["bbox"] = b
+            moved.append(name)
+            for pk, pr in (pins.get(name) or {}).items():
+                if not isinstance(pr, dict):
+                    continue
+                if isinstance(pr.get("y"), (int, float)):
+                    pr["y"] = float(pr["y"]) + _sym_shift
+                pt = pr.get("point")
+                if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                    try:
+                        pr["point"] = [float(pt[0]), float(pt[1]) + _sym_shift]
+                    except (TypeError, ValueError):
+                        pass
+        if not moved:
+            return
+        _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
+        _log(fp, "  %-28s 符号框平移 %.1fpx（%d 颗：%s）"
+             % (cid, _sym_shift, len(moved), "、".join(moved[:6])))
+
+
     #   病二：A→B→C 是一条直线、B 处挂了一条支线时，我们画成 A→C 一条长线，
     #         判分要求两端点各 ≤5px，于是 GT 的 A→B、B→C 两段**都**判错。
     _geo_on = os.environ.get("FUSION_DESEG", "1").strip().lower() not in (
@@ -1659,6 +1710,7 @@ def _run(a) -> int:
                     _pwrclip_step(cid)
                     _edgecal_step(cid)
                     _pinkey_step(cid)
+                    _symshift_step(cid)
                     _degeom_step(cid)
                     continue
             except Exception as exc:                        # noqa: BLE001
@@ -1672,6 +1724,7 @@ def _run(a) -> int:
         _pwrclip_step(cid)
         _edgecal_step(cid)
         _pinkey_step(cid)
+        _symshift_step(cid)
         _degeom_step(cid)
         if _broke and not (_valread_on or _pinname_on):
             _reread_skipped.append((cid, _p))
