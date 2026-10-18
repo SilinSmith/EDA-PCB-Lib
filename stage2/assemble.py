@@ -2686,6 +2686,43 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     out_nets = attach_orphan_rails(out_nets, pins)
     out_nets = merge_shared_pins(out_nets)
     _trace_dump("04.snap3", out_nets, H, case_id)
+    # ---- 引脚点吸附到导线端点（`STAGE2_PIN_SNAP` = 半径，0=关） ----
+    # 官方 10 的 136 只脚里 99 只在 5px 内、28 只在 5..20px（§5.260）：残差是**逐元件**
+    # 的整体偏移（件内 sd 0.18~0.50），全局平移/缩放都救不了（§5.260 已否证三种）。
+    # 这里改走局部证据：引脚点的正确位置应当落在自己的导线端点上。
+    _pin_snap = float(os.environ.get("STAGE2_PIN_SNAP", "0") or 0.0)
+    if _pin_snap > 0.0:
+        _eps = []
+        for _s in segs_all:
+            try:
+                if len(_s) == 2:
+                    _eps.append((float(_s[0][0]), float(_s[0][1])))
+                    _eps.append((float(_s[1][0]), float(_s[1][1])))
+                elif len(_s) == 4:
+                    _eps.append((float(_s[0]), float(_s[1])))
+                    _eps.append((float(_s[2]), float(_s[3])))
+            except (TypeError, ValueError, IndexError):
+                continue
+        _moved = _seen = 0
+        for _comp, _group in (pins or {}).items():
+            if not isinstance(_group, dict):
+                continue
+            for _pk, _pr in _group.items():
+                _pt = (_pr or {}).get("point") or {}
+                _px, _py = _pt.get("x"), _pt.get("y")
+                if _px is None or _py is None:
+                    continue
+                _seen += 1
+                _best, _bd = None, _pin_snap
+                for _ex, _ey in _eps:
+                    _dd = ((_px - _ex) ** 2 + (_py - _ey) ** 2) ** 0.5
+                    if _dd < _bd:
+                        _bd, _best = _dd, (_ex, _ey)
+                if _best is not None:
+                    _pt["x"], _pt["y"] = _best[0], _best[1]
+                    _moved += 1
+        if os.environ.get("STAGE2_PIN_SNAP_DBG"):
+            print("[dbg pin_snap] case=%s moved %d/%d r=%.1f" % (case_id, _moved, _seen, _pin_snap))
     if EDGE_SNAP > 0:
         # ★ 端点吸附放在**最后**：这时 net 的成员已经定下来，同 net 里能拿来当
         # 结点的邻居最全（离线实验就是在最终文档上做的，顺序必须一致）。

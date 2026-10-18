@@ -2109,6 +2109,112 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         net_labels.append({"text": txt, "conf": conf, "box": list(t["bbox"]),
                            "d": t["d"]})
 
+    # ---- 位号补绑（`STAGE2_DESIG_RESCUE` = 关联半径上限，0=关） ----
+    # 证据（台账 §5.270）：blk1 里 298 个没配上的有名元件中，**29.5% 的位号串
+    # 整页已经读到过**，但 92.6% 从未成为任何元件的候选（`desig_slots` 里没有它）。
+    # 所以这里不再「读」，只做**指派**：拿页面里已有、尚未被占用的位号形状文本，
+    # 按「类型前缀必须相符 + 几何距离」做一次全局一对一补绑。
+    _rescue_r = float(os.environ.get("STAGE2_DESIG_RESCUE", "0") or 0.0)
+    if _rescue_r > 0.0:
+        _ctype = {str(c.get("id")): str(c.get("type") or "") for c in components}
+        _used_canon = set()
+        _cur = {}
+        for _cid, _rec in out.items():
+            _d = _rec.get("designator") or {}
+            _ct = _ctype.get(str(_cid), "")
+            _c0 = canon_designator(str(_d.get("text") or ""), _ct)[0]
+            if _c0:
+                _used_canon.add(_c0)
+                _cur[str(_cid)] = (float(_d.get("d") or 999.0), _c0)
+        # 候选用**全部文本**（含已经被别的元件「占用」的框）：实测（§5.270 旁证）
+        # 已读到的位号串几乎都落在**邻件**的owned 集合里，只看自由文本一个候选都
+        # 拿不到（0011：456 个自由文本，最近的可读位号距离 131px）。占用只影响
+        # 候选来源，不构成约束——真正的约束是「一对一」和「不许变差」。
+        _pool = []
+        for _t in texts:
+            if _t.get("wide"):
+                continue
+            if not _t.get("bbox"):
+                continue
+            _pool.append(_t)
+        _slots = []
+        for _c in components:
+            _cid = str(_c.get("id"))
+            _cb = _c.get("bbox_img") or _c.get("bbox")
+            if not _cb:
+                continue
+            _ty = _ctype.get(_cid, "")
+            if not TYPE_PREFIX.get(_ty):
+                continue
+            if _ty in NO_DESIGNATOR:
+                # `v`（电源符号）在 `TYPE_PREFIX` 里挂着 `TP`，但它是**没有位号**的
+                # 类型；放它进来会把 `TP1` 这种串吸到电源符号上（`0019 ∅498`
+                # 实测就是这样换名的），所以这里按 NO_DESIGNATOR 挡掉。
+                continue
+            _cd = _cur.get(_cid, (None, None))[0]
+            for _t in _pool:
+                _tb = _t.get("bbox")
+                _got = _best_read(_t.get("reads") or {}, "designator",
+                                  lambda s, _ty=_ty: canon_designator(s, _ty)[0] != "")
+                if not _got:
+                    continue
+                _can, _fid = canon_designator(str(_got[1]), _ty)
+                if not _can or _can in _used_canon:
+                    continue
+                _dx = max(float(_cb[0]) - float(_tb[2]), 0.0, float(_tb[0]) - float(_cb[2]))
+                _dy = max(float(_cb[1]) - float(_tb[3]), 0.0, float(_tb[1]) - float(_cb[3]))
+                _dist = (_dx * _dx + _dy * _dy) ** 0.5
+                if _dist > _rescue_r:
+                    continue
+                # 已有位号的元件只允许「明显更近」时改绑（余量 10px），否则不动。
+                if _cd is not None and _dist + 10.0 >= _cd:
+                    continue
+                _slots.append((_dist - 12.0 * _fid - 6.0 * float(_got[2]),
+                               _can, _got[1], _got[2], list(_tb), _dist, _fid, _cid))
+        _slots.sort(key=lambda x: x[0])
+        _used_comp = set()
+        _n_rescue = 0
+        if os.environ.get("STAGE2_DESIG_DBG"):
+            _probe = []
+            for _c in components[:400]:
+                _cb = _c.get("bbox_img") or _c.get("bbox")
+                if not _cb:
+                    continue
+                _ty = _ctype.get(str(_c.get("id")), "")
+                _best = (1e9, "", "")
+                for _t in _pool:
+                    _tb = _t.get("bbox")
+                    _got = _best_read(_t.get("reads") or {}, "designator",
+                                      lambda s, _ty=_ty: canon_designator(s, _ty)[0] != "")
+                    if not _got:
+                        continue
+                    _dx = max(float(_cb[0]) - float(_tb[2]), 0.0, float(_tb[0]) - float(_cb[2]))
+                    _dy = max(float(_cb[1]) - float(_tb[3]), 0.0, float(_tb[1]) - float(_cb[3]))
+                    _dd = (_dx * _dx + _dy * _dy) ** 0.5
+                    if _dd < _best[0]:
+                        _best = (_dd, str(_got[1]), _ty)
+                if _best[0] < 1e9:
+                    _probe.append(_best)
+            _probe.sort()
+            print("[dbg rescue] free_desig_texts=%d slots=%d r=%.1f bound=%d nearest=%s"
+                  % (len(_pool), len(_slots), _rescue_r, len(_used_canon),
+                     [("%.0f" % p[0], p[1], p[2]) for p in _probe[:6]]))
+        for _s in _slots:
+            _cid = _s[7]
+            if _cid in _used_comp or _s[1] in _used_canon:
+                continue
+            _used_comp.add(_cid)
+            _used_canon.add(_s[1])
+            out[_cid]["designator"] = {"text": _s[2], "canon": _s[1], "conf": float(_s[3]),
+                                       "box": _s[4], "d": float(_s[5]), "fit": _s[6],
+                                       "box_i": -1, "type_fix": None, "rescued": True}
+            _n_rescue += 1
+            if _dbg_want(cid):
+                print("[dbg] rescue %s type=%s <- %s (canon=%s, d=%.1f)"
+                      % (_cid, _ctype.get(_cid, ""), _s[2], _s[1], _s[5]))
+        if _n_rescue and _dbg_want(cid):
+            print("[dbg] rescue total %d" % _n_rescue)
+
     return {"comps": out, "net_labels": net_labels, "desig_slots": desig_slots,
             "struct_slots": struct_slots,
             "n_texts": len(texts), "n_owned": sum(len(v) for v in owned.values()),
