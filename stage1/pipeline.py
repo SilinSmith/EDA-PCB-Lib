@@ -419,6 +419,78 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                                     own_ledger=own_ledger)
     hyps.case = case.case_id
 
+    # ---- 双尺度检测（`STAGE1_DUAL_DETECT` = 第二遍的 imgsz，0=关）----
+    # 动机（§5.280）：整条管线换到 2560 时 `pin` tp 94→97、`netLine` 385→390（框更准），
+    # 但 `component` tp 233→228（权重按 1600 训练，放大掉小目标召回），降 conf 只捞回 1 个。
+    # 所以在**同一次**推理里跑两遍：1600 保召回，2560 精化框坐标；两遍按 IoU 配对，
+    # 配对上的用 2560 的坐标，只在 2560 出现的补进来（保住召回缺口）。
+    _dual = float(os.environ.get("STAGE1_DUAL_DETECT", "2560") or 0.0)
+    _dual_fine_hi = float(os.environ.get("STAGE1_DUAL_FINE", "0.75") or 0.5)
+    _dual_new_lo = float(os.environ.get("STAGE1_DUAL_NEW", "0.35") or 0.5)
+    n_dual_fine = n_dual_new = 0
+    _dual_maxpx = float(os.environ.get("STAGE1_DUAL_MAX_PIXELS", "0") or 0.0)
+    _dual_minside = float(os.environ.get("STAGE1_DUAL_MIN_SIDE", "1400") or 0.0)
+    _h0, _w0 = float(bgr.shape[0]), float(bgr.shape[1])
+    if (_dual >= 320 and abs(_dual - float(imgsz)) > 1.0
+            and (_dual_maxpx <= 0 or _h0 * _w0 <= _dual_maxpx)
+            and max(_h0, _w0) >= _dual_minside):
+        try:
+            from stage1.detect import Detector as _Det2, to_json_box as _toj2  # noqa: F401
+            _d2 = _Det2(weights, imgsz=int(_dual), conf=conf, device=device)
+            _c2, _h2, _t2, _n2 = _d2.detect(bgr, conf=conf, use_cv=use_cv, tiler=tiler)
+            _H2 = float(bgr.shape[0])
+
+            def _iou(a, b):
+                ix0, iy0 = max(a[0], b[0]), max(a[1], b[1])
+                ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
+                if ix1 <= ix0 or iy1 <= iy0:
+                    return 0.0
+                inter = (ix1 - ix0) * (iy1 - iy0)
+                ua = ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter)
+                return inter / ua if ua > 0 else 0.0
+
+            _taken = set()
+            for _c in _c2:
+                _bb = _c.get("bbox_img")
+                if not _bb:
+                    continue
+                _best, _bj = 0.0, None
+                for _j, _o in enumerate(comps):
+                    if _j in _taken:
+                        continue
+                    _v = _iou(_bb, _o.get("bbox_img") or [0, 0, 0, 0])
+                    if _v > _best:
+                        _best, _bj = _v, _j
+                if _bj is not None and _best >= _dual_fine_hi:
+                    _taken.add(_bj)
+                    _o = comps[_bj]
+                    _o["bbox_img"] = [round(float(t), 2) for t in _bb]
+                    if _c.get("bbox_raw_img"):
+                        _o["bbox_raw_img"] = [round(float(t), 2) for t in _c["bbox_raw_img"]]
+                    _o["bbox_json"] = [round(float(t), 2) for t in _toj2(_bb, _H2)]
+                    if _c.get("center_img"):
+                        _o["center_img"] = [round(float(t), 2) for t in _c["center_img"]]
+                    _o["dual_fine"] = round(_best, 3)
+                    n_dual_fine += 1
+            # 只在第二遍出现、和第一遍配不上的框：补进来（保住 2560 掉的召回）
+            for _c in _c2:
+                _bb = _c.get("bbox_img")
+                if not _bb or any(_iou(_bb, comps[_j].get("bbox_img") or [0, 0, 0, 0]) >= _dual_new_lo
+                                  for _j in range(len(comps))):
+                    continue
+                _new = dict(_c)
+                _new["id"] = "d%04d" % n_dual_new
+                _new["source"] = "yolo_dual"
+                _new["bbox_img"] = [round(float(t), 2) for t in _bb]
+                _new["bbox_json"] = [round(float(t), 2) for t in _toj2(_bb, _H2)]
+                comps.append(_new)
+                n_dual_new += 1
+            if os.environ.get("STAGE1_DUAL_DETECT_DBG"):
+                print("[dbg dual_detect] fine %d / new %d (imgsz %d)" % (n_dual_fine, n_dual_new, int(_dual)))
+        except Exception as e:                                     # noqa: BLE001
+            traceback.print_exc()
+            errs.append(f"dual_detect: {type(e).__name__}: {e}")
+
     # 大 IC 几何补检：必须在 `extract_wires`（吃 `occlude=[c["bbox_img"] ...]`）和
     # `pintrace.trace_from_boxes`（吃 `cboxes`）**之前**加进来，这样 IC 边框会被
     # 涂掉不污染导线骨架，而且大 IC 的四条边会自己长出引脚射线。
