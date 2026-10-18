@@ -2161,12 +2161,25 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     #   **整颗丢掉**（实测 `0065`/`0059`/`0042` 的 box 引脚发 0 个），pin F1 直接爆 0
     #   （派生 10 张里 7 张 pin F1 = 0，见 §5.262）。
     BOX_ALONE_U1 = env_on("STAGE2_BOX_ALONE_U1", "1")
+    # ★ `STAGE2_BOX_GAP_U1`（默认 **0 = 先 A/B**）：把上面那条从「整页唯一 box」放宽到
+    #   「整页 box 数 k、读出 U 号正好 k-1 个、且这些号都落在 1..k 里」——缺的那一个号
+    #   就补给没读到号的那颗。`work/_ugap.py`（220 案、GT 当尺子）实测：条件成立 26 次，
+    #   **补对 20 / 补错 6**（含 3 次 GT 本身无名）。补对一次能救回该 IC 的全部脚与网
+    #   （§5.263 里那几个 +12~+14 的案子就是同类），所以值得单独 A/B。
+    BOX_GAP_U1 = env_on("STAGE2_BOX_GAP_U1", "0")
     _n_box = 0
+    _used_u: set = set()
     for _c0 in comps:
         _a0 = a.get(_c0["id"]) or {}
         _t0 = str(_a0.get("ctype_fix") or _c0.get("type") or "other").strip().lower()
-        if _t0 == "box":
-            _n_box += 1
+        if _t0 != "box":
+            continue
+        _n_box += 1
+        _d0 = _a0.get("designator") or {}
+        _k0 = str(_d0.get("canon") or _d0.get("text") or "").strip()
+        _m0 = re.fullmatch(r"U(\d+)", _k0)
+        if _m0:
+            _used_u.add(int(_m0.group(1)))
     # `tp` 闸门的台账（只在本函数内累计，退出前打印；`STAGE2_TP_LEDGER=1` 时）。
     _tp_ledger: List[dict] = []
 
@@ -2223,12 +2236,24 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             if DROP_UNKEYED:
                 continue
             _ct_here = str(info.get("ctype_fix") or c.get("type") or "other").strip().lower()
+            _gap = None
+            if BOX_GAP_U1 and _ct_here == "box" and 0 < len(_used_u) == _n_box - 1 \
+                    and _used_u <= set(range(1, _n_box + 1)):
+                _miss = sorted(set(range(1, _n_box + 1)) - _used_u)
+                if len(_miss) == 1 and ("U%d" % _miss[0]) not in components:
+                    _gap = "U%d" % _miss[0]
             if (BOX_ALONE_U1 and _ct_here == "box" and _n_box == 1
                     and "U1" not in components):
                 key = "U1"
                 _unkeyed = False
                 if os.environ.get("STAGE2_DBG_PINS"):
                     print("[boxalone] cid=%s 整页唯一 box 且无位号 → 命名 U1" % cid)
+            elif _gap:
+                key = _gap
+                _unkeyed = False
+                if os.environ.get("STAGE2_DBG_PINS"):
+                    print("[boxgap] cid=%s 兜底键 → %s（已用 U 号 %s / 共 %d 颗 box）"
+                          % (cid, _gap, sorted(_used_u), _n_box))
             else:
                 key = "p%03d" % i
                 _unkeyed = True
