@@ -68,6 +68,7 @@ SHORT = {"component": "元件", "pin": "引脚", "net_hypergraph": "网络", "ne
 #   完整证据链与读数见 `docs/RESULTS.md` §5.20 / §5.21。
 ENGINE = "protocol2"
 _ENGINE_ALIAS = {"protocol2": "protocol2", "soft": "protocol2",
+                 "protocol3": "protocol3", "qa3": "protocol3",
                  "protocol": "protocol", "legacy": "protocol",
                  "harness": "harness", "official": "harness"}
 
@@ -215,8 +216,8 @@ def main(argv=None):
     ap.add_argument("--cmp", default="", help="和基线 <名字> 比")
     ap.add_argument("--list", action="store_true", help="只打印默认 case 列表")
     ap.add_argument("--engine", default="protocol2",
-                    choices=("protocol2", "soft", "protocol", "harness",
-                             "legacy", "official"),
+                    choices=("protocol2", "soft", "protocol3", "qa3", "protocol",
+                             "harness", "legacy", "official"),
                     help="protocol2（默认，别名 soft）= 书面口径 + 官方实测标定的连通性口径"
                          "（bbox20 / ∅ 坐标匹配 / 只算 box 引脚 / tp=Σ 软 F1(Dice) / refs 字面比）；"
                          "protocol（别名 legacy）= 旧口径（tp=Σ 交集、非 box 引脚折算 `*`，"
@@ -252,6 +253,14 @@ def main(argv=None):
 
     if ENGINE == "protocol2":
         cfg = EvalConfig()                      # net_soft=True（软 Dice）、refs 字面比
+    elif ENGINE == "protocol3":
+        # 2026-11 赛题组新判分口径（QA 更新）：
+        #   ① 空间阈值 5px → 20px（元件 bbox / IC 引脚 / 导线端点共用）
+        #   ② 普通元件的 pin 不计位置分、也不按 pin 计连接（pin_box_only 默认已如此）
+        #   ③ 连接关系两级：普通元件按「整体」对齐（非 box 的脚折成 *），IC 仍按 pin
+        #   ④ GND/电源符号按「类别 + value + 几何」匹配（∅NNN 不参与键比较）
+        cfg = EvalConfig(net_soft=True, bbox_tol=20.0, pin_tol=20.0, line_tol=20.0,
+                         net_pin_collapse_nonbox=True, unkeyed_match="gt", coord_gate=20.0)
     else:
         cfg = EvalConfig(net_soft=False, net_pin_collapse_nonbox=True)
     rows = score(names, cfg)
