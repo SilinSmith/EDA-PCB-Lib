@@ -2215,6 +2215,12 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         if _n_rescue and _dbg_want(cid):
             print("[dbg] rescue total %d" % _n_rescue)
 
+    # 候选池保洁：`canon` 为空的串（`0603`/`U60` 这类封装或乱读）留着只会污染
+    # 阶段三的仲裁与诊断视图（台账 §5.283 里能看到它们混在黄框里），直接丢掉。
+    if os.environ.get("STAGE2_SLOT_CLEAN", "1") not in ("0", "off", "false"):
+        desig_slots = {k: [s for s in v if (s or {}).get("canon")]
+                       for k, v in desig_slots.items()}
+
     return {"comps": out, "net_labels": net_labels, "desig_slots": desig_slots,
             "struct_slots": struct_slots,
             "n_texts": len(texts), "n_owned": sum(len(v) for v in owned.values()),

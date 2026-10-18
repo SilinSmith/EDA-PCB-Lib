@@ -260,7 +260,8 @@ def main(argv=None):
         #   ③ 连接关系两级：普通元件按「整体」对齐（非 box 的脚折成 *），IC 仍按 pin
         #   ④ GND/电源符号按「类别 + value + 几何」匹配（∅NNN 不参与键比较）
         cfg = EvalConfig(net_soft=True, bbox_tol=20.0, pin_tol=20.0, line_tol=20.0,
-                         net_pin_collapse_nonbox=True, unkeyed_match="gt", coord_gate=20.0)
+                         net_pin_collapse_nonbox=True, unkeyed_match="gt", coord_gate=20.0,
+                         coord_center=True)
     else:
         cfg = EvalConfig(net_soft=False, net_pin_collapse_nonbox=True)
     rows = score(names, cfg)

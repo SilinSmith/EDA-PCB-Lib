@@ -114,6 +114,10 @@ class EvalConfig:
     unkeyed_match: str = 'gt'
     # 坐标匹配的可用距离（中心距，px）；超过就置 INF 不配
     coord_gate: float = 40.0
+    # 坐标匹配用**中心距**还是左上角距：2026-11 新口径（protocol3）按「几何位置」
+    # 配 GND/电源符号，而我们的符号框常比 GT 的小一圈，左上角距会被尺寸差放大
+    # （实测 44/108 个未配上的 ∅ 符号，中心距 p50 13.4 / p90 18.7px，全都够 20px 门槛）。
+    coord_center: bool = False
     # 类型不同时的代价惩罚，让匈牙利优先配同类
     coord_type_penalty: float = 1.0e4
     # pin_f1 是否只统计 box（评测 Q2「非 box 类型元器件 pin name, pin number
@@ -360,7 +364,11 @@ def assign_components(gt: dict, pred: dict, cfg: EvalConfig,
                     gb = _box((gc.get(gk) or {}).get('bbox'))
                     if pb is None or gb is None:
                         row.append(INF); continue
-                    d = math.hypot(pb[0] - gb[0], pb[1] - gb[1])
+                    if cfg.coord_center:
+                        d = math.hypot((pb[0] + pb[2]) / 2.0 - (gb[0] + gb[2]) / 2.0,
+                                       (pb[1] + pb[3]) / 2.0 - (gb[1] + gb[3]) / 2.0)
+                    else:
+                        d = math.hypot(pb[0] - gb[0], pb[1] - gb[1])
                     if bbox_ok(gb, pb, cfg) is not True and d > cfg.coord_gate:
                         row.append(INF); continue
                     row.append(d + (0.0 if pt == ctype_of(gc.get(gk))
