@@ -2784,6 +2784,60 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         if os.environ.get("STAGE2_PIN_OFFSET_DBG"):
             print("[dbg pin_offset] case=%s shifted %d comps / %d pins (r=%.1f min=%.1f)"
                   % (case_id, _ncomp, _npin, _off_r, _off_min))
+    # ---- 引脚点由**元件符号本体**重定（`STAGE2_PIN_BODY` = 腿长，0=关） ----
+    # 依据只看 GT 也成立的符号规律（§5.279，官方 10 实测）：引脚点落在元件框**外侧**
+    # 约 10px（p50=10、p90=15、87% ≤12px），且同一侧的引脚**等间距**（79% 的侧最大偏差
+    # ≤1px）。所以垂直方向改成「框边 ± 腿长」，沿轴方向用我们自己的检出值拟合等间距网格，
+    # 完全不引用我们自己画的线（§5.278 已证那比引脚点更不可靠）。
+    _body = float(os.environ.get("STAGE2_PIN_BODY", "0") or 0.0)
+    if _body > 0.0:
+        _grid = (os.environ.get("STAGE2_PIN_BODY_GRID", "1") or "1") not in ("0", "off", "false")
+        _nb = _ng = 0
+        for _cn, _grp in (pins or {}).items():
+            _bb = (components.get(_cn) or {}).get("bbox") if isinstance(components, dict) else None
+            if not _bb or not isinstance(_grp, dict) or len(_grp) < 2:
+                continue
+            try:
+                _x0, _y0, _x1, _y1 = (float(t) for t in _bb)
+            except (TypeError, ValueError):
+                continue
+            _sides = {}
+            for _pk, _pr in _grp.items():
+                _pt = (_pr or {}).get("point") or {}
+                _px, _py = _pt.get("x"), _pt.get("y")
+                if _px is None or _py is None:
+                    continue
+                _px, _py = float(_px), float(_py)
+                _cand = ((_x0 - _px, "L"), (_px - _x1, "R"), (_y0 - _py, "T"), (_py - _y1, "B"))
+                _out, _sd = max(_cand)
+                _sides.setdefault(_sd, []).append((_pk, _px, _py))
+            for _sd, _items in _sides.items():
+                _n = len(_items)
+                _along = sorted(t[2] if _sd in ("L", "R") else t[1] for t in _items)
+                _fit = None
+                if _grid and _n >= 2:
+                    _step = (_along[-1] - _along[0]) / (_n - 1)
+                    if _step > 3.0:
+                        _fit = [_along[0] + i * _step for i in range(_n)]
+                _bypos = dict(zip(_along, _fit or _along))
+                for _pk, _px, _py in _items:
+                    _a = _py if _sd in ("L", "R") else _px
+                    _na = _bypos.get(_a, _a)
+                    if _sd == "L":
+                        _px, _py = _x0 - _body, _na
+                    elif _sd == "R":
+                        _px, _py = _x1 + _body, _na
+                    elif _sd == "T":
+                        _px, _py = _na, _y0 - _body
+                    else:
+                        _px, _py = _na, _y1 + _body
+                    _pt = _grp[_pk].setdefault("point", {})
+                    _pt["x"], _pt["y"] = _px, _py
+                    _nb += 1
+                    if _fit:
+                        _ng += 1
+        if os.environ.get("STAGE2_PIN_BODY_DBG"):
+            print("[dbg pin_body] case=%s placed %d (grid %d) leg=%.1f" % (case_id, _nb, _ng, _body))
     # ---- 引脚点**沿出线法线**吸附（`STAGE2_PIN_SNAP_N` = 半径，0=关） ----
     # 逐脚就近吸和逐件整平移都判负（§5.276.3、§5.277）：前者把对的点拖到错的线上，
     # 后者把整件本来对的脚一起拖坏。改走「多候选 + 几何上下文」：候选被限制在**该脚
