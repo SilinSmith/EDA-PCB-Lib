@@ -419,6 +419,30 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                                     own_ledger=own_ledger)
     hyps.case = case.case_id
 
+    # ---- 空白框过滤（`STAGE1_BLANK_FILTER` = 墨迹下限，0=关）----
+    # 用户观察（§5.283）：白底上会「扫出电容」。官方 10 的 255 个预测元件里有 37 个
+    # 框内墨迹 <2%（8×20 的电阻框整块空白）——这些是纯 fp，删掉只赚不亏。
+    _blank = float(os.environ.get("STAGE1_BLANK_FILTER", "0") or 0.0)
+    if _blank > 0.0 and comps:
+        _gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) if bgr.ndim == 3 else bgr
+        _kept, _nb = [], 0
+        for _c in comps:
+            _b = _c.get("bbox_img") or []
+            if len(_b) < 4:
+                _kept.append(_c)
+                continue
+            _x0, _y0, _x1, _y1 = [int(round(float(t))) for t in _b[:4]]
+            _crop = _gray[max(0, _y0):_y1, max(0, _x0):_x1]
+            _ink = float((_crop < 200).mean()) if _crop.size else 1.0
+            if _ink < _blank:
+                _nb += 1
+                continue
+            _kept.append(_c)
+        if _nb:
+            print("[stage1] blank filter 丢 %d 个（墨迹<%.3f），留 %d"
+                  % (_nb, _blank, len(_kept)), flush=True)
+        comps = _kept
+
     # ---- 双尺度检测（`STAGE1_DUAL_DETECT` = 第二遍的 imgsz，0=关）----
     # 动机（§5.280）：整条管线换到 2560 时 `pin` tp 94→97、`netLine` 385→390（框更准），
     # 但 `component` tp 233→228（权重按 1600 训练，放大掉小目标召回），降 conf 只捞回 1 个。
