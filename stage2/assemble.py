@@ -2723,6 +2723,129 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                     _moved += 1
         if os.environ.get("STAGE2_PIN_SNAP_DBG"):
             print("[dbg pin_snap] case=%s moved %d/%d r=%.1f" % (case_id, _moved, _seen, _pin_snap))
+    # ---- 引脚点**逐元件整平移**（`STAGE2_PIN_OFFSET` = 候选半径，0=关） ----
+    # 证据（§5.260）：官方 10 的引脚点残差**逐元件近似一个平移**（件内 sd 0.18~0.50、
+    # 逐件均值 ±4~9px），全局平移/缩放/沿边外推全部否证。所以不逐脚就近吸（§5.276.3
+    # 判负：会把对的点拖到错的线上），而是**每只脚先记账一组带权候选位移，再按
+    # 「同一元件的脚共用一个平移」投票**，只有多只脚指向同一位移时才整体平移该元件。
+    _off_r = float(os.environ.get("STAGE2_PIN_OFFSET", "0") or 0.0)
+    _off_min = float(os.environ.get("STAGE2_PIN_OFFSET_MIN", "2") or 2.0)
+    if _off_r > 0.0:
+        _deg = {}
+        for _s in segs_all:
+            try:
+                _qs = ([(float(_s[0][0]), float(_s[0][1]))] if len(_s) == 2 else
+                       [(float(_s[0]), float(_s[1])), (float(_s[2]), float(_s[3]))])
+            except (TypeError, ValueError, IndexError):
+                continue
+            for _q in _qs:
+                _k = (round(_q[0]), round(_q[1]))
+                _deg[_k] = _deg.get(_k, 0) + 1
+        _ncomp = _npin = 0
+        for _comp, _group in (pins or {}).items():
+            if not isinstance(_group, dict):
+                continue
+            _votes = {}
+            for _pk, _pr in _group.items():
+                _pt = (_pr or {}).get("point") or {}
+                _px, _py = _pt.get("x"), _pt.get("y")
+                if _px is None or _py is None:
+                    continue
+                _npin += 1
+                for (_ex, _ey), _d in _deg.items():
+                    _dx, _dy = _ex - _px, _ey - _py
+                    if _dx * _dx + _dy * _dy > _off_r * _off_r:
+                        continue
+                    # 1.5px 分箱投票；**度数=1 的端点加权**（那才是「线头」，十字/丁字
+                    # 结点度数 2~3，多半是别的网络的拐点，不该当本脚的目标）。
+                    _key = (round(_dx / 1.5), round(_dy / 1.5))
+                    _w = 1.0 if _d <= 1 else 0.35
+                    _cur = _votes.get(_key) or (0.0, 0.0)
+                    _votes[_key] = (_cur[0] + _w, _cur[1] + 1.0)
+            if not _votes:
+                continue
+            _best = max(_votes.items(),
+                        key=lambda kv: (kv[1][0], -abs(kv[0][0]) - abs(kv[0][1])))
+            if _best[1][0] < _off_min:
+                continue
+            _dx, _dy = _best[0][0] * 1.5, _best[0][1] * 1.5
+            if abs(_dx) < 0.75 and abs(_dy) < 0.75:
+                continue
+            for _pk, _pr in _group.items():
+                _pt = (_pr or {}).get("point") or {}
+                if _pt.get("x") is None or _pt.get("y") is None:
+                    continue
+                _pt["x"] = float(_pt["x"]) + _dx
+                _pt["y"] = float(_pt["y"]) + _dy
+            _ncomp += 1
+            if os.environ.get("STAGE2_PIN_OFFSET_DBG"):
+                print("[dbg pin_offset] case=%s comp=%s shift=(%+.1f,%+.1f) votes=%.2f pins=%d"
+                      % (case_id, _comp, _dx, _dy, _best[1][0], len(_group)))
+        if os.environ.get("STAGE2_PIN_OFFSET_DBG"):
+            print("[dbg pin_offset] case=%s shifted %d comps / %d pins (r=%.1f min=%.1f)"
+                  % (case_id, _ncomp, _npin, _off_r, _off_min))
+    # ---- 引脚点**沿出线法线**吸附（`STAGE2_PIN_SNAP_N` = 半径，0=关） ----
+    # 逐脚就近吸和逐件整平移都判负（§5.276.3、§5.277）：前者把对的点拖到错的线上，
+    # 后者把整件本来对的脚一起拖坏。改走「多候选 + 几何上下文」：候选被限制在**该脚
+    # 出线法线方向**的窄带里（引脚只会沿自己那条腿的走向接出去），且当前点已经贴着
+    # 端点（<2.5px）就不动——那 99/136 本来就在 5px 内。
+    _snap_n = float(os.environ.get("STAGE2_PIN_SNAP_N", "0") or 0.0)
+    if _snap_n > 0.0:
+        _deg2 = {}
+        for _s in segs_all:
+            try:
+                _qs = ([(float(_s[0][0]), float(_s[0][1]))] if len(_s) == 2 else
+                       [(float(_s[0]), float(_s[1])), (float(_s[2]), float(_s[3]))])
+            except (TypeError, ValueError, IndexError):
+                continue
+            for _q in _qs:
+                _k = (round(_q[0]), round(_q[1]))
+                _deg2[_k] = _deg2.get(_k, 0) + 1
+        _moved2 = _seen2 = 0
+        for _comp, _group in (pins or {}).items():
+            if not isinstance(_group, dict) or not _group:
+                continue
+            _xs, _ys = [], []
+            for _pr in _group.values():
+                _pt = (_pr or {}).get("point") or {}
+                if _pt.get("x") is not None and _pt.get("y") is not None:
+                    _xs.append(float(_pt["x"]))
+                    _ys.append(float(_pt["y"]))
+            if len(_xs) < 2:
+                continue
+            _bx0, _bx1, _by0, _by1 = min(_xs), max(_xs), min(_ys), max(_ys)
+            for _pk, _pr in _group.items():
+                _pt = (_pr or {}).get("point") or {}
+                _px, _py = _pt.get("x"), _pt.get("y")
+                if _px is None or _py is None:
+                    continue
+                _seen2 += 1
+                _px, _py = float(_px), float(_py)
+                # 最近的一条边 + 向外法线（y 向下：上边法线 (0,-1)、左边 (-1,0)）
+                _sides = ((_px - _bx0, -1.0, 0.0), (_bx1 - _px, 1.0, 0.0),
+                          (_py - _by0, 0.0, -1.0), (_by1 - _py, 0.0, 1.0))
+                _smin, _nx, _ny = min(_sides, key=lambda t: t[0])
+                _best, _bd = None, _snap_n
+                for (_ex, _ey), _d in _deg2.items():
+                    _dx, _dy = _ex - _px, _ey - _py
+                    _dd = (_dx * _dx + _dy * _dy) ** 0.5
+                    if _dd > _bd or _dd < 1.5:
+                        continue
+                    # 候选必须落在法线窄带内（引脚只会沿自己那条腿的走向接出去）。
+                    # **不判内外侧**：实测引脚点有时落在导线端点外侧 12px（C160/U1 都是），
+                    # 方向不可靠；可靠的是「在同一条腿的轴线上」。
+                    if _nx:
+                        if abs(_dy) > 0.35 * _dd:
+                            continue
+                    else:
+                        if abs(_dx) > 0.35 * _dd:
+                            continue
+                    _bd, _best = _dd, (_ex, _ey)
+                if _best is not None:
+                    _pt["x"], _pt["y"] = _best[0], _best[1]
+                    _moved2 += 1
+        if os.environ.get("STAGE2_PIN_SNAP_DBG"):
+            print("[dbg pin_snap_n] case=%s moved %d/%d r=%.1f" % (case_id, _moved2, _seen2, _snap_n))
     if EDGE_SNAP > 0:
         # ★ 端点吸附放在**最后**：这时 net 的成员已经定下来，同 net 里能拿来当
         # 结点的邻居最全（离线实验就是在最终文档上做的，顺序必须一致）。
