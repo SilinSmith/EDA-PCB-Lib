@@ -912,7 +912,8 @@ def _run(a) -> int:
     _log(fp, "=== 阶段一：视觉（YOLO + CV + 骨架） %d 张 ===" % len(cases))
     t0 = time.time()
     r1 = run_cases(cases, s1_dir, workers=a.workers, weights=DEFAULT_WEIGHTS,
-                   imgsz=a.imgsz, conf=0.25, device=a.device,
+                   imgsz=a.imgsz, conf=float(os.environ.get("SUBMISSION_CONF", "0.25") or 0.25),
+                   device=a.device,
                    use_cv=True, do_wires=not a.no_wires,
                    tiler=_tiler(a))
     ok1 = {r["case"] for r in r1 if r["ok"]}
