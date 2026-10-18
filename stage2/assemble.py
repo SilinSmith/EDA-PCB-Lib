@@ -93,6 +93,12 @@ DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "0")
 #    指向「没有引脚表」的元件的引用 —— 两者要么一起留、要么一起剪。
 # 离线代理脚本：`work/_unkeyed_proxy.py`（V0 原样 / V1 连元件一起丢 / V2 只丢引脚）。
 PIN_DROP_UNKEYED = env_on("STAGE2_PIN_DROP_UNKEYED", "1")
+# ★ 「整页位号都读不出」时不要连引脚一起丢（`STAGE2_KEEP_UNKEYED_IF_NO_DESIG`，默认 0）。
+#   池子 82/200 个案的位号只有 5–8px（`0024` 印的是 7px 蓝字 `K7`），OCR 读不出来 ⇒
+#   位号列空 ⇒ 兜底键 ⇒ `PIN_DROP_UNKEYED` 把整页引脚清零：`0024` 29 颗元件最后只剩
+#   **1 个引脚、1 条网**（GT 27 颗 / 38 条网），引脚轴与两个网轴全归零。本开关在
+#   「整页位号数 ≤ max(1, 10%×元件数)」时保留兜底键元件的引脚，让几何轴还能得分。
+KEEP_UNKEYED_IF_NO_DESIG = env_on("STAGE2_KEEP_UNKEYED_IF_NO_DESIG", "0")
 
 # ★★ 「被洗白的兜底键」也认回无名元件（`STAGE2_PIN_DROP_LAUNDERED`，默认 1）。
 #
@@ -2204,6 +2210,15 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         from stage2 import libpins as _libpins
         _LIB_CTX = _libpins.new_ctx()
 
+    _KEEP_UNKEYED = False
+    if KEEP_UNKEYED_IF_NO_DESIG and len(comps) >= 3:
+        _n_des = 0
+        for _c in comps:
+            _dd = (a.get(_c["id"]) or {}).get("designator") or {}
+            if _dd.get("canon") or _dd.get("text"):
+                _n_des += 1
+        _KEEP_UNKEYED = _n_des <= max(1, int(0.10 * len(comps)))
+
     for i, c in enumerate(comps):
         cid = c["id"]
         info = a.get(cid) or {}
@@ -2315,7 +2330,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                            "bbox": [round(float(x), 2) for x in bbox]}
 
         pts = st1_pins.get(cid) or []
-        if _unkeyed and PIN_DROP_UNKEYED:
+        if _unkeyed and PIN_DROP_UNKEYED and not _KEEP_UNKEYED:
             # 兜底键元件的引脚一个都不发（见文件顶 `PIN_DROP_UNKEYED` 的长注释）。
             continue
         if not pts:
