@@ -314,7 +314,7 @@ RETRY_SCALE = float(os.environ.get("VLM_DESIG_RETRY_SCALE", "3.0"))
 # 但同一批里混着 model 把**型号**当位号读的情况（0052 的 U1 -> SLM6550、
 # 0016 的 U6 -> J2、0014 的 U14 -> U12）：一次错改名，整颗元件的 pin/net 全丢。
 # 规则：旧键是兜底键、或新旧前缀相同，才允许改；其余一律不动。
-GUARD = os.environ.get("VLM_DESIG_GUARD", "0").strip().lower() not in (
+GUARD = os.environ.get("VLM_DESIG_GUARD", "1").strip().lower() not in (
     "", "0", "false", "off", "none")
 _FB_RE = re.compile(r"^[pP]\d{3,4}$")
 _PFX_RE = re.compile(r"^([A-Za-z]+)")
