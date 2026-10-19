@@ -22686,3 +22686,27 @@ python -X utf8 work\_runpool.py --tag pvf --blocks 1-6 --vlm
 1. 位号轴剩下的空间基本上是「**这一页根本没把这些位号读出来**」（41.3%），而不是「读出来了没绑对」（槽内可选未选 = 0，只在别处 10.3% 里还有一半是 GT 与图不一致）。§5.295 已证 53/185 页的 GT 位号在图上一个都对不上（0024：图上印 `K0..K15`、GT 写 `U1..U16`），这批任何识别器都救不了。
 2. 因此**不做**绑定重排、不做争用仲裁、不做序列补号：三条确定性修补的上界加起来 ≈10 个点，且其中一半被 GT 不一致吃掉。要动就动「位号串的可读率」本身——目前唯一被证明有效的工具是 VLM（无读页面 45% 读对，整池 +1.81，§5.297）。
 3. 工具口径教训：`stage2.text.TextEngine.read()` 返回的是**碎片级**读数，每条带 5 个角色（designator/value/pin_name/pin_number/net_label），「取第一个非空角色」常拿到单字符（`('V',0.94)` 这种）；测可读率必须走 `_assigned` 的合并候选池，否则会得到「读对率 10%」这种假数（本轮一度据此误判，已由 `_slotcov.py` 纠正）。
+
+## §5.303 真实域微调 textrec：位号完全正确率 0.5519 → 0.9286（留出 8 页）
+
+§5.302 把位号轴剩余空间定位到「**这一页根本没把这些位号读出来**（41.3%）」之后，按用户选择（m01629）直接改 stage1 的文字模型。本轮做的是**最小、可回退**的一步：用与 200 池零重叠的真实语料微调现有 CRNN。
+
+### 5.303.1 语料与切分
+- 真实语料：`Dataset300` 的 32 个 case（= `manifest.jsonl` 里 `split=real`）。与 200 池零重叠已核（`work/_manifestpeek.py`）。
+- 按 case 三切：`cases[::4]` → holdout 8 页；其余按 `[::4]` → val 6 页；剩 18 页 → train。产出 `textrec/data/manifest_ft3.jsonl`（real 3303 / val 1441 条）与 `textrec/data/manifest_ho.jsonl`（holdout 1898 条，训练绝不碰）。
+- 只喂真实域（不掺合成），从 `textrec/runs/official_pool/best.pt`（第 59 轮，合成域 val_exact 0.8314）续训：`--epochs 71 --lr 1e-4 --batch 64`，12 轮，16 s/轮。字表沿用 checkpoint 自带（71 chars + blank = 72 类）。
+
+### 5.303.2 留出 8 页的读数（`textrec.eval_real --manifest textrec/data/manifest_ho.jsonl`）
+| 量 | 原 ckpt | 微调 `runs/ft3/best.pt` |
+|---|---:|---:|
+| 位号 designator CER（n=154） | 0.2585 | **0.0362** |
+| 位号 designator 完全正确率 | 0.5519（85/154） | **0.9286（143/154）** |
+| ALL 完全正确率（n=1898） | 0.3498 | **0.6807** |
+- 与同图其它文本框的重叠度分桶（重叠=上图里位号挨着别的字）：clean 0.6195→0.9204、mild 0.3333→0.9394、strong 0.5000→**1.0000**。⇒ 提升恰好落在「位号与邻近文字互相包含」这个此前被判为不可分的桶里，说明原模型缺的是**真实位号域的字体/渲染统计**，不是几何。
+- 微调过程内部 val（6 页）最好 CER 0.1172；设计器角色 exact 0.9151。
+
+### 5.303.3 边界与下一步
+1. 8 页 holdout 与训练 18 页来自同一批 Dataset300（同一批 Altium 导出风格）⇒ 0.93 是**同域留出**估计，不代表官方 10GT/200 池的分布。
+2. 决定性判据仍是端到端：`STAGE2_CKPT` 已接线（`eda-pcb/assets.py:45 CRNN_ENV = "STAGE2_CKPT"`，单案冒烟确认 `识别器 TextEngine(ckpt=...ft3/best.pt ...)`）。待跑 `_runpool.py --tag pft --blocks 1-6`（`--env "STAGE2_CKPT=<abs>"`）与 `p3pb` 对照，写 §5.304。
+3. 若端到端成立，下一处损耗不再是位号串本身，而是 §5.302 里「29% 的未读位号有候选框却没成词」——那要动 stage1 的**成词/合并**，属于另一条链。
+
