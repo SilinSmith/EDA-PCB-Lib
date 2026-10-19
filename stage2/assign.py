@@ -1025,6 +1025,9 @@ def _score(fit: float, conf: float, d: float, inside_flag: bool,
         - dist_w * min(d, dist_clamp) + (0.15 if inside_flag else 0.0)
 
 
+_BORROW_PREF = 0.0 if (os.environ.get("STAGE2_NO_BORROW") or "").strip() not in ("", "0") else 0.85
+
+
 def _best_read(reads: Dict[str, Tuple[str, float]], role: str,
                fit) -> Optional[Tuple[str, float, float]]:
     """在 5 种读法里取该角色适配度最高的一次。也允许串角色借读
@@ -1036,7 +1039,7 @@ def _best_read(reads: Dict[str, Tuple[str, float]], role: str,
         f = fit(txt)
         if f <= 0:
             continue
-        pref = 1.0 if r == role else 0.85
+        pref = 1.0 if r == role else _BORROW_PREF
         s = f * pref * (0.3 + 0.7 * max(0.0, min(1.0, conf)))
         if best is None or s > best[0]:
             best = (s, txt, float(conf), f)

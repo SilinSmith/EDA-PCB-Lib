@@ -442,7 +442,7 @@ class TextEngine:
         if self._tried2:
             return self._rec2
         self._tried2 = True
-        p = (os.environ.get("STAGE2_CKPT_DESIG") or "").strip()
+        p = (os.environ.get("STAGE2_CKPT_ROLES_CKPT") or os.environ.get("STAGE2_CKPT_DESIG") or "").strip()
         if not p or not Path(p).is_file():
             return None
         try:
@@ -488,11 +488,12 @@ class TextEngine:
                     items.append((cb, r))
                 keys.append((i, r))
         rec2 = self.recognizer2()
-        if rec2 is None or not any(r == "designator" for _i, r in keys):
+        frozen = set(t.strip() for t in (os.environ.get("STAGE2_CKPT_ROLES") or "designator").split(",") if t.strip())
+        if rec2 is None or not any(r in frozen for _i, r in keys):
             passes = [(rec, items, keys)]
         else:
-            sel = [k for k in range(len(items)) if keys[k][1] == "designator"]
-            oth = [k for k in range(len(items)) if keys[k][1] != "designator"]
+            sel = [k for k in range(len(items)) if keys[k][1] in frozen]
+            oth = [k for k in range(len(items)) if keys[k][1] not in frozen]
             passes = [(rec2, [items[k] for k in sel], [keys[k] for k in sel]),
                       (rec, [items[k] for k in oth], [keys[k] for k in oth])]
         for rr, its, kys in passes:
