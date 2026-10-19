@@ -403,6 +403,8 @@ class TextEngine:
         self.pad_frac_y = float(pad_frac_y)
         self._rec = None
         self._tried = False
+        self._rec2 = None
+        self._tried2 = False
         self.note = ""
 
     # ------------------------------------------------------------------
@@ -433,6 +435,22 @@ class TextEngine:
             if not self.allow_missing:
                 raise
         return self._rec
+
+    def recognizer2(self):
+        """位号专用识别器（`STAGE2_CKPT_DESIG`）。用途：只换数字/名字的权重时把位号
+        读数钉在旧权重上，观察「识别增益能否变现而不洗牌键」。未设置时返回 None。"""
+        if self._tried2:
+            return self._rec2
+        self._tried2 = True
+        p = (os.environ.get("STAGE2_CKPT_DESIG") or "").strip()
+        if not p or not Path(p).is_file():
+            return None
+        try:
+            from textrec.infer import Recognizer
+            self._rec2 = Recognizer.load(Path(p), device=self.device)
+        except Exception:                                        # noqa: BLE001
+            self._rec2 = None
+        return self._rec2
 
     # ------------------------------------------------------------------
     def read(self, bgr: np.ndarray, boxes: Sequence[Box],
@@ -469,11 +487,20 @@ class TextEngine:
                 else:
                     items.append((cb, r))
                 keys.append((i, r))
-        for s in range(0, len(items), self.chunk):
-            part = items[s:s + self.chunk]
-            got = rec.read_many(gray, part)
-            for (i, r), (txt, conf) in zip(keys[s:s + self.chunk], got):
-                reads[i][r] = (txt, float(conf))
+        rec2 = self.recognizer2()
+        if rec2 is None or not any(r == "designator" for _i, r in keys):
+            passes = [(rec, items, keys)]
+        else:
+            sel = [k for k in range(len(items)) if keys[k][1] == "designator"]
+            oth = [k for k in range(len(items)) if keys[k][1] != "designator"]
+            passes = [(rec2, [items[k] for k in sel], [keys[k] for k in sel]),
+                      (rec, [items[k] for k in oth], [keys[k] for k in oth])]
+        for rr, its, kys in passes:
+            for s in range(0, len(its), self.chunk):
+                part = its[s:s + self.chunk]
+                got = rr.read_many(gray, part)
+                for (i, r), (txt, conf) in zip(kys[s:s + self.chunk], got):
+                    reads[i][r] = (txt, float(conf))
         return [{"bbox": boxes[i], "reads": reads[i],
                  **({"cfrac": colored_frac(bgr, boxes[i])} if TEXT_INK else {})}
                 for i in range(len(boxes))]
