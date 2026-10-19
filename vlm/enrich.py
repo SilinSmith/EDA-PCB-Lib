@@ -298,6 +298,52 @@ def read_designator(bgr, ib, opts, stat, ctype=""):
     return None
 
 
+# ---- 定向回问（agenda -> 回问）：同一个元件的位号，换窗口再问一次 -------------
+# 为什么需要：`read_designator` 只有「主体框外扩 margin」一个窗口，密排页上这个窗口
+# 会把**邻居**的位号一起框进来，模型于是回邻居的名字 —— 下游 `claim` 里出现
+# 「多颗元件读出同一个位号」，现行策略是**整组放弃**（`enrich_one` 的 `solo`）。
+# 放弃等于确定丢分：`pNNN` 键永远配不上 GT。定向回问把这一组收敛成不同读数。
+RETRY = os.environ.get("VLM_DESIG_RETRY", "0").strip().lower() not in (
+    "", "0", "false", "off", "none")
+RETRY_MAX = int(os.environ.get("VLM_DESIG_RETRY_MAX", "12"))
+RETRY_SCALE = float(os.environ.get("VLM_DESIG_RETRY_SCALE", "3.0"))
+# 四个窗口：紧贴 / 上方带 / 左侧带 / 右侧带。位号在原理图里只可能印在这几处，
+# 且「上方带」与「左侧带」是最常见的两种；紧贴那一个用来兜住「刚好在外扩内」的。
+RETRY_WINS = (
+    (-8, -8, 8, 8),
+    (-10, -52, 10, 6),
+    (-52, -10, 6, 10),
+    (-6, -10, 52, 10),
+)
+
+
+def read_designator_win(bgr, win, opts, stat, ctype=""):
+    """按**显式窗口**读一次位号（定向回问专用）。窗口是图像坐标 (x0, y0, x1, y1)。"""
+    if bgr is None or not win:
+        return None
+    h, w = bgr.shape[:2]
+    try:
+        x0, y0, x1, y1 = [float(v) for v in win]
+    except Exception:                                    # noqa: BLE001
+        return None
+    x0 = max(0, int(x0)); y0 = max(0, int(y0))
+    x1 = min(w, int(x1)); y1 = min(h, int(y1))
+    if x1 - x0 < 6 or y1 - y0 < 6:
+        return None
+    crop = bgr[y0:y1, x0:x1]
+    if crop.size and RETRY_SCALE > 1.001:
+        crop = cv2.resize(crop, (max(8, int(crop.shape[1] * RETRY_SCALE)),
+                                 max(8, int(crop.shape[0] * RETRY_SCALE))),
+                          interpolation=cv2.INTER_CUBIC)
+    prompt = DESIG_PROMPT_PASSIVE if ctype in PASSIVE_TYPES else DESIG_PROMPT
+    txt, _dt = client.ask(crop, prompt, model=opts["model"])
+    stat["desig"] = stat.get("desig", 0) + 1
+    stat["desig_retry"] = stat.get("desig_retry", 0) + 1
+    lines = (txt or "").strip().splitlines()
+    t = re.sub(r"[^0-9A-Za-z?]", "", lines[0]) if lines else ""
+    return t if t and DESIG_RE.match(t) else None
+
+
 def read_value(bgr, ib, opts, stat):
     """读分立元件的「值」。返回 (位号, 值) 或 (None, None)。
 
@@ -559,6 +605,7 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
         no_desig = frozenset({"gnd", "v", "net_input", "net_output",
                               "net_short", "net_bidirection", "net_passive"})
         reads = {}
+        ibs = {}
         for key, cv_ in comps.items():
             ct = str(cv_.get("type") or "").lower()
             if ct in no_desig:
@@ -576,6 +623,7 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
             if not bb:
                 continue
             ib = (bb[0], H - bb[3], bb[2], H - bb[1])       # y 向上 -> 图像坐标
+            ibs[key] = ib
             got = read_designator(bgr, ib, opts, stat, ct)
             if got:
                 reads[key] = got
@@ -587,6 +635,49 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
         for k, g in reads.items():
             claims.setdefault(g, []).append(k)
         solo = {g: ks[0] for g, ks in claims.items() if len(ks) == 1 and ks[0] != g}
+        # ---- 定向回问：把「读出同一个位号」的那几颗换窗口重问 -----------------
+        # 现行做法是整组放弃（下面 `solo` 已经把它们排除）。它们全是 `pNNN`/错键，
+        # 放弃 = 确定丢分；重问一次只要能把这一组**拆开**就是净赚。
+        if RETRY:
+            _dup = [k for ks in claims.values() if len(ks) > 1 for k in ks]
+            _amb = [k for k in _dup if k in ibs][:RETRY_MAX]
+            if _amb:
+                from collections import Counter as _C
+                _cand = {}
+                for k in _amb:
+                    x0, y0, x1, y1 = ibs[k]
+                    ct_k = str((comps.get(k) or {}).get("type") or "").lower()
+                    got = []
+                    for dx0, dy0, dx1, dy1 in RETRY_WINS:
+                        g = read_designator_win(
+                            bgr, (x0 + dx0, y0 + dy0, x1 + dx1, y1 + dy1),
+                            opts, stat, ct_k)
+                        if g:
+                            got.append(g)
+                    if got:
+                        _cand[k] = got
+                _taken = {g for g, ks in claims.items() if len(ks) == 1 and ks[0] == g}
+                _pick = {}
+                for k, gs in _cand.items():
+                    for g, _n in _C(gs).most_common():
+                        if g in _taken or g in _pick.values():
+                            continue
+                        if g in comps and reads.get(g) == g:
+                            continue          # 那个键被自我确认的元件占着，别抢
+                        _pick[k] = g
+                        break
+                if _pick:
+                    stat["desig_retry_set"] = stat.get("desig_retry_set", 0) + len(_pick)
+                    for k, g in _pick.items():
+                        reads[k] = g
+                    claims = {}
+                    for k, g in reads.items():
+                        claims.setdefault(g, []).append(k)
+                    solo = {g: ks[0] for g, ks in claims.items()
+                            if len(ks) == 1 and ks[0] != g}
+                    if os.environ.get("VLM_DESIG_DBG"):
+                        print("[desig retry] case=%s amb=%d picked=%d"
+                              % (pred.get("case"), len(_amb), len(_pick)), flush=True)
         renames = {}
         # 第一轮：目标键本来就空着的，直接改。
         for g, old in sorted(solo.items()):
