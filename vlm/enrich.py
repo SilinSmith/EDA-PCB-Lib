@@ -309,6 +309,26 @@ RETRY_MAX = int(os.environ.get("VLM_DESIG_RETRY_MAX", "12"))
 RETRY_SCALE = float(os.environ.get("VLM_DESIG_RETRY_SCALE", "3.0"))
 # 四个窗口：紧贴 / 上方带 / 左侧带 / 右侧带。位号在原理图里只可能印在这几处，
 # 且「上方带」与「左侧带」是最常见的两种；紧贴那一个用来兜住「刚好在外扩内」的。
+# 改名的**准入**（`VLM_DESIG_GUARD`）：VLM 读到的新名字不总比旧名字好。
+# 68 案上按 bbox 对齐的 476 次改名里，价值主要来自「兜底键 pNNN -> 真位号」，
+# 但同一批里混着 model 把**型号**当位号读的情况（0052 的 U1 -> SLM6550、
+# 0016 的 U6 -> J2、0014 的 U14 -> U12）：一次错改名，整颗元件的 pin/net 全丢。
+# 规则：旧键是兜底键、或新旧前缀相同，才允许改；其余一律不动。
+GUARD = os.environ.get("VLM_DESIG_GUARD", "0").strip().lower() not in (
+    "", "0", "false", "off", "none")
+_FB_RE = re.compile(r"^[pP]\d{3,4}$")
+_PFX_RE = re.compile(r"^([A-Za-z]+)")
+
+
+def _is_fallback_key(k):
+    return bool(_FB_RE.match(str(k)))
+
+
+def _key_prefix(k):
+    m = _PFX_RE.match(str(k))
+    return m.group(1).upper() if m else ""
+
+
 RETRY_WINS = (
     (-8, -8, 8, 8),
     (-10, -52, 10, 6),
@@ -678,6 +698,13 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
                     if os.environ.get("VLM_DESIG_DBG"):
                         print("[desig retry] case=%s amb=%d picked=%d"
                               % (pred.get("case"), len(_amb), len(_pick)), flush=True)
+        if GUARD and solo:
+            _kept = {g: k for g, k in solo.items()
+                     if _is_fallback_key(k) or _key_prefix(g) == _key_prefix(k)}
+            if os.environ.get("VLM_DESIG_DBG"):
+                print("[desig guard] case=%s solo=%d kept=%d"
+                      % (pred.get("case"), len(solo), len(_kept)), flush=True)
+            solo = _kept
         renames = {}
         # 第一轮：目标键本来就空着的，直接改。
         for g, old in sorted(solo.items()):
