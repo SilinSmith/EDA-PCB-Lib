@@ -647,6 +647,12 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
             got = read_designator(bgr, ib, opts, stat, ct)
             if got:
                 reads[key] = got
+        _rlog = os.environ.get("VLM_DESIG_READLOG")
+        if _rlog and reads:
+            with open(_rlog, "a", encoding="utf-8") as _f:
+                for _k, _g in sorted(reads.items()):
+                    _f.write('{"stage": "read", "case": "%s", "comp": "%s", "text": "%s"}\n'
+                             % (pred.get("case"), _k, _g))
         # 冲突消解：先只认「无人争抢」的读数。多颗 IC 读出同一个位号，说明至少
         # 有一颗读到了邻居（`0001` 的 U3 就常被读成邻居的 `U1`）—— 这种整组放弃，
         # 而不是随机挑一个去抢占。`U?`/`J?` 这种未标注形式在 `read_designator`
@@ -718,6 +724,11 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
                 print("[desig guard] case=%s solo=%d kept=%d"
                       % (pred.get("case"), len(solo), len(_kept)), flush=True)
             solo = _kept
+        if _rlog and solo:
+            with open(_rlog, "a", encoding="utf-8") as _f:
+                for _g, _k in sorted(solo.items()):
+                    _f.write('{"stage": "solo", "case": "%s", "comp": "%s", "text": "%s"}\n'
+                             % (pred.get("case"), _k, _g))
         renames = {}
         # 第一轮：目标键本来就空着的，直接改。
         for g, old in sorted(solo.items()):
