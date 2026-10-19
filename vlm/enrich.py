@@ -684,6 +684,10 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
                             continue
                         if g in comps and reads.get(g) == g:
                             continue          # 那个键被自我确认的元件占着，别抢
+                        if g in comps and FKEY_RE.match(str(g)) is None:
+                            # 占着它的元件已有**真位号**（r/c/l/d 这类不进 reads 的元件），
+                            # 抢过来只会把它打回 pNNN —— §5.299 量到的「丢真名」全是这条。
+                            continue
                         _pick[k] = g
                         break
                 if _pick:
@@ -698,6 +702,15 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
                     if os.environ.get("VLM_DESIG_DBG"):
                         print("[desig retry] case=%s amb=%d picked=%d"
                               % (pred.get("case"), len(_amb), len(_pick)), flush=True)
+                        for k, g in sorted(_pick.items()):
+                            print("[desig pick] case=%s %s -> %s"
+                                  % (pred.get("case"), k, g), flush=True)
+                    _plog = os.environ.get("VLM_DESIG_PICKLOG")
+                    if _plog:
+                        with open(_plog, "a", encoding="utf-8") as _f:
+                            for k, g in sorted(_pick.items()):
+                                _f.write('{"case": "%s", "old": "%s", "new": "%s"}\n'
+                                         % (pred.get("case"), k, g))
         if GUARD and solo:
             _kept = {g: k for g, k in solo.items()
                      if _is_fallback_key(k) or _key_prefix(g) == _key_prefix(k)}
