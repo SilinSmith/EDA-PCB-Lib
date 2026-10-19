@@ -872,9 +872,20 @@ def project_assigned(assigned: dict, by: str = S2) -> List[Claim]:
                                  evidence={"conf": rec.get("conf"), "box": rec.get("box")},
                                  region=_box4(rec.get("box")),
                                  attrs={"cid": cid, "i": key, "raw_text": rec.get("text")}))
-    for nid, lab in (assigned.get("net_labels") or {}).items():
-        out.append(Claim(slot=f"{K_NET}:{nid}", value=lab, score=1.0,
-                         source="stage2:net_labels", by=by))
+    # ★ 2026-10：`_assigned` 的 `net_labels` 已从 dict 改成**列表**（每项
+    #   `{text, conf, box, d}`）。旧代码只吃 `.items()` ⇒ 本层自那次改动起
+    #   **一张图都跑不起来**（`AttributeError: 'list' object has no attribute 'items'`），
+    #   所以「从没 A/B 过」是字面意思。两种形状都接，避免下一次改形再静默弄坏。
+    _nl = assigned.get("net_labels") or {}
+    _nl_items = _nl.items() if isinstance(_nl, dict) else enumerate(_nl)
+    for nid, lab in _nl_items:
+        _v = lab.get("text") if isinstance(lab, dict) else lab
+        if _v in (None, ""):
+            continue
+        out.append(Claim(slot=f"{K_NET}:{nid}", value=_v,
+                         score=float(lab.get("conf", 1.0) or 0.0) if isinstance(lab, dict) else 1.0,
+                         source="stage2:net_labels", by=by,
+                         region=_box4(lab.get("box")) if isinstance(lab, dict) else None))
     return out
 
 
