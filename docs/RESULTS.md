@@ -23793,3 +23793,48 @@ if not PIN_DROP_UNKEYED and not NET_DROP_UNKEYED and _UNK_GATE:
 ⇒ 「重定位引脚端点」既救不了脚号/脚名（那要靠识别），也救不了边端点（那要重写导线重建器）。三轴的问题都不在引脚点位精度上，**本轮不再往几何层投工**。
 
 产物：`work/_pinoffset.py`（未改任何默认）。
+
+### 5.332 导线重建 B：笔画集合是对的，端点/切点不可事后修正（oracle +3.23，六臂全负）
+
+**动机**：§5.328 证 `line` 分数恰等于「同网内孪生边比例」（0.6111 预测 vs 0.6105 实测），§5.331 证端点误差不来自引脚点精度。按用户 m06696 选的 B（重写导线重建器），先做离线可行性判定，再决定是否动 stage1。
+
+#### 5.332.1 判分器口径
+
+`net_line_f1`（`schematic_parser/metrics.py:596`）用 `_seg_distance` = **端点对端点最大距离**（`line_unordered` 允许换序），`protocol4` 下 `line_tol=5` ⇒ 两端都必须落在 5 px 内才算 tp。
+
+#### 5.332.2 误差归因（`work/_edgefp.py gate10`）
+
+池化 tp 410 / fp 264 / fn 226。fp 中离最近 GT 边 ≤10 px 93、10–20 px 118、20–50 px 29、>50 px 24；fp 的「远端点」**160/264 落在 GT 引脚点 12 px 内**（过冲进引脚桩）。fn 中 165/226 触及 GT 引脚点。
+
+#### 5.332.3 ORACLE：把端点吸到 25 px 内最近的 GT 边端点
+
+`work/_edgeoracle.py`：`line` 0.6105 → **0.9337**，总分 80.73 → **83.96（+3.23）**，674 条边里 649 条被移动。⇒ **笔画集合基本正确，全部差距在端点/切点的位置**。
+
+#### 5.332.4 端点结构对照（`work/_endclass.py`）
+
+| | 边数 | free | corner | junction（同网内共享） |
+|---|---|---|---|---|
+| GT | 639 | 501 | 266 | **511（61%）** |
+| 我方 | 676 | **1203** | 94 | 55（11%） |
+
+GT 的 free 端 398/501 落在引脚点 12 px 内 ⇒ GT 的边端只落在两类位置：**引脚点**与**共享结点**。我方端点几乎全是孤立自由端。
+
+#### 5.332.5 六条事后修正臂全负（官方 10，protocol4，基线 80.73 / line 0.6105）
+
+| 臂 | 做法 | 结果 |
+|---|---|---|
+| `_nodenet.py` | 端点聚类合并成共享结点 | tol3 line 0.6098、tol6 0.6131（**中立**） |
+| `_tsplit.py` | 在其它端点投影处切段 | tol3 line **0.5199**（过切） |
+| `_wiretrim2.py` | 定向 12 px 引脚回缩（移 296 端点） | line 0.5811 |
+| `_wiretrim3.py` | 只动自由端 + bbox 4 px 判据 | **moved 0**（我方端点离任何符号 bbox 都 >4 px） |
+| `_wiremst.py replace` | 按网络成员合成 L1 MST 折线，**整体替换**原件 | 总分 **75.64**、line **0.1014** |
+| `_wiremst.py union` | 合成边与原件**并集** | 79.43、line 0.4804；tp **412 vs 基线 410** |
+
+最后一行的 412 ≈ 410 是最硬的证据：**367 条合成边没有换来任何新 tp**。合成的轴对齐折线从不与 GT 笔画重合，而我们的骨架笔画与 GT 笔画本来就重合（否则 oracle 到不了 0.93）。
+
+#### 5.332.6 结论：不改默认，B 的真实成本在 stage1
+
+- `line` 的缺口是**切点位置 + 结点共享**，而 GT 的结点坐标不在我们任何产物里（`work/_fast_out_gate10/runs/stage1/1.stage1.json` 的 `wires` 只存 `n_segments` 等统计，不存 segments，无法离线核对管线内图结构）。唯一已知锚点（引脚点）已用 4 种方式吸附，全负。
+- 真要逼近，只能让 stage1 直接产出「共享结点 + 边」的图（`pipeline/pskel.py` 有 `Node`/`HalfEdge`/`build_graph`/junction resolution，但最终 edges 是 RDP 折线过滤后的产物），并让网络归属与图对齐。这是改 stage1 的多日工程，本轮**不做默认变更**。
+- 产物：`work/_edgefp.py`、`work/_edgeoracle.py`、`work/_endclass.py`、`work/_nodenet.py`、`work/_tsplit.py`、`work/_wiretrim2.py`、`work/_wiretrim3.py`、`work/_wiremst.py`（全部离线诊断，默认未改）。
+
