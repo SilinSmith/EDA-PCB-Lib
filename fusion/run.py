@@ -151,6 +151,13 @@ def _prune_orphan_refs(doc: dict) -> dict:
             keep = []
             for t in toks:
                 key, _, num = t.partition(".")
+                if num == "*" and key in comps:
+                    # `*` = 「不指具体引脚」的通配成员：只有没有引脚的电源/地符号会这么
+                    # 写（`assemble.STAGE2_SYM_VERTEX`）。判题机对非 box 类型按
+                    # `net_pin_collapse_nonbox` 折叠成元件身份 ⇒ 脚号不参与比较，
+                    # 这条仍然满足「成员必须指向存在的元件」这个不变式。
+                    keep.append(t)
+                    continue
                 if key and num and _FKEY_RE.match(key) and key not in comps:
                     # 键都没有 ⇒ 整条引用都是悬空的
                     n += 1

@@ -2773,6 +2773,65 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     _trace_dump("00.pre", out_nets, H, case_id)
     out_nets = attach_orphan_rails(out_nets, pins)
     out_nets = merge_shared_pins(out_nets)
+    # ---- 电源/地符号挂为**纯顶点**（`STAGE2_SYM_VERTEX` = 半径，0=关） ----
+    # §5.330：GT 的 124 个缺失网络顶点里 **113 个**是被折叠成 `∅NNN` 的电源/地符号；我们
+    # 108/108 都检出了，但它们**没有引脚**，于是既不进并查集也不进 hyperGraph —— 而 GT 把
+    # 它们 100% 放进某个网（占全部顶点引用的 22.2%）。此前两条臂（`STAGE2_SYM_MERGE`、
+    # `STAGE2_KEEP_UNKEYED_POWER`）都把它们当**连接子**，电源/地会把本来分开的网并起来
+    # （netH 0.7945 / 0.7425，§5.330）。这里只当**纯顶点**：网络结构一根边都不动，只把符号
+    # 挂到几何上最近的那个网（「柄端」= bbox 四边中点里离该网边端最近的，距离 ≤ R）。
+    _symv = float(os.environ.get("STAGE2_SYM_VERTEX", "40") or 0.0)
+    if _symv > 0.0 and isinstance(components, dict):
+        _anch = []
+        for _n, _v in out_nets.items():
+            for _e in (_v.get("edges") or {}).values():
+                for _q in (_e or []):
+                    try:
+                        _anch.append((float(_q["x"]), float(_q["y"]), _n))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+        if _anch:
+            _used = set()
+            for _v in out_nets.values():
+                for _r in _hg_refs(_v.get("hyperGraph", "")):
+                    _used.add(_r[0])
+            _natt = 0
+            for _k, _c in components.items():
+                if not isinstance(_c, dict):
+                    continue
+                _k = str(_k)
+                if not FKEY_RE.match(_k) or _k in _used:
+                    continue
+                if str(_c.get("type") or "").strip().lower() not in POWER_TYPES:
+                    continue
+                _bb = _c.get("bbox")
+                if not (isinstance(_bb, (list, tuple)) and len(_bb) == 4):
+                    continue
+                _x0, _y0, _x1, _y1 = (float(t) for t in _bb)
+                _best = None
+                for _cp in (((_x0 + _x1) / 2.0, _y0), ((_x0 + _x1) / 2.0, _y1),
+                            (_x0, (_y0 + _y1) / 2.0), (_x1, (_y0 + _y1) / 2.0)):
+                    for _ax, _ay, _nm in _anch:
+                        _d = math.hypot(_ax - _cp[0], _ay - _cp[1])
+                        if _d <= _symv and (_best is None or _d < _best[0]):
+                            _best = (_d, _nm)
+                if not _best:
+                    continue
+                _v = out_nets[_best[1]]
+                _rs = _hg_refs(_v.get("hyperGraph", ""))
+                _rs.append((str(_k), "*"))
+                _v["hyperGraph"] = "(" + ",".join("%s.%s" % _t for _t in _rs) + ")"
+                _used.add(str(_k))
+                _natt += 1
+            if os.environ.get("STAGE2_SYM_VERTEX_DBG"):
+                print("[dbg sym_vertex] case=%s attached %d (r=%.1f) anch=%d"
+                      % (case_id, _natt, _symv, len(_anch)))
+                if not _natt:
+                    for _kk, _c in components.items():
+                        _t = str((_c or {}).get("type") or "").strip().lower()
+                        if _t in POWER_TYPES:
+                            print("[dbg sym_vertex]   key=%s type=%s used=%s bb=%s"
+                                  % (_kk, _t, str(_kk) in _used, (_c or {}).get("bbox")))
     _trace_dump("04.snap3", out_nets, H, case_id)
     # ---- 引脚点吸附到导线端点（`STAGE2_PIN_SNAP` = 半径，0=关） ----
     # 官方 10 的 136 只脚里 99 只在 5px 内、28 只在 5..20px（§5.260）：残差是**逐元件**
@@ -3074,6 +3133,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     _pidx: Dict[str, Dict[str, str]] = {}
     for (_c, _k), _pk in pin_pk.items():
         _pidx.setdefault(_c, {})[str(_k)] = _pk
+    if os.environ.get("STAGE2_SYM_VERTEX_DBG"):
+        _ns = sum(1 for _v in out_nets.values() if ".*" in (_v.get("hyperGraph") or ""))
+        print("[dbg sym_vertex] case=%s final nets with star=%d/%d"
+              % (case_id, _ns, len(out_nets)))
     return {"case": case_id, "components": components, "pins": pins,
             "nets": out_nets, "__pin_index": _pidx}
 

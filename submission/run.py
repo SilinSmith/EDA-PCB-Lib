@@ -549,7 +549,14 @@ def _sanitize_pred(doc):
             if "." not in tok:
                 continue
             c, _, num = tok.rpartition(".")
-            ok = c in comps and ("pin_" + num) in (pins.get(c) or {})
+            # `*` = 「不指具体引脚」的通配成员：只有**没有引脚**的电源/地符号会这么写
+            # （`assemble.STAGE2_SYM_VERTEX` 把它们当纯顶点挂进网）。判题机对非 box 类型
+            # 本来就按 `net_pin_collapse_nonbox` 折叠成元件身份，脚号不参与比较，所以
+            # 这条仍然满足「成员必须指向存在的元件」这个不变式。
+            if num == "*":
+                ok = c in comps
+            else:
+                ok = c in comps and ("pin_" + num) in (pins.get(c) or {})
             (keep if ok else bad).append(c + "." + num)
         if not bad:
             continue
