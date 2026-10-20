@@ -92,7 +92,17 @@ DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "0")
 # ⚠️ 反例（因此保留开关）：若把 `NET_DROP_UNKEYED=0` 与本开关一起改，超图里会留下
 #    指向「没有引脚表」的元件的引用 —— 两者要么一起留、要么一起剪。
 # 离线代理脚本：`work/_unkeyed_proxy.py`（V0 原样 / V1 连元件一起丢 / V2 只丢引脚）。
-PIN_DROP_UNKEYED = env_on("STAGE2_PIN_DROP_UNKEYED", "1")
+#
+# ★★★ 2026-11 改默认 **1 → 0**（与 `NET_DROP_UNKEYED` 同时改成 0，两者必须成对）。
+#   上面那套推导成立的前提是**字面比脚号**；现役 `protocol3` 的 `net_pin_collapse_nonbox=True`
+#   把非 box 元件的脚号折成 `*`，`重写后的 ∅NNN.*` 与我们 `pNNN.*` 因此**能配上**。
+#   50 评测案、`protocol3 --no-vlm`、`FUSION_LLM=0`（基线 `ne0` 34.4280）：
+#     本开关 0 / NET 0 → **35.8487（+1.4207）** 网络 0.2905→0.3208、导线 0.1665→0.2058
+#     本开关 0 / NET 1 → 34.2575（−0.1705）   ← 只有脚没有网，纯 fp
+#     本开关 1 / NET 0 → 34.4077（−0.0203）   ← 只有网引用没有脚，悬空
+#   ⇒ 收益全在**成对**打开；单开任一侧无效甚至为负。逐案 33 好 / 10 差。
+#   详见 `docs/RESULTS.md` §5.314。
+PIN_DROP_UNKEYED = env_on("STAGE2_PIN_DROP_UNKEYED", "0")
 # ★ 「整页位号都读不出」时不要连引脚一起丢（`STAGE2_KEEP_UNKEYED_IF_NO_DESIG`，默认 0）。
 #   池子 82/200 个案的位号只有 5–8px（`0024` 印的是 7px 蓝字 `K7`），OCR 读不出来 ⇒
 #   位号列空 ⇒ 兜底键 ⇒ `PIN_DROP_UNKEYED` 把整页引脚清零：`0024` 29 颗元件最后只剩
@@ -422,7 +432,12 @@ FKEY_RE = re.compile(r"^p\d{3,4}$")
 #    本开关 `=0` 且 `STAGE2_PIN_DROP_UNKEYED=0` 时，字面尺 **76.2174（−3.08）**、
 #    折叠尺 **83.8524（+4.47）**，对照剪掉的是 79.2965 / 79.3847 ⇒ breakeven 概率 **41%**
 #    ⇒ 先拿一次提交当探针读新报告的 connectivity，再决定是否翻（翻只需一个 env）。
-NET_DROP_UNKEYED = env_on("STAGE2_NET_DROP_UNKEYED", "1")
+#
+# ★★★ 2026-11 本开关与 `PIN_DROP_UNKEYED` 一起改成 0（见文件上方那段长注释）。理由同上：
+#   `NET_DROP_UNKEYED=1` 的前提「∅NNN 的脚号是随机号 ⇒ 引用永远配不上」只在**字面比**下成立；
+#   现役 `protocol3` 折叠非 box 脚号为 `*` 之后，∅ 的网表成员**是可配的**（GT 里 44/125 条网
+#   含 ∅ 成员）。50 评测案、成对打开：34.4280 → 35.8487（+1.4207）。
+NET_DROP_UNKEYED = env_on("STAGE2_NET_DROP_UNKEYED", "0")
 
 # ★ **只由电源/地符号组成的孤立网要不要丢**（`STAGE2_NET_DROP_PWRONLY`，默认 `1`）。
 #
@@ -433,7 +448,12 @@ NET_DROP_UNKEYED = env_on("STAGE2_NET_DROP_UNKEYED", "1")
 # 同口径下逐张都变好或持平（1 51.56→53.11、3 78.48→81.44、5 58.40→59.71 …）。
 # 旧（字面）口径下也顺带把损失从 −4.44 收窄到 −2.64 ⇒ **两个口径下都更优**。
 # `=0` 可退回「连孤网一起输出」的行为做对照（`work\tools\diag\_pwrfilter.py` 的 `keep`）。
-NET_DROP_PWRONLY = env_on("STAGE2_NET_DROP_PWRONLY", "1")
+# ★★★ 2026-11 默认改成 **0**。上面那组增益（+1.4383）是在「脚号字面比 + 无名元件引脚
+#   全丢」的旧尺上量的：那时孤网的成员脚号一半是 `*` 以外的噪声，留着只配得上噪声。现在
+#   无名元件引脚放行（`PIN_DROP_UNKEYED=0`）后，孤网里坐的是**真实的电源/地引脚**，而
+#   `protocol3` 的脚号折叠让它们照样能配。50 评测案、在 `nf1` 基础上成对：35.88 → **36.47**
+#   （+0.5967；netH 0.3209→0.3428，wire 0.2060→0.1882；逐案 20 涨 / 8 跌超 0.5，net 32 涨 13 跌）。
+NET_DROP_PWRONLY = env_on("STAGE2_NET_DROP_PWRONLY", "0")
 
 # ★ 电源/地符号（GT 里键为 `∅NNN`）**只用来合并网络，不写进 hyperGraph**。
 #
