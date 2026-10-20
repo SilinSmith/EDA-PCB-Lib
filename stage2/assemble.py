@@ -112,6 +112,12 @@ PIN_DROP_UNKEYED = env_on("STAGE2_PIN_DROP_UNKEYED", "0")
 #   （`∅200` 的 pin 是 `200`、名字 `P_31`），我们的 `p123.pin_1` 即使经坐标改写也对不上，
 #   而它们挂的网一旦进了 hyperGraph 就只贡献 fp ⇒ 单独对它们保留旧行为。
 _PWR_DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED_POWER", "0")
+# 电源/地符号的兜底键**引脚与超图引用**即便页面级证据闸门判「不发」也保留
+# （`STAGE2_KEEP_UNKEYED_POWER`，默认 0 = 关，仅做对照臂）。
+# 依据：官方 10 张里 GT 的 108 颗电源/地符号 **100% 都在 hyperGraph 里**（占 22.2% 引用），
+# 而我们检出的 108 颗里 0 颗有引脚、0 颗进网 ⇒ 每个电源网的白白丢一个顶点。
+# 若把所有缺失顶点补回配对网，netH 天花板 +0.1724（其中 +0.1589 来自 gnd/v）。
+_KEEP_UNK_POWER = env_on("STAGE2_KEEP_UNKEYED_POWER", "0")
 # ★ 「整页位号都读不出」时不要连引脚一起丢（`STAGE2_KEEP_UNKEYED_IF_NO_DESIG`，默认 0）。
 #   池子 82/200 个案的位号只有 5–8px（`0024` 印的是 7px 蓝字 `K7`），OCR 读不出来 ⇒
 #   位号列空 ⇒ 兜底键 ⇒ `PIN_DROP_UNKEYED` 把整页引脚清零：`0024` 29 颗元件最后只剩
@@ -2385,7 +2391,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                            "bbox": [round(float(x), 2) for x in bbox]}
 
         pts = st1_pins.get(cid) or []
-        if _unkeyed and not _KEEP_UNKEYED and (
+        if _unkeyed and not _KEEP_UNKEYED and not (
+                _KEEP_UNK_POWER and ctype in POWER_TYPES) and (
                 PIN_DROP_UNKEYED or not _release_unkeyed
                 or (_PWR_DROP_UNKEYED and ctype in POWER_TYPES)):
             # 兜底键元件的引脚一个都不发（见文件顶 `PIN_DROP_UNKEYED` 的长注释）。
@@ -2697,7 +2704,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 if SYM_MERGE:
                     syms_here.add(k)
                     continue
-            if (NET_DROP_UNKEYED or not _release_unkeyed) and FKEY_RE.match(k):
+            if (NET_DROP_UNKEYED or not _release_unkeyed) and FKEY_RE.match(k) and not (
+                    _KEEP_UNK_POWER and ct_by_cid.get(cid) in POWER_TYPES):
                 continue
             t = (k, num_of[(cid, idx)])
             if t not in seen:
