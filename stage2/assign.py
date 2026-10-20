@@ -27,6 +27,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from . import structmatch
+from . import keyform as _keyform
 from .expect import expect as expect_kind, fragment_score, score_expect
 
 # ---------------------------------------------------------------------------
@@ -1529,7 +1530,18 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             sc, info = alts[0]
             desig_cands.append((cid, info["canon"], sc, info))
 
-    if global_match:
+    # ★ 键形成层（`STAGE2_KEY_CHANNEL`，默认 0 = 关；规则与依据见 `stage2/keyform.py`）：
+    #   把「键是谁的」与「这个框读出什么」拆开——键的候选只来自自己名下的框，
+    #   谁更像这颗的印字交给几何（体上方 + 横向重叠），一对一裁决，撞框/撞号作废
+    #   退回 `pNNN`。上面那条「分数线里混距离 + 串角色借读」的老路径原样保留，
+    #   默认臂（channel 关）逐位不变。
+    _KEY_CHANNEL = env_on("STAGE2_KEY_CHANNEL", "0")
+    if _KEY_CHANNEL:
+        _kcomps = [c for c in comps if c["type"] not in NO_DESIGNATOR]
+        picked = _keyform.pick(texts, _kcomps, canon_designator_meaning)
+        if env_on("STAGE2_KEY_DBG", "0"):
+            print("[dbg-key] %s" % (_keyform.LAST,))
+    elif global_match:
         picked = _global_match(desig_cands, [c["id"] for c in comps])
     elif OWN_ASSIGN:
         picked = _own_assign_pick(desig_all)
