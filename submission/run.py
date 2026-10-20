@@ -523,6 +523,49 @@ def _child_concurrency(a, n_lanes: int):
     return vw, s1
 
 
+def _sanitize_pred(doc):
+    """出口不变式：网表成员必须指向**存在**的元件与引脚。
+
+    `work/_checkup.py` 的 C7 在 200 案 × 10 轮里抓到 1 例（`0019` 的 `net_9` 引用
+    `U0.3`，而 `pins["U0"]` 只剩 `pin_1`：那个引脚在后续剪枝里被删了，网里的引用成了
+    陈旧记录）。判题机这边表现为「网络成员指向不存在的引脚」，只会白送一个假成员。
+
+    只摘悬空引用，其余逐字节不动；摘空了就整条删网（空网不进 tp 也进不了召回）。
+    """
+    comps = doc.get("components") or {}
+    pins = doc.get("pins") or {}
+    nets = doc.get("nets") or {}
+    if not isinstance(nets, dict):
+        return doc, False
+    changed = False
+    for k in list(nets):
+        rec = nets.get(k) or {}
+        hg = str(rec.get("hyperGraph") or "")
+        if not hg:
+            continue
+        keep, bad = [], []
+        for tok in hg.strip().strip("()").split(","):
+            tok = tok.strip()
+            if "." not in tok:
+                continue
+            c, _, num = tok.rpartition(".")
+            ok = c in comps and ("pin_" + num) in (pins.get(c) or {})
+            (keep if ok else bad).append(c + "." + num)
+        if not bad:
+            continue
+        changed = True
+        if not keep:
+            nets.pop(k, None)
+            continue
+        rec["hyperGraph"] = "(" + ",".join(keep) + ")"
+        if isinstance(rec.get("_refs"), list):
+            ks = set(keep)
+            rec["_refs"] = [x for x in rec["_refs"]
+                            if isinstance(x, (list, tuple)) and len(x) >= 2
+                            and "%s.%s" % (x[0], x[1]) in ks]
+    return doc, changed
+
+
 def _publish_one(lane_file: Path, dst: Path, state: dict, stage_dir: Path) -> bool:
     """把 lane 里的一份 `<case>_Pred.json` **升级**进主输出目录（§5.54）。
 
@@ -559,7 +602,10 @@ def _publish_one(lane_file: Path, dst: Path, state: dict, stage_dir: Path) -> bo
                 return False
     try:
         data = lane_file.read_bytes()
-        json.loads(data.decode("utf-8"))
+        doc = json.loads(data.decode("utf-8"))
+        doc, _changed = _sanitize_pred(doc)
+        if _changed:
+            data = json.dumps(doc, ensure_ascii=False).encode("utf-8")
     except Exception:                                               # noqa: BLE001
         return False                    # 还在写 / 写坏了 ⇒ 下一轮再看
     try:

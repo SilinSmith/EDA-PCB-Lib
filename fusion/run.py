@@ -115,6 +115,7 @@ CONV_EXACT = env_on("FUSION_CONV_EXACT", "1")
 # 按 owner m40034 ④「不许静默丢弃」的规矩：每条被摘掉的引用都进
 # `cvparts.hypo.LEDGER`（`prune_ref` 事件），并汇总进本 case 的报告 `ref_prune`。
 REF_PRUNE = env_on("FUSION_REF_PRUNE", "1")
+REF_PRUNE_DESIG = env_on("FUSION_REF_PRUNE_DESIG", "1")   # 具名键的悬空引用也摘（见 `_prune_orphan_refs`）
 _FKEY_RE = re.compile(r"^p\d{3,4}$")          # 形状同 `stage2/assemble.py:305`
 
 
@@ -167,6 +168,18 @@ def _prune_orphan_refs(doc: dict) -> dict:
                     if LEDGER is not None:
                         LEDGER.record("prune_ref", nid, before=[t],
                                       reason="引脚的产出被兜底键闸门摘掉 ⇒ 引用会悬空",
+                                      by="fusion.ref_prune")
+                    continue
+                if REF_PRUNE_DESIG and key and num and key in comps and not _has_pin(key, num):
+                    # ★ 具名键也会悬空：200 案 × 10 轮抓到 1 例（`0019` 的 `net_9` 引用
+                    #   `U0.3`，而 `pins["U0"]` 只剩 `pin_1`）。原来是只认兜底键 `p###`，
+                    #   具名键漏网 ⇒ 判题机看到一个指向不存在引脚的成员。
+                    n += 1
+                    if len(ex) < 5:
+                        ex.append("%s:%s" % (nid, t))
+                    if LEDGER is not None:
+                        LEDGER.record("prune_ref", nid, before=[t],
+                                      reason="具名键的引脚不在本文件里 ⇒ 引用悬空",
                                       by="fusion.ref_prune")
                     continue
                 keep.append(t)
