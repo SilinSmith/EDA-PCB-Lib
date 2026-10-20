@@ -2248,6 +2248,31 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 _n_des += 1
         _KEEP_UNKEYED = _n_des <= max(1, int(0.10 * len(comps)))
 
+    # ★ 无名件放行的**页面级证据闸门**（`STAGE2_UNKEYED_GATE`，默认 1）。
+    #   2026-11：把 `PIN_DROP_UNKEYED`/`NET_DROP_UNKEYED` 一起改 0 后，200 池评测半 +2.03、
+    #   官方 10 张 −2.85（protocol4 口径，RESULTS §5.326）。两者的差别不在 GT 有没有无名件
+    #   （官方 10 张 108/254 颗、100% 进超图），而在**无名件的类型构成**：官方 10 张我们检出
+    #   的无名件全是电源/地符号（gnd 59 / v 49 / led 2），池子里还有无名 box 111 颗 + 被动件
+    #   780 颗。电源符号的 GT 脚号是源文档内部号（`∅200` 的 pin 是 `200`），我们 `p123.pin_1`
+    #   改写后依旧对不上，放行只会往网里加 fp。
+    #   ⇒ 只有当页面里出现 ≥`STAGE2_UNKEYED_GATE_N`（默认 3）颗**非电源**的无名件
+    #   （= 我们确实把真器件的位号读丢了）时，才放行无名件的引脚与超图引用；否则退回旧行为。
+    #   ⚠️ 必须**两闸同进同退**：剪脚不剪引用会留悬空成员，`FUSION_REF_PRUNE_DESIG` 随后把
+    #   整条网剪掉（§5.326.3 的功率例外实验：池子 36.46 → 33.50）。
+    _UNK_GATE = env_on("STAGE2_UNKEYED_GATE", "1")
+    _UNK_GATE_N = int(os.environ.get("STAGE2_UNKEYED_GATE_N", "2") or 2)
+    _release_unkeyed = True
+    if not PIN_DROP_UNKEYED and not NET_DROP_UNKEYED and _UNK_GATE:
+        _n_np = 0
+        for _c in comps:
+            _dd = (a.get(_c["id"]) or {}).get("designator") or {}
+            if _dd.get("canon") or _dd.get("text"):
+                continue
+            _t = str(_c.get("type") or "").strip().lower()
+            if _t not in POWER_TYPES:
+                _n_np += 1
+        _release_unkeyed = _n_np >= _UNK_GATE_N
+
     for i, c in enumerate(comps):
         cid = c["id"]
         info = a.get(cid) or {}
@@ -2360,7 +2385,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
 
         pts = st1_pins.get(cid) or []
         if _unkeyed and not _KEEP_UNKEYED and (
-                PIN_DROP_UNKEYED or (_PWR_DROP_UNKEYED and ctype in POWER_TYPES)):
+                PIN_DROP_UNKEYED or not _release_unkeyed
+                or (_PWR_DROP_UNKEYED and ctype in POWER_TYPES)):
             # 兜底键元件的引脚一个都不发（见文件顶 `PIN_DROP_UNKEYED` 的长注释）。
             # `_PWR_DROP_UNKEYED`：**电源/地符号**即便 PIN 闸放开也照旧不发（见 :105 的注释）。
             continue
@@ -2670,7 +2696,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 if SYM_MERGE:
                     syms_here.add(k)
                     continue
-            if NET_DROP_UNKEYED and FKEY_RE.match(k):
+            if (NET_DROP_UNKEYED or not _release_unkeyed) and FKEY_RE.match(k):
                 continue
             t = (k, num_of[(cid, idx)])
             if t not in seen:
