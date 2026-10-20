@@ -519,6 +519,10 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         # ★ 内涵「多余检测」（同一开关）：我方发出去的、内涵上必然判错的元件
         #   （`d`/`led` 的 Name 槽在官方 10GT 里是型号，我方 `name = key`）。
         _nd["conform_extra"] = list(_le)
+        if os.environ.get("STAGE2_DUMP_READS", "0").strip().lower() not in (
+                "", "0", "false", "off", "none"):
+            from .assign import LAST_TEXT_READS as _tr
+            _nd["text_reads"] = list(_tr)
         # ★ 大一统交叉校验层（用户 m50175，`CV_UNIFIED` 默认 0=关）：把已有的各种
         #   候选池/降权痕迹**只读**投影成统一 `Registry`（5 种并行候选表示 → `Claim`），
         #   跑内置校验（几何判据走 `GridIndex`/`AlongIndex`），产出 `Verdict` 台账。

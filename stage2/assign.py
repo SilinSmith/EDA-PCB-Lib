@@ -715,6 +715,18 @@ LAST_CONFORM: List[dict] = []
 #   检索「多余的元素」。记录里同时带上器件名读数，便于换约定时直接用。
 #   **只写旁路报告**，见 `stage2/run.py` 的 `no_delete.conform_extra`。
 LAST_CONFORM_EXTRA: List[dict] = []
+# ★ 逐框读法全量导出（`STAGE2_DUMP_READS=1`，默认关）：把每个文字框的**所有角色读法**
+#   落到 `_assigned/<case>.json` 的 `no_delete.text_reads`。用于回答「位号读不出来」
+#   到底是检测没出框、还是出了框但读错 —— 只写旁路，交付物字节不变。
+DUMP_READS = env_on("STAGE2_DUMP_READS", "0")
+LAST_TEXT_READS: List[dict] = []
+# ★ 远处位号认领（见 `assign()` 里同名注释块）：半径像素，0=关。
+_FAR_KEY = float(os.environ.get("STAGE2_FAR_KEY", "0") or 0.0)
+_FAR_CONF = float(os.environ.get("STAGE2_FAR_CONF", "0.50") or 0.50)
+_FAR_TYPES = tuple(x.strip() for x in
+                   os.environ.get("STAGE2_FAR_TYPES", "box").split(",") if x.strip())
+# 只有「现键文字框离元件 > 这个像素」的元件才允许被远处认领**替换**
+_FAR_REPL = float(os.environ.get("STAGE2_FAR_REPL", "40") or 40.0)
 # 官方约定下 `Name` 应当放**型号**（而非位号）的类型；`box` 已经这么做了。
 EXTRA_MODELNAME_TYPES = ("d", "led")
 
@@ -1622,6 +1634,70 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 print("[dbg-typefix] cid=%s %s -> %s (canon=%s)"
                       % (cid, _old, _tf, info.get("canon")))
 
+    # ★ 远处位号认领（`STAGE2_FAR_KEY` = 半径像素，默认 0=关）-------------------------
+    # 依据（`work/_readcheck.py` + `work/_farclaim.py`，50 评测案逐框全量读法）：
+    #   非键对的 138 颗 IC 里 **29 颗的 GT 位号串确实被读到了**，只是在页面上离元件
+    #   很远（>120px），进不了 `owned/steal` 这两个按距离划的口袋 ⇒ 元件退化成 `pNNN`。
+    # 规则（**不看 GT**）：元件当前无位号 + 类型在 `_FAR_TYPES` 内；候选读法必须
+    #   ①按**这颗元件自己的类型**能 canon 出位号（前缀 ⇄ 类型互证 ⇒ 别的类型的位号串
+    #   不会被抢）；②该 canon 尚未被任何元件占用；③框-框距离 ≤ 半径；④一对一。
+    # 由近到远贪心。分数只用于记账，不参与阶段三仲裁。
+    if _FAR_KEY > 0.0:
+        _byid = {c["id"]: c for c in comps}
+        _cur = {}
+        for c in comps:
+            _i = (out.get(c["id"]) or {}).get("designator")
+            if _i:
+                _cur[c["id"]] = (str(_i.get("canon") or "").upper(), float(_i.get("d") or 0.0))
+        _reassign = []
+        for c in comps:
+            cid = c["id"]
+            if c["type"] in NO_DESIGNATOR or c["type"] not in _FAR_TYPES:
+                continue
+            if cid not in _cur or _cur[cid][1] > _FAR_REPL:
+                _reassign.append(cid)
+        _used = set()
+        for cid, (_cc, _dd) in _cur.items():
+            if _cc and cid not in set(_reassign):
+                _used.add(_cc)
+        _cand = []
+        for cid in _reassign:
+            c = _byid[cid]
+            _cc, _cd = _cur.get(cid, ("", 0.0))
+            for t in texts:
+                if _too_wide(t, DESIG_MAXW):
+                    continue
+                _d = dist_rect_to_rect(t["bbox"], c["bbox"])
+                if _d > _FAR_KEY or (_cc and _d >= _cd):
+                    continue
+                for _role, _rv in (t.get("reads") or {}).items():
+                    if not (isinstance(_rv, (tuple, list)) and _rv and _rv[0]):
+                        continue
+                    _cf = float(_rv[1] or 0.0)
+                    if _cf < _FAR_CONF:
+                        continue
+                    can, fid, tfix, _how = canon_designator_meaning(str(_rv[0]), c["type"])
+                    if not can or can.upper() in _used or can.upper() == _cc:
+                        continue
+                    _cand.append((_d, cid, can, str(_rv[0]), _cf, list(t["bbox"]), tfix))
+        _cand.sort(key=lambda x: x[0])
+        if os.environ.get("STAGE2_FAR_DBG", "0") not in ("", "0", "false", "off"):
+            print("[dbg-far-sum] reassign=%d cand=%d used=%d"
+                  % (len(_reassign), len(_cand), len(_used)))
+        _done = set()
+        for _d, cid, can, _txt, _cf, _box, _tf in _cand:
+            if cid in _done or can.upper() in _used:
+                continue
+            out[cid]["designator"] = {"text": _txt, "canon": can, "conf": _cf,
+                                      "box": _box, "d": _d, "fit": 1.0,
+                                      "box_i": -1, "type_fix": _tf,
+                                      "key_src": "far"}
+            _used.add(can.upper())
+            _done.add(cid)
+            if _dbg_want(cid):
+                print("[dbg-far] cid=%s canon=%s read=%s d=%.0f conf=%.3f"
+                      % (cid, can, _txt, _d, _cf))
+
     # ★ 内涵「遗漏检测」定稿（`STAGE2_CONFORM_AUDIT`，恒开、**只写报告**）：
     #   在**所有归属通道**（贪心/匈牙利/own.*）都跑完之后看一遍 —— 哪些元件
     #   最终没有位号，而内涵规则（前缀 ⇄ 类型互证、削开头胶连）本来能给它一个键？
@@ -2235,6 +2311,17 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
     if os.environ.get("STAGE2_SLOT_CLEAN", "1") not in ("0", "off", "false"):
         desig_slots = {k: [s for s in v if (s or {}).get("canon")]
                        for k, v in desig_slots.items()}
+
+    if DUMP_READS:
+        LAST_TEXT_READS[:] = [
+            {"box": [round(float(x), 1) for x in t["bbox"]],
+             "d": round(float(t.get("d") or 0.0), 1),
+             "inside": bool(t.get("inside")),
+             "wide": bool(t.get("wide")),
+             "reads": {r: [str(v[0]), round(float(v[1] or 0.0), 3)]
+                       for r, v in (t.get("reads") or {}).items()
+                       if isinstance(v, (tuple, list)) and v and v[0]}}
+            for t in texts]
 
     return {"comps": out, "net_labels": net_labels, "desig_slots": desig_slots,
             "struct_slots": struct_slots,
