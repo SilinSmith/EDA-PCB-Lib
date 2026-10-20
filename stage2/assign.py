@@ -497,6 +497,16 @@ FREE_STEAL = env_on("STAGE2_FREE_STEAL", "1")
 # （component F1 0.1426→0.1451，tp 971→988，text_mismatch 948→931）。
 VALUE_STEAL_R = float(os.environ.get("STAGE2_VALUE_STEAL", "40"))
 
+# **器件名兜底**（`STAGE2_PART_STEAL`，半径；0 = 关）。与上面两条 STEAL 同一个病，
+# 但更狠：IC 的型号字往往印在符号**外**、离邻居更近，于是被邻居的 slots 吃掉，这颗 IC
+# 的器件名只能拿旁边一个垃圾串。10GT case 6 的 `U3`：全页明明读出了 `78M12`（conf 1.0），
+# 却因为那块框属于邻居而落到 `7SWM12`。这里允许在自己名下没有「像器件名」的候选时，
+# 去 `d <= STAGE2_PART_STEAL` 的抢读池里取一个（要求 `fit_partname == 1.0`、
+# conf ≥ `STAGE2_PART_STEAL_CONF`、长度 ≥ 5），并扣 `STAGE2_PART_STEAL_PEN` 分。
+PART_STEAL = float(os.environ.get("STAGE2_PART_STEAL", "0"))
+PART_STEAL_CONF = float(os.environ.get("STAGE2_PART_STEAL_CONF", "0.55"))
+PART_STEAL_PEN = float(os.environ.get("STAGE2_PART_STEAL_PEN", "0.35"))
+
 
 # ---- §5.222 贴中罚（GT-blind；**已按 §5.222.10 的 A/B 转默认开**） -----------------
 # 依据（`docs/RESULTS.md` §5.222.3）：位号形态的已认串按「离最近 GT 元件多远」量，
@@ -987,6 +997,31 @@ def fit_value(text: str) -> float:
             and any(c.isdigit() for c in text):
         return 0.6
     return 0.0
+
+
+# ★ 值轮的「单位族」闸门（`STAGE2_VALUE_FAMILY`，默认 0 = 关）。
+#
+# 病（200 池前 10 案的值失配 top）：`16V|0.1uF` ×7、`6.3V|4.7uF` ×2、`50V|15pF` ×2 ——
+# 电容符号旁边的文字是**一列三行**（位号 / 容值 / 耐压 / 容差），几何上耐压行往往比容值行
+# 离符号更近，于是「值」槽抓到了 `16V`。类型给了可判据：c 的值带 `F`、l 带 `H`、
+# r 带 `Ω/k/M/R/%`、晶振带 `HM`、二极管带 `V/A`。族不符的读法打 0.55 折，让同族候选胜出；
+# 若同族一个候选都没有，打折后它仍然会赢（不打成 0，避免整条值丢掉）。
+VALUE_FAMILY_ON = env_on("STAGE2_VALUE_FAMILY", "0")
+VALUE_FAMILY = {"c": "Ff", "l": "Hh", "r": "\u03a9\u2126kKmMR%",
+                "crystal": "HM", "crystal_2pin": "HM", "crystal_3pin": "HM",
+                "crystal_4pin": "HM", "fuse": "AF", "d": "VA"}
+
+
+def fit_value_typed(text: str, ctype: str) -> float:
+    s = fit_value(text)
+    if not VALUE_FAMILY_ON or s <= 0.0:
+        return s
+    fam = VALUE_FAMILY.get(str(ctype or ""))
+    if not fam:
+        return s
+    if any(ch in fam for ch in str(text or "")):
+        return s
+    return s * 0.55
 
 
 def fit_partname(text: str) -> float:
@@ -1771,11 +1806,25 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         # 参数（r/c/l/...）或器件名（box 等）
         want = "value" if ctype in ("r", "c", "l", "fuse", "crystal_2pin",
                                     "crystal_3pin", "crystal_4pin", "crystal") else "partname"
-        fit = fit_value if want == "value" else fit_partname
+        fit = (lambda _t: fit_value_typed(_t, ctype)) if want == "value" else fit_partname
         # 注意：这里**不能**用 `wide` 过滤 —— IC 的器件名本来就长
         # （实测 `MSP432E401YTPDT` 这种），按宽高比筛会把器件名整条筛掉。
         best = None
-        for t in cands:
+        _src = list(cands)
+        if want == "partname" and PART_STEAL > 0:
+            for _t in steal.get(cid, []):
+                if float(_t.get("d", 1e9)) > PART_STEAL:
+                    continue
+                _got = _best_read(_t["reads"], "partname", fit_partname)
+                if not _got:
+                    continue
+                _s, _txt, _cf, _f = _got
+                if _f < 1.0 or _cf < PART_STEAL_CONF or len(str(_txt or "")) < 5:
+                    continue
+                _t = dict(_t)
+                _t["_part_pen"] = 1.0
+                _src.append(_t)
+        for t in _src:
             if rec["designator"] and list(t["bbox"]) == rec["designator"]["box"]:
                 continue
             got = _best_read(t["reads"], want, fit)
@@ -1784,6 +1833,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             s, txt, conf, f = got
             sc = _score(s, conf, t["d"], t["inside"],
                         dist_w=(VALUE_DISTW if want == "value" else 0.035))
+            if t.get("_part_pen"):
+                sc -= PART_STEAL_PEN
             if want == "partname" and NAME_SHAPE_PEN > 0.0:      # §5.248 字形闸（默认关）
                 _bad = 0.0
                 _tx = str(txt or "").strip()
