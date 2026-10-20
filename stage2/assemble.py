@@ -606,6 +606,7 @@ NET_WELD_TPAD = float(os.environ.get("STAGE2_NET_WELD_TPAD", "3.0"))
 # `par3+snap20` 0.1879 / 51.2898 分数更高但同样爆 0 ⇒ **不合并描边、只做吸附**。
 EDGE_SNAP = float(os.environ.get("STAGE2_EDGE_SNAP", "10.0"))         # 吸附半径（px），0=关
 EDGE_SNAP_ANG = float(os.environ.get("STAGE2_EDGE_SNAP_ANG", "45.0"))  # 只吸到近似垂直的边
+EDGE_SNAP_JUNC = env_on("STAGE2_EDGE_SNAP_JUNC", "0")   # 端点吸附时把同网其它边端点也当锚点
 
 
 def _ang_deg(d1, d2) -> float:
@@ -2717,6 +2718,13 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 _p = ((pins.get(_k) or {}).get("pin_%s" % _n) or {}).get("point")
                 if _p:
                     _pp.append((float(_p["x"]), float(_p["y"])))
+            if EDGE_SNAP_JUNC:
+                # ★ 再补上**本网其它边的端点**（拐点/三通）。`EDGE_SNAP` 只吸引脚点，
+                #   而 GT 的边多数在同网拐点处首尾相接（官方 639 条边的端点 20.2% 落在引脚点
+                #   5px 内、其余都落在别的边的端点上）。补上后端点能自洽闭合。
+                for _e in edges.values():
+                    for _i in (0, len(_e) - 1):
+                        _pp.append((float(_e[_i]["x"]), float(_e[_i]["y"])))
             for _e in edges.values():
                 for _i in (0, len(_e) - 1):
                     _q = (_e[_i]["x"], _e[_i]["y"])

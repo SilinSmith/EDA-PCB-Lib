@@ -6,12 +6,12 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **639** 个开关。
+共 **640** 个开关。
 
 ## 目录
 
 - [stage1](#stage1)（162）
-- [stage2](#stage2)（223）
+- [stage2](#stage2)（224）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（133）
 - [vlm](#vlm)（51）
@@ -223,7 +223,7 @@
 | `STAGE2_CONFORM_TYPE_PEN` | `"0.85"` | `stage2/assign.py:698` |
 | `STAGE2_CPNT_LIB` | `""` | `stage2/libpins.py:103` |
 | `STAGE2_DBG_CID` | — | `stage2/assign.py:221` |
-| `STAGE2_DBG_PINS` | — *(7 处)* | `stage2/assemble.py:2322` |
+| `STAGE2_DBG_PINS` | — *(7 处)* | `stage2/assemble.py:2323` |
 | `STAGE2_DEMOTE_CONF` | `"0"` | `stage2/assign.py:1618` |
 | `STAGE2_DEMOTE_HARD` | `"0.05"` | `stage2/structmatch.py:36` |
 | `STAGE2_DESIG_DBG` | — | `stage2/assign.py:2274` |
@@ -233,37 +233,38 @@
 | `STAGE2_DROP_UNKEYED_POWER` | `"0"` | `stage2/assemble.py:114` |
 | `STAGE2_DUMP_READS` | `"0"` *(2 处)* | `stage2/assign.py:721` |
 | `STAGE2_EDGE_ANG` | `"6.0"` | `stage2/assemble.py:539` |
-| `STAGE2_EDGE_CORNER` | `"12"` | `stage2/assemble.py:951` |
-| `STAGE2_EDGE_CORNER_CROSS` | `"1"` | `stage2/assemble.py:953` |
-| `STAGE2_EDGE_CORNER_INT` | `"0.05"` | `stage2/assemble.py:952` |
-| `STAGE2_EDGE_DEDUP` | `"2.0"` | `stage2/assemble.py:702` |
-| `STAGE2_EDGE_DEDUP2` | `"2.0"` | `stage2/assemble.py:707` |
-| `STAGE2_EDGE_EXT` | `"20"` | `stage2/assemble.py:745` |
-| `STAGE2_EDGE_EXT_ANY` | `"25"` | `stage2/assemble.py:839` |
-| `STAGE2_EDGE_EXT_ANY_HIT` | `"2.0"` | `stage2/assemble.py:840` |
-| `STAGE2_EDGE_EXT_FREE` | `"0"` | `stage2/assemble.py:778` |
-| `STAGE2_EDGE_EXT_FREE_EDGE` | `"3.0"` | `stage2/assemble.py:780` |
-| `STAGE2_EDGE_EXT_FREE_PIN` | `"5.0"` | `stage2/assemble.py:779` |
-| `STAGE2_EDGE_EXT_HIT` | `"3.0"` | `stage2/assemble.py:746` |
+| `STAGE2_EDGE_CORNER` | `"12"` | `stage2/assemble.py:952` |
+| `STAGE2_EDGE_CORNER_CROSS` | `"1"` | `stage2/assemble.py:954` |
+| `STAGE2_EDGE_CORNER_INT` | `"0.05"` | `stage2/assemble.py:953` |
+| `STAGE2_EDGE_DEDUP` | `"2.0"` | `stage2/assemble.py:703` |
+| `STAGE2_EDGE_DEDUP2` | `"2.0"` | `stage2/assemble.py:708` |
+| `STAGE2_EDGE_EXT` | `"20"` | `stage2/assemble.py:746` |
+| `STAGE2_EDGE_EXT_ANY` | `"25"` | `stage2/assemble.py:840` |
+| `STAGE2_EDGE_EXT_ANY_HIT` | `"2.0"` | `stage2/assemble.py:841` |
+| `STAGE2_EDGE_EXT_FREE` | `"0"` | `stage2/assemble.py:779` |
+| `STAGE2_EDGE_EXT_FREE_EDGE` | `"3.0"` | `stage2/assemble.py:781` |
+| `STAGE2_EDGE_EXT_FREE_PIN` | `"5.0"` | `stage2/assemble.py:780` |
+| `STAGE2_EDGE_EXT_HIT` | `"3.0"` | `stage2/assemble.py:747` |
 | `STAGE2_EDGE_JOIN` | `"40.0"` | `stage2/assemble.py:538` |
 | `STAGE2_EDGE_MERGE` | `"0"` | `stage2/assemble.py:528` |
-| `STAGE2_EDGE_OVERLAP` | `"10"` | `stage2/assemble.py:758` |
-| `STAGE2_EDGE_OVERLAP_MIN` | `"0.35"` | `stage2/assemble.py:760` |
-| `STAGE2_EDGE_OVERLAP_OFF` | `"4.0"` | `stage2/assemble.py:759` |
+| `STAGE2_EDGE_OVERLAP` | `"10"` | `stage2/assemble.py:759` |
+| `STAGE2_EDGE_OVERLAP_MIN` | `"0.35"` | `stage2/assemble.py:761` |
+| `STAGE2_EDGE_OVERLAP_OFF` | `"4.0"` | `stage2/assemble.py:760` |
 | `STAGE2_EDGE_SNAP` | `"10.0"` *(2 处)* | `stage2/assemble.py:537` |
 | `STAGE2_EDGE_SNAP_ANG` | `"45.0"` | `stage2/assemble.py:608` |
-| `STAGE2_EDGE_SPLIT` | `"3.0"` | `stage2/assemble.py:700` |
-| `STAGE2_EDGE_SPLIT_COL` | `"0.90"` | `stage2/assemble.py:701` |
-| `STAGE2_EDGE_SPLIT_PIN` | `"0"` | `stage2/assemble.py:1366` |
-| `STAGE2_EDGE_SPLIT_XNET` | `"0"` | `stage2/assemble.py:1378` |
-| `STAGE2_EDGE_SPLIT_XNET_ANG` | `"30"` | `stage2/assemble.py:1380` |
-| `STAGE2_EDGE_SPLIT_XNET_MINLEN` | `"6"` | `stage2/assemble.py:1381` |
-| `STAGE2_EDGE_TRIM` | `"3.0"` | `stage2/assemble.py:732` |
-| `STAGE2_END_TO_BOX` | `"0"` | `stage2/assemble.py:1568` |
-| `STAGE2_END_TO_BOX_FREE` | `"3.0"` | `stage2/assemble.py:1571` |
-| `STAGE2_END_TO_BOX_MAX` | `"30.0"` | `stage2/assemble.py:1570` |
-| `STAGE2_END_TO_BOX_TOL` | `"4.0"` | `stage2/assemble.py:1569` |
-| `STAGE2_END_TO_BOX_TYPES` | `"c"` | `stage2/assemble.py:1579` |
+| `STAGE2_EDGE_SNAP_JUNC` | `"0"` | `stage2/assemble.py:609` |
+| `STAGE2_EDGE_SPLIT` | `"3.0"` | `stage2/assemble.py:701` |
+| `STAGE2_EDGE_SPLIT_COL` | `"0.90"` | `stage2/assemble.py:702` |
+| `STAGE2_EDGE_SPLIT_PIN` | `"0"` | `stage2/assemble.py:1367` |
+| `STAGE2_EDGE_SPLIT_XNET` | `"0"` | `stage2/assemble.py:1379` |
+| `STAGE2_EDGE_SPLIT_XNET_ANG` | `"30"` | `stage2/assemble.py:1381` |
+| `STAGE2_EDGE_SPLIT_XNET_MINLEN` | `"6"` | `stage2/assemble.py:1382` |
+| `STAGE2_EDGE_TRIM` | `"3.0"` | `stage2/assemble.py:733` |
+| `STAGE2_END_TO_BOX` | `"0"` | `stage2/assemble.py:1569` |
+| `STAGE2_END_TO_BOX_FREE` | `"3.0"` | `stage2/assemble.py:1572` |
+| `STAGE2_END_TO_BOX_MAX` | `"30.0"` | `stage2/assemble.py:1571` |
+| `STAGE2_END_TO_BOX_TOL` | `"4.0"` | `stage2/assemble.py:1570` |
+| `STAGE2_END_TO_BOX_TYPES` | `"c"` | `stage2/assemble.py:1580` |
 | `STAGE2_FAR_CONF` | `"0.50"` | `stage2/assign.py:725` |
 | `STAGE2_FAR_DBG` | `"0"` | `stage2/assign.py:1690` |
 | `STAGE2_FAR_KEY` | `"0"` | `stage2/assign.py:724` |
@@ -279,7 +280,7 @@
 | `STAGE2_KEY_DBG` | `"0"` | `stage2/assign.py:1559` |
 | `STAGE2_KEY_RESCUE` | `"0"` | `stage2/keyform.py:158` |
 | `STAGE2_KEY_WCHECK` | `"1"` | `stage2/keyform.py:160` |
-| `STAGE2_LED_POLARITY` | `"1"` | `stage2/assemble.py:1822` |
+| `STAGE2_LED_POLARITY` | `"1"` | `stage2/assemble.py:1823` |
 | `STAGE2_LIB_PINS` | `"1"` *(2 处)* | `stage2/assemble.py:393` |
 | `STAGE2_LIB_PINS_DBG` | `"0"` | `stage2/assemble.py:395` |
 | `STAGE2_LIB_PINS_FUZZY` | `"0.85"` | `stage2/libpins.py:335` |
@@ -359,46 +360,46 @@
 | `STAGE2_PINROT_WIN_PAD` | `"60.0"` | `stage2/pinrot.py:82` |
 | `STAGE2_PIN_ALONG` | `"1"` | `stage2/assign.py:432` |
 | `STAGE2_PIN_ANCHOR` | `"12"` | `stage2/structmatch.py:54` |
-| `STAGE2_PIN_AXIS_DL` | `"0"` | `stage2/assemble.py:1806` |
-| `STAGE2_PIN_BODY` | `"0"` | `stage2/assemble.py:2864` |
-| `STAGE2_PIN_BODY_DBG` | — | `stage2/assemble.py:2911` |
-| `STAGE2_PIN_BODY_GRID` | `"1"` | `stage2/assemble.py:2866` |
+| `STAGE2_PIN_AXIS_DL` | `"0"` | `stage2/assemble.py:1807` |
+| `STAGE2_PIN_BODY` | `"0"` | `stage2/assemble.py:2872` |
+| `STAGE2_PIN_BODY_DBG` | — | `stage2/assemble.py:2919` |
+| `STAGE2_PIN_BODY_GRID` | `"1"` | `stage2/assemble.py:2874` |
 | `STAGE2_PIN_COVER` | `"0.15"` | `stage2/assign.py:436` |
 | `STAGE2_PIN_DROP_LAUNDERED` | `"1"` | `stage2/assemble.py:135` |
 | `STAGE2_PIN_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:105` |
 | `STAGE2_PIN_GREY_EVIDENCE` | `"1"` | `stage2/run.py:96` |
 | `STAGE2_PIN_LANE_CLEANUP` | `"light"` | `stage2/run.py:78` |
 | `STAGE2_PIN_LANE_CROP` | `"1"` | `stage2/run.py:77` |
-| `STAGE2_PIN_LEAD_ATTACH` | `"1"` | `stage2/assemble.py:3164` |
-| `STAGE2_PIN_LEAD_DEG` | `"35.0"` | `stage2/assemble.py:3168` |
-| `STAGE2_PIN_LEAD_MOVE` | `"1"` | `stage2/assemble.py:3165` |
-| `STAGE2_PIN_LEAD_MOVE_R` | `"50.0"` | `stage2/assemble.py:3167` |
-| `STAGE2_PIN_LEAD_R` | `"40.0"` | `stage2/assemble.py:3166` |
+| `STAGE2_PIN_LEAD_ATTACH` | `"1"` | `stage2/assemble.py:3172` |
+| `STAGE2_PIN_LEAD_DEG` | `"35.0"` | `stage2/assemble.py:3176` |
+| `STAGE2_PIN_LEAD_MOVE` | `"1"` | `stage2/assemble.py:3173` |
+| `STAGE2_PIN_LEAD_MOVE_R` | `"50.0"` | `stage2/assemble.py:3175` |
+| `STAGE2_PIN_LEAD_R` | `"40.0"` | `stage2/assemble.py:3174` |
 | `STAGE2_PIN_NAME_OCR` | `"off"` | `stage2/run.py:79` |
 | `STAGE2_PIN_NUMBER_REPAIR` | `"0"` | `stage2/run.py:81` |
-| `STAGE2_PIN_OFFSET` | `"0"` | `stage2/assemble.py:2803` |
-| `STAGE2_PIN_OFFSET_DBG` | — *(2 处)* | `stage2/assemble.py:2853` |
-| `STAGE2_PIN_OFFSET_MIN` | `"2"` | `stage2/assemble.py:2804` |
+| `STAGE2_PIN_OFFSET` | `"0"` | `stage2/assemble.py:2811` |
+| `STAGE2_PIN_OFFSET_DBG` | — *(2 处)* | `stage2/assemble.py:2861` |
+| `STAGE2_PIN_OFFSET_MIN` | `"2"` | `stage2/assemble.py:2812` |
 | `STAGE2_PIN_RESIDUAL` | `"0"` | `stage2/assign.py:444` |
 | `STAGE2_PIN_RESIDUAL_MIN` | `"0"` | `stage2/assign.py:445` |
-| `STAGE2_PIN_SNAP` | `"0"` *(2 处)* | `stage2/assemble.py:854` |
-| `STAGE2_PIN_SNAP_DBG` | — *(2 处)* | `stage2/assemble.py:2796` |
-| `STAGE2_PIN_SNAP_N` | `"0"` | `stage2/assemble.py:2918` |
-| `STAGE2_PIN_SNAP_PERP` | `"8"` | `stage2/assemble.py:856` |
-| `STAGE2_PIN_SNAP_R` | `"45"` | `stage2/assemble.py:855` |
-| `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:1804` |
+| `STAGE2_PIN_SNAP` | `"0"` *(2 处)* | `stage2/assemble.py:855` |
+| `STAGE2_PIN_SNAP_DBG` | — *(2 处)* | `stage2/assemble.py:2804` |
+| `STAGE2_PIN_SNAP_N` | `"0"` | `stage2/assemble.py:2926` |
+| `STAGE2_PIN_SNAP_PERP` | `"8"` | `stage2/assemble.py:857` |
+| `STAGE2_PIN_SNAP_R` | `"45"` | `stage2/assemble.py:856` |
+| `STAGE2_PIN_STAMP` | `"1"` | `stage2/assemble.py:1805` |
 | `STAGE2_PIN_STUB_MERGE` | `"12"` | `stage2/assign.py:342` |
 | `STAGE2_PIN_TEXT_CROP` | `"0"` | `stage2/run.py:76` |
 | `STAGE2_PIN_TRUST_DROP` | `""` | `stage2/run.py:103` |
 | `STAGE2_PREFIX` | `"strict"` | `stage2/assign.py:157` |
 | `STAGE2_PREFIX_SKEL` | `"0"` | `stage2/assign.py:167` |
-| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:3127` |
-| `STAGE2_RAIL_SPLIT` | `"1"` | `stage2/assemble.py:3179` |
+| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:3135` |
+| `STAGE2_RAIL_SPLIT` | `"1"` | `stage2/assemble.py:3187` |
 | `STAGE2_SHAPE_FILL` | `"0"` | `stage2/assign.py:1403` |
 | `STAGE2_SHAPE_MINCONF` | `"0.90"` | `stage2/assign.py:1405` |
 | `STAGE2_SHAPE_PEN` | `"0.60"` | `stage2/assign.py:1404` |
 | `STAGE2_SLOT_CLEAN` | `"1"` | `stage2/assign.py:2317` |
-| `STAGE2_STAMP_ONE_SIDE` | `"1"` | `stage2/assemble.py:1864` |
+| `STAGE2_STAMP_ONE_SIDE` | `"1"` | `stage2/assemble.py:1865` |
 | `STAGE2_STEAL` | `"80"` | `stage2/assign.py:478` |
 | `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:488` |
 | `STAGE2_TEXT_INK` | `"0"` | `stage2/text.py:141` |
@@ -408,9 +409,9 @@
 | `STAGE2_TP_CV_SUBTYPES` | `"ring3"` | `stage2/assemble.py:186` |
 | `STAGE2_TP_LEDGER` | `"0"` | `stage2/assemble.py:201` |
 | `STAGE2_TP_TRUST_EVIDENCE` | `"1"` | `stage2/assemble.py:198` |
-| `STAGE2_TRACE_DUMP` | `""` | `stage2/assemble.py:3084` |
-| `STAGE2_UNKEYED_GATE` | `"1"` | `stage2/assemble.py:2262` |
-| `STAGE2_UNKEYED_GATE_N` | `"2"` | `stage2/assemble.py:2263` |
+| `STAGE2_TRACE_DUMP` | `""` | `stage2/assemble.py:3092` |
+| `STAGE2_UNKEYED_GATE` | `"1"` | `stage2/assemble.py:2263` |
+| `STAGE2_UNKEYED_GATE_N` | `"2"` | `stage2/assemble.py:2264` |
 | `STAGE2_VALUE_DISTW` | `"0.035"` | `stage2/assign.py:600` |
 | `STAGE2_VALUE_NETNAME` | `"0"` | `stage2/assign.py:589` |
 | `STAGE2_VALUE_STEAL` | `"40"` | `stage2/assign.py:489` |
