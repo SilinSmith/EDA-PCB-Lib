@@ -429,6 +429,8 @@ PINNAME_OUTSIDE = float(os.environ.get("STAGE2_PINNAME_OUTSIDE", "0"))
 # 真正的位号过滤器是 `canon_designator`（只认 `[A-Z]{1,3}\d{1,4}`），宽高比只用来
 # 挡「一排字」。6.0 覆盖到 ~7.7 字符，足够；`STAGE2_DESIG_MAXW=3.0` 可关回旧行为。
 DESIG_MAXW = float(os.environ.get("STAGE2_DESIG_MAXW", "6.0"))
+#: 位号候选的**距离硬上限**（px，0=关）：只挡「让位到邻居标签」的候选，宁可退回 pNNN。
+DESIG_MAXD = float(os.environ.get("STAGE2_DESIG_MAXD", "0"))
 # `STAGE2_PIN_ALONG`：引脚名/号绑定用**沿边距离**（左右边比 |Δy|、上下边比 |Δx|）
 # 代替 2D 中心距。文字框朝外方向的偏移随文字长度变（VDD/VDDIO/VDDREG 一起右对齐），
 # 那份噪声在 2D 距离里比沿边信号还大，实测会把整排引脚名上移一格。
@@ -1505,6 +1507,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         for t in dcands:
             if _too_wide(t, DESIG_MAXW):
                 continue
+            if DESIG_MAXD > 0 and t["d"] > DESIG_MAXD:
+                continue          # 只挡「距离离谱」的让位候选（默认关）
             got = _best_read(t["reads"], "designator",
                              lambda s, ty=ctype: canon_designator_meaning(s, ty, rescue=True)[1])
             if not got:
