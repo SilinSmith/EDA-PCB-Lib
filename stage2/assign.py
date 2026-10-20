@@ -725,6 +725,11 @@ _FAR_KEY = float(os.environ.get("STAGE2_FAR_KEY", "0") or 0.0)
 _FAR_CONF = float(os.environ.get("STAGE2_FAR_CONF", "0.50") or 0.50)
 _FAR_TYPES = tuple(x.strip() for x in
                    os.environ.get("STAGE2_FAR_TYPES", "box").split(",") if x.strip())
+# `STAGE2_FAR_TYPES=all` ⇒ 除 `NO_DESIGNATOR` 之外全类型（电阻/电容/晶振也要能认领：
+# `work/_elsewhere.py` 的 B 组 111 颗里有 **53 颗是「键为空、但该串整页读到了」**，
+# 绝大多数是被动件，只放开 `box` 就会把它们全漏掉）。
+if any(x.lower() == "all" for x in _FAR_TYPES):
+    _FAR_TYPES = None
 # 只有「现键文字框离元件 > 这个像素」的元件才允许被远处认领**替换**
 _FAR_REPL = float(os.environ.get("STAGE2_FAR_REPL", "40") or 40.0)
 # 官方约定下 `Name` 应当放**型号**（而非位号）的类型；`box` 已经这么做了。
@@ -1652,7 +1657,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         _reassign = []
         for c in comps:
             cid = c["id"]
-            if c["type"] in NO_DESIGNATOR or c["type"] not in _FAR_TYPES:
+            if c["type"] in NO_DESIGNATOR or (_FAR_TYPES is not None
+                                              and c["type"] not in _FAR_TYPES):
                 continue
             if cid not in _cur or _cur[cid][1] > _FAR_REPL:
                 _reassign.append(cid)
