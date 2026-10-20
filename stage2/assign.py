@@ -354,6 +354,15 @@ PINNAME_MAXW = float(os.environ.get("STAGE2_PINNAME_MAXW", "6.0"))
 # 于是名候选池里踢掉 `cfrac > PINNAME_CFRAC` 的框。**只压名轮**：号轮不动。
 # 该属性只在 `STAGE2_TEXT_INK=1` 时才存在 —— 两开关要**一起**开（`cfrac` 缺席时本闸门不生效）。
 PINNAME_CFRAC = float(os.environ.get("STAGE2_PINNAME_CFRAC", "0.20"))
+# ★ 名轮压「像位号的读法」（`STAGE2_PINNAME_KEYLIKE`）。
+#
+# 病（10GT case 6 的 `U2`/`U4`，SOT23-5）：GT 名序列自上而下 `OUT,GND,FAULT,EN,IN`，
+# 我们读到 `Q1,OUT,GND,EN,IN` —— pin1 被旁边一颗三极管位号 `Q1` 占走，其余名字整体下移
+# 一格、`FAULT` 被挤掉。`fit_pinname("Q1") = 1.0`，几何上它又最近，所以纯评分救不回来。
+# 规则：名轮里「大写字母 1~3 个 + 数字」的读法只给 0.2 分（真引脚名极少长这样，
+# 而位号全是这个形状）；号轮不受影响。
+PINNAME_KEYLIKE = float(os.environ.get("STAGE2_PINNAME_KEYLIKE", "0.2"))
+_PINNAME_KEY_RE = re.compile(r"^[QRCULDKJFY]{1,2}\d{1,4}$")
 # ★ 号轮的「每字符像素宽」闸门（`STAGE2_PINNUM_PXC`，默认 0 = 关）：
 #   引脚号是 1~3 个字符，真号码框 ≈ 10~11 px/字符；而合并了上下两行、或抢到名字
 #   宽度的框会到 14+ px/字符（case 8 的 U1：`[967,701,994,711]` 27x10 读成 `26`
@@ -1009,6 +1018,8 @@ def fit_pinname(text: str) -> float:
         return 0.0
     if PINNUM_RE.match(text) and text.isdigit():
         return 0.15
+    if PINNAME_KEYLIKE and _PINNAME_KEY_RE.match(text):
+        return PINNAME_KEYLIKE
     return 1.0
 
 
