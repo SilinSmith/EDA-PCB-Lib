@@ -103,6 +103,15 @@ DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "0")
 #   ⇒ 收益全在**成对**打开；单开任一侧无效甚至为负。逐案 33 好 / 10 差。
 #   详见 `docs/RESULTS.md` §5.314。
 PIN_DROP_UNKEYED = env_on("STAGE2_PIN_DROP_UNKEYED", "0")
+
+# ★★ 电源/地符号的**兜底键引脚**即便 `PIN_DROP_UNKEYED=0` 也照旧不发
+# （`STAGE2_DROP_UNKEYED_POWER`，默认 1）。依据（2026-11，官方 10 张 GT vs 200 池评测半）：
+#   把 `PIN/NET_DROP_UNKEYED` 一起改 0 之后，**池子 +2.03 分、官方 10 张 −2.85 分**（protocol4 口径）。
+#   差别就在这批符号上：官方 10 张我们检出的无名件**全是** `gnd`/`v`（113 颗 / 230 脚，`box_unkeyed=0`），
+#   池子里则有 111 颗无名 `box` + 780 颗无名被动件。电源符号的 GT 引脚号是源文档内部号
+#   （`∅200` 的 pin 是 `200`、名字 `P_31`），我们的 `p123.pin_1` 即使经坐标改写也对不上，
+#   而它们挂的网一旦进了 hyperGraph 就只贡献 fp ⇒ 单独对它们保留旧行为。
+_PWR_DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED_POWER", "0")
 # ★ 「整页位号都读不出」时不要连引脚一起丢（`STAGE2_KEEP_UNKEYED_IF_NO_DESIG`，默认 0）。
 #   池子 82/200 个案的位号只有 5–8px（`0024` 印的是 7px 蓝字 `K7`），OCR 读不出来 ⇒
 #   位号列空 ⇒ 兜底键 ⇒ `PIN_DROP_UNKEYED` 把整页引脚清零：`0024` 29 颗元件最后只剩
@@ -2350,8 +2359,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                            "bbox": [round(float(x), 2) for x in bbox]}
 
         pts = st1_pins.get(cid) or []
-        if _unkeyed and PIN_DROP_UNKEYED and not _KEEP_UNKEYED:
+        if _unkeyed and not _KEEP_UNKEYED and (
+                PIN_DROP_UNKEYED or (_PWR_DROP_UNKEYED and ctype in POWER_TYPES)):
             # 兜底键元件的引脚一个都不发（见文件顶 `PIN_DROP_UNKEYED` 的长注释）。
+            # `_PWR_DROP_UNKEYED`：**电源/地符号**即便 PIN 闸放开也照旧不发（见 :105 的注释）。
             continue
         if not pts:
             continue

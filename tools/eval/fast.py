@@ -69,6 +69,7 @@ SHORT = {"component": "元件", "pin": "引脚", "net_hypergraph": "网络", "ne
 ENGINE = "protocol2"
 _ENGINE_ALIAS = {"protocol2": "protocol2", "soft": "protocol2",
                  "protocol3": "protocol3", "qa3": "protocol3",
+    "protocol4": "protocol4", "final": "protocol4",
                  "protocol": "protocol", "legacy": "protocol",
                  "harness": "harness", "official": "harness"}
 
@@ -216,7 +217,7 @@ def main(argv=None):
     ap.add_argument("--cmp", default="", help="和基线 <名字> 比")
     ap.add_argument("--list", action="store_true", help="只打印默认 case 列表")
     ap.add_argument("--engine", default="protocol2",
-                    choices=("protocol2", "soft", "protocol3", "qa3", "protocol",
+                    choices=("protocol2", "soft", "protocol3", "qa3", "protocol4", "final", "protocol",
                              "harness", "legacy", "official"),
                     help="protocol2（默认，别名 soft）= 书面口径 + 官方实测标定的连通性口径"
                          "（bbox20 / ∅ 坐标匹配 / 只算 box 引脚 / tp=Σ 软 F1(Dice) / refs 字面比）；"
@@ -260,6 +261,16 @@ def main(argv=None):
         #   ③ 连接关系两级：普通元件按「整体」对齐（非 box 的脚折成 *），IC 仍按 pin
         #   ④ GND/电源符号按「类别 + value + 几何」匹配（∅NNN 不参与键比较）
         cfg = EvalConfig(net_soft=True, bbox_tol=20.0, pin_tol=20.0, line_tol=20.0,
+                         net_pin_collapse_nonbox=True, unkeyed_match="gt", coord_gate=20.0,
+                         coord_center=True)
+    elif ENGINE == "protocol4":
+        # 2026-11《评测要求.pdf》（最终提交要求）逐条对齐：
+        #   ① 元件 bbox：四个对应坐标 **最大绝对误差 ≤ 20 px**（corners 口径）
+        #   ② IC 引脚点：欧氏距离 **≤ 5 px**
+        #   ③ 导线端点：交换顺序后两端欧氏距离**均 ≤ 5 px**
+        #   ④ 引脚只算 IC（pin_box_only=True）；网络用 Dice + 匈牙利，不比名字
+        #   ⑤ 非 IC 的连接顶点折叠成元件身份（net_pin_collapse_nonbox=True）
+        cfg = EvalConfig(net_soft=True, bbox_tol=20.0, pin_tol=5.0, line_tol=5.0,
                          net_pin_collapse_nonbox=True, unkeyed_match="gt", coord_gate=20.0,
                          coord_center=True)
     else:
