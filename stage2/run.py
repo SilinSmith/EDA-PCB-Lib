@@ -27,7 +27,8 @@ except ImportError:                     # 直接跑脚本时 `sys.path[0]` 是�
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from envflag import env_on
 
-from .text import DEFAULT_CKPT, TextEngine, detect_texts, imread_unicode, read_stage1_texts
+from .text import (DEFAULT_CKPT, LINESPLIT, TextEngine, detect_texts, imread_unicode,
+                   read_stage1_texts)
 from .assign import assign, dist_to_rect
 from .assemble import build_doc
 from .expect import merge_runs, score_expect, should_grow
@@ -362,6 +363,15 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
     if not boxes:
         boxes = detect_texts(bgr)
         src = "detect"
+
+    # ★ 叠行注释块按行切开（`stage2/text.split_stacked`，`TEXT_LINESPLIT` 默认开）。
+    #   两行注释（位号 + 型号/值）被检测器当成一个框时，纵向压扁后位号必然读错。
+    if LINESPLIT:
+        from .text import split_stacked as _split
+        _n0 = len(boxes)
+        boxes = _split(bgr, boxes)
+        if len(boxes) != _n0:
+            src += "+line%d" % (len(boxes) - _n0)
 
     # ★★ **pincol 的引脚号窗口直接切、直接读**（`stage1/pincol.py`，默认开）。
     #

@@ -256,6 +256,77 @@ class Recognizer:
         return self.read_many(image, [(bbox, role)])[0]
 
     # ------------------------------------------------------------------
+    @torch.no_grad()
+    def read_topk(self, image: ImageLike, items: Iterable[Tuple[Bbox, object]],
+                  k: int = 5, beam: int = 8) -> List[List[Tuple[str, float]]]:
+        """每个框返回至多 `k` 条候选 `[(text, conf), ...]`，按整条路径概率降序。
+
+        贪心解码只保留 argmax 那一条；而位号错例里最常见的正是「差 1 个字符」
+        （`U202 -> U22`、`C157 -> C19`），正确答案往往就是同一框的第 2/3 条假设。
+        这里用 CTC 前缀 beam 搜索把它们留住，交给下游按全页一致性挑选。
+
+        `conf` 口径与 `read_many` 相同（被发射字符的对数概率几何平均），因此下游
+        的门槛不用改。逐条前向（不补白），保证同一框的候选不受同批其它样本影响。
+        """
+        img = _as_pil(image)
+        items = list(items)
+        if not items:
+            return []
+        out: List[List[Tuple[str, float]]] = []
+        for bbox, role in items:
+            crop = crop_gray(img, bbox, self.img_h, self.max_w)
+            a = np.asarray(crop, dtype=np.float32) / 255.0
+            a = ((a - 0.5) / 0.5).astype(np.float32)
+            batch = torch.from_numpy(a[None, None, :, :]).to(self.device)
+            role_t = torch.tensor([_role_id(role)], dtype=torch.long,
+                                  device=self.device)
+            logp = self.model(batch, role_t).log_softmax(2)[:, 0, :].cpu().numpy()
+            tmax = max(1, min(logp.shape[0], a.shape[1] // WIDTH_REDUCTION + EXTRA_STEPS))
+            out.append(self._beam(logp[:tmax], k=k, beam=beam))
+        return out
+
+    def _beam(self, lp, k: int = 5, beam: int = 8) -> List[Tuple[str, float]]:
+        """CTC 前缀 beam 搜索。状态 = (前缀, log p(blk), log p(非blk), 字数和, 字数)。"""
+        neg = -1e9
+        beams = {(): (0.0, neg, 0.0, 0)}
+        for t in range(lp.shape[0]):
+            row = lp[t]
+            nxt = {}
+            cand = np.argpartition(-row, min(beam, row.shape[0] - 1))[:beam]
+            for pre, (pb, pnb, ssum, n) in beams.items():
+                tot = np.logaddexp(pb, pnb)
+                a = nxt.get(pre, (neg, neg, 0.0, 0))
+                nxt[pre] = (np.logaddexp(a[0], tot + float(row[BLANK])),
+                            a[1], a[2], a[3])
+                for c in cand:
+                    c = int(c)
+                    if c == BLANK:
+                        continue
+                    p = float(row[c])
+                    if pre and pre[-1] == c:
+                        a = nxt.get(pre, (neg, neg, 0.0, 0))
+                        nxt[pre] = (a[0], np.logaddexp(a[1], pnb + p),
+                                    a[2] + p, a[3] + 1)
+                        key = pre + (c,)
+                        a = nxt.get(key, (neg, neg, 0.0, 0))
+                        nxt[key] = (a[0], np.logaddexp(a[1], tot + p),
+                                    a[2] + p, a[3] + 1)
+                    else:
+                        key = pre + (c,)
+                        a = nxt.get(key, (neg, neg, 0.0, 0))
+                        nxt[key] = (a[0], np.logaddexp(a[1], tot + p),
+                                    a[2] + p, a[3] + 1)
+            beams = dict(sorted(nxt.items(),
+                                key=lambda kv: -np.logaddexp(kv[1][0], kv[1][1]))[:beam])
+        ranked = sorted(beams.items(),
+                        key=lambda kv: -np.logaddexp(kv[1][0], kv[1][1]))[:k]
+        out = []
+        for pre, (pb, pnb, ssum, n) in ranked:
+            txt = "".join(self.charset.itos.get(i, "") for i in pre)
+            out.append((txt, float(np.exp(ssum / n)) if n else 0.0))
+        return out
+
+    # ------------------------------------------------------------------
     def debug(self) -> str:
         meta = getattr(self, "ckpt_meta", {})
         return ("Recognizer(device=%s, classes=%d, img_h=%d, max_w=%d, "

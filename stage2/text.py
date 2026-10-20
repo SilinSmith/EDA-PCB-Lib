@@ -141,6 +141,10 @@ TIGHT_ROLES = tuple(r.strip() for r in
 TEXT_INK = os.environ.get("STAGE2_TEXT_INK", "0").strip().lower() in ("1", "true", "yes", "on")
 TEXT_INK_SAT = float(os.environ.get("STAGE2_TEXT_INK_SAT", "60"))
 TEXT_INK_DARK = float(os.environ.get("STAGE2_TEXT_INK_DARK", "160"))
+# ★ 「叠行注释块按行切开」（见 `split_stacked`）：高 ≥ LINESPLIT_H × 页面中位字高的框才切。
+LINESPLIT = os.environ.get("TEXT_LINESPLIT", "1").strip().lower() in ("1", "true", "yes", "on")
+LINESPLIT_H = float(os.environ.get("TEXT_LINESPLIT_H", "1.7"))
+LAST_SPLIT = [0, 0]        # [切开的框数, 切出的行数]
 
 
 def colored_frac(bgr: np.ndarray, box: Box, sat: float = None, dark: float = None) -> float:
@@ -217,6 +221,62 @@ def imread_unicode(path) -> np.ndarray:
     if img is None:
         raise IOError("读不出图像: %s" % path)
     return img
+
+
+def split_stacked(bgr: np.ndarray, boxes: List[Box],
+                  min_frac: Optional[float] = None) -> List[Box]:
+    """把「两行以上叠在一起」的文字框按**墨迹行缝**切开，一行一框。
+
+    依据（`work/_lineblock.py`，50 评测案）：未键对的 536 颗具名元件里 **160 颗（29.9%）**
+    近旁就有这种「高 ≥ 2.2× 页面中位字高」的框，而框上的位号读法全是 `C`/`U`/`1`/`UF3`
+    这类残串 —— 两行注释（位号 + 型号/值）被当成**一行**去认，纵向被压扁后谁都读不对。
+    这是检测层的合并错误，不是识别参数问题：正确做法是按行切开，一行一个候选。
+    """
+    if not boxes:
+        return boxes
+    hs = sorted(float(b[3]) - float(b[1]) for b in boxes)
+    med = hs[len(hs) // 2] if hs else 8.0
+    lim = (min_frac if min_frac is not None else LINESPLIT_H) * med
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) if bgr.ndim == 3 else bgr
+    out: List[Box] = []
+    for b in boxes:
+        h = float(b[3]) - float(b[1])
+        if h < lim or h < 6.0:
+            out.append(b)
+            continue
+        x0, y0, x1, y1 = [int(round(float(v))) for v in b]
+        H, W = gray.shape[:2]
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(W, x1), min(H, y1)
+        if x1 - x0 < 3 or y1 - y0 < 4:
+            out.append(b)
+            continue
+        sub = gray[y0:y1, x0:x1]
+        ink = (sub < TEXT_INK_DARK).sum(axis=1)
+        thr = max(1, int(0.02 * (x1 - x0)))
+        bands: List[Tuple[int, int]] = []
+        cur = None
+        for i, v in enumerate(ink):
+            if v > thr:
+                cur = [i, i] if cur is None else [cur[0], i]
+            elif cur is not None:
+                bands.append((cur[0], cur[1]))
+                cur = None
+        if cur is not None:
+            bands.append((cur[0], cur[1]))
+        bands = [bb for bb in bands if bb[1] - bb[0] >= 3]
+        if len(bands) < 2:
+            out.append(b)
+            continue
+        if any((bb[1] - bb[0]) > 1.6 * med + 2 for bb in bands):
+            out.append(b)      # 切出来一段就比一行还高 ⇒ 不是「叠行」，别动
+            continue
+        for i0, i1 in bands:
+            out.append((float(b[0]), float(y0 + i0) - 1.0,
+                        float(b[2]), float(y0 + i1) + 1.0))
+        LAST_SPLIT[0] += 1
+        LAST_SPLIT[1] += len(bands)
+    return out
 
 
 def read_stage1_texts(stage1_doc: dict) -> List[Box]:
