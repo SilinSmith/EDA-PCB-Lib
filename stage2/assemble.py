@@ -3202,6 +3202,47 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             print("[dbg phantom] case=%s cut %d/%d merge=%s moved %d"
                   % (case_id, _cut3, _cut3 + len(out_nets), _merge3,
                      sum(len(v) for v in _pend3.values())))
+    _pair = float(os.environ.get("STAGE2_NET_PAIR", "120") or 0.0)
+    if _pair > 0:
+        # ★ 单成员网就近配对（`STAGE2_NET_PAIR=px`）：池子 50 案的网成员度分布与 GT 系统性错位——
+        # GT 单成员网 789（31%）/ 双成员 1247（49%）；我们 1661（62%）/ 548（21%）
+        # （`work/_netdensity.py`）⇒ 该并成一条 2 成员网的引脚被拆成了两条单成员网。
+        # 离线在出口文档上做（`work/_postnet.py pairclose`）：池子 36.39 → 36.87（netH
+        # 0.3508 → 0.3626，120px 起进平台）；GT10 83.99 → 84.13。两边同向。
+        # 只动 `hyperGraph`，边/引脚一律不碰 ⇒ 元件/引脚/线轴逐位不变。
+        _sing: List[tuple] = []
+        for _nk4, _nv4 in out_nets.items():
+            _m4 = _hg_refs(_nv4.get("hyperGraph", ""))
+            if len(_m4) != 1:
+                continue
+            _c4, _n4 = _m4[0]
+            _p4 = (((pins.get(_c4) or {}).get("pin_%s" % _n4) or {}).get("point") or {})
+            if _p4.get("x") is None:
+                continue
+            _sing.append((_nk4, "%s.%s" % (_c4, _n4), float(_p4["x"]), float(_p4["y"])))
+        _dead4 = set()
+        _merged4 = 0
+        for _i4 in range(len(_sing)):
+            _k41, _t41, _x41, _y41 = _sing[_i4]
+            if _k41 in _dead4:
+                continue
+            _b4 = None
+            for _j4 in range(_i4 + 1, len(_sing)):
+                _k42, _t42, _x42, _y42 = _sing[_j4]
+                if _k42 in _dead4:
+                    continue
+                _d4 = ((_x41 - _x42) ** 2 + (_y41 - _y42) ** 2) ** 0.5
+                if _d4 <= _pair and (_b4 is None or _d4 < _b4[0]):
+                    _b4 = (_d4, _k42, _t42)
+            if _b4 is not None:
+                out_nets[_k41]["hyperGraph"] = "(%s,%s)" % (_t41, _b4[2])
+                _dead4.add(_b4[1])
+                _merged4 += 1
+        if _dead4:
+            out_nets = {_k: _v for _k, _v in out_nets.items() if _k not in _dead4}
+        if os.environ.get("STAGE2_NET_PAIR_DBG"):
+            print("[dbg net_pair] case=%s singletons %d merged %d nets %d"
+                  % (case_id, len(_sing), _merged4, len(out_nets)))
     _pidx: Dict[str, Dict[str, str]] = {}
     for (_c, _k), _pk in pin_pk.items():
         _pidx.setdefault(_c, {})[str(_k)] = _pk
