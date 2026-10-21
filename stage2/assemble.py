@@ -3130,6 +3130,42 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         #   出口文档（几何全部定型）上做的，落在这里才能与离线读数逐位一致。
         #   只写 `hyperGraph`，`edges`/引脚一律不碰 ⇒ 元件/引脚/导线三通道逐位不变。
         attach_stamped_leads(out_nets, pins, components)
+    _phantom = float(os.environ.get("STAGE2_PHANTOM_NET", "0") or 0.0)
+    if _phantom > 0:
+        # ★ 幽灵网剪除（`STAGE2_PHANTOM_NET=px`）：所有成员脚点都离**全图任一导线** >px 的网。
+        # 池子 50 案实测：1485 条网里 403 条（27.1%）属于此类，成员 448 个；与 GT 网成员
+        # 交集 **0**（`work/_phantom.py`）⇒ 不可能命中任何 GT 网，只贡献 FP。距离分布
+        # 6-10px 89 / 10-20 169 / 20-40 176 / 40-200 135 / >200 29。
+        # 放在最末尾：所有合并/焊接/吸附都已定型，脚点与边都是出口形态。
+        _allseg = [s for _v in out_nets.values() for s in _net_seg_pairs(_v)]
+
+        def _dseg(px, py, segs):
+            _best = 1e9
+            for (_ax, _ay), (_bx, _by) in segs:
+                _dx, _dy = _bx - _ax, _by - _ay
+                _l2 = _dx * _dx + _dy * _dy
+                _t = 0.0 if _l2 <= 1e-9 else max(0.0, min(1.0, ((px - _ax) * _dx + (py - _ay) * _dy) / _l2))
+                _d = ((px - (_ax + _t * _dx)) ** 2 + (py - (_ay + _t * _dy)) ** 2) ** 0.5
+                if _d < _best:
+                    _best = _d
+            return _best
+
+        _kept3: Dict[str, dict] = {}
+        _cut3 = 0
+        for _v in out_nets.values():
+            _ds3 = []
+            for _c3, _n3 in _hg_refs(_v.get("hyperGraph", "")):
+                _p3 = (((pins.get(_c3) or {}).get("pin_%s" % _n3) or {}).get("point") or {})
+                if _p3.get("x") is None:
+                    continue
+                _ds3.append(_dseg(float(_p3["x"]), float(_p3["y"]), _allseg))
+            if _ds3 and all(_d > _phantom for _d in _ds3):
+                _cut3 += 1
+                continue
+            _kept3["net_%d" % (len(_kept3) + 1)] = _v
+        out_nets = _kept3
+        if os.environ.get("STAGE2_PHANTOM_DBG"):
+            print("[dbg phantom] case=%s cut %d/%d" % (case_id, _cut3, _cut3 + len(out_nets)))
     _pidx: Dict[str, Dict[str, str]] = {}
     for (_c, _k), _pk in pin_pk.items():
         _pidx.setdefault(_c, {})[str(_k)] = _pk
