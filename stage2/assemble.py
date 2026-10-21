@@ -3151,21 +3151,57 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             return _best
 
         _kept3: Dict[str, dict] = {}
+        _old2new3: Dict[str, str] = {}
         _cut3 = 0
-        for _v in out_nets.values():
+        _merge3 = bool(os.environ.get("STAGE2_PHANTOM_MERGE") or 0)
+        # 段 → 所属网（改判归属用）
+        _segown = []
+        for _ok, _ov in out_nets.items():
+            for _os in _net_seg_pairs(_ov):
+                _segown.append((_ok, _os))
+        _pend3: Dict[str, List[str]] = {}
+        for _nk3, _v in out_nets.items():
             _ds3 = []
-            for _c3, _n3 in _hg_refs(_v.get("hyperGraph", "")):
+            _mems3 = _hg_refs(_v.get("hyperGraph", ""))
+            for _c3, _n3 in _mems3:
                 _p3 = (((pins.get(_c3) or {}).get("pin_%s" % _n3) or {}).get("point") or {})
                 if _p3.get("x") is None:
                     continue
                 _ds3.append(_dseg(float(_p3["x"]), float(_p3["y"]), _allseg))
             if _ds3 and all(_d > _phantom for _d in _ds3):
                 _cut3 += 1
+                if _merge3:
+                    # 改判归属：把成员挂到「离它最近的导线」所在的那条网，而不是直接删。
+                    for _c3, _n3 in _mems3:
+                        _p3 = (((pins.get(_c3) or {}).get("pin_%s" % _n3) or {}).get("point") or {})
+                        if _p3.get("x") is None:
+                            continue
+                        _bd3, _bo3 = 1e9, ""
+                        for _ok, _os in _segown:
+                            if _ok == _nk3:
+                                continue
+                            _dd3 = _dseg(float(_p3["x"]), float(_p3["y"]), [_os])
+                            if _dd3 < _bd3:
+                                _bd3, _bo3 = _dd3, _ok
+                        if _bo3 and _bd3 <= 3.0 * _phantom:
+                            _pend3.setdefault(_bo3, []).append("%s.%s" % (_c3, _n3))
                 continue
             _kept3["net_%d" % (len(_kept3) + 1)] = _v
+            _old2new3[_nk3] = "net_%d" % len(_kept3)
+        for _ok, _add in _pend3.items():
+            _tv = _kept3.get(_old2new3.get(_ok, ""))
+            if _tv is None:
+                continue
+            _cur = ["%s.%s" % t for t in _hg_refs(_tv.get("hyperGraph", ""))]
+            for _t in _add:
+                if _t not in _cur:
+                    _cur.append(_t)
+            _tv["hyperGraph"] = "(" + ",".join(_cur) + ")"
         out_nets = _kept3
         if os.environ.get("STAGE2_PHANTOM_DBG"):
-            print("[dbg phantom] case=%s cut %d/%d" % (case_id, _cut3, _cut3 + len(out_nets)))
+            print("[dbg phantom] case=%s cut %d/%d merge=%s moved %d"
+                  % (case_id, _cut3, _cut3 + len(out_nets), _merge3,
+                     sum(len(v) for v in _pend3.values())))
     _pidx: Dict[str, Dict[str, str]] = {}
     for (_c, _k), _pk in pin_pk.items():
         _pidx.setdefault(_c, {})[str(_k)] = _pk
