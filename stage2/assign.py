@@ -1680,6 +1680,27 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             _keep.append((cid, info))
         picked = _keep
 
+    # ★ 键归属倒查视图（`STAGE2_DUMP_KEYPROV=1`，默认关）：上面 `LAST_TEXT_READS` 只记
+    #   「每块框能读出什么」，答不了「这颗元件的键是从哪块框、多远、多少置信度来的」——
+    #   池子取证时正是被这一点卡住（同名字串全在百米以外，无法判断是漏检还是错配）。
+    #   每颗拿到键的元件落一��：cid / canon / 框 / 距离 / 置信度 / 分数。
+    if env_on("STAGE2_DUMP_KEYPROV", "0"):
+        try:
+            _p = os.environ.get("STAGE2_DUMP_PATH") or os.path.join("work", "_reads_dump.jsonl")
+            with io.open(_p, "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({
+                    "case": os.environ.get("STAGE2_DUMP_CASE", ""),
+                    "picked": [{"cid": cid,
+                                "key": (info or {}).get("canon"),
+                                "box": (info or {}).get("box"),
+                                "d": (info or {}).get("d"),
+                                "conf": (info or {}).get("conf"),
+                                "score": (info or {}).get("score"),
+                                "chan": bool(_KEY_CHANNEL)}
+                               for cid, info in picked]}, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
     for cid, info in picked:
         out[cid]["designator"] = info
         _tf = (info or {}).get("type_fix")

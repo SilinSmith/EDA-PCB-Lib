@@ -6,12 +6,12 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **659** 个开关。
+共 **660** 个开关。
 
 ## 目录
 
 - [stage1](#stage1)（165）
-- [stage2](#stage2)（240）
+- [stage2](#stage2)（241）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（133）
 - [vlm](#vlm)（51）
@@ -229,14 +229,15 @@
 | `STAGE2_DBG_PINS` | — *(7 处)* | `stage2/assemble.py:2329` |
 | `STAGE2_DEMOTE_CONF` | `"0"` | `stage2/assign.py:1670` |
 | `STAGE2_DEMOTE_HARD` | `"0.05"` | `stage2/structmatch.py:36` |
-| `STAGE2_DESIG_DBG` | — | `stage2/assign.py:2342` |
+| `STAGE2_DESIG_DBG` | — | `stage2/assign.py:2363` |
 | `STAGE2_DESIG_MAXD` | `"0"` | `stage2/assign.py:435` |
 | `STAGE2_DESIG_MAXW` | `"6.0"` | `stage2/assign.py:433` |
-| `STAGE2_DESIG_RESCUE` | `"0"` | `stage2/assign.py:2282` |
+| `STAGE2_DESIG_RESCUE` | `"0"` | `stage2/assign.py:2303` |
 | `STAGE2_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:77` |
 | `STAGE2_DROP_UNKEYED_POWER` | `"0"` | `stage2/assemble.py:114` |
-| `STAGE2_DUMP_CASE` | `""` | `stage2/assign.py:2404` |
-| `STAGE2_DUMP_PATH` | — | `stage2/assign.py:2402` |
+| `STAGE2_DUMP_CASE` | `""` *(2 处)* | `stage2/assign.py:1692` |
+| `STAGE2_DUMP_KEYPROV` | `"0"` | `stage2/assign.py:1687` |
+| `STAGE2_DUMP_PATH` | — *(2 处)* | `stage2/assign.py:1689` |
 | `STAGE2_DUMP_READS` | `"0"` *(2 处)* | `stage2/assign.py:744` |
 | `STAGE2_EDGE_ANG` | `"6.0"` | `stage2/assemble.py:545` |
 | `STAGE2_EDGE_CORNER` | `"12"` | `stage2/assemble.py:958` |
@@ -272,7 +273,7 @@
 | `STAGE2_END_TO_BOX_TOL` | `"4.0"` | `stage2/assemble.py:1576` |
 | `STAGE2_END_TO_BOX_TYPES` | `"c"` | `stage2/assemble.py:1586` |
 | `STAGE2_FAR_CONF` | `"0.50"` | `stage2/assign.py:748` |
-| `STAGE2_FAR_DBG` | `"0"` | `stage2/assign.py:1742` |
+| `STAGE2_FAR_DBG` | `"0"` | `stage2/assign.py:1763` |
 | `STAGE2_FAR_KEY` | `"0"` | `stage2/assign.py:747` |
 | `STAGE2_FAR_REPL` | `"40"` | `stage2/assign.py:757` |
 | `STAGE2_FAR_TYPES` | `"box"` | `stage2/assign.py:750` |
@@ -414,7 +415,7 @@
 | `STAGE2_SHAPE_FILL` | `"0"` | `stage2/assign.py:1453` |
 | `STAGE2_SHAPE_MINCONF` | `"0.90"` | `stage2/assign.py:1455` |
 | `STAGE2_SHAPE_PEN` | `"0.60"` | `stage2/assign.py:1454` |
-| `STAGE2_SLOT_CLEAN` | `"1"` | `stage2/assign.py:2385` |
+| `STAGE2_SLOT_CLEAN` | `"1"` | `stage2/assign.py:2406` |
 | `STAGE2_STAMP_ONE_SIDE` | `"1"` | `stage2/assemble.py:1871` |
 | `STAGE2_STEAL` | `"80"` | `stage2/assign.py:491` |
 | `STAGE2_SYM_MERGE` | `"0"` | `stage2/assemble.py:494` |
