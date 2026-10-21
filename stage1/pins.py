@@ -53,6 +53,19 @@ PIN_OUT = 10.0
 #     12 正好落在两者之间，符合预期。
 # 教训：`STAGE1_PIN_OUT_BOX` 曾经被写成默认 15.0，让整条管线白亏 1.09（10GT）。
 PIN_OUT_BOX = float(os.environ.get("STAGE1_PIN_OUT_BOX", "12.0"))
+# ★ 逐侧腿长（L,R,T,B），2026-10-21 在**提交尺**（`protocol4`，pin_tol=5）下重扫所得。
+# 旧尺 `protocol3`（pin_tol=20）下位置几乎不罚分，所以上面那条常数当年只按「整体 F1」调到 12；
+# 换成 5px 后位置成为 pin 轴主项，逐侧扫描（`work/_pinleg5.py`，GT10 十张，纯离线改 pins.point
+# 后 `--score-only`）：
+#   12,12,12,12（旧默认）-> pin 0.7763（总分 83.47）
+#   10,10,10,10          -> pin 0.7517（82.86）
+#   14,14,14,14          -> pin 0.5738（78.41）
+#   14,10,8,10           -> pin 0.7008（81.59）
+#   **12,10,8,10**        -> pin **0.8104**（**84.33**）
+#   15,12,10,12          -> pin 0.6667（80.74）
+# 与独立量的 GT 逐侧外伸（L p50 15 / R 10 / T 8 / B 10）方向一致：左边长、上边最短。
+# 设 `STAGE1_PIN_LEG_BOX=""` 即退回单一 `PIN_OUT_BOX`。
+PIN_LEG_BOX = tuple(float(v) for v in (os.environ.get("STAGE1_PIN_LEG_BOX", "12,10,8,10") or "").split(",") if v.strip()) or None
 # 「触到框边」的判定半径
 TOUCH_TOL = 6.0
 # 同一引脚上多个接触点的合并半径（沿框边弧长）
@@ -511,6 +524,19 @@ def _point_on_edge(bbox, e: int, s: float):
     return (x1, y2 - s)
 
 
+def _leg_for(nx: float, ny: float, out_dist) -> float:
+    """标量直接用；4 元组按法线方向取 (L,R,T,B)。设 `STAGE1_PIN_LEG_BOX=""` 即退回标量。"""
+    if isinstance(out_dist, (tuple, list)) and len(out_dist) == 4:
+        if nx < -0.5:
+            return float(out_dist[0])
+        if nx > 0.5:
+            return float(out_dist[1])
+        if ny < -0.5:
+            return float(out_dist[2])
+        return float(out_dist[3])
+    return float(out_dist)
+
+
 def pins_from_touch(bbox, pts: np.ndarray, tol: float = TOUCH_TOL,
                     cluster_r: float = CLUSTER_R, out_dist: float = PIN_OUT):
     """导线接触点 -> 引脚（朝框外推 `out_dist`）。"""
@@ -523,7 +549,8 @@ def pins_from_touch(bbox, pts: np.ndarray, tol: float = TOUCH_TOL,
         smid = float(np.median(arcs))
         bx, by = _point_on_edge(bbox, ed, smid)
         nx, ny = normals[ed]
-        pins.append((bx + nx * out_dist, by + ny * out_dist))
+        _leg = _leg_for(nx, ny, out_dist)
+        pins.append((bx + nx * _leg, by + ny * _leg))
     return pins
 
 
@@ -640,9 +667,10 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
         _ct = str(c.get("type") or "").lower()
         _is_ic = ("box" in _ct or "bigic" in _ct)
         _od = PIN_OUT_BOX if _is_ic else out_dist
+        _leg = (PIN_LEG_BOX or _od) if _is_ic else out_dist
         # IC 的引脚间距只有 ~10px，不能用 12px 的合并半径（会把邻脚并掉）
         _cr = CLUSTER_IC if _is_ic else cluster_r
-        pins = pins_from_touch(bb, pts, touch_tol, _cr, _od)
+        pins = pins_from_touch(bb, pts, touch_tol, _cr, _leg)
         _ev = {"touch": len(pins), "prior": 0, "stub": 0}
         if not pins and use_prior:
             pins = pins_from_prior(bb, c.get("type") or "")
