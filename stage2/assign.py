@@ -1011,6 +1011,7 @@ def fit_value(text: str) -> float:
 # r 带 `Ω/k/M/R/%`、晶振带 `HM`、二极管带 `V/A`。族不符的读法打 0.55 折，让同族候选胜出；
 # 若同族一个候选都没有，打折后它仍然会赢（不打成 0，避免整条值丢掉）。
 VALUE_FAMILY_ON = env_on("STAGE2_VALUE_FAMILY", "0")
+VALUE_UNITX_ON = env_on("STAGE2_VALUE_UNITX", "0")
 VALUE_FAMILY = {"c": "Ff", "l": "Hh", "r": "\u03a9\u2126kKmMR%",
                 "crystal": "HM", "crystal_2pin": "HM", "crystal_3pin": "HM",
                 "crystal_4pin": "HM", "fuse": "AF", "d": "VA"}
@@ -1026,6 +1027,36 @@ def fit_value_typed(text: str, ctype: str) -> float:
     if any(ch in fam for ch in str(text or "")):
         return s
     return s * 0.55
+
+
+#: 单位 → 它属于哪一类器件的「值」（`STAGE2_VALUE_UNITX`，默认 0 = 关）。
+#: 池子实测（§5.345）阻容值失配 92/179 里，头号错法是**拿耐压行当值**：
+#: `4.7uF -> 6.3V` / `0.1uF -> 16V` / `15pF -> 50V` / 晶振 `12MHz -> 5p`。
+#: 这些串的「像值」分数与真值一样是满分，胜负只看距离，而耐压行常常更近。
+#: `VALUE_FAMILY` 的 0.55 只降权不否决，实测压不住；这里按**单位语义**直接否决。
+UNIT_CLASS = {"F": "cap", "H": "ind", "Hz": "xtal", "\u03a9": "res", "R": "res",
+              "V": "volt", "A": "amp", "W": "watt", "%": "pct"}
+FOREIGN_UNIT = {"c": {"volt", "amp", "watt", "pct", "ind", "xtal", "res"},
+                "l": {"volt", "amp", "watt", "pct", "cap", "xtal", "res"},
+                "r": {"volt", "amp", "watt", "pct", "cap", "ind", "xtal"},
+                "crystal": {"volt", "amp", "watt", "pct", "cap", "res"},
+                "crystal_2pin": {"volt", "amp", "watt", "pct", "cap", "res"},
+                "crystal_3pin": {"volt", "amp", "watt", "pct", "cap", "res"},
+                "crystal_4pin": {"volt", "amp", "watt", "pct", "cap", "res"}}
+_UNIT_SUF = re.compile(r"(Hz|F|H|\u03a9|R|V|A|W|%)\s*$")
+
+
+def fit_value_unitx(text: str, ctype: str) -> float:
+    s = fit_value_typed(text, ctype)
+    if not VALUE_UNITX_ON or s <= 0.0:
+        return s
+    bad = FOREIGN_UNIT.get(str(ctype or ""))
+    if not bad:
+        return s
+    m = _UNIT_SUF.search(str(text or "").strip())
+    if m and UNIT_CLASS.get(m.group(1)) in bad:
+        return 0.0
+    return s
 
 
 def fit_partname(text: str) -> float:
@@ -1650,6 +1681,27 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 seen_box.add(bi)
             picked.append((cid, info))
 
+        # ★ 落选者补位（`STAGE2_ALT_FILL`，默认 0 = 关）：撞号/撞框时高分的拿走，
+        #   低分的**直接掉回 `pNNN`**，哪怕它自己还有第二个空着的候选框可用 ——
+        #   池子 0101 的「邻位串号」（`X1←C11`/`C11←C5`）正是这条链的产物：
+        #   `C11` 那块框被水晶振子抢走，真电容没去拿自己的次优框。这里让落选者
+        #   按自己的候选顺序再挑一次，只拿**没被任何人占过的框/串**。
+        if env_on("STAGE2_ALT_FILL", "0"):
+            _got = {cid for cid, _ in picked}
+            for cid in [c["id"] for c in comps]:
+                if cid in _got:
+                    continue
+                for info in (desig_all.get(cid) or [])[1:]:
+                    can = (info or {}).get("canon")
+                    bi = _box_key(info)
+                    if not can or can in seen_txt or (bi is not None and bi in seen_box):
+                        continue
+                    seen_txt.add(can)
+                    if bi is not None:
+                        seen_box.add(bi)
+                    picked.append((cid, info))
+                    break
+
     # `desig_slots` 给的是**每个元件的全部候选**（阶段三 LLM 仲裁的原料），
     # 不是「最优候选」的列表 —— 后者会让第个三阶段没有任何东西可裁。
     desig_slots: Dict[str, List[dict]] = desig_all
@@ -1833,7 +1885,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         # 参数（r/c/l/...）或器件名（box 等）
         want = "value" if ctype in ("r", "c", "l", "fuse", "crystal_2pin",
                                     "crystal_3pin", "crystal_4pin", "crystal") else "partname"
-        fit = (lambda _t: fit_value_typed(_t, ctype)) if want == "value" else fit_partname
+        fit = (lambda _t: fit_value_unitx(_t, ctype)) if want == "value" else fit_partname
         # 注意：这里**不能**用 `wide` 过滤 —— IC 的器件名本来就长
         # （实测 `MSP432E401YTPDT` 这种），按宽高比筛会把器件名整条筛掉。
         best = None
