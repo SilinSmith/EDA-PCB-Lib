@@ -18,6 +18,8 @@ except ImportError:                     # 直接跑脚本（python eda-pcb\stage
     import sys as _sys, os as _os       # `sys.path[0]` 是本目录，得把 eda-pcb\ 补上
     _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
     from envflag import env_on
+import io
+import json
 import math
 import os
 import re
@@ -2394,6 +2396,17 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                        for r, v in (t.get("reads") or {}).items()
                        if isinstance(v, (tuple, list)) and v and v[0]}}
             for t in texts]
+        # ★ 落盘（`STAGE2_DUMP_READS=1` 时）：`LAST_TEXT_READS` 原来只活在进程内，取不了证。
+        # 写 JSONL 而不是 print —— `Tee-Object` 会吞掉子进程的 stdout。
+        try:
+            _p = os.environ.get("STAGE2_DUMP_PATH") or os.path.join("work", "_reads_dump.jsonl")
+            with io.open(_p, "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({"case": os.environ.get("STAGE2_DUMP_CASE", ""),
+                                     "n": len(LAST_TEXT_READS),
+                                     "reads": LAST_TEXT_READS},
+                                    ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
     return {"comps": out, "net_labels": net_labels, "desig_slots": desig_slots,
             "struct_slots": struct_slots,
