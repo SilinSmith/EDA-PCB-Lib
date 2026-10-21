@@ -1946,7 +1946,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 d = dist_to_rect(ccx, ccy, tb)
                 if d > VALUE_STEAL_R:
                     continue
-                got = _best_read(t["reads"], "value", fit_value)
+                got = _best_read(t["reads"], "value",
+                                 lambda _t: fit_value_unitx(_t, ctype))
                 if not got or got[3] < 1.0:
                     continue
                 s, txt, conf, f = got
