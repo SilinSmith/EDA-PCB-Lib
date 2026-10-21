@@ -66,6 +66,10 @@ PIN_OUT_BOX = float(os.environ.get("STAGE1_PIN_OUT_BOX", "12.0"))
 # 与独立量的 GT 逐侧外伸（L p50 15 / R 10 / T 8 / B 10）方向一致：左边长、上边最短。
 # 设 `STAGE1_PIN_LEG_BOX=""` 即退回单一 `PIN_OUT_BOX`。
 PIN_LEG_BOX = tuple(float(v) for v in (os.environ.get("STAGE1_PIN_LEG_BOX", "12,10,8,10") or "").split(",") if v.strip()) or None
+# 收尾重摆：stub / merge 补出来的点原本按标量腿长摆，这里统一按「最近边 + 该侧腿长」
+# 再摆一次（切向坐标不动）。§5.340.3 里端到端 83.99 与离线 84.33 的差就是这一段。
+PIN_LEG_SNAP = int(os.environ.get("STAGE1_PIN_LEG_SNAP", "0"))
+PIN_LEG_ALL = int(os.environ.get("STAGE1_PIN_LEG_ALL", "0"))
 # 「触到框边」的判定半径
 TOUCH_TOL = 6.0
 # 同一引脚上多个接触点的合并半径（沿框边弧长）
@@ -524,6 +528,28 @@ def _point_on_edge(bbox, e: int, s: float):
     return (x1, y2 - s)
 
 
+def _snap_leg(pins, bbox, legs):
+    """把每个点重摆到「最近框边 + 该侧腿长」（切向坐标不动）。"""
+    if not legs or len(legs) != 4 or not pins:
+        return pins
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    lL, lR, lT, lB = [float(v) for v in legs]
+    out = []
+    for p in pins:
+        px, py = float(p[0]), float(p[1])
+        dl, dr, dt, db = abs(px - x1), abs(px - x2), abs(py - y1), abs(py - y2)
+        m = min(dl, dr, dt, db)
+        if m == dl:
+            out.append((x1 - lL, py))
+        elif m == dr:
+            out.append((x2 + lR, py))
+        elif m == dt:
+            out.append((px, y1 - lT))
+        else:
+            out.append((px, y2 + lB))
+    return out
+
+
 def _leg_for(nx: float, ny: float, out_dist) -> float:
     """标量直接用；4 元组按法线方向取 (L,R,T,B)。设 `STAGE1_PIN_LEG_BOX=""` 即退回标量。"""
     if isinstance(out_dist, (tuple, list)) and len(out_dist) == 4:
@@ -667,7 +693,7 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
         _ct = str(c.get("type") or "").lower()
         _is_ic = ("box" in _ct or "bigic" in _ct)
         _od = PIN_OUT_BOX if _is_ic else out_dist
-        _leg = (PIN_LEG_BOX or _od) if _is_ic else out_dist
+        _leg = ((PIN_LEG_BOX or _od) if (_is_ic or PIN_LEG_ALL) else out_dist)
         # IC 的引脚间距只有 ~10px，不能用 12px 的合并半径（会把邻脚并掉）
         _cr = CLUSTER_IC if _is_ic else cluster_r
         pins = pins_from_touch(bb, pts, touch_tol, _cr, _leg)
@@ -706,6 +732,9 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
                     _b4 = len(pins)
                     pins = _merge_stubs(pins, bb, _ink_s, _od)
                     _ev["stub"] = max(0, len(pins) - _b4)
+        # 逐侧腿长收尾（§5.340.3）：stub/merge 补出的点仍按标量腿长摆，这里统一重摆。
+        if PIN_LEG_SNAP and _is_ic and PIN_LEG_BOX:
+            pins = _snap_leg(pins, bb, PIN_LEG_BOX)
         # 去重（同一位置只留一个），再截断
         dedup: List[Tuple[float, float]] = []
         for p in pins:
