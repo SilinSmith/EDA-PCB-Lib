@@ -3222,22 +3222,31 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             _sing.append((_nk4, "%s.%s" % (_c4, _n4), float(_p4["x"]), float(_p4["y"])))
         _dead4 = set()
         _merged4 = 0
-        for _i4 in range(len(_sing)):
-            _k41, _t41, _x41, _y41 = _sing[_i4]
-            if _k41 in _dead4:
-                continue
-            _b4 = None
-            for _j4 in range(_i4 + 1, len(_sing)):
-                _k42, _t42, _x42, _y42 = _sing[_j4]
-                if _k42 in _dead4:
+        # 同一颗元件的两个引脚不该被并成一条网（那是元件两端的电气隔离），
+        # `STAGE2_NET_PAIR_SAMEC=0` 时禁止这种配对（默认 1 = 保持旧行为）。
+        _samec4 = os.environ.get("STAGE2_NET_PAIR_SAMEC", "1").strip() not in ("", "0")
+        # `STAGE2_NET_PAIR_TWOPASS=1`：两轮——先只配**不同元件**的点，剩下的孤点
+        # 再允许同元件配对（保持「先优先跨元件」的顺序，避免同元件抢走本该跨件配的点）。
+        _two4 = os.environ.get("STAGE2_NET_PAIR_TWOPASS", "0").strip() not in ("", "0")
+        for _pass4 in ((False, True) if _two4 else ((True,) if _samec4 else (False,))):
+            for _i4 in range(len(_sing)):
+                _k41, _t41, _x41, _y41 = _sing[_i4]
+                if _k41 in _dead4:
                     continue
-                _d4 = ((_x41 - _x42) ** 2 + (_y41 - _y42) ** 2) ** 0.5
-                if _d4 <= _pair and (_b4 is None or _d4 < _b4[0]):
-                    _b4 = (_d4, _k42, _t42)
-            if _b4 is not None:
-                out_nets[_k41]["hyperGraph"] = "(%s,%s)" % (_t41, _b4[2])
-                _dead4.add(_b4[1])
-                _merged4 += 1
+                _b4 = None
+                for _j4 in range(_i4 + 1, len(_sing)):
+                    _k42, _t42, _x42, _y42 = _sing[_j4]
+                    if _k42 in _dead4:
+                        continue
+                    if not _pass4 and _t41.split(".", 1)[0] == _t42.split(".", 1)[0]:
+                        continue
+                    _d4 = ((_x41 - _x42) ** 2 + (_y41 - _y42) ** 2) ** 0.5
+                    if _d4 <= _pair and (_b4 is None or _d4 < _b4[0]):
+                        _b4 = (_d4, _k42, _t42)
+                if _b4 is not None:
+                    out_nets[_k41]["hyperGraph"] = "(%s,%s)" % (_t41, _b4[2])
+                    _dead4.add(_b4[1])
+                    _merged4 += 1
         if _dead4:
             out_nets = {_k: _v for _k, _v in out_nets.items() if _k not in _dead4}
         if os.environ.get("STAGE2_NET_PAIR_DBG"):
