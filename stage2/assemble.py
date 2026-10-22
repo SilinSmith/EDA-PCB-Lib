@@ -3202,7 +3202,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             print("[dbg phantom] case=%s cut %d/%d merge=%s moved %d"
                   % (case_id, _cut3, _cut3 + len(out_nets), _merge3,
                      sum(len(v) for v in _pend3.values())))
-    _pair = float(os.environ.get("STAGE2_NET_PAIR", "120") or 0.0)
+    _pair = float(os.environ.get("STAGE2_NET_PAIR", "180") or 0.0)
     if _pair > 0:
         # ★ 单成员网就近配对（`STAGE2_NET_PAIR=px`）：池子 50 案的网成员度分布与 GT 系统性错位——
         # GT 单成员网 789（31%）/ 双成员 1247（49%）；我们 1661（62%）/ 548（21%）

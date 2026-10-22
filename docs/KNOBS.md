@@ -309,7 +309,7 @@
 | `STAGE2_NETLABEL_MIN_W` | `"12"` | `stage2/assign.py:641` |
 | `STAGE2_NET_DROP_PWRONLY` | `"0"` | `stage2/assemble.py:471` |
 | `STAGE2_NET_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:455` |
-| `STAGE2_NET_PAIR` | `"120"` | `stage2/assemble.py:3205` |
+| `STAGE2_NET_PAIR` | `"180"` | `stage2/assemble.py:3205` |
 | `STAGE2_NET_PAIR_DBG` | — | `stage2/assemble.py:3243` |
 | `STAGE2_NET_WELD` | `"16"` | `stage2/assemble.py:590` |
 | `STAGE2_NET_WELD_COS` | `"0.5"` | `stage2/assemble.py:592` |
