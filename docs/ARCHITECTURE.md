@@ -1,5 +1,11 @@
 # 架构说明
 
+> **2026-10-22 校订**：本页的分层与文件职责仍然准确（`stage1/ stage2/ stage3/ fusion/` 四个包
+> 都还在，`pipeline/prun.py` 的消融梯子可用），但**读数与开关默认值不在这里**——以
+> `docs/HANDOFF.md` §1/§3 为准。自本页写完（2026-10-07）之后改过默认的三处：
+> `STAGE1_CROSS_GAP=10`（无焊点十字切段）、`STAGE1_PIN_LEG_BOX="12,10,8,10"`（逐侧腿长）、
+> `STAGE2_NET_PAIR=180`（单成员网配对半径）。工具清单以 `HANDOFF.md` §5 为准。
+
 > 配套阅读：`README.md`（做什么 / 怎么跑）、`RESULTS.md`（实测数字）、
 > `DIAGNOSTICS.md`（怎么量）、`workflow.html`（交互式流程图）。
 > 全部环境开关的清单见 `KNOBS.md`（由 `tools/dev/gen_knobs.py` 生成）。
