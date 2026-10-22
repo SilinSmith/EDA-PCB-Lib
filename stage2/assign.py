@@ -1046,17 +1046,30 @@ FOREIGN_UNIT = {"c": {"volt", "amp", "watt", "pct", "ind", "xtal", "res"},
 _UNIT_SUF = re.compile(r"(Hz|F|H|\u03a9|R|V|A|W|%)\s*$")
 
 
+def is_foreign_value(text: str, ctype: str) -> bool:
+    """读数是不是「别类器件的值」（`6.3V` 之于电容）。`VALUE_UNITX` 与
+    `VALUE_FILL` 共用这一个判定。"""
+    bad = FOREIGN_UNIT.get(str(ctype or ""))
+    if not bad:
+        return False
+    m = _UNIT_SUF.search(str(text or "").strip())
+    return bool(m and UNIT_CLASS.get(m.group(1)) in bad)
+
+
 def fit_value_unitx(text: str, ctype: str) -> float:
     s = fit_value_typed(text, ctype)
     if not VALUE_UNITX_ON or s <= 0.0:
         return s
-    bad = FOREIGN_UNIT.get(str(ctype or ""))
-    if not bad:
-        return s
-    m = _UNIT_SUF.search(str(text or "").strip())
-    if m and UNIT_CLASS.get(m.group(1)) in bad:
+    if is_foreign_value(text, ctype):
         return 0.0
     return s
+
+
+#: 值补候选半径（`STAGE2_VALUE_FILL`，默认 0 = 关）。`VALUE_UNITX` 只会**否决**
+#: 耐压行，否决完那颗元件就空了；真正的容值框被归属判给了邻居，所以要按本类
+#: 单位在半径内再捞一次。收益尚未过噪，故不进默认（§5.345）。
+VALUE_FILL_R = float(os.environ.get("STAGE2_VALUE_FILL", "0"))
+VALUE_FILL_GAIN = float(os.environ.get("STAGE2_VALUE_FILL_GAIN", "0"))
 
 
 def fit_partname(text: str) -> float:
@@ -1959,6 +1972,34 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 sc = _score(s, conf, d, inside(_tcx, _tcy, c["bbox"]))
                 if best is None or sc > best[0]:
                     best = (sc, txt, conf, dict(t, d=d))
+        if want == "value" and VALUE_FILL_R > 0 and (
+                best is None or is_foreign_value(best[1], ctype)):
+            # **值补候选**：只在「当前是空值/异类单位」时出手，不与已正确的值竞争。
+            bx = c["bbox"]
+            ccx, ccy = (bx[0] + bx[2]) / 2.0, (bx[1] + bx[3]) / 2.0
+            _fb = None
+            for t in texts:
+                tb = t.get("bbox")
+                if not tb or len(tb) != 4:
+                    continue
+                if tuple(tb) in _desig_boxes:
+                    continue
+                d = dist_to_rect(ccx, ccy, tb)
+                if d > VALUE_FILL_R:
+                    continue
+                got = _best_read(t["reads"], "value",
+                                 lambda _t: fit_value_unitx(_t, ctype))
+                if not got or got[3] < 1.0:
+                    continue
+                s, txt, conf, f = got
+                if is_foreign_value(txt, ctype):
+                    continue
+                _tcx, _tcy = (tb[0] + tb[2]) / 2.0, (tb[1] + tb[3]) / 2.0
+                sc = _score(s, conf, d, inside(_tcx, _tcy, c["bbox"]))
+                if _fb is None or sc > _fb[0]:
+                    _fb = (sc, txt, conf, dict(t, d=d))
+            if _fb is not None and (best is None or _fb[0] > best[0] + VALUE_FILL_GAIN):
+                best = _fb
         if best is not None:
             _txt = best[1]
             if want == "value" and VALUE_TRIM_ON:
