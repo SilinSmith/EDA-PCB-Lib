@@ -3228,7 +3228,36 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # `STAGE2_NET_PAIR_TWOPASS=1`：两轮——先只配**不同元件**的点，剩下的孤点
         # 再允许同元件配对（保持「先优先跨元件」的顺序，避免同元件抢走本该跨件配的点）。
         _two4 = os.environ.get("STAGE2_NET_PAIR_TWOPASS", "0").strip() not in ("", "0")
+        # `STAGE2_NET_PAIR_AXIS=px`：直连的两枚孤点必须近似**同一条水平/垂直线**
+        # （KiCad 的导线是正交的；纯距离判据会把斜向相邻的两个器件错配成一条网）。
+        # 0 = 关（默认，保持旧行为）。
+        _axis4 = float(os.environ.get("STAGE2_NET_PAIR_AXIS", "0") or 0.0)
+        # `STAGE2_NET_PAIR_GREEDY=1`：把所有候选对按距离**升序**统一贪心（全局最近优先），
+        # 而不是按网序逐点取最近。旧顺序会让先遍历到的点抢走本该属于更近一对的点。
+        _greedy4 = os.environ.get("STAGE2_NET_PAIR_GREEDY", "0").strip() not in ("", "0")
+        if _greedy4:
+            _cands4 = []
+            for _i4 in range(len(_sing)):
+                _k41, _t41, _x41, _y41 = _sing[_i4]
+                for _j4 in range(_i4 + 1, len(_sing)):
+                    _k42, _t42, _x42, _y42 = _sing[_j4]
+                    if not _samec4 and _t41.split(".", 1)[0] == _t42.split(".", 1)[0]:
+                        continue
+                    if _axis4 > 0.0 and min(abs(_x41 - _x42), abs(_y41 - _y42)) > _axis4:
+                        continue
+                    _d4 = ((_x41 - _x42) ** 2 + (_y41 - _y42) ** 2) ** 0.5
+                    if _d4 <= _pair:
+                        _cands4.append((_d4, _k41, _t41, _k42, _t42))
+            _cands4.sort()
+            for _d4, _k41, _t41, _k42, _t42 in _cands4:
+                if _k41 in _dead4 or _k42 in _dead4:
+                    continue
+                out_nets[_k41]["hyperGraph"] = "(%s,%s)" % (_t41, _t42)
+                _dead4.add(_k42)
+                _merged4 += 1
         for _pass4 in ((False, True) if _two4 else ((True,) if _samec4 else (False,))):
+            if _greedy4:
+                break
             for _i4 in range(len(_sing)):
                 _k41, _t41, _x41, _y41 = _sing[_i4]
                 if _k41 in _dead4:
@@ -3239,6 +3268,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                     if _k42 in _dead4:
                         continue
                     if not _pass4 and _t41.split(".", 1)[0] == _t42.split(".", 1)[0]:
+                        continue
+                    if _axis4 > 0.0 and min(abs(_x41 - _x42), abs(_y41 - _y42)) > _axis4:
                         continue
                     _d4 = ((_x41 - _x42) ** 2 + (_y41 - _y42) ** 2) ** 0.5
                     if _d4 <= _pair and (_b4 is None or _d4 < _b4[0]):

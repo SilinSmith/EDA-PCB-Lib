@@ -6,12 +6,12 @@
 统一实现在 `envflag.py`；PowerShell 里 `$env:X=''` 是**删除**变量而不是关功能，
 要关某个开关请写具体假值，例如 `$env:STAGE2_PINNUM_TIGHT='0'`。
 
-共 **666** 个开关。
+共 **668** 个开关。
 
 ## 目录
 
 - [stage1](#stage1)（165）
-- [stage2](#stage2)（247）
+- [stage2](#stage2)（249）
 - [stage3](#stage3)（2）
 - [fusion](#fusion)（133）
 - [vlm](#vlm)（51）
@@ -310,7 +310,9 @@
 | `STAGE2_NET_DROP_PWRONLY` | `"0"` | `stage2/assemble.py:471` |
 | `STAGE2_NET_DROP_UNKEYED` | `"0"` | `stage2/assemble.py:455` |
 | `STAGE2_NET_PAIR` | `"180"` | `stage2/assemble.py:3205` |
-| `STAGE2_NET_PAIR_DBG` | — | `stage2/assemble.py:3252` |
+| `STAGE2_NET_PAIR_AXIS` | `"0"` | `stage2/assemble.py:3234` |
+| `STAGE2_NET_PAIR_DBG` | — | `stage2/assemble.py:3283` |
+| `STAGE2_NET_PAIR_GREEDY` | `"0"` | `stage2/assemble.py:3237` |
 | `STAGE2_NET_PAIR_SAMEC` | `"1"` | `stage2/assemble.py:3227` |
 | `STAGE2_NET_PAIR_TWOPASS` | `"0"` | `stage2/assemble.py:3230` |
 | `STAGE2_NET_WELD` | `"16"` | `stage2/assemble.py:590` |
@@ -390,11 +392,11 @@
 | `STAGE2_PIN_GREY_EVIDENCE` | `"1"` | `stage2/run.py:96` |
 | `STAGE2_PIN_LANE_CLEANUP` | `"light"` | `stage2/run.py:78` |
 | `STAGE2_PIN_LANE_CROP` | `"1"` | `stage2/run.py:77` |
-| `STAGE2_PIN_LEAD_ATTACH` | `"1"` | `stage2/assemble.py:3365` |
-| `STAGE2_PIN_LEAD_DEG` | `"35.0"` | `stage2/assemble.py:3369` |
-| `STAGE2_PIN_LEAD_MOVE` | `"1"` | `stage2/assemble.py:3366` |
-| `STAGE2_PIN_LEAD_MOVE_R` | `"50.0"` | `stage2/assemble.py:3368` |
-| `STAGE2_PIN_LEAD_R` | `"40.0"` | `stage2/assemble.py:3367` |
+| `STAGE2_PIN_LEAD_ATTACH` | `"1"` | `stage2/assemble.py:3396` |
+| `STAGE2_PIN_LEAD_DEG` | `"35.0"` | `stage2/assemble.py:3400` |
+| `STAGE2_PIN_LEAD_MOVE` | `"1"` | `stage2/assemble.py:3397` |
+| `STAGE2_PIN_LEAD_MOVE_R` | `"50.0"` | `stage2/assemble.py:3399` |
+| `STAGE2_PIN_LEAD_R` | `"40.0"` | `stage2/assemble.py:3398` |
 | `STAGE2_PIN_NAME_OCR` | `"off"` | `stage2/run.py:79` |
 | `STAGE2_PIN_NUMBER_REPAIR` | `"0"` | `stage2/run.py:81` |
 | `STAGE2_PIN_OFFSET` | `"0"` | `stage2/assemble.py:2878` |
@@ -413,8 +415,8 @@
 | `STAGE2_PIN_TRUST_DROP` | `""` | `stage2/run.py:103` |
 | `STAGE2_PREFIX` | `"strict"` | `stage2/assign.py:159` |
 | `STAGE2_PREFIX_SKEL` | `"0"` | `stage2/assign.py:169` |
-| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:3328` |
-| `STAGE2_RAIL_SPLIT` | `"1"` | `stage2/assemble.py:3380` |
+| `STAGE2_RAIL_ATTACH` | `"1"` | `stage2/assemble.py:3359` |
+| `STAGE2_RAIL_SPLIT` | `"1"` | `stage2/assemble.py:3411` |
 | `STAGE2_SHAPE_FILL` | `"0"` | `stage2/assign.py:1497` |
 | `STAGE2_SHAPE_MINCONF` | `"0.90"` | `stage2/assign.py:1499` |
 | `STAGE2_SHAPE_PEN` | `"0.60"` | `stage2/assign.py:1498` |
@@ -431,7 +433,7 @@
 | `STAGE2_TP_CV_SUBTYPES` | `"ring3"` | `stage2/assemble.py:192` |
 | `STAGE2_TP_LEDGER` | `"0"` | `stage2/assemble.py:207` |
 | `STAGE2_TP_TRUST_EVIDENCE` | `"1"` | `stage2/assemble.py:204` |
-| `STAGE2_TRACE_DUMP` | `""` | `stage2/assemble.py:3285` |
+| `STAGE2_TRACE_DUMP` | `""` | `stage2/assemble.py:3316` |
 | `STAGE2_UNKEYED_GATE` | `"1"` | `stage2/assemble.py:2269` |
 | `STAGE2_UNKEYED_GATE_N` | `"2"` | `stage2/assemble.py:2270` |
 | `STAGE2_VALUE_DISTW` | `"0.035"` | `stage2/assign.py:623` |
