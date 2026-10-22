@@ -141,6 +141,111 @@ TIGHT_ROLES = tuple(r.strip() for r in
 TEXT_INK = os.environ.get("STAGE2_TEXT_INK", "0").strip().lower() in ("1", "true", "yes", "on")
 TEXT_INK_SAT = float(os.environ.get("STAGE2_TEXT_INK_SAT", "60"))
 TEXT_INK_DARK = float(os.environ.get("STAGE2_TEXT_INK_DARK", "160"))
+
+# ★★★ 字形聚类自举（`STAGE2_GLYPH_VOTE`，**默认 0 = 关**）：同页同一字形的多次读数互相投票。
+#
+# 动机：识别错误是**逐裁剪**随机的——同一个 `4` 在一处读对、在另一处读成 `9`，而它们
+# 在像素上几乎一样。一页上有 60+ 个脚号、只用到 10 个数字，冗余极大；错例里最常见的
+# 又是「差一个字符」（§5.348：错键 71.9% 是同首字母数字差一位），正是投票能吃掉的错误。
+#
+# 做法：把全页文字框按**外观签名**（16×32 二值墨迹）聚成同形簇 → 簇内把每个成员的
+# top-k 候选按置信度加权求和 → 取簇共识；只有当共识串**本来就在该框自己的 top-k 里**
+# （说明不是凭空塞进来的）且簇内分差 ≥ `MARGIN` 时才改写该框的读数。
+# 这条「自己在候选里」的守卫是为了不把 `0/O`、`1/l` 这类真同形字互相污染。
+GLYPH_VOTE = int(os.environ.get("STAGE2_GLYPH_VOTE", "0") or 0)
+GLYPH_VOTE_MIN = int(os.environ.get("STAGE2_GLYPH_VOTE_MIN", "3") or 3)
+GLYPH_VOTE_TAU = float(os.environ.get("STAGE2_GLYPH_VOTE_TAU", "3") or 3)
+GLYPH_VOTE_PURITY = float(os.environ.get("STAGE2_GLYPH_VOTE_PURITY", "0.6") or 0.6)
+GLYPH_VOTE_CONF = float(os.environ.get("STAGE2_GLYPH_VOTE_CONF", "0.35") or 0.35)
+GLYPH_VOTE_OVERRIDE = float(os.environ.get("STAGE2_GLYPH_VOTE_OVERRIDE", "0.6") or 0.6)
+GLYPH_VOTE_BEAM = int(os.environ.get("STAGE2_GLYPH_VOTE_BEAM", "8") or 8)
+GLYPH_VOTE_MAX = int(os.environ.get("STAGE2_GLYPH_VOTE_MAX", "4000") or 4000)
+GLYPH_VOTE_ROLES = tuple(r.strip() for r in os.environ.get(
+    "STAGE2_GLYPH_VOTE_ROLES", "designator,pin_number,pin_name,value").split(",") if r.strip())
+
+
+_STATS: Dict[str, int] = {}
+_EXAMPLES: List = []
+
+
+def glyph_sig(gray: np.ndarray, box: Box, wh: Tuple[int, int] = (16, 32)):
+    """框内墨迹的二值签名（按框均值二值化后缩放），用于同形聚类。"""
+    h, w = gray.shape[:2]
+    x0 = max(0, int(np.floor(box[0])))
+    y0 = max(0, int(np.floor(box[1])))
+    x1 = min(w, int(np.ceil(box[2])))
+    y1 = min(h, int(np.ceil(box[3])))
+    if x1 <= x0 + 1 or y1 <= y0 + 1:
+        return None
+    c = gray[y0:y1, x0:x1]
+    c = cv2.resize(c, wh, interpolation=cv2.INTER_AREA)
+    return (c < float(c.mean())).astype(np.uint8).ravel()
+
+
+def glyph_vote(reads: List[Dict], cands: Dict, sigs: Dict) -> int:
+    """同形簇内投票改写读数。返回被改写的框-角色数（诊断用）。"""
+    order = list(sigs)
+    clusters: List[Dict] = []
+    for key in order:
+        s = sigs[key]
+        hit = None
+        for cl in clusters:
+            if int(np.count_nonzero(cl["rep"] ^ s)) <= GLYPH_VOTE_TAU:
+                hit = cl
+                break
+        if hit is None:
+            clusters.append({"cnt": s.astype(np.int16), "n": 1, "rep": s.copy(),
+                             "members": [key]})
+            continue
+        hit["cnt"] += s
+        hit["n"] += 1
+        hit["rep"] = (2 * hit["cnt"] >= hit["n"]).astype(np.uint8)
+        hit["members"].append(key)
+
+    n_fix = 0
+    why = {"clusters": len(clusters), "big": 0, "twovote": 0, "pure": 0}
+    for cl in clusters:
+        if cl["n"] < GLYPH_VOTE_MIN:
+            continue
+        why["big"] += 1
+        votes: Dict[str, List[float]] = {}
+        for key in cl["members"]:
+            top = cands.get(key) or []
+            if not top:
+                continue
+            t, sc = top[0]
+            if not t or float(sc) < GLYPH_VOTE_CONF:
+                continue
+            v = votes.setdefault(t, [0.0, 0.0])
+            v[0] += 1.0
+            v[1] += float(sc)
+        if len(votes) < 2:
+            continue
+        why["twovote"] += 1
+        total = sum(v[0] for v in votes.values())
+        ranked = sorted(votes.items(), key=lambda kv: (-kv[1][0], -kv[1][1]))
+        best, (cnt, _s) = ranked[0]
+        if total < GLYPH_VOTE_MIN or cnt / total < GLYPH_VOTE_PURITY:
+            continue
+        why["pure"] += 1
+        for i, r in cl["members"]:
+            cur = reads[i].get(r)
+            if not cur or cur[0] == best:
+                continue
+            if float(cur[1]) > GLYPH_VOTE_OVERRIDE:
+                continue                      # 自己读得很像就信自己
+            if not any(t == best for t, _s in (cands.get((i, r)) or [])):
+                continue                      # 该框自己没考虑过这个串 ⇒ 不改
+            if os.environ.get("STAGE2_GLYPH_VOTE_DBG", "0") not in ("0", "", "off"):
+                _STATS[r] = _STATS.get(r, 0) + 1
+                if len(_EXAMPLES) < 24:
+                    _EXAMPLES.append((r, cur[0], best, round(float(cur[1]), 2), cl["n"]))
+            reads[i][r] = (best, float(cur[1]))
+            n_fix += 1
+    if os.environ.get("STAGE2_GLYPH_VOTE_DBG", "0") not in ("0", "", "off"):
+        print("[glyph] 漏斗 %s" % why)
+    return n_fix
+
 # ★ 「叠行注释块按行切开」（见 `split_stacked`）：高 ≥ LINESPLIT_H × 页面中位字高的框才切。
 LINESPLIT = os.environ.get("TEXT_LINESPLIT", "1").strip().lower() in ("1", "true", "yes", "on")
 LINESPLIT_H = float(os.environ.get("TEXT_LINESPLIT_H", "1.7"))
@@ -562,9 +667,49 @@ class TextEngine:
                 got = rr.read_many(gray, part)
                 for (i, r), (txt, conf) in zip(kys[s:s + self.chunk], got):
                     reads[i][r] = (txt, float(conf))
+        if GLYPH_VOTE > 0:
+            self._glyph_vote(bgr, gray, boxes, roles, rec, reads)
         return [{"bbox": boxes[i], "reads": reads[i],
                  **({"cfrac": colored_frac(bgr, boxes[i])} if TEXT_INK else {})}
                 for i in range(len(boxes))]
+
+    # ------------------------------------------------------------------
+    def _glyph_vote(self, bgr: np.ndarray, gray: np.ndarray, boxes: Sequence[Box],
+                    roles: Sequence[str], rec, reads: List[Dict]) -> None:
+        """`STAGE2_GLYPH_VOTE` 的实装：算签名 + top-k 候选，然后交给 `glyph_vote`。"""
+        vroles = [r for r in roles if r in GLYPH_VOTE_ROLES]
+        if not vroles:
+            return
+        sigs: Dict = {}
+        uses: Dict = {}
+        want_tight = bool(TIGHT_ROLES) and any(r in TIGHT_ROLES for r in vroles)
+        for i, b in enumerate(boxes):
+            cb = pad_box(b, self.pad_min, self.pad_frac,
+                         pad_min_y=self.pad_min_y, pad_frac_y=self.pad_frac_y)
+            tb = tight_ink_box(bgr, b) if want_tight else None
+            for r in vroles:
+                use = cb
+                if tb is not None and r in TIGHT_ROLES:
+                    use = pad_box(tb, self.pad_min, self.pad_frac,
+                                  pad_min_y=self.pad_min_y,
+                                  pad_frac_y=(PINNUM_PAD_FRAC_Y if r == "pin_number"
+                                              else self.pad_frac_y))
+                s = glyph_sig(gray, use)
+                if s is not None:
+                    sigs[(i, r)] = s
+                    uses[(i, r)] = use
+        keys = list(sigs)[:GLYPH_VOTE_MAX]
+        if not keys:
+            return
+        got = rec.read_topk(gray, [(uses[k], k[1]) for k in keys],
+                            k=GLYPH_VOTE, beam=GLYPH_VOTE_BEAM)
+        cands = {k: v for k, v in zip(keys, got)}
+        n = glyph_vote(reads, cands, {k: sigs[k] for k in keys})
+        if os.environ.get("STAGE2_GLYPH_VOTE_DBG", "0") not in ("0", "", "off"):
+            print("[glyph] 簇改写 %d / 参与 %d  roles=%s" % (n, len(keys), _STATS))
+            for e in _EXAMPLES:
+                print("[glyph]   %s %r -> %r conf=%.2f 簇=%d" % e)
+            _EXAMPLES.clear()
 
     # ------------------------------------------------------------------
     def describe(self) -> str:
