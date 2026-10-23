@@ -81,6 +81,26 @@ PIN_LEG_INK = int(os.environ.get("STAGE1_PIN_LEG_INK", "0"))
 PIN_LEG_INK_MAX = float(os.environ.get("STAGE1_PIN_LEG_INK_MAX", "26"))
 PIN_LEG_INK_MIN = float(os.environ.get("STAGE1_PIN_LEG_INK_MIN", "6"))
 LEG_INK_N = {"n": 0}                    # 诊断计数：实际量到墨迹腿长的元件数
+# 两脚元件（C/R/L/LED/D）的引脚点直接落到**导线端点**上。
+# 动机（§5.359 的 `position_mismatch` 分解）：官方 10 的 38 个位置错里 **28 个是法向**，
+# 中位 |d|=9.6px，且集中在两脚件（`1/U1` 右列 7 脚 −10、`3/C1` −9.8、`6/LED1` +10.9、
+# `7/C8` −7.0…）——GT 引线长度在 3~22px 之间变化，任何常数腿长都错。
+# 两脚件的引线端点就是导线端点（GT 的 `pin.point` 落在导线起端），所以直接在
+# 「已检出的线段端点」里找：朝外、`|切向 ≤ PIN_WIRE_TAN|`、距离 ≤ `PIN_WIRE_R`。
+# 度 1 端点优先（两条线段的交点不是引线端），找不到就退回原点位。
+PIN_WIRE_END = int(os.environ.get("STAGE1_PIN_WIRE_END", "0"))
+PIN_WIRE_R = float(os.environ.get("STAGE1_PIN_WIRE_R", "30"))
+PIN_WIRE_TAN = float(os.environ.get("STAGE1_PIN_WIRE_TAN", "4"))
+PIN_WIRE_N = {"n": 0, "miss": 0}         # 诊断计数：改到的引脚数 / 没找到的引脚数
+# IC 逐元件逐侧腿长，用**符号色**量（`STAGE1_PIN_LEG_COLOR`）。
+# 墨迹法失败的原因已定案（§5.358）：引线与导线同为墨、在带内连成一片，`Pin.ln` 量到的是
+# 带长。但这些图纸里**引线是符号色（暗红）、导线是绿色**，颜色把它们分开了：
+# 从框边向外走，红像素连续段有多长，引线就有多长；红段结束处常常就是导线起点。
+# 只在有色页面上生效（黑白页面没有符号色 ⇒ mask 为空 ⇒ 退回常数）。
+PIN_LEG_COLOR = int(os.environ.get("STAGE1_PIN_LEG_COLOR", "0"))
+PIN_LEG_COLOR_MAX = float(os.environ.get("STAGE1_PIN_LEG_COLOR_MAX", "30"))
+PIN_LEG_COLOR_GAP = int(os.environ.get("STAGE1_PIN_LEG_COLOR_GAP", "2"))
+PIN_LEG_COLOR_N = {"n": 0, "empty": 0}
 # 「触到框边」的判定半径
 TOUCH_TOL = 6.0
 # 同一引脚上多个接触点的合并半径（沿框边弧长）
@@ -711,10 +731,142 @@ def _merge_stubs(pins, bb, ink, out_dist):
     return out
 
 
+def _color_leg_box(bb, sym):
+    """用符号色掩膜量 (L, R, T, B) 四侧引线长度；量不到的侧为 None。
+
+    做法：对每条边、沿边逐行/逐列看框外 `PIN_LEG_COLOR_MAX` 以内的符号色像素，
+    取「从框边出发的连续段长」（允许 `PIN_LEG_COLOR_GAP` 个空像素，抗抗锯齿断点），
+    同一侧全部段长取中位数。段长 <1 的不计（噪声）。
+    """
+    if sym is None or not len(sym):
+        return None
+    H, W = sym.shape[:2]
+    x0, y0, x1, y1 = [int(round(float(v))) for v in bb]
+    R = int(max(4, PIN_LEG_COLOR_MAX))
+    gap = max(0, int(PIN_LEG_COLOR_GAP))
+    out = []
+    for side in ("L", "R", "T", "B"):
+        lens = []
+        if side in ("L", "R"):
+            ya, yb = max(0, y0), min(H, y1 + 1)
+            if side == "L":
+                xa, xb, step, base = max(0, x0 - R), max(1, x0), -1, x0
+            else:
+                xa, xb, step, base = min(W, x1 + 1), min(W, x1 + 1 + R), 1, x1
+            if xb - xa < 1 or yb - ya < 2:
+                continue
+            sub = sym[ya:yb, xa:xb]
+            for r in range(sub.shape[0]):
+                row = sub[r]
+                idx = np.nonzero(row)[0]
+                if not idx.size:
+                    continue
+                # 从框边一侧起算（L 边取最大列号、R 边取最小列号）
+                edge_col = row.size - 1 if step < 0 else 0
+                if not row[edge_col]:
+                    # 允许框边错开 2px：找最靠边的红像素
+                    near = idx.max() if step < 0 else idx.min()
+                    if abs(int(near) - edge_col) > 2:
+                        continue
+                    edge_col = int(near)
+                c, last, g = edge_col, edge_col, 0
+                while 0 <= c + step < row.size:
+                    c += step
+                    if row[c]:
+                        last, g = c, 0
+                    else:
+                        g += 1
+                        if g > gap:
+                            break
+                L = abs(last - edge_col) + 1
+                if L >= 2:
+                    lens.append(float(L))
+        else:
+            xa, xb = max(0, x0), min(W, x1 + 1)
+            if side == "T":
+                ya, yb, step, base = max(0, y0 - R), max(1, y0), -1, y0
+            else:
+                ya, yb, step, base = min(H, y1 + 1), min(H, y1 + 1 + R), 1, y1
+            if yb - ya < 1 or xb - xa < 2:
+                continue
+            sub = sym[ya:yb, xa:xb]
+            for c in range(sub.shape[1]):
+                col = sub[:, c]
+                idx = np.nonzero(col)[0]
+                if not idx.size:
+                    continue
+                edge_row = col.size - 1 if step < 0 else 0
+                if not col[edge_row]:
+                    near = idx.max() if step < 0 else idx.min()
+                    if abs(int(near) - edge_row) > 2:
+                        continue
+                    edge_row = int(near)
+                r, last, g = edge_row, edge_row, 0
+                while 0 <= r + step < col.size:
+                    r += step
+                    if col[r]:
+                        last, g = r, 0
+                    else:
+                        g += 1
+                        if g > gap:
+                            break
+                L = abs(last - edge_row) + 1
+                if L >= 2:
+                    lens.append(float(L))
+        out.append(float(np.median(lens)) if len(lens) >= 2 else None)
+    if all(v is None for v in out):
+        PIN_LEG_COLOR_N["empty"] += 1
+        return None
+    return tuple(out)
+
+
+def _snap_to_wire_end(pins, bb, ends, free=None):
+    """把两脚件的引脚点挪到「朝外的、度 1 的导线端点」上（`STAGE1_PIN_WIRE_END`）。
+
+    `pins` 是 `(x, y)` 列表（框边 + 常数腿长）；对每个点，向元件中心的反方向看
+    `PIN_WIRE_R` 以内，只在「切向偏移 ≤ `PIN_WIRE_TAN`」的端点里取最近的一个：
+    同一颗元件上的两个引脚各自找自己的端点，绝不抢（一对一）。
+    """
+    cx, cy = (bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0
+    cand = ends if free is None or not len(free) else ends[free]
+    if not len(cand):
+        cand = ends
+    used = set()
+    out = []
+    for p in pins:
+        vx, vy = p[0] - cx, p[1] - cy
+        L = math.hypot(vx, vy)
+        if L < 1e-6:
+            out.append(p)
+            continue
+        ux, uy = vx / L, vy / L
+        best, bd = None, PIN_WIRE_R + 1e-6
+        for i, e in enumerate(map(tuple, cand)):
+            if i in used:
+                continue
+            dx, dy = e[0] - p[0], e[1] - p[1]
+            d = math.hypot(dx, dy)
+            if d > bd or d < 1.0:
+                continue
+            along = dx * ux + dy * uy                    # 朝外分量
+            across = abs(-dx * uy + dy * ux)             # 切向偏移
+            if along < 0.5 * d or across > PIN_WIRE_TAN:
+                continue
+            best, bd = i, d
+        if best is None:
+            PIN_WIRE_N["miss"] += 1
+            out.append(p)
+        else:
+            used.add(best)
+            PIN_WIRE_N["n"] += 1
+            out.append((float(cand[best][0]), float(cand[best][1])))
+    return out
+
+
 def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
               cluster_r: float = CLUSTER_R, out_dist: float = PIN_OUT,
               sample_step: float = SAMPLE_STEP, use_prior: bool = True,
-              ink=None):
+              ink=None, sym_ink=None):
     """给每个元件找引脚。返回 {comp_id: [(x, y), ...]}（图像坐标）。
 
     `texts` 用于「文字不是引脚/桩」的两档处理：`STAGE1_PIN_STUB_TEXT=1` 只让**桩证据**
@@ -733,6 +885,16 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
         except Exception:                                 # pragma: no cover
             pass
     pts = sample_segments(segments, sample_step)
+    # ★ 两脚元件「引脚点落到导线端点」的候选端点（`STAGE1_PIN_WIRE_END`）。
+    _we_pos = _we_free = None
+    if PIN_WIRE_END and len(segments):
+        _ends = np.asarray(
+            [[float(s[0][0]), float(s[0][1])] for s in segments] +
+            [[float(s[-1][0]), float(s[-1][1])] for s in segments], np.float64)
+        if len(_ends):
+            _d2 = ((_ends[:, None, :] - _ends[None, :, :]) ** 2).sum(-1)
+            _we_pos = _ends
+            _we_free = (_d2 <= 4.0).sum(1) == 1        # 度 1 = 只属于一条线段
     # ★ 跨引线吸附的目标点集（见 `STAGE1_PIN_LEAD`）：整张图只算一次。
     _lead_tgt = _lead_mask = None
     if PIN_LEAD > 0 and len(segments):
@@ -769,6 +931,11 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
                     _inkm = ink
             _leg = _leg_tuple(_leg, _ink_leg_box(bb, _inkm))
             LEG_INK_N["n"] += 1
+        if PIN_LEG_COLOR and _is_ic and sym_ink is not None:
+            _cl = _color_leg_box(bb, sym_ink)
+            if _cl is not None:
+                _leg = _leg_tuple(_leg, _cl)
+                PIN_LEG_COLOR_N["n"] += 1
         # IC 的引脚间距只有 ~10px，不能用 12px 的合并半径（会把邻脚并掉）
         _cr = CLUSTER_IC if _is_ic else cluster_r
         pins = pins_from_touch(bb, pts, touch_tol, _cr, _leg)
@@ -863,6 +1030,9 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
                 if _nsnap:
                     dedup = _snapped
                     _ev["lead"] = _nsnap
+        if PIN_WIRE_END and (not _is_ic) and _we_pos is not None and dedup:
+            dedup = _snap_to_wire_end(dedup, bb, _we_pos, _we_free)
+            _ev["wire_end"] = len(dedup)
         out[c["id"]] = dedup[:MAX_PINS]
         if _latent:
             LATENT[c["id"]] = list(_latent)

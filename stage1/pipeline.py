@@ -672,8 +672,15 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
             # 因为「导线触到框边」这条主判据看不见**没接线**的引脚（220 张实测
             # 覆盖率只有 0.45、`point@5px` 仅 16.8%）。
             _ink = (cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) < ray_mod.INK).astype(np.uint8)
+            # ★ 符号色掩膜（`STAGE1_PIN_LEG_COLOR`）：引线是暗红、导线是绿色，颜色能
+            #   把两者分开，用来逐元件量引线长度（见 `stage1/pins.py::_color_leg_box`）。
+            _sym = None
+            if nets_mod.pins_mod.PIN_LEG_COLOR:
+                _hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+                _h, _s, _v = _hsv[:, :, 0], _hsv[:, :, 1], _hsv[:, :, 2]
+                _sym = (((_h <= 10) | (_h >= 170)) & (_s >= 60) & (_v >= 50)).astype(np.uint8)
             comp_pins = nets_mod.build_pins(
-                comps, w.get("segments") or [], texts=texts, ink=_ink)
+                comps, w.get("segments") or [], texts=texts, ink=_ink, sym_ink=_sym)
             # ★★ 引脚**列枚举**：把「框外那一排引脚号 / 框内那一排引脚名」的
             # 等距格点补进 `comp_pins`。规则是**不丢弃**：枚举点附近已有导线触点
             # 就用触点（网络装配靠它），没有触点就用格点坐标（= 补出来的脚），
