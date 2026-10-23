@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import random
+import os
 from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Sequence
@@ -140,6 +141,16 @@ def _ink_band(img: Image.Image, cy1: int, cy2: int, cx1: int, cx2: int,
     return ny1, ny2, glyph_h
 
 
+# 裁剪缩放的重采样核。默认 BILINEAR 是训练与推理共用的历史口径；小字（字高 5~8px）
+# 放大到 IMG_H=32 时核的选择会直接影响笔画锐度，故留一个只改推理侧的开关供 A/B。
+_RESAMPLE = {
+    "bilinear": Image.BILINEAR,
+    "bicubic": Image.BICUBIC,
+    "lanczos": Image.LANCZOS,
+    "nearest": Image.NEAREST,
+}.get((os.environ.get("TEXTREC_RESAMPLE") or "bilinear").strip().lower(), Image.BILINEAR)
+
+
 def crop_gray(img: Image.Image, bbox, img_h: "int | None" = None,
               max_w: "int | None" = None, augment: bool = False, rng=None):
     """按 bbox 裁一块灰度图并缩放到统一高度。**训练与推理必须共用这一个函数**，
@@ -181,7 +192,7 @@ def crop_gray(img: Image.Image, bbox, img_h: "int | None" = None,
     ch, cw = crop.size[1], crop.size[0]
     new_w = int(round(img_h * cw / max(1, ch)))
     new_w = max(C.MIN_W, min(max_w, new_w))
-    return crop.resize((new_w, img_h), Image.BILINEAR)
+    return crop.resize((new_w, img_h), _RESAMPLE)
 
 
 class CropDataset(Dataset):

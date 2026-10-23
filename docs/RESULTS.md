@@ -25299,3 +25299,56 @@ tp/fp/fn 合计 407/261/232，无单案塌陷 ⇒ 不是某张图的特例。
 即交付权重的第 73/74 轮。判分仍用官方 10 `protocol4`（CPU、确定性）。
 
 工具：`eda-pcb/tools/dev/self_labels.py`（`--limit` 冒烟、`--dbg` 逐页计数）。
+
+### 5.361.3 训练结果：自训练整体判负（armS1 第 72 轮 = 87.40，交付 88.73）
+`--resume weights/textrec_best.pt --epochs 74 --batch 128 --lr 1.5e-5 --device cpu`
+（1765 步/轮、单轮 2554 s）。第 72 轮在自训练 val 上大幅改善
+（`valCER 0.0645 / valExact 0.8701`，交付权重同划分是 0.15355/0.73677），
+但官方 10 `protocol4` **掉到 87.40**（comp 0.9309 / pin 0.8094 / netH 0.9489 / line 0.6028）。
+
+机理：自训练标签来自**模型自己的读数**，它在 200 页上的错误被当成真值强化，
+「模型已会但判错」的部分并没有被纠正，反而把本域特有的错读（`C151 -> C15` 这类
+尾字丢失）学成了先验；同时 200 页与交付域的字形分布差异被 `valCER` 掩盖
+（自训练 val 也是自标签，越练越一致）。⇒ **自训练不是域对齐手段**，第 73 轮未跑完即终止。
+教训：用自标签监控自训练是循环论证，判决只能看外部尺子（官方 10 / 池子）。
+
+## §5.362 裁剪重采样核：BILINEAR 已是训练/推理的共同口径，改核必亏
+`textrec/dataset.py` 新增 `TEXTREC_RESAMPLE`（`bilinear`(默认)/`bicubic`/`lanczos`/`nearest`），
+只影响 `crop_gray` 的最后一跳 `resize((new_w, IMG_H))`。动机：小字（字高 5~8px）放大到
+`IMG_H=32` 时核选择会改变笔画锐度。官方 10 `protocol4`：
+
+| 核 | 总分 | comp | pin | netH | line |
+|---|---:|---:|---:|---:|---:|
+| `bilinear`（默认） | **88.73** | 0.9505 | 0.8381 | 0.9486 | 0.6060 |
+| `bicubic` | 87.76 | 0.9425 | 0.8213 | 0.9402 | 0.6046 |
+| `lanczos` | 87.81 | 0.9425 | 0.8189 | 0.9432 | 0.6051 |
+
+⇒ 训练时用的是 BILINEAR（`crop_gray` 唯一实现），推理换核等于引入预处理不匹配。
+开关保留作诊断，默认必须 `bilinear`。
+
+## §5.363 双权重集成：三种合并方式都不过线
+`stage2/text.py` 新增 `STAGE2_CKPT_ENS`（第二权重）+ `STAGE2_ENS_MODE`
+（`conf` 逐格按「置信度领先 `STAGE2_ENS_MARGIN` 才换」/ `logit` 后验平均）+
+`STAGE2_ENS_ROLES`；`textrec/infer.py` 新增 `logits_many()`（逐条前向返回 `(T,C)` 后验）
+与 `decode_probs()`（贪心 CTC + 与 `read_many` 同口径的几何平均置信度）。
+动机：两个不同 epoch/语料的权重误差不相关，合并应优于单模型。
+
+官方 10 `protocol4`（基线 88.73）：
+
+| 臂 | 第二权重 | 总分 | comp | pin |
+|---|---|---:|---:|---:|
+| `conf` 全角色 m0.05 | `textrec_pre_mix_20261016.pt`(e69) | 88.38 | 0.9473 | 0.8314 |
+| `conf` 强制换（m−9） | 同上 | 86.05 | 0.9044 | 0.8082 |
+| `conf` 仅 `designator,value` | 同上 | **88.85** | 0.9525 | 0.8381 |
+| `conf` 仅 `pin_number,pin_name` | 同上 | 88.80 | 0.9531 | 0.8381 |
+| `logit` 后验平均 | 同上 | 87.34 | 0.9317 | 0.8274 |
+| `conf` 仅 `designator,value` | `work/_train_armA/best.pt` | 88.65 | 0.9479 | 0.8381 |
+| `conf` 仅 `designator,value` | `work/_train_armB/best.pt` | 88.59 | 0.9460 | 0.8381 |
+| `conf` 仅 `designator,value` | `work/_train_armS1/best.pt` | 88.48 | 0.9460 | 0.8348 |
+
+池 50 案（`protocol3`，基线 armB2 = 36.357）：`conf` 仅 `designator,value` + e69 权重 =
+**36.588**（comp 0.5830），配对 **+0.231，t 1.24，20 胜 10 负**。
+
+结论：唯一两尺同向的是「弱 e69 权重 + 只在位号/值上按置信度换」，但
+官方 10 +0.12、池子 t 1.24 都**不过证据线**（§5.347.5），且推理时间翻倍；
+后验平均在强/弱权重差距大时把强的一侧拉向弱侧（87.34）。⇒ 三臂全部默认关。

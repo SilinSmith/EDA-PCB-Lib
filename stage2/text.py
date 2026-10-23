@@ -153,6 +153,13 @@ TEXT_INK_DARK = float(os.environ.get("STAGE2_TEXT_INK_DARK", "160"))
 # （说明不是凭空塞进来的）且簇内分差 ≥ `MARGIN` 时才改写该框的读数。
 # 这条「自己在候选里」的守卫是为了不把 `0/O`、`1/l` 这类真同形字互相污染。
 GLYPH_VOTE = int(os.environ.get("STAGE2_GLYPH_VOTE", "0") or 0)
+ENS_MARGIN = float(os.environ.get("STAGE2_ENS_MARGIN", "0.05") or 0.0)
+ENS_MODE = (os.environ.get("STAGE2_ENS_MODE") or "conf").strip().lower()
+ENS_ROLES = tuple(r.strip() for r in
+                  (os.environ.get("STAGE2_ENS_ROLES") or "designator,value,pin_number,pin_name").split(",")
+                  if r.strip())
+ENS_DBG = os.environ.get("STAGE2_ENS_DBG", "0") not in ("0", "", "off")
+_ENS: List[Tuple[str, str, float, float]] = []
 GLYPH_VOTE_MIN = int(os.environ.get("STAGE2_GLYPH_VOTE_MIN", "3") or 3)
 GLYPH_VOTE_TAU = float(os.environ.get("STAGE2_GLYPH_VOTE_TAU", "3") or 3)
 GLYPH_VOTE_PURITY = float(os.environ.get("STAGE2_GLYPH_VOTE_PURITY", "0.6") or 0.6)
@@ -570,6 +577,8 @@ class TextEngine:
         self._tried = False
         self._rec2 = None
         self._tried2 = False
+        self._rec3 = None
+        self._tried3 = False
         self.note = ""
 
     # ------------------------------------------------------------------
@@ -616,6 +625,21 @@ class TextEngine:
         except Exception:                                        # noqa: BLE001
             self._rec2 = None
         return self._rec2
+
+    def recognizer_ens(self):
+        """`STAGE2_CKPT_ENS` 的第二权重（装同一份代码、不同 epoch/语料），未设置返回 None。"""
+        if self._tried3:
+            return self._rec3
+        self._tried3 = True
+        p = (os.environ.get("STAGE2_CKPT_ENS") or "").strip()
+        if not p or not Path(p).is_file():
+            return None
+        try:
+            from textrec.infer import Recognizer
+            self._rec3 = Recognizer.load(Path(p), device=self.device)
+        except Exception:                                        # noqa: BLE001
+            self._rec3 = None
+        return self._rec3
 
     # ------------------------------------------------------------------
     def read(self, bgr: np.ndarray, boxes: Sequence[Box],
@@ -667,6 +691,37 @@ class TextEngine:
                 got = rr.read_many(gray, part)
                 for (i, r), (txt, conf) in zip(kys[s:s + self.chunk], got):
                     reads[i][r] = (txt, float(conf))
+        rec3 = self.recognizer_ens()
+        if rec3 is not None and ENS_MODE == "logit":
+            # 后验平均：两个权重在同一裁片上的 softmax 逐时步平均后解码。
+            for s in range(0, len(items), self.chunk):
+                part = items[s:s + self.chunk]
+                lp1 = rec.logits_many(gray, part)
+                lp2 = rec3.logits_many(gray, part)
+                for (i, r), a1, a2 in zip(keys[s:s + self.chunk], lp1, lp2):
+                    if r not in ENS_ROLES or reads[i].get(r) is None:
+                        continue
+                    t = min(a1.shape[0], a2.shape[0])
+                    p = 0.5 * (np.exp(a1[:t]) + np.exp(a2[:t]))
+                    txt, conf = rec.decode_probs(p)
+                    cur = reads[i][r]
+                    if txt and (txt != cur[0]) and ENS_DBG:
+                        _ENS.append((cur[0], txt, cur[1], float(conf)))
+                    reads[i][r] = (txt, float(conf))
+        elif rec3 is not None:
+            # `STAGE2_CKPT_ENS`：第二个权重独立重读同一批裁片，逐 (框,角色) 按
+            # 「置信度领先 ENS_MARGIN 才换」合并。两个模型误差不相关，换的只是
+            # 一方明显更确定的那些格子。
+            for s in range(0, len(items), self.chunk):
+                got = rec3.read_many(gray, items[s:s + self.chunk])
+                for (i, r), (txt, conf) in zip(keys[s:s + self.chunk], got):
+                    cur = reads[i].get(r)
+                    if cur is None or r not in ENS_ROLES:
+                        continue
+                    if float(conf) > cur[1] + ENS_MARGIN:
+                        if ENS_DBG:
+                            _ENS.append((cur[0], txt, cur[1], float(conf)))
+                        reads[i][r] = (txt, float(conf))
         if GLYPH_VOTE > 0:
             self._glyph_vote(bgr, gray, boxes, roles, rec, reads)
         return [{"bbox": boxes[i], "reads": reads[i],

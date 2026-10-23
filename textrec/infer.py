@@ -285,6 +285,45 @@ class Recognizer:
             out.append(self._beam(logp[:tmax], k=k, beam=beam))
         return out
 
+    def logits_many(self, image: ImageLike,
+                    items: Iterable[Tuple[Bbox, object]]) -> List[np.ndarray]:
+        """逐条前向，返回每个样本的 `log_softmax` 矩阵 `(T, C)`（不补白、不解码）。
+
+        供**多权重后验平均**用：两个模型的 CTC 后验在同一裁片上逐时步平均，
+        再贪心解码，通常比「按置信度挑一个」稳（后者会把一方的高置信错读留下）。
+        有效时步与 `read_topk` 同一口径（`width // WIDTH_REDUCTION + EXTRA_STEPS`）。
+        """
+        img = _as_pil(image)
+        items = list(items)
+        out: List[np.ndarray] = []
+        for bbox, role in items:
+            crop = crop_gray(img, bbox, self.img_h, self.max_w)
+            a = np.asarray(crop, dtype=np.float32) / 255.0
+            a = ((a - 0.5) / 0.5).astype(np.float32)
+            batch = torch.from_numpy(a[None, None, :, :]).to(self.device)
+            role_t = torch.tensor([_role_id(role)], dtype=torch.long,
+                                  device=self.device)
+            with torch.no_grad():
+                logp = self.model(batch, role_t).log_softmax(2)[:, 0, :].detach().cpu().numpy()
+            tmax = max(1, min(logp.shape[0], a.shape[1] // WIDTH_REDUCTION + EXTRA_STEPS))
+            out.append(logp[:tmax].astype(np.float32))
+        return out
+
+    def decode_probs(self, prob: np.ndarray) -> Tuple[str, float]:
+        """贪心 CTC 解码 + 与 `read_many` 同口径的置信度（发射字符概率几何平均）。"""
+        idx = prob.argmax(axis=1)
+        chars, prev, ps = [], -1, []
+        for t, c in enumerate(idx):
+            c = int(c)
+            if c != prev and c != BLANK:
+                ch = self.charset.itos.get(c, "")
+                if ch:
+                    chars.append(ch)
+                    ps.append(float(prob[t, c]))
+            prev = c
+        conf = float(np.exp(np.mean(np.log(np.clip(ps, 1e-6, 1.0))))) if ps else 0.0
+        return "".join(chars), conf
+
     def _beam(self, lp, k: int = 5, beam: int = 8) -> List[Tuple[str, float]]:
         """CTC 前缀 beam 搜索。状态 = (前缀, log p(blk), log p(非blk), 字数和, 字数)。"""
         neg = -1e9
