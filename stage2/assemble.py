@@ -532,6 +532,13 @@ MIN_EDGE_LEN = float(os.environ.get("STAGE2_MIN_EDGE_LEN", "20"))
 # 关 25.3549 / 导线 tp 46 / 导线 F1=0 共 **8** 张）。用户明确在意「某个小分爆 0」，
 # 所以**默认关**、旋钮留着。见 `merge_collinear` 的完整推导。
 EDGE_MERGE = env_on("STAGE2_EDGE_MERGE", "0")
+# ★ 碎边「并集」模式（`STAGE2_EDGE_UNION`，默认 **0 = 关**）。
+# `EDGE_MERGE` 是**替换**（细边被长边取代），本开关是**并集**：细边全留，再把焊出来
+# 的长边追加进去（端点与某条细边重合的重复项丢掉）。动机：官方 `net_line_f1` 的
+# 一对一指派下，GT 长边需要一条**整跨**的预测边才拿得到 tp，GT 短边又需要细边——
+# 替换模式必然顾此失彼。并集的代价是边数变多（fp 涨），收益是被过度切分的 GT 长边
+# 终于能被命中。
+EDGE_UNION = env_on("STAGE2_EDGE_UNION", "0")
 # ★ 边的端点吸附到本网引脚点的半径（`STAGE2_EDGE_SNAP`，默认 **10.0**）。
 # 见 `assemble()` 网络循环里的长注释：GT 边有 20.2% 的端点落在本网引脚 5px 内，
 # 我们只有 2.1%；机制是 `extract_wires` 挖空元件框 ⇒ 导线断在框边（差 12~20px）。
@@ -1772,6 +1779,27 @@ def merge_collinear(runs: List[list], join_tol: float = None,
                 break
     return out
 
+def union_edges(fine: List[list], merged: List[list], eps: float = 0.5) -> List[list]:
+    """`merged` 里不与 `fine` 重合（任一端点序）的那些，去重后返回。"""
+    def sig(p, q):
+        return (round(p["x"] / eps), round(p["y"] / eps),
+                round(q["x"] / eps), round(q["y"] / eps))
+    have = set()
+    for r in fine:
+        s = sig(r[0], r[-1])
+        have.add(s)
+        have.add((s[2], s[3], s[0], s[1]))
+    out = []
+    for r in merged:
+        s = sig(r[0], r[-1])
+        rev = (s[2], s[3], s[0], s[1])
+        if s in have or rev in have:
+            continue
+        have.add(s)
+        have.add(rev)
+        out.append([r[0], r[-1]])
+    return out
+
 # 阻容的 `value` 只写「含字母/Ω/μ」的串，否则写 null。
 # 官方 `component_text_ok`（metrics.py:149-157）对 VALUE_TYPES 比 `value` **逐字符相等**，
 # 而官方语料里 r/c 的 value 只有两种形态：`None`（220 张 3294 个里的 966 = 29.3%）或
@@ -2682,8 +2710,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             if len(pt) >= 2:
                 seg_pts.append(pt)
         # ★ 先把共线碎边焊成两点长边，再逐条过长度闸门（见 `merge_collinear` 的长注释）。
-        if EDGE_MERGE and len(seg_pts) > 1:
-            seg_pts = merge_collinear([[p[0], p[-1]] for p in seg_pts])
+        if (EDGE_MERGE or EDGE_UNION) and len(seg_pts) > 1:
+            fine = [[p[0], p[-1]] for p in seg_pts]
+            merged = merge_collinear(fine)
+            seg_pts = (merged + union_edges(fine, merged)) if EDGE_UNION else merged
         for pt in seg_pts:
             if len(pt) < 2:
                 continue

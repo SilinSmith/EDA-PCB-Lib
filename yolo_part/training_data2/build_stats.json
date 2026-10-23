@@ -1,0 +1,8 @@
+{
+  "old_train": 180,
+  "old_val": 20,
+  "new_train": 48,
+  "new_boxes": 4051,
+  "dropped_types": {},
+  "cross_dup_with_official": []
+}
