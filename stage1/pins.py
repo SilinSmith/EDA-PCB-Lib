@@ -70,6 +70,17 @@ PIN_LEG_BOX = tuple(float(v) for v in (os.environ.get("STAGE1_PIN_LEG_BOX", "12,
 # 再摆一次（切向坐标不动）。§5.340.3 里端到端 83.99 与离线 84.33 的差就是这一段。
 PIN_LEG_SNAP = int(os.environ.get("STAGE1_PIN_LEG_SNAP", "0"))
 PIN_LEG_ALL = int(os.environ.get("STAGE1_PIN_LEG_ALL", "0"))
+# 逐**元件**逐侧腿长：从墨迹量出这一颗自己的引线长度，替掉常数 `PIN_LEG_BOX`。
+# 动机（§5.357 之后的引脚漏斗）：官方 10 的 21 个位置错里，case1 `U1` 右列 **7 个**
+# 全是 `d=(+10.0, ±1)` —— GT 那一侧的腿长是 20px，而我们按常数只推 10px。
+# 腿长是逐元件的（同一张图上符号库不同、缩放不同），任何固定 4 元组都必然一半错。
+# 量法：`pintrace.find_pins` 已经把「框边外 4px → 该行带内最靠外墨像素」的桩长记在
+# `Pin.ln`，于是该侧腿长 = `4 + ln`；按侧取中位数并夹到 `[4, PIN_LEG_INK_MAX]`。
+# 用去字墨迹（`text_free_ink`）量，否则紧贴框边的引脚号数字会把腿长虚增到 ~9px。
+PIN_LEG_INK = int(os.environ.get("STAGE1_PIN_LEG_INK", "0"))
+PIN_LEG_INK_MAX = float(os.environ.get("STAGE1_PIN_LEG_INK_MAX", "26"))
+PIN_LEG_INK_MIN = float(os.environ.get("STAGE1_PIN_LEG_INK_MIN", "6"))
+LEG_INK_N = {"n": 0}                    # 诊断计数：实际量到墨迹腿长的元件数
 # 「触到框边」的判定半径
 TOUCH_TOL = 6.0
 # 同一引脚上多个接触点的合并半径（沿框边弧长）
@@ -607,6 +618,57 @@ def pins_from_prior(bbox, ctype: str):
     return []
 
 
+def _ink_leg_box(bb, ink):
+    """从墨迹量这颗元件每一侧的引线长度，返回 `(L, R, T, B)`；量不出返回 None。
+
+    `Pin.ln` 是「框边外 4px 起点 → 该行带内最靠外的墨像素」的长度，所以腿长 = `4 + ln`。
+    同一侧可能同时量到「真引线」和「贴着框边的引脚号数字」，真引线更长 ⇒ 取**中位数**
+    再夹到 `[PIN_LEG_INK_MIN, PIN_LEG_INK_MAX]`；某侧没量到就留 None 交给常数兜底。
+    """
+    try:
+        from . import pintrace as _pt
+    except ImportError:                                   # pragma: no cover
+        import pintrace as _pt
+    if ink is None:
+        return None
+    try:
+        found = _pt.find_pins(ink, [list(bb)])
+    except Exception:                                     # pragma: no cover
+        return None
+    if not found:
+        return None
+    sides = {"L": [], "R": [], "T": [], "B": []}
+    for p in found:
+        if p.dx < -0.5:
+            sides["L"].append(4.0 + float(p.ln))
+        elif p.dx > 0.5:
+            sides["R"].append(4.0 + float(p.ln))
+        elif p.dy < -0.5:
+            sides["T"].append(4.0 + float(p.ln))
+        else:
+            sides["B"].append(4.0 + float(p.ln))
+    out = []
+    for k in ("L", "R", "T", "B"):
+        vals = sides[k]
+        if not vals:
+            out.append(None)
+            continue
+        v = float(np.median(vals))
+        out.append(min(PIN_LEG_INK_MAX, max(PIN_LEG_INK_MIN, v)))
+    if all(v is None for v in out):
+        return None
+    return tuple(out)
+
+
+def _leg_tuple(base, measured):
+    """把测得的逐侧腿长叠加到常数元组上：量不到的那一侧沿用常数。"""
+    if measured is None:
+        return base
+    if not (isinstance(base, (tuple, list)) and len(base) == 4):
+        base = (base, base, base, base)
+    return tuple(float(base[i]) if measured[i] is None else float(measured[i]) for i in range(4))
+
+
 def _stub_points(bb, ink, out_dist, min_len=0.0):
     """`pintrace.find_pins` 的几何引脚桩，统一重排到「框外 `out_dist` px」。
 
@@ -694,6 +756,19 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
         _is_ic = ("box" in _ct or "bigic" in _ct)
         _od = PIN_OUT_BOX if _is_ic else out_dist
         _leg = ((PIN_LEG_BOX or _od) if (_is_ic or PIN_LEG_ALL) else out_dist)
+        if PIN_LEG_INK and _is_ic and ink is not None:
+            _inkm = ink
+            if texts:
+                try:
+                    from . import pincol as _pc
+                except ImportError:                       # pragma: no cover
+                    import pincol as _pc
+                try:
+                    _inkm = _pc.text_free_ink(ink, texts, pad=STUB_FREE_PAD)
+                except Exception:                         # pragma: no cover
+                    _inkm = ink
+            _leg = _leg_tuple(_leg, _ink_leg_box(bb, _inkm))
+            LEG_INK_N["n"] += 1
         # IC 的引脚间距只有 ~10px，不能用 12px 的合并半径（会把邻脚并掉）
         _cr = CLUSTER_IC if _is_ic else cluster_r
         pins = pins_from_touch(bb, pts, touch_tol, _cr, _leg)
