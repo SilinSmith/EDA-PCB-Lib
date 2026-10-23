@@ -252,7 +252,7 @@ $env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'
 python -X utf8 eda-pcb\tools\eval\fast.py --out <tag> --engine protocol4 --no-vlm --cases "1,2,3,4,5,6,7,8,9,10"
 ```
 
-今天基线：**84.43**（component 0.9078 / pin 0.7963 / netH 0.8997 / line 0.5802）。
+今天基线：**88.73**（component 0.9505 / pin 0.8381 / netH 0.9486 / line 0.6060；2026-10-23 换权重后，旧基线 84.43）。
 判据：总分与四个分项都不低于基线 −0.3；`component`/`pin` 掉分即视为识别器没变现，回退。
 
 ### 4.3 闸门 B：池 50 案，`protocol3`（历史对齐尺，20 px）
@@ -266,7 +266,7 @@ $env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'
 python -X utf8 eda-pcb\tools\eval\fast.py --out <tag>_50 --engine protocol3 --no-vlm --cases $c
 ```
 
-今天基线：**36.840**（0.5808 / 0.1926 / 0.3612 / 0.1926）。
+今天基线：**36.84**（0.5808 / 0.1999 / 0.3620 / 0.1851，2026-10-22 口径）。换权重后池子 36.36 / 33.97（protocol3/protocol4），与旧基线配对 t −0.90，属噪声内微负。
 两把尺**不可混用**（同一批预测换尺总分差 4.96），对外只报 `protocol4`。
 
 ## 5. 风险清单
@@ -290,3 +290,70 @@ python -X utf8 eda-pcb\tools\eval\fast.py --out <tag>_50 --engine protocol3 --no
 4. GPU 续训（§3.1，`--epochs` > 69）→ 看 `history.json` 的 val CER 是否真的降。
 5. `$env:STAGE2_CKPT` 指到新 `best.pt` → 闸门 A（84.43）→ 闸门 B（36.840）→ 都过再谈交付；
    掉分就 `Remove-Item Env:STAGE2_CKPT` 回退，一句话说明是哪把尺掉的。
+
+## 7. 已经发生过的一次成功替换（2026-10-23，可照抄）
+
+下面的读数与配方就是本书 §3/§4 流程的一次完整执行记录，细节见 docs/RESULTS.md §5.357。
+
+旧权重（epoch 69）在 GT10 protocol4 上是 **85.90**；换成新权重后 **88.73**。
+
+§5.356 的 mix5（87.01）之后又在 GPU 上把语料换成「合成 12 万 + 真实 6.8 万」，得两条臂
+（armB 3 轮 / armB2 +1 轮）。本节的数都是**当前 HEAD 代码 + 干净环境**复现的：
+每次运行前显式 `Remove-Item Env:STAGE2_CKPT`，不留任何 `STAGE1_*`/`STAGE2_*` 残留
+（§5.338.1 的串号坑，本段又踩了一次，见 7.3）。
+
+### 7.1 读数
+
+| 权重 | GT10 `protocol4` | comp | pin | netH | line |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 交付旧权重（epoch 69） | 85.90 | 0.9044 | 0.8042 | 0.9318 | 0.6054 |
+| **armB2（epoch 72，新交付）** | **88.73** | **0.9505** | **0.8381** | **0.9486** | 0.6060 |
+
+逐案（`work/_paircmp.py work/_gt10base_s.txt work/_gt10new_s.txt`）：
+
+```
+1  73.74 -> 84.17  +10.43    6  86.22 -> 94.01  +7.79
+2  90.37 -> 94.60   +4.23    7  91.03 -> 93.21  +2.18
+3  96.17 -> 96.17   +0.00    8  68.03 -> 68.17  +0.14
+4  84.88 -> 86.13   +1.25    9  94.41 -> 96.17  +1.76
+5  89.27 -> 89.27   +0.00   10  84.92 -> 85.36  +0.44
+paired n10  base 85.904  new 88.726  delta +2.822  t +2.47  win 8  loss 0
+```
+
+8 胜 2 平 0 负，且原先最差的两案（1 号 73.74、8 号 68.03）分别 +10.43 / +0.14 —— 收益不是单案翻转。
+收益全部来自文本轴：comp 0.9044→0.9505、pin 0.8042→0.8381（脚号/脚名的字读对了）、
+netH 0.9318→0.9486（键对了网才对得上），导线轴 0.6060 不动。
+
+### 7.2 语料与配方（可复现）
+
+```
+# 1) 收字：检测框用我们自己的 detect_texts，标签用 GT 串的 exact/near 两层匹配
+cd eda-pcb; python -X utf8 tools\dev\harvest_labels.py --out work\_man_new_ocr.jsonl
+# 2) 组语料：合成 12 万（锚点）+ 真实 300 案 6642 + 新集 7621×7 过采样 = 18.0 万条
+python -X utf8 tools\dev\build_arm_manifest.py --synth ..\work\textrec_merged.jsonl \
+       --synth-n 120000 --real ..\work\_real_only.jsonl --new ..\work\_man_new_ocr.jsonl \
+       --new-repeat 7 --out ..\work\_man_armB.jsonl
+# 3) 微调（GPU 约 10 分钟/轮；CPU 同命令换 --device cpu，约 17 分钟/轮）
+python -X utf8 -m textrec.train --manifest ..\work\_man_armB.jsonl \
+       --resume weights\textrec_pre_mix_20261016.pt --epochs 72 --batch 256 --lr 1.5e-5 --device cuda
+```
+
+* `--epochs` 是**绝对**轮号（ckpt 内 `epoch=69`，所以从 70 起算），不是相对轮数。
+* 字表必须留空（`--resume` 自动取 ckpt 自带 71 字），显式给 `--charset` 会被拒。
+* 旧权重备份在 `eda-pcb/weights/textrec_pre_mix_20261016.pt`（epoch 69，回退只需拷回）。
+* 交付那次的 armB 清单是 18.8 万条（新集过采样 7.16×、且未丢 val 行）；上面这条命令产
+  18.0 万条（丢 val），同配方、行不逐条相同，2 轮内的读数差在 0.1 分内。
+
+### 7.3 两个坑（都真实踩到）
+
+1. **`STAGE2_CKPT` 的绝对/相对路径不影响读数，但环境里残留的 `STAGE1_*`/`STAGE2_*` 会**：
+   同一条权重两次跑分 88.96 / 88.73（pin 0.8327 vs 0.8381）。凡是对外公布的数字，
+   必须在新 shell 里显式清空相关环境变量后重跑；`88.73` 是本节的权威值。
+2. **收字工具的 `near` 层会把错位真值串扣到邻框上**：官方 200 案带进语料时 comp 掉到 0.9133
+   （不走它 0.9544，§5.356.2），故交付配方里只留合成 + 真实 + 新集。
+
+### 7.4 池子侧（`protocol3`，50 案）
+
+armB2 在同一批 50 案上 **36.36**（基线 36.840，配对 t −0.90，25 胜 22 负），`protocol4` 池
+33.97（基线 34.375）。都在噪声内、方向略负；池页来自官方 200 案（用户判定标注不可靠），
+两把尺页源不同，交付以 GT10 为准，但池子这一负号记在这里，不隐藏。
