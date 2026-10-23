@@ -261,6 +261,8 @@ eda_yolo/
 !/yolo_part/Dataset*/200_train_cases/**/*.json
 /yolo_part/training_data/images/
 /yolo_part/training_data/labels/
+/yolo_part/training_data2/images/
+/yolo_part/training_data2/labels/
 /yolo_part/weights/
 /textrec/data/
 
