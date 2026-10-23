@@ -25455,3 +25455,55 @@ case8  U1  L n=9  med= +9.0  spread=0.0   +9 +9 +9 +9 +9 +9 +9 +9 +9
 ⇒ 腿长三条路（墨迹 §5.359、符号库反查 §5.359、导线端点本节）全部封死。引脚轴
 0.8381 的 15.4% 位置误差**不可从图像侧估计**，只能等符号库本体（`.SchLib`）或
 GT 同分布的训练数据。
+
+### 5.365 双权重集成在 110 案池子上判负；池子损失的构成（检测，不是键）
+
+**目的**：§5.363 的双权重集成臂（`STAGE2_CKPT_ENS` + `conf`/`0.05` + `designator,value`）
+在官方 10 上 +0.12、在 50 案池上 +0.231（t 1.24，不过证据线）。为按下噪声给结论，
+把配对样本从 50 案抬到 **110 案**（`work/_half1.txt`：10GT + 10_GTcase + 200_train_cases 90）。
+
+**A/B**（`protocol3`、CPU、`FUSION_LLM=0`、逐臂显式设全部 `STAGE2_*`）
+
+| 臂 | 110 案均值 | comp | pin | netH | line |
+| --- | --- | --- | --- | --- | --- |
+| 交付（单权重 e72） | **38.45** | 0.5347 | 0.2383 | 0.3885 | 0.2848 |
+| + 集成 e69（conf/0.05/位号+值） | 38.34 | 0.5336 | 0.2395 | 0.3857 | 0.2844 |
+
+逐案配对（`work/_pair110.py`，114 个 (split,case) 键）：total **−0.1067，sd 1.227，t −0.93，
+W/L 24/27**；netH t −1.84（19 胜 23 负）。⇒ GT10 的 +0.12 是单案噪声，池子方向是**负**的。
+集成臂**判否**，全部保持默认关（`STAGE2_CKPT_ENS` 留作脚手架）。
+
+**顺带修的工具坑**：`fast.py` 的 stdout 行里 0 分项被装饰成 `>> 0.0000<<`，且池子 case 名
+带空格（`0025-Altium Designer`）。`work/_pair110.py` 现在按 `|` 切分、剥装饰再提数，
+否则 110 案只能对上 47 条。
+
+### 5.365.1 池子损失到底在哪（`work/_pooldetail.py` 离线复算）
+
+用 `schematic_parser.metrics.evaluate_case` 直接吃已导出的预测（不重跑管线），90 案 `protocol3`：
+
+```
+score 31.41 | comp 0.4843 | pin 0.1413 | netH 0.3216 | line 0.2089
+component.coord_matched 1129   component.missing 1145   component.extra 1032
+component.text_mismatch  293   component.bbox_mismatch 151   type_mismatch 10
+pin.missing 2577   pin.extra 378   pin.position_mismatch 132   pin.name_mismatch 137
+net.gt_count 3369   net.pred_count 2732   net.soft_tp 959
+```
+
+关键结论：**键不是池子的主损失**。`assign_components` 的 `unkeyed_match="gt"` 会把
+GT 无名元与任何未配上的预测元做坐标配对（§5.353 的 `rewrite_keys` 再回写键），所以
+「GT 无名而我们有名字」这类并不直接判错——`coord_matched 1129` 就是这个通道收回来的。
+真正的洞是 `missing 1145 / extra 1032`：**每案约 13 个 GT 元件我们既没检出也没配上**。
+
+`work/_misswhat.py`（抽 30 案）给的构成：类型 `c 100 / box 86 / r 72 / pin 15 / switch 13 /
+testpoint 13`，尺寸带 `16-32 px 244 / >=64 58 / 32-64 49 / <16 14` ⇒ 是**常规小件的检出/切分**
+问题，不是长尾符号。两条既有证据要求我们**不要**往这里投：
+(1) §5.356/§5.357 与 m08705：200 案池的 GT 本身标注错误多，已决定弃用；
+(2) 两次检测器重训（det248 新集混训、det220 官方 180 页域内微调）在 GT10 上都判负。
+=> 池子剩余损失**不可作为优化目标**，GT10 仍是唯一尺子。
+
+### 5.365.2 一个仍未闭环的交付差异：`-vlm` 开关
+
+所有读数（88.73）都是 `--no-vlm`；交付入口 `eda-pcb/submission/run.py` 默认 `-vlm auto`
+（会拉起平台侧大模型）。本地 llama-server 只有 qwen3.5-9b，且小裁图 VLM 早已判负
+（§5.35x 系列），所以本地无法给出「VLM 开」的可信上界。这一项要么在平台侧实测，
+要么交付时显式 `-vlm off` 保持与 88.73 同构——列入交付说明，见 `docs/HANDOFF.md`。
