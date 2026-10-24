@@ -315,6 +315,62 @@ def _hue_in_palette(h0: float, buckets, tol: float) -> bool:
     return False
 
 
+def local_wire_hue(bgr: np.ndarray, ink: np.ndarray | None = None, occlude=None,
+                   hue_tol: float = 42.0, pad: int = 3):
+    """**不用 VLM** 直接判「导线是什么色相」：元件框外的细笔画长直线最多的色桶。
+
+    `auto` 分支的判据只看「细笔画 + 长直线」，图框边带已经排除，但**符号本体的矩形轮廓
+    也是长直线**，于是它经常选中符号色（`#800000` 红系）而不是导线色。这里再排除掉
+    `occlude`（已检出元件框）内的像素——导线只在框与框之间跑，符号轮廓全在框里。
+    返回色相（float）或 ``None``（无彩/太稀疏），口径与 ``HINT_HUE`` 一致。
+    """
+    if ink is None:
+        ink = ink_mask(bgr)
+    thin, _ = thin_stroke_mask(bgr, ink, 1.6)
+    thin = thin > 0
+    if not thin.any():
+        return None
+    if occlude:
+        H_, W_ = thin.shape[:2]
+        keep = np.ones((H_, W_), bool)
+        for b in occlude:
+            try:
+                x1, y1, x2, y2 = [float(v) for v in b]
+            except Exception:                          # noqa: BLE001
+                continue
+            xa = max(0, int(min(x1, x2)) - pad)
+            xb = min(W_, int(max(x1, x2)) + pad)
+            ya = max(0, int(min(y1, y2)) - pad)
+            yb = min(H_, int(max(y1, y2)) + pad)
+            if xb > xa and yb > ya:
+                keep[ya:yb, xa:xb] = False
+        thin = thin & keep
+        if not thin.any():
+            return None
+    h_all = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)[:, :, 0].astype(np.float32)
+    hist_t = np.bincount((h_all[thin] // 10).astype(np.int32), minlength=18)
+    if hist_t.max() < 50:
+        return None
+    H_, W_ = thin.shape[:2]
+    ey, ex = int(H_ * 0.045), int(W_ * 0.045)
+    inner = np.zeros((H_, W_), bool)
+    inner[ey:H_ - ey, ex:W_ - ex] = True
+    kh = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+    kv = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 40))
+    best_h, best_n = None, -1
+    for b_ in [b for b in range(18) if hist_t[b] >= max(1, hist_t.max() * 0.02)]:
+        h0 = float(b_) * 10.0 + 5.0
+        dd = np.abs(h_all - h0)
+        dd = np.minimum(dd, 180.0 - dd)
+        mm = (((dd <= hue_tol) & thin).astype(np.uint8)) * 255
+        lr = (cv2.morphologyEx(mm, cv2.MORPH_OPEN, kh) > 0) | \
+             (cv2.morphologyEx(mm, cv2.MORPH_OPEN, kv) > 0)
+        n = int((lr & inner).sum())
+        if n > best_n:
+            best_h, best_n = h0, n
+    return best_h
+
+
 def wire_colour_mask(bgr: np.ndarray, ink: np.ndarray, hue_tol: float = 42.0):
     """Pixels whose hue matches the dominant ink hue (the wire colour), or ``None``.
 

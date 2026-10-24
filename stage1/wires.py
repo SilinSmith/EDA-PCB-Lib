@@ -536,7 +536,7 @@ def _hue_small(bgr: np.ndarray) -> np.ndarray:
                       interpolation=cv2.INTER_AREA)
 
 
-def _hint_wire_hue(bgr: np.ndarray) -> None:
+def _hint_wire_hue(bgr: np.ndarray, occlude=None) -> None:
     """`STAGE1_WIRE_COLOUR=confirm`（默认）或 `hint` 时问一次模型，把色相写进
     `pipeline.pskel.HINT_HUE`；两者的区别在末端的掩膜（`confirm` 要求该色相在本图调色板
     里被证实，否则不删任何像素），发问这一步完全一样。
@@ -550,9 +550,6 @@ def _hint_wire_hue(bgr: np.ndarray) -> None:
     """
     if os.environ.get("STAGE1_WIRE_COLOUR", "confirm").strip().lower() not in (
             "hint", "confirm", "hint_confirm", "hint+confirm", "verify"):
-        return
-    if _HUE_FAIL["off"]:
-        _HINT_STAT["skipped"] = int(_HINT_STAT.get("skipped", 0)) + 1
         return
     import sys
     root = Path(__file__).resolve().parents[1]
@@ -568,6 +565,39 @@ def _hint_wire_hue(bgr: np.ndarray) -> None:
             return
     except Exception:
         pass
+    # ★ 2026-10-23：**本地色相判定**（`STAGE1_WIRE_HUE_LOCAL`），替代/兜底每页一次的颜色问话。
+    #   判据：元件框内已被涂掉的细笔画长直线，剩下的色相直方图里长直线最多的那个色桶
+    #   （`pipeline/pskel.py:local_wire_hue`）。口径与 VLM 那条完全一致 —— 都只是往
+    #   `HINT_HUE` 写一个色相，末端 `confirm` 的调色板证实照旧生效。
+    #   `on`  = 只用本地（零外部调用）；`off` = 只用模型；
+    #   `fallback`（默认）= 先问模型，模型不可用/答非所问时用本地顶上 —— 于是「端点没起来」
+    #   不再退化成「一个像素都不删」（官方 10 张实测那条退化值 −2.40）。
+    _LMODE = os.environ.get("STAGE1_WIRE_HUE_LOCAL", "fallback").strip().lower()
+    _use_local = _LMODE not in ("0", "off", "no", "false")
+    _local_first = _LMODE in ("1", "on", "local", "only")
+
+    def _by_local() -> bool:
+        _h0 = None
+        try:
+            _h0 = pskel.local_wire_hue(bgr, ink=pskel.ink_mask(bgr), occlude=occlude)
+        except Exception:                              # noqa: BLE001
+            _h0 = None
+        if _h0 is None:
+            return False
+        pskel.HINT_HUE = float(_h0)
+        _HINT_STAT["hit"] = int(_HINT_STAT.get("hit", 0)) + 1
+        _HINT_STAT["local"] = int(_HINT_STAT.get("local", 0)) + 1
+        _HINT_STAT["hue"] = float(_h0)
+        return True
+
+    if _local_first:
+        _by_local()
+        return
+    if _HUE_FAIL["off"]:
+        if _use_local and _by_local():
+            return
+        _HINT_STAT["skipped"] = int(_HINT_STAT.get("skipped", 0)) + 1
+        return
     try:
         from vlm import client
         r = client.ask(_hue_small(bgr), WIRE_HUE_PROMPT, timeout=HUE_TIMEOUT,
@@ -582,6 +612,8 @@ def _hint_wire_hue(bgr: np.ndarray) -> None:
         _HINT_STAT["last_err"] = txt[:60]
         if _HUE_FAIL["n"] >= HUE_MAXFAIL and not _HUE_FAIL["off"]:
             _HUE_FAIL["off"] = True
+        if _use_local:
+            _by_local()
         return
     _HINT_STAT["words"][txt] = _HINT_STAT["words"].get(txt, 0) + 1
     for w, hue in _HUE_WORDS:
@@ -622,6 +654,7 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
     #   模型吐的颜色词），而且统计值跨图混在一起没有意义。这里每张图重置一次。
     _HINT_STAT["calls"] = 0
     _HINT_STAT["hit"] = 0
+    _HINT_STAT["local"] = 0
     _HINT_STAT["words"].clear()
     from pipeline.pskel import WireExtractor
 
@@ -638,7 +671,7 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
     if s != 1.0:
         src = cv2.resize(work, (max(8, int(round(W * s))), max(8, int(round(H * s)))),
                          interpolation=cv2.INTER_AREA)
-    _hint_wire_hue(bgr)
+    _hint_wire_hue(bgr, occlude=occlude)
     # ★ 2026-10-08 新增：导线骨架「空壳」修正旋钮（病灶见 `pipeline/pskel.py:118`
     #   `thin_stroke_mask` 的 `dt <= max_half_width`）：一根 4px 宽的导线，横截面上
     #   dt = 1,2,2,1 ⇒ `dt <= 1.6` **只留下两条外沿**，Zhang-Suen 于是给出**两条平行骨架**
@@ -1012,6 +1045,8 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
         # ★ 审计项⑤：把「问色相」的统计接出来（以前 `_HINT_STAT` 只写不读，
         #   没人看得见 hint 到底命中没有）。`calls`/`hit`/`words` 每张图重置。
         "hint": {"calls": _HINT_STAT["calls"], "hit": _HINT_STAT["hit"],
+                 "local": int(_HINT_STAT.get("local", 0)),
+                 "hue": _HINT_STAT.get("hue"),
                  "words": dict(_HINT_STAT["words"])},
         "endpoints": endpoints,
         "junctions": junctions,
