@@ -594,10 +594,21 @@ def read_pins(bgr, points, ctr, win, opts, stat, bbox=None):
         crops.append(im); idx.append(i)
     ans = {}
     per, cols = opts["per"], opts["cols"]
+    _side = int(opts.get("pin_side") or 0)          # >0 = 固定格边长；0 = 自动
     for s in range(0, len(crops), per):
         sub = crops[s:s + per]
         subidx = idx[s:s + per]
-        g = tile(sub, cols=cols)
+        # `tile()` 把每格**最长边归一化到 side**，所以 `side=150` 在大 IC 上等于把裁片
+        # 缩小（case1/U1 的裁片 310px → 0.48×），而 `VLM_PIN_SCALE` 预放大再被归一化
+        # 回去、**逐像素等于没做**（实测 ps=1/2/3 的 tile 都是 192×166、墨迹 150×46）。
+        # 自动档因此取「这一批里最长的裁片」⇒ 绝不缩小，小件照旧被放大到同一格。
+        _td = _side if _side > 0 else 150
+        if _side <= 0 and opts.get("pin_noshrink", 1):
+            _long = [max(c.shape[:2]) for c in sub if c is not None]
+            if _long:
+                _td = max(_td, int(max(_long)))
+        g = tile(sub, cols=cols, side=_td)
+        stat.setdefault("tile_side", []).append(int(_td))
         txt, _dt = client.ask(g, PINS_PROMPT, model=opts["model"])
         stat["grid"] += 1
         for i, (num, name) in parse_grid(txt).items():
@@ -1030,6 +1041,11 @@ DEFAULTS = dict(designator=True, desig_all=False, desig_margin=60.0,
                 # 改成环境变量是为了能不改 CLI 就 A/B：`VLM_PIN_PER` / `VLM_PIN_COLS`。
                 per=int(os.environ.get("VLM_PIN_PER", "8")),
                 cols=int(os.environ.get("VLM_PIN_COLS", "4")),
+                # 引脚网格的**格边长**：`tile()` 会把每格最长边归一到这个值。
+                # 默认 0 = 自动（取该批最长裁片，绝不缩小）；`VLM_PIN_SIDE=150`
+                # 可回到旧行为做 A/B。`VLM_PIN_NOSHRINK=0` 让自动档退化成 150。
+                pin_side=int(os.environ.get("VLM_PIN_SIDE", "0") or 0),
+                pin_noshrink=int(os.environ.get("VLM_PIN_NOSHRINK", "1") or 0),
                 min_pins=2, pin_merge=PIN_MERGE, pin_rebuild=PIN_REBUILD,
                 pin=PIN_CHANNEL,
                 # **引脚名窗口：`inner` 是最大的一根旋钮**（实测，`work\tools\diag\_pinsweep.py`，
