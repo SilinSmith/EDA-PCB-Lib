@@ -164,6 +164,37 @@ def ink_mask(bgr: np.ndarray, mode: str = 'adaptive', k: int = 31,
                                  cv2.THRESH_BINARY_INV, k, c)
 
 
+def pale_suppress(bgr: np.ndarray, ink: np.ndarray) -> np.ndarray:
+    """Drop **pale** pixels from the ink mask: the drafting grid of editor screenshots.
+
+    Datasheet screenshots of schematic editors carry a light grid (page `0093`: grey
+    238.3, chroma 7) while the actual wiring is dark (grey ~43, BGR 33,33,149). An
+    adaptive threshold treats the grid as foreground, so the skeleton walks the whole
+    grid and `net_line_f1` collapses (pool `0093` line F1 0.000, 567 edges, ~91% of
+    them on grid pixels). Guard = "bright AND colourless" → background.
+
+    ``STAGE1_INK_PALE_V`` <= 0 disables it (default), ``STAGE1_INK_PALE_S`` is the
+    chroma ceiling for "colourless".
+    """
+    try:
+        vmax = float(os.environ.get("STAGE1_INK_PALE_V", "0") or 0)
+    except ValueError:
+        vmax = 0.0
+    if vmax <= 0.0:
+        return ink
+    try:
+        smax = float(os.environ.get("STAGE1_INK_PALE_S", "30") or 30)
+    except ValueError:
+        smax = 30.0
+    b = bgr.astype(np.int16)
+    pale = (b.max(axis=2) >= vmax) & ((b.max(axis=2) - b.min(axis=2)) <= smax)
+    if not pale.any():
+        return ink
+    out = ink.copy()
+    out[pale] = 0
+    return out
+
+
 # `know` 节点用：由 `stage1/wires.py` 问一次模型「导线是什么颜色」后写进来的强制色相。
 HINT_HUE = None
 
@@ -1132,6 +1163,7 @@ class WireExtractor:
             bgr = cv2.resize(bgr, None, fx=self.scale, fy=self.scale,
                              interpolation=cv2.INTER_AREA if self.scale < 1 else cv2.INTER_CUBIC)
         ink = ink_mask(bgr, self.ink_mode, k=self.adap_k, c=self.adap_c)
+        ink = pale_suppress(bgr, ink)
         if self.close_ink:
             ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8))
         thin, dt = thin_stroke_mask(bgr, ink, self.thin_w)
