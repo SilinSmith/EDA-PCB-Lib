@@ -134,6 +134,29 @@ _ZOOM_KEEP_RE = {
              "pin_name": _ZOOM_PINNAME_RE},
 }.get(ZOOM_READ_KEEP, {})
 
+# ★ 多尺度文字检测（`STAGE2_MS_TEXT`，默认关`""`）。
+#   动机：池页（KiCad/Altium 导出件）的位号是 6~9px 的细字，`cvparts.textseg` 在 1× 上
+#   对它的召回不足——`work/_multiscale.py` 实测页 0001 的 GT 键串整页只读出 36/47，
+#   把整页 CUBIC 放大 2×/3× 再检测、框除回 1× 后并集到 **41/47**（0013 是 2/18 → 7/18）。
+#   与 `STAGE2_ZOOM_READ`（逐元件窗口）不同，这里**整页**跑，交给 `assign` 正常竞争。
+#   值 = 逗号分隔的放大倍数，如 `2` / `2,3`；只收 1× 高度 ≤ `STAGE2_MS_TEXT_MAXH` 的框
+#   （大标签 1× 已经检得出，重复加只会搅乱槽位），与已有框 IoU ≥ `STAGE2_MS_TEXT_IOU`
+#   的丢弃（同一串不重复入池）。
+MS_TEXT = tuple(float(x) for x in (os.environ.get("STAGE2_MS_TEXT", "").split(",")) if x.strip())
+MS_TEXT_MAXH = float(os.environ.get("STAGE2_MS_TEXT_MAXH", "20") or 20)
+MS_TEXT_IOU = float(os.environ.get("STAGE2_MS_TEXT_IOU", "0.4") or 0.4)
+MS_TEXT_ROLES = tuple(x.strip() for x in os.environ.get(
+    "STAGE2_MS_TEXT_ROLES", "designator,value").split(",") if x.strip())
+MS_TEXT_MINH = int(os.environ.get("STAGE2_MS_TEXT_MINH", "4") or 4)
+# 三道护栏（默认全开）：多尺度只用来「补新位号」，不然会把 1× 已经读到的串再入池一遍、
+# 或者让落在符号本体里的脚名去抢 designator/value 槽位——官方 case1 实测：不加护栏
+# `STAGE2_MS_TEXT=2` 85.54→**81.72**（netH 0.9633→0.8757，pin 0.7308→0.7037）。
+MS_TEXT_CONF = float(os.environ.get("STAGE2_MS_TEXT_CONF", "0.75") or 0.75)
+MS_TEXT_OUTSIDE = env_on("STAGE2_MS_TEXT_OUTSIDE", "1")   # 只收落在元件框外的框
+MS_TEXT_NOVEL = env_on("STAGE2_MS_TEXT_NOVEL", "1")       # 只收 1× 池里还没有的位号串
+MS_TEXT_KEEP_RE = re.compile(r"^[A-Z]{1,3}\d{1,4}[A-Z]?$") if env_on(
+    "STAGE2_MS_TEXT_KEYS", "1") else None
+
 # ★ 引脚「信任闸门」：用队友 `stage1/pin_evidence.py` 的逐脚图像证据决定哪些脚
 #   不可信（`""`=关；`rejected` / `rejected+uncertain` / `uncertain`）。
 #   这是我们**缺的那条信息**（官方 10 张实测：trusted 的几何未命中率 23.2%，
@@ -433,6 +456,74 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         reads = engine.read(bgr, boxes) if roles is None else engine.read(bgr, boxes, roles)
     else:
         reads = [{"bbox": b, "reads": {}} for b in boxes]
+
+    # ★ 小字放大重读（`STAGE2_ZOOM_READ`，默认关）：见文件头该开关的注释。
+    #   只对**已检出的元件**做局部放大，把新增读数并入候选池；坐标一律除回原尺度，
+    #   与整页读数同处一个坐标系，`assign` 无需知道它从哪来。
+    # ★ 多尺度整页文字检测（`STAGE2_MS_TEXT`，默认关）：见开关块的注释。
+    #   把整页放大 → 检测 → 框除回 1× → 去重 → 只读 `MS_TEXT_ROLES` → 并入候选池。
+    if do_ocr and MS_TEXT:
+        try:
+            import cv2 as _cv2                      # noqa: PLC0415
+            _n_new = 0
+            _have = list(boxes)
+
+            def _iou(a, b):
+                ix = min(a[2], b[2]) - max(a[0], b[0])
+                iy = min(a[3], b[3]) - max(a[1], b[1])
+                if ix <= 0 or iy <= 0:
+                    return 0.0
+                inter = ix * iy
+                ua = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+                return inter / ua if ua > 0 else 0.0
+
+            for _s in MS_TEXT:
+                _up = _cv2.resize(bgr, None, fx=_s, fy=_s, interpolation=_cv2.INTER_CUBIC)
+                _bs = detect_texts(_up, min_h=int(MS_TEXT_MINH * _s),
+                                   max_h=int(34 * _s))
+                _add = []
+                for _b in _bs:
+                    _b1 = (_b[0] / _s, _b[1] / _s, _b[2] / _s, _b[3] / _s)
+                    if _b1[3] - _b1[1] > MS_TEXT_MAXH:
+                        continue
+                    if MS_TEXT_OUTSIDE:
+                        _mx = 0.5 * (_b1[0] + _b1[2])
+                        _my = 0.5 * (_b1[1] + _b1[3])
+                        if any(c["bbox_img"][0] - 2 <= _mx <= c["bbox_img"][2] + 2 and
+                               c["bbox_img"][1] - 2 <= _my <= c["bbox_img"][3] + 2
+                               for c in (doc.get("components") or []) if c.get("bbox_img")):
+                            continue
+                    if any(_iou(_b1, _h) >= MS_TEXT_IOU for _h in _have):
+                        continue
+                    _have.append(_b1)
+                    _add.append((_b1, (_b[0], _b[1], _b[2], _b[3])))
+                if not _add:
+                    continue
+                _got = engine.read(_up, [a[1] for a in _add], MS_TEXT_ROLES)
+                _seen = set()
+                if MS_TEXT_NOVEL:
+                    for _r0 in reads:
+                        _v0 = (_r0.get("reads") or {}).get("designator")
+                        if _v0 and _v0[0]:
+                            _seen.add(_v0[0].strip())
+                for (_b1, _b2), _r in zip(_add, _got):
+                    _rd = _r.get("reads") or {}
+                    if MS_TEXT_KEEP_RE:
+                        _dv = _rd.get("designator")
+                        if not _dv or not _dv[0] or _dv[1] < MS_TEXT_CONF \
+                                or not MS_TEXT_KEEP_RE.match(_dv[0].strip()):
+                            continue
+                        if MS_TEXT_NOVEL and _dv[0].strip() in _seen:
+                            continue
+                        _seen.add(_dv[0].strip())
+                        _rd = {"designator": _dv}
+                    boxes.append(_b1)
+                    reads.append({"bbox": _b1, "reads": _rd, "ms": int(_s)})
+                    _n_new += 1
+            if _n_new:
+                src += "+ms%s(%d)" % ("/".join("%g" % s for s in MS_TEXT), _n_new)
+        except Exception as _e:                      # noqa: BLE001
+            src += "+msfail(%s)" % type(_e).__name__
 
     # ★ 小字放大重读（`STAGE2_ZOOM_READ`，默认关）：见文件头该开关的注释。
     #   只对**已检出的元件**做局部放大，把新增读数并入候选池；坐标一律除回原尺度，
