@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -167,6 +168,23 @@ GLYPH_VOTE_CONF = float(os.environ.get("STAGE2_GLYPH_VOTE_CONF", "0.35") or 0.35
 GLYPH_VOTE_OVERRIDE = float(os.environ.get("STAGE2_GLYPH_VOTE_OVERRIDE", "0.6") or 0.6)
 GLYPH_VOTE_BEAM = int(os.environ.get("STAGE2_GLYPH_VOTE_BEAM", "8") or 8)
 GLYPH_VOTE_MAX = int(os.environ.get("STAGE2_GLYPH_VOTE_MAX", "4000") or 4000)
+# ★★ 单位字母的**墨迹判别**（`STAGE2_VALUE_MU` / `STAGE2_VALUE_NU`，默认 0 = 关）。
+#
+# 病：GT 里微符号恒为 **U+03BC**（池子 200 页 110 个、GT10 1 个），我们只输出 ASCII `u`；
+# 反过来 `10nF` 被读成 `10uF`（GT10 case1 `C158`，§5.370）。CRNN 在 8-10px 上把
+# `μ`/`u`/`n` 当同一个形状，是**字符级**混淆——整串 top-k、同页投票都吃过（都判否）。
+# 但这两个字的形态在像素上是**可分**的：
+#   * `μ` 有降部：`tail`（字形底边低于基线的像素）中位 3px，`u`/`n` **恒 0**
+#     ⇒ 池子 60 页 153 个样本上 `tail>=2` 命中 72% 的 μ、**误报 0**。
+#   * `n` 拱在顶上、`u` 碗在底下：`mb`（上 1/3 墨量 − 下 1/3 墨量）n 中位 **+0.03**、
+#     u 中位 **−0.11**，`mb<=-0.02` 判 n/u **94.8%**。
+# 只在字符串形状是「数字 + 单位 + 尾字母」（`12uF`/`0.1uF`/`4.7<n>H`）时才动。
+VALUE_MU = os.environ.get("STAGE2_VALUE_MU", "1").strip().lower() in ("1", "true", "yes", "on")
+VALUE_MU_TAIL = float(os.environ.get("STAGE2_VALUE_MU_TAIL", "2.0") or 2.0)
+VALUE_NU = os.environ.get("STAGE2_VALUE_NU", "0").strip().lower() in ("1", "true", "yes", "on")
+VALUE_NU_MB = float(os.environ.get("STAGE2_VALUE_NU_MB", "-0.02") or -0.02)
+VALUE_UNIT_ROLES = ("value",)
+_UNIT_STATS: Dict[str, int] = {}
 GLYPH_VOTE_ROLES = tuple(r.strip() for r in os.environ.get(
     "STAGE2_GLYPH_VOTE_ROLES", "designator,pin_number,pin_name,value").split(",") if r.strip())
 
@@ -307,6 +325,97 @@ def tight_ink_box(bgr: np.ndarray, box: Box,
         return None
     return (float(x1 + on[0] - 1), float(y1 + oy[0] - 1),
             float(x1 + on[-1] + 2), float(y1 + oy[-1] + 2))
+
+
+def _glyph_runs(dark: np.ndarray) -> List[Tuple[int, int]]:
+    """列投影的连通段（= 逐个字形的左右边界）。"""
+    cols = dark.any(axis=0)
+    runs, s = [], None
+    for i, v in enumerate(cols):
+        if v and s is None:
+            s = i
+        elif not v and s is not None:
+            runs.append((s, i))
+            s = None
+    if s is not None:
+        runs.append((s, len(cols)))
+    return runs
+
+
+def _unitglyph_features(bgr: np.ndarray, box: Box) -> Optional[Dict[str, float]]:
+    """量框内**倒数第二个字形**（`12uF` 里的 `u`）的形态，供 `μ`/`u`、`n`/`u` 判别。
+
+    - `tail`：该字形底边低于框内基线的像素数。`μ` 有降部（p50 3px），`u`/`n` 没有（恒 0）。
+    - `mb`：该字形**上三分之一与下三分之一的墨量之差**。`n` 的拱在顶上（+0.03），
+      `u` 的碗在底下（−0.11）——池子 153 个样本上 `mb<=-0.02` 判 n/u 准确 94.8%。
+    - `cy`：墨迹重心（0=字形顶，1=基线），同一现象的另一视角。
+
+    基线取该框所有列底边的 75 分位（下划线、`%` 之类的低悬笔不拉低基线）。
+    """
+    if bgr is None or getattr(bgr, "ndim", 2) != 3:
+        return None
+    x1, y1, x2, y2 = [int(round(float(v))) for v in box]
+    x1, y1 = max(0, x1 - 1), max(0, y1 - 1)
+    x2, y2 = min(int(bgr.shape[1]), x2 + 1), min(int(bgr.shape[0]), y2 + 1)
+    if x2 - x1 < 3 or y2 - y1 < 3:
+        return None
+    sub = bgr[y1:y2, x1:x2].astype(np.int16)
+    dark = sub.min(2) < 170      # 只按「暗」判墨（值的蓝字是**有色**的，加饱和闸会把它全切掉）
+    runs = _glyph_runs(dark)
+    if len(runs) < 3:
+        return None
+    a, b = runs[-2]
+    seg = dark[:, a:b]
+    rows = np.nonzero(seg.any(1))[0]
+    if len(rows) == 0:
+        return None
+    bottoms = [int(np.nonzero(dark[:, c])[0][-1]) for c in range(dark.shape[1]) if dark[:, c].any()]
+    if not bottoms:
+        return None
+    base = float(np.percentile(bottoms, 75))
+    ys = np.nonzero(seg)[0]
+    top, bot = float(rows[0]), float(rows[-1])
+    span = max(1.0, bot - top)
+    third = max(1.0, span / 3.0)
+    return {"tail": float(rows[-1]) - base,
+            "mb": float((ys - top < third).mean()) - float((ys - top > span - third).mean()),
+            "cy": float((ys - top).mean() / span),
+            "w": float(b - a)}
+
+
+_MU_RE = re.compile(r"^(?P<a>\d+(?:\.\d+)?)\s*(?P<u>[uUnN\u03bc\u00b5])\s*(?P<t>[FfHhMmRr])$")
+UNIT_MU = "\u03bc"
+
+
+def fix_unit_text(bgr: np.ndarray, txt: str, box: Box,
+                  tail_min: float = None, mb_split: float = None,
+                  do_nu: bool = None) -> str:
+    """用字形墨迹改掉 `12uF` 里的单位字母：降部 → `μ`；`n`/`u` 按上下墨量判。
+
+    只在字符串形状是「数字 + 单位 + 尾字母」时才动，其余原样返回。
+    """
+    if not txt:
+        return txt
+    tail_min = VALUE_MU_TAIL if tail_min is None else tail_min
+    mb_split = VALUE_NU_MB if mb_split is None else mb_split
+    do_nu = VALUE_NU if do_nu is None else do_nu
+    m = _MU_RE.match(txt.strip())
+    if not m:
+        return txt
+    u = m.group("u")
+    f = _unitglyph_features(bgr, box)
+    if f is None:
+        return txt
+    new = u
+    if u in "uU" and f["tail"] >= tail_min:
+        new = UNIT_MU
+    elif do_nu and u in "nNuU":
+        new = ("u" if f["mb"] <= mb_split else "n") if u in "nNuU" else u
+        if u.isupper():
+            new = new.upper()
+    if new == u:
+        return txt
+    return txt[:m.start("u")] + new + txt[m.end("u"):]
 
 
 def pad_box(box: Box, pad_min: float = PAD_MIN, pad_frac: float = PAD_FRAC,
@@ -724,9 +833,28 @@ class TextEngine:
                         reads[i][r] = (txt, float(conf))
         if GLYPH_VOTE > 0:
             self._glyph_vote(bgr, gray, boxes, roles, rec, reads)
+        if VALUE_MU or VALUE_NU:
+            self._fix_units(bgr, boxes, roles, reads)
         return [{"bbox": boxes[i], "reads": reads[i],
                  **({"cfrac": colored_frac(bgr, boxes[i])} if TEXT_INK else {})}
                 for i in range(len(boxes))]
+
+    # ------------------------------------------------------------------
+    def _fix_units(self, bgr: np.ndarray, boxes: Sequence[Box], roles: Sequence[str],
+                   reads: List[Dict]) -> None:
+        """`STAGE2_VALUE_MU` / `STAGE2_VALUE_NU`：用字形墨迹改单位字母（详见上面的长注释）。"""
+        want = [r for r in roles if r in VALUE_UNIT_ROLES]
+        if not want:
+            return
+        for i, b in enumerate(boxes):
+            for r in want:
+                cur = reads[i].get(r)
+                if cur is None or not cur[0]:
+                    continue
+                new = fix_unit_text(bgr, cur[0], b)
+                if new != cur[0]:
+                    _UNIT_STATS["changed"] = _UNIT_STATS.get("changed", 0) + 1
+                    reads[i][r] = (new, cur[1])
 
     # ------------------------------------------------------------------
     def _glyph_vote(self, bgr: np.ndarray, gray: np.ndarray, boxes: Sequence[Box],

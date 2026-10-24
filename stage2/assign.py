@@ -639,7 +639,7 @@ VALUE_DISTW = float(os.environ.get("STAGE2_VALUE_DISTW", "0.035"))
 
 DESIGNATOR_RE = re.compile(r"^[A-Za-z]{1,4}\d{1,4}[A-Za-z]?$")
 PINNUM_RE = re.compile(r"^[A-Za-z]{0,2}\d{1,3}[A-Za-z]?$")
-VALUE_RE = re.compile(r"^[+-]?(\d+(\.\d+)?|\.\d+)\s*[pnu\u00b5mkKMGR]?[FHV\u03a9AWRJ]?$")
+VALUE_RE = re.compile(r"^[+-]?(\d+(\.\d+)?|\.\d+)\s*[pnu\u00b5\u03bcmkKMGR]?[FHV\u03a9AWRJ]?$")
 NETNAME_RE = re.compile(r"^[+\-]?[A-Za-z_][A-Za-z0-9_+\-\.]{0,14}$")
 PARTNAME_RE = re.compile(r"^(?=.*\d)[A-Za-z0-9][A-Za-z0-9_\-\./+]{3,30}$")
 # **电压型网络名**（`3.3V` / `5V` / `1.8V`）：`NETNAME_RE` 要求首字符是字母，
