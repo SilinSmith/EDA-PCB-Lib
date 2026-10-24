@@ -378,6 +378,21 @@ PINNUM_PXC = float(os.environ.get("STAGE2_PINNUM_PXC", "0"))
 # 器件名块是 53x22（两行大字块），放行会被读成 `15IO` 抢走 pin2（80.00 → 78.22）。
 # 实测三条该放行的框：case 1 U1 89x18、case 2 U3 26x10、case 5 U3 75x13。
 PARTNAME_FREE_H = float(os.environ.get("STAGE2_PARTNAME_FREE_H", "18.0"))
+# ★★ 「器件名优先取框外」（`STAGE2_PARTNAME_OUTSIDE`，默认 0 = 现行行为；见 §5.371）。
+# 病（10GT 五个 IC 的 `Name` 全错，`work/_namebox.py` 逐框取证）：型号那一行**总在 bbox 外侧**
+# （下方 7~11px 或上方 3px），引脚名总在 bbox **内侧**，而 `_score()` 对 `inside` 有 **+0.15**
+# 的天然加成，于是型号框被高置信的引脚名框顶掉：
+#   case4 U3 `TP4054-MS`(0.72) 输给脚名 `CR6`(0.53→输出 `CIR6`)
+#   case5 U3 `AMS1117-3.3`(0.71) 输给脚名 `VCUTA9`(0.93)
+#   case6 U2 `STMPS2141STR`(0.85，**读全对**) 输给脚名 `E.1T`(0.93)
+#   case7 U1 `MP2236CGJ-Z` 型号框在 bbox 上方 3px（读成 `MP2C12`，是识别错不是选框错）
+# 取值 = 对「框内候选」扣的分；0.5 足以翻掉 case4/5/6 的次序（脚名 conf 至多再高 0.4）。
+# **默认 1.0**（2026-10-17 实测）：官方 10 `protocol4` 88.73 → **89.49**
+# （comp 0.9505→0.9619、pin 0.8381→0.8508、netH 0.9486→0.9515、line 0.6060 不变），
+# `component.text_mismatch` 7→4；官方判题机复刻尺 `schematic_parser.official` 65.1432→65.6575（+0.5143）；
+# 池子 50 案 `protocol4` 33.97→**34.05**（comp 0.5763→0.5792、pin 0.1237→0.1254，
+# netH −0.0008 / line −0.0021 均在噪声内）。0.3 时次序还没翻（=基线），≥1.0 后进平台。
+PARTNAME_OUTSIDE = float(os.environ.get("STAGE2_PARTNAME_OUTSIDE", "1.0"))
 # ★★ 「名候选必须靠近它的**最近那根脚**」与「同一块墨迹的重叠副本只留最宽的一份」
 #   （`STAGE2_PINNAME_ROWNEAR` / `STAGE2_PINNAME_DUPOV`；见 `docs/RESULTS.md` §5.93）。
 #
@@ -1927,6 +1942,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                         dist_w=(VALUE_DISTW if want == "value" else 0.035))
             if t.get("_part_pen"):
                 sc -= PART_STEAL_PEN
+            if want == "partname" and PARTNAME_OUTSIDE > 0.0 and t["inside"]:
+                sc -= PARTNAME_OUTSIDE
             if want == "partname" and NAME_SHAPE_PEN > 0.0:      # §5.248 字形闸（默认关）
                 _bad = 0.0
                 _tx = str(txt or "").strip()
