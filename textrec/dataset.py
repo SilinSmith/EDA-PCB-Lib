@@ -150,6 +150,11 @@ _RESAMPLE = {
     "nearest": Image.NEAREST,
 }.get((os.environ.get("TEXTREC_RESAMPLE") or "bilinear").strip().lower(), Image.BILINEAR)
 
+# 小字先放大再归一：`TEXTREC_SMALL_UP`=放大倍数（0=关），`TEXTREC_SMALL_H`=只处理裁片高
+# 小于它的（字高 5~8px 的位号/脚号在 32 高的归一化里要被放大 4~6 倍）。
+SMALL_UP = float(os.environ.get("TEXTREC_SMALL_UP", "0") or 0)
+SMALL_H = float(os.environ.get("TEXTREC_SMALL_H", "16") or 16)
+
 
 def crop_gray(img: Image.Image, bbox, img_h: "int | None" = None,
               max_w: "int | None" = None, augment: bool = False, rng=None):
@@ -189,7 +194,17 @@ def crop_gray(img: Image.Image, bbox, img_h: "int | None" = None,
 
     crop = img.crop((cx1, cy1, cx2, cy2))
 
+    # ★ 小字「先放大后归一」（`TEXTREC_SMALL_UP`，**默认 0 = 关**，只影响推理侧 A/B 时打开）。
+    #   背景：`crop_gray` 是「从原图直接一次 resample 到高 32」。字高 5~8px 时这一步要放大
+    #   4~6 倍，双线性一次到位会把笔画糊掉——`work/_tinydesig.py` 实测同一帧 8px 位号：
+    #   1× 直接读不出，先把该区域 CUBIC 放大 4× 再走同一条 `crop_gray` 则读成 0.98。
+    #   这里用同一条思路：裁片先按 `K` 用 CUBIC 放大，再走原来的 `img_h`/`max_w` 归一。
+    #   小字（高 < `SMALL_H`）才做，大字逐位不变。
     ch, cw = crop.size[1], crop.size[0]
+    if SMALL_UP > 0 and (y2 - y1) < SMALL_H:
+        k = max(1, int(round(SMALL_UP)))
+        crop = crop.resize((max(1, cw * k), max(1, ch * k)), Image.BICUBIC)
+        ch, cw = crop.size[1], crop.size[0]
     new_w = int(round(img_h * cw / max(1, ch)))
     new_w = max(C.MIN_W, min(max_w, new_w))
     return crop.resize((new_w, img_h), _RESAMPLE)
