@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -94,6 +95,44 @@ PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "0")
 #   与基线**逐位相同**（`tok_grey0` = `tok_g6def` = 76.39，其余三个读数器
 #   在本机仍是 no-op：号修复/彩色号要 PP-OCR，整词读数器净中性）。
 PIN_GREY_EVIDENCE = env_on("STAGE2_PIN_GREY_EVIDENCE", "1")
+
+# ★ 小字「放大重读」（`STAGE2_ZOOM_READ`，**默认 0 = 关**；=4 表示 4× 放大）。
+#   依据（`work/_tinydesig.py` + 直接取证，页 `0001` 的 `C6`）：位号字高只有 **8px**，
+#   整页检测器在 1× 上根本不吐这个框（整页 909 个读数里没有 `C6`）；把元件周围
+#   ±40px 的窗口放大 **4×** 后再跑 `detect_texts(min_h=2)` + 同一 CRNN，读出
+#   `C6:0.98`。2×/3× 不够（历史上「上采样无效」的结论是 1×/2×/3× 窗口尺度下做的）。
+#   逐元件裁剪 ⇒ 每页只多 ~100 次小图前向，代价可控；命中的框坐标除回原尺度并并入
+#   `reads`，交给 `assign` 当普通候选参与打分（不直接改键）。
+ZOOM_READ = float(os.environ.get("STAGE2_ZOOM_READ", "0") or 0)
+ZOOM_READ_PAD = float(os.environ.get("STAGE2_ZOOM_READ_PAD", "40") or 40)
+ZOOM_READ_MINH = int(os.environ.get("STAGE2_ZOOM_READ_MINH", "2") or 2)
+ZOOM_READ_MAX = int(os.environ.get("STAGE2_ZOOM_READ_MAX", "0") or 0)
+ZOOM_READ_ROLES = tuple(x.strip() for x in os.environ.get(
+    "STAGE2_ZOOM_READ_ROLES", "designator,value").split(",") if x.strip())
+# 只把**形状像位号**的放大读数并进候选池（`desig`=位号形状 / `all`=不筛，用于对照）。
+# 教训：不筛就并（`all`）时官方 case1 85.54 → **75.63**（引脚 0.7308→0.5385）——
+# 放大窗口把**引脚名**也读成 designator/value，而 `assign` 的槽位是一对一竞争，
+# 这些盒子会抢走引脚名槽位。筛到位号形状后污染面才等于目标面。
+ZOOM_READ_KEEP = os.environ.get("STAGE2_ZOOM_READ_KEEP", "desig").strip().lower()
+ZOOM_READ_CONF = float(os.environ.get("STAGE2_ZOOM_READ_CONF", "0.6") or 0.6)
+ZOOM_READ_DUP = env_on("STAGE2_ZOOM_READ_DUP", "0")
+# `STAGE2_ZOOM_READ_MODE`：`add`=把放大读数当**新候选**并入（历史实现，实测会把
+#   槽位竞争搅乱：官方 case1 引脚 0.7308→0.5385）；`refine`=只**重读已存在的框**
+#   （低置信的），不变动候选数量 ⇒ 不会引入竞争者。默认 `refine`。
+ZOOM_READ_MODE = os.environ.get("STAGE2_ZOOM_READ_MODE", "refine").strip().lower()
+ZOOM_REFINE_BELOW = float(os.environ.get("STAGE2_ZOOM_REFINE_BELOW", "0.7") or 0.7)
+ZOOM_REFINE_GAIN = float(os.environ.get("STAGE2_ZOOM_REFINE_GAIN", "0.05") or 0.05)
+ZOOM_REFINE_MAX = int(os.environ.get("STAGE2_ZOOM_REFINE_MAX", "0") or 0)
+_ZOOM_DESIG_RE = re.compile(r"^[A-Z]{1,3}\d{1,4}[A-Z]?$")
+_ZOOM_PINNUM_RE = re.compile(r"^(\d{1,3}[A-Z]?|[A-Z]\d{1,2})$")
+_ZOOM_PINNAME_RE = re.compile(r"^[A-Z][A-Z0-9_/+.\-]{1,15}$")
+# `desig` 只要位号形状；`pin` 只要脚号/脚名形状；`both` 两者都收；`all` 不筛（对照用）。
+_ZOOM_KEEP_RE = {
+    "desig": {"designator": _ZOOM_DESIG_RE},
+    "pin": {"pin_number": _ZOOM_PINNUM_RE, "pin_name": _ZOOM_PINNAME_RE},
+    "both": {"designator": _ZOOM_DESIG_RE, "pin_number": _ZOOM_PINNUM_RE,
+             "pin_name": _ZOOM_PINNAME_RE},
+}.get(ZOOM_READ_KEEP, {})
 
 # ★ 引脚「信任闸门」：用队友 `stage1/pin_evidence.py` 的逐脚图像证据决定哪些脚
 #   不可信（`""`=关；`rejected` / `rejected+uncertain` / `uncertain`）。
@@ -394,6 +433,126 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         reads = engine.read(bgr, boxes) if roles is None else engine.read(bgr, boxes, roles)
     else:
         reads = [{"bbox": b, "reads": {}} for b in boxes]
+
+    # ★ 小字放大重读（`STAGE2_ZOOM_READ`，默认关）：见文件头该开关的注释。
+    #   只对**已检出的元件**做局部放大，把新增读数并入候选池；坐标一律除回原尺度，
+    #   与整页读数同处一个坐标系，`assign` 无需知道它从哪来。
+    if do_ocr and ZOOM_READ > 1.0 and ZOOM_READ_MODE == "refine":
+        # 只重读**已经存在**的框：把元件窗口放大后，用同一 CRNN 再读一遍这些框，
+        # 只在「新读法置信度明显更高」时替换。候选数量不变 ⇒ 不动槽位竞争。
+        try:
+            import cv2 as _cv2                      # noqa: PLC0415
+            _zc = [c for c in (doc.get("components") or []) if c.get("bbox_img")]
+            _plan = {}
+            for _i, _r0 in enumerate(reads):
+                _b0 = _r0["bbox"]
+                _mx = max([v[1] for v in (_r0.get("reads") or {}).values() if v] or [0.0])
+                if _mx >= ZOOM_REFINE_BELOW:
+                    continue
+                _j = min(range(len(_zc)),
+                         key=lambda k: dist_to_rect(0.5 * (_b0[0] + _b0[2]),
+                                                    0.5 * (_b0[1] + _b0[3]),
+                                                    _zc[k]["bbox_img"]))
+                _plan.setdefault(_j, []).append(_i)
+            _n_ref = 0
+            for _j, _idxs in _plan.items():
+                if ZOOM_REFINE_MAX and _n_ref >= ZOOM_REFINE_MAX:
+                    break
+                _bb = _zc[_j]["bbox_img"]
+                _x0 = max(0, int(_bb[0] - ZOOM_READ_PAD))
+                _y0 = max(0, int(_bb[1] - ZOOM_READ_PAD))
+                _x1 = min(bgr.shape[1], int(_bb[2] + ZOOM_READ_PAD))
+                _y1 = min(bgr.shape[0], int(_bb[3] + ZOOM_READ_PAD))
+                if _x1 - _x0 < 8 or _y1 - _y0 < 8:
+                    continue
+                _sub = _cv2.resize(bgr[_y0:_y1, _x0:_x1], None,
+                                   fx=ZOOM_READ, fy=ZOOM_READ,
+                                   interpolation=_cv2.INTER_CUBIC)
+                _mb = [[(reads[_i]["bbox"][0] - _x0) * ZOOM_READ,
+                        (reads[_i]["bbox"][1] - _y0) * ZOOM_READ,
+                        (reads[_i]["bbox"][2] - _x0) * ZOOM_READ,
+                        (reads[_i]["bbox"][3] - _y0) * ZOOM_READ] for _i in _idxs]
+                _mb = [[max(0.0, b[0]), max(0.0, b[1]),
+                        min(float(_sub.shape[1]), b[2]),
+                        min(float(_sub.shape[0]), b[3])] for b in _mb]
+                if any(b[2] - b[0] < 2 or b[3] - b[1] < 2 for b in _mb):
+                    _idxs = [i for i, b in zip(_idxs, _mb) if b[2] - b[0] >= 2 and b[3] - b[1] >= 2]
+                    _mb = [b for b in _mb if b[2] - b[0] >= 2 and b[3] - b[1] >= 2]
+                    if not _idxs:
+                        continue
+                for _i, _nr in zip(_idxs, engine.read(
+                        _sub, _mb, roles if roles is not None else ZOOM_READ_ROLES)):
+                    _old = reads[_i].get("reads") or {}
+                    _new = _nr.get("reads") or {}
+                    _om = max([v[1] for v in _old.values() if v] or [0.0])
+                    _nm = max([v[1] for v in _new.values() if v] or [0.0])
+                    if _nm >= _om + ZOOM_REFINE_GAIN:
+                        reads[_i]["reads"] = _new
+                        reads[_i]["zoom"] = 1
+                        _n_ref += 1
+            if _n_ref:
+                src += "+zrefine%g(%d)" % (ZOOM_READ, _n_ref)
+            if os.environ.get("STAGE2_ZOOM_READ_DBG"):
+                sys.stderr.write("[zrefine] lowconf=%d refined=%d\n"
+                                 % (sum(len(v) for v in _plan.values()), _n_ref))
+        except Exception as _e:
+            src += "+zrefinefail(%s)" % type(_e).__name__
+    elif do_ocr and ZOOM_READ > 1.0:
+        try:
+            import cv2 as _cv2                      # noqa: PLC0415
+            _zc = [c for c in (doc.get("components") or []) if c.get("bbox_img")]
+            if ZOOM_READ_MAX and len(_zc) > ZOOM_READ_MAX:
+                _zc = _zc[:ZOOM_READ_MAX]
+            _seen = {tuple(round(float(v), 2) for v in b) for b in boxes}
+            _added = 0
+            for _c in _zc:
+                _bb = _c["bbox_img"]
+                _x0 = max(0, int(_bb[0] - ZOOM_READ_PAD))
+                _y0 = max(0, int(_bb[1] - ZOOM_READ_PAD))
+                _x1 = min(bgr.shape[1], int(_bb[2] + ZOOM_READ_PAD))
+                _y1 = min(bgr.shape[0], int(_bb[3] + ZOOM_READ_PAD))
+                if _x1 - _x0 < 8 or _y1 - _y0 < 8:
+                    continue
+                _sub = _cv2.resize(bgr[_y0:_y1, _x0:_x1], None,
+                                   fx=ZOOM_READ, fy=ZOOM_READ,
+                                   interpolation=_cv2.INTER_CUBIC)
+                _zb = detect_texts(_sub, min_h=ZOOM_READ_MINH)
+                if not _zb:
+                    continue
+                for _r in engine.read(_sub, _zb, ZOOM_READ_ROLES):
+                    _rd = _r.get("reads") or {}
+                    if ZOOM_READ_KEEP != "all":
+                        _hit = []
+                        for _role, v in _rd.items():
+                            if not (v and v[0] and v[1] >= ZOOM_READ_CONF):
+                                continue
+                            _want = _ZOOM_KEEP_RE.get(_role)
+                            if _want and _want.match(str(v[0]).strip().upper()):
+                                _hit.append((_role, v))
+                        if not _hit:
+                            continue
+                        _role, _v = max(_hit, key=lambda t: t[1][1])
+                        _rd = {_role: (str(_v[0]).strip().upper(), float(_v[1]))}
+                    _b = [_r["bbox"][0] / ZOOM_READ + _x0, _r["bbox"][1] / ZOOM_READ + _y0,
+                          _r["bbox"][2] / ZOOM_READ + _x0, _r["bbox"][3] / ZOOM_READ + _y0]
+                    _k = tuple(round(float(v), 2) for v in _b)
+                    if _k in _seen:
+                        continue
+                    _mid = (0.5 * (_b[0] + _b[2]), 0.5 * (_b[1] + _b[3]))
+                    if not ZOOM_READ_DUP and any(
+                            (0.5 * (b[0] + b[2]) - _mid[0]) ** 2
+                            + (0.5 * (b[1] + b[3]) - _mid[1]) ** 2 <= 36.0 for b in boxes):
+                        continue
+                    _seen.add(_k)
+                    boxes.append(_b)
+                    reads.append({"bbox": _b, "reads": _rd})
+                    _added += 1
+            if _added:
+                src += "+zoom%g(%d)" % (ZOOM_READ, _added)
+            if os.environ.get("STAGE2_ZOOM_READ_DBG"):
+                sys.stderr.write("[zoom] comps=%d added=%d\n" % (len(_zc), _added))
+        except Exception as _e:                     # 失败就退回整页读数，不拖垮管线
+            src += "+zoomfail(%s)" % type(_e).__name__
     # ★★ 用**队友的逐脚图像证据**给引脚做「信任闸门」（我们自己的胶水，开关默认关）。
     #   依据（work\_evidpow.py，官方 10 张的框引脚 220 个）：
     #       trust=trusted   n=142  几何未命中 23.2%
