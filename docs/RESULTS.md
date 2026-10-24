@@ -26240,3 +26240,54 @@ GT 腿长分布横跨 **6~22px**（`6×2, 7×2, 8×5, 9×3, 10×5, 11×2, 12×3,
   **kill 这个子进程**后 `fast.py` 会打印「管线没跑成功」并照常从已有产物打分。
 - 本轮 GPU 由另一会话的 `silinflow` 训练/推理占用（`train --allow-cuda`、`serve --device cuda`），
   按用户要求 1 小时内不调用 GPU；以上所有读数均为 CPU 确定性路径。
+
+### 5.378 `-vlm off` 不等于零外部调用：基线订正 + CPU 交付吞吐
+
+#### 5.378.1 三条口径的实测（官方 10 / `protocol4` / CPU）
+
+| 配置 | 总分 | comp | pin | netH | line | 产物 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `-vlm off`（`FUSION_LLM` **未设→默认开**、`STAGE2_PINROT=1`、`WIRE_COLOUR=dominant`） | 89.62 | 0.9665 | 0.8508 | 0.9515 | 0.6060 | `work/_fast_out_hueFBdef2` |
+| 同上 + `FUSION_LLM=0` + `FUSION_ITERATE=0`（**零外部调用**） | **89.77** | 0.9665 | 0.8563 | 0.9522 | 0.6046 | `work/_fast_out_nollm` |
+| `-offline`（另外 `STAGE2_PINROT=0`） | 89.11 | 0.9665 | 0.8342 | 0.9495 | 0.6034 | `work/_fast_out_offl` |
+
+结论：
+
+1. **`-vlm off` 只关 VLM 通道，不关融合层的 LLM 轮。** `-offline` 才会把
+   `FUSION_LLM/FUSION_ITERATE/STAGE1_WIRE_COLOUR/STAGE2_PINROT` 一起钉住
+   （`submission/run.py:298 _apply_offline`，注释里写明「那 19 次调用值 +1.11 分」是旧基线的结论）。
+   判分机上没有 LLM 端点 ⇒ 真实行为等于第二行，**交付基线以 89.77 为准**（已同步到 `HANDOFF.md` §1）。
+2. `STAGE2_PINROT=1` 值 **+0.66**（pin 0.8342→0.8563）：竖排脚号旋转重读是本地识别器，不是外部调用。
+3. comp / netH / line 三项在三档之间基本不动（0.9665 / 0.9495-0.9522 / 0.6034-0.6060）⇒
+   差异全部来自引脚通道，与 LLM 轮关系不大（89.62 vs 89.77 的 0.15 是 LLM 轮在本机的净影响）。
+
+#### 5.378.2 「管线卡死 30 分钟」的真正机理
+
+- `vlm/client.py:110` `TIMEOUT = VLM_TIMEOUT`（默认 **600 s/次**）、`:122` `RETRY = VLM_RETRY`（默认 **3**）、
+  `:113` `BUDGET = VLM_BUDGET_S`（默认 **0 = 不限**）。
+- 融合 LLM 轮走这条通道。本机 llama-server 与另一个会话的 GPU 训练争卡时，单次生成极慢 ⇒
+  **2 张图在融合层烧 20 分钟以上**，`Get-Process` 看 CPU 仍在增长、`final_results/*_Pred.json` 早已落盘 ——
+  看起来像「打分卡死」，其实是外部推理在排队。
+- 处置：`tools/eval/fast.py` 现在 `os.environ.setdefault("VLM_BUDGET_S", "900")`（不改调用方语义，
+  交付入口本来就把每 lane 钉成 1800）；再要绝对确定性就用 `-offline`。
+  另：打分本身是瞬时的（离线 `evaluate_case` 逐案 0.0 s），**不要把等待算在打分头上**。
+
+#### 5.378.3 CPU 交付吞吐：`-device cpu` 现在会扇出
+
+以前 `_resolve_case_workers` 在「无卡/单卡」时一律返回 1（逐 case 串行），220 张按实测
+11.46 s/张 = **42 min**，再叠上融合 LLM 轮就顶到 `EDA_WALL_BUDGET_S=6900` 看门狗、尾部被补空壳。
+
+改法（`submission/run.py:445 _cpu_lanes` + `_resolve_case_workers`）：
+`ndev == 0` **或** `-device cpu` 时取 `min(4, cpu_count//6, 可用内存GiB//3, 图数)`；显式
+`-case-workers` / `EDA_CASE_WORKERS` 仍然优先，`EDA_CASE_WORKERS=1` 可强制串行。单卡 GPU 行为不变。
+
+实测（本机 24 核，40 张池页，`-offline`）：
+
+| 跑法 | 墙钟 | s/张 | 220 张推算 |
+| --- | ---: | ---: | ---: |
+| 串行（CUDA 可见，`-device cpu`） | 458.4 s | 11.46 | 42 min |
+| 串行（`CUDA_VISIBLE_DEVICES=""`） | 275.8 s | 6.90 | 25 min |
+| **扇出 4 路（`-device cpu`）** | **151.8 s** | **3.80** | **14 min** |
+
+正确性：40/40 张 `*_Pred.json` 与串行**逐字节相同**（另有 4 张、8 张两批 A/B 同样逐字节相同）。
+内存：单 case 进程峰值 **2.5 GiB**（`work/_memprobe`）⇒ 4 路约 10 GiB，故 `_cpu_lanes` 用可用内存兜底。

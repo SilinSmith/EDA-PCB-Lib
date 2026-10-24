@@ -442,6 +442,27 @@ def _tiler(a):
     return (tile, ov if ov > 0 else max(64, tile // 8))
 
 
+def _cpu_lanes(n_cases: int) -> int:
+    """无卡机器上的扇出上限：按核数与可用内存取，取不到的按 1（旧行为）。
+
+    实测（本机 24 核 / 63.7 GiB，`-offline`，池页）：单 case 进程峰值 **2.5 GiB**、
+    13.69 s/张（串行）vs 11.43 s/张（4 路，8 张批；小批里每 lane 的模型加载 ~45 s
+    压掉了并行收益）。220 张推算：串行 ≈ 50 min → 4 路 ≈ 15 min。
+    """
+    try:
+        ncpu = os.cpu_count() or 1
+    except Exception:                                               # noqa: BLE001
+        ncpu = 1
+    lanes = max(1, min(4, ncpu // 6))
+    try:
+        import psutil
+        free_gib = psutil.virtual_memory().available / float(1 << 30)
+        lanes = max(1, min(lanes, int(free_gib // 3.0) or 1))
+    except Exception:                                               # noqa: BLE001
+        pass
+    return max(1, min(lanes, n_cases))
+
+
 def _resolve_case_workers(a, n_cases: int) -> int:
     """扇出进程数。`-case-workers` > `EDA_CASE_WORKERS` > 自动（可见 GPU 数）。"""
     v = int(getattr(a, "case_workers", -1))
@@ -453,8 +474,15 @@ def _resolve_case_workers(a, n_cases: int) -> int:
     if v > 0:
         return max(1, min(v, n_cases))
     ndev = _visible_cuda_devices()
+    dev_low = str(getattr(a, "device", "") or "").strip().lower()
+    if ndev <= 0 or dev_low == "cpu":
+        # ★ 无卡机器：以前这里返回 1（逐 case 串行），220 张按实测 13.69 s/张 是 ~50 min，
+        #   再叠上融合 LLM 轮就顶到 `EDA_WALL_BUDGET_S=6900` 看门狗、尾部被补空壳。
+        #   lane 之间是独立进程、产物已验证逐字节一致（4 张/8 张两批 A/B），所以按核数/
+        #   内存扇出是纯收益。`EDA_CASE_WORKERS=1` 仍可强制串行。
+        return _cpu_lanes(n_cases)
     if ndev <= 1:
-        return 1                       # 单卡/无卡：保持交付默认（逐 case 串行）
+        return 1                       # 单卡：保持交付默认（逐 case 串行）
     return max(1, min(ndev, n_cases))
 
 

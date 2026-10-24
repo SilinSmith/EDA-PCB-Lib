@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -226,6 +227,12 @@ def main(argv=None):
                          "harness（别名 official）= 2026-10-09 判题机复刻（已被业主认定写错，"
                          "只作历史对照，同一批产物结论常常相反）")
     a = ap.parse_args(argv)
+
+    # ★ 外部推理的累计预算默认只给 15 分钟：`VLM_BUDGET_S` 不设时 `vlm/client.py`
+    #   是不限（=0），而融合 LLM 轮在 `-vlm off` 下**仍然是开的**。端点在跑别的活
+    #   （llama-server 抢不到卡）时，2 张图能烧掉 20 分钟以上，看起来像管线卡死。
+    #   这里给 dev 工具钉个上限，显式设过的值不覆盖。
+    os.environ.setdefault("VLM_BUDGET_S", "900")
 
     global OUT_DIR, ENGINE
     if a.out:
