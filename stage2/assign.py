@@ -862,6 +862,50 @@ def _digitize(tail: str) -> str:
     return d if d.isdigit() else ""
 
 
+# ★★ 位号「只读到数字」的补解（`STAGE2_DESIG_DIGITS`，默认 **0 = 关**）。
+#
+# 病（池 47 页实测，`work/_poolfunnel.py` + `work/_desigrebuild.py`）：
+# 1147 个真位号 GT 元件里 513 个（44.7%）整页读不到该串，但这 513 个里 **476 个
+# 存在编辑距离 1 的页内读数** —— `C6` 读成 `6`、`TP3` 读成 `QTP3`、`R8` 读成 `C8`。
+# 即名字大多读到了，**前缀丢了 / 张冠李戴**。50 个缺键里 1020 个落在 GT 无名件上
+# （§5.383），所以不能放宽成「任何数字都算位号」，只能在这条窄路上补：
+#   · 读法剥掉字母后剩 1~3 位数字，且原串不比数字长 2 个字母以上；
+#   · 文字框**在元件本体之外**（位号印在框外，脚号印在框内 —— 这两者的分布差异
+#     是 §5.371 就量过的：`PARTNAME_OUTSIDE` 同一族证据）；
+#   · 置信度地板 `DIGITS_MINCONF`；
+#   · 分数带罚 `DIGITS_PEN`（数字证据弱于完整读法）。
+# 前缀取该类型最短的允许前缀（`TYPE_PREFIX`），与 `canon_designator` 同一套语义。
+DESIG_DIGITS = env_on("STAGE2_DESIG_DIGITS", "1")
+DIGITS_MAXD = float(os.environ.get("STAGE2_DIGITS_MAXD", "60") or 60)
+DIGITS_MINCONF = float(os.environ.get("STAGE2_DIGITS_MINCONF", "0.80") or 0.80)
+DIGITS_OUTSIDE = env_on("STAGE2_DIGITS_OUTSIDE", "1")
+DIGITS_PEN = float(os.environ.get("STAGE2_DIGITS_PEN", "0.08") or 0.08)
+DIGITS_FIT = float(os.environ.get("STAGE2_DIGITS_FIT", "0.55") or 0.55)
+DIGITS_ONLY_EMPTY = env_on("STAGE2_DIGITS_ONLY_EMPTY", "1")
+_DIGITS_STAT = {"cand": 0, "used": 0}
+
+
+def _bare_digit_read(reads: Dict[str, Tuple[str, float]]):
+    """框的「只有数字」读法：剥掉字母后剩 1~3 位数字 ⇒ `(数字, 置信度)`，否则 `None`。"""
+    best = None
+    for _r, v in (reads or {}).items():
+        if not isinstance(v, (tuple, list)) or not v or not v[0]:
+            continue
+        s = re.sub(r"[^0-9A-Za-z]", "", str(v[0])).upper()
+        if not s:
+            continue
+        dg = _digitize("".join(ch for ch in s if not ch.isalpha()))
+        if not dg or len(dg) > 3:
+            continue
+        letters = sum(1 for ch in s if ch.isalpha())
+        if letters > 2:
+            continue
+        conf = float(v[1] or 0.0)
+        if best is None or conf > best[1]:
+            best = (dg, conf)
+    return best
+
+
 def canon_designator(text: str, ctype: str):
     """把读出的串规范成位号，返回 `(位号, 前缀保真度)`；认不出返回 `("", 0.0)`。
 
@@ -1665,6 +1709,34 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                               "fit": fid, "box_i": t.get("_i", -1),
                               "type_fix": tfix}))
         alts.sort(key=lambda x: -x[0])
+        # ★ 位号「只读到数字」的补解（`STAGE2_DESIG_DIGITS`，默认关）。
+        #   `DIGITS_ONLY_EMPTY=1` 时只在**一条常规候选都没有**时启用，
+        #   保证不会从已有读法那里抢键（开关关时逐位不变）。
+        if DESIG_DIGITS and (not alts or not DIGITS_ONLY_EMPTY):
+            _dg = []
+            _pre = min((a.upper() for a in TYPE_PREFIX.get(ctype, ())), key=len, default="")
+            if _pre:
+                for t in dcands:
+                    if _too_wide(t, DESIG_MAXW):
+                        continue
+                    if t["d"] > DIGITS_MAXD * _spx:
+                        continue
+                    if DIGITS_OUTSIDE and t.get("inside"):
+                        continue
+                    got = _bare_digit_read(t["reads"])
+                    if not got or got[1] < DIGITS_MINCONF:
+                        continue
+                    can = _pre + got[0]
+                    _sc = _score(DIGITS_FIT, got[1], t["d"], t["inside"],
+                                 dist_clamp=max(_far, _sr)) - DIGITS_PEN
+                    _dg.append((_sc, {"text": got[0], "canon": can, "conf": got[1],
+                                      "box": list(t["bbox"]), "d": t["d"],
+                                      "fit": DIGITS_FIT, "box_i": t.get("_i", -1),
+                                      "type_fix": None, "digit_only": True}))
+            _dg.sort(key=lambda x: -x[0])
+            if _dg:
+                _DIGITS_STAT["cand"] += 1
+                alts = _dg + alts
         if not alts and _SHAPE_FILL:
             # 零候选补位：只在「一个合法候选都没有」时启用；分数 = 常规项 − 罚
             _fb = []
