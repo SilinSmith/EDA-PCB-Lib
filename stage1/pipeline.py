@@ -47,6 +47,7 @@ from stage1 import nets as nets_mod            # noqa: E402
 from stage1 import pincol as pincol_mod        # noqa: E402
 # ★ 「未连接脚」的 X 标记（`STAGE1_PIN_XMARK`，默认 0）：检出的 X 中心就是引脚外端。
 from stage1 import xnc as xnc_mod               # noqa: E402
+from stage1 import pstub as pstub_mod           # noqa: E402
 # ★ 队友分支 `codex/improve-pin-network-parsing` 的引脚证据链（2026-10-16 并入，默认关）：
 #   `pincolor` = 在图像上实测红色桩/绿线转折得到「彩色已确认的引脚端点」；
 #   `pin_evidence` = 逐脚量六项图像证据（框覆盖率/墨迹连续长度/文字重叠/分支率…）。
@@ -733,6 +734,25 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                 except Exception as e:
                     traceback.print_exc()
                     errs.append(f"pin_xmark: {type(e).__name__}: {e}")
+            # ★★ 「引线桩」闸门（`STAGE1_PIN_STUB`，默认 1；见 `stage1/pstub.py`）：
+            #   真引线桩从元件面一直外伸 ≥10px，而脚号数字贴面印、NC 的 X 压在腿端
+            #   —— 这两样都不是桩。面外 6px 与 9px 处都没有墨迹的脚点直接丢（官方 10 张
+            #   只丢 6 根，pin 0.8570→0.8595、总分 90.09→90.15；§5.397.6 的重复行一半来自此）。
+            #   同样必须在 `build_nets` 之前（网络装配吃最终引脚序列）。
+            # ★★ 「引线桩」闸门（`STAGE1_PIN_XSTUB`，默认 1；见 `stage1/pstub.py`）：
+            #   真引线桩从元件面一直外伸 ≥10px，而脚号数字贴面印、NC 的 X 压在腿端
+            #   —— 这两样都不是桩。面外 6px 与 9px 处都没有墨迹、且同侧 14px 内有邻居的脚点
+            #   直接丢（官方 10 张只丢 4 根：case5 `U1 pin_7`、case8 `U1 pin_1/pin_12/pin_2`；
+            #   总分 90.09→90.51，池 50 案 34.47→34.16；§5.397.8）。
+            #   必须在 `build_nets` 之前，因为网络装配吃的是最终引脚序列。
+            #   注意：键名不能叫 `STAGE1_PIN_STUB` —— 那个键已被 `stage1/pins.py:185`
+            #   的几何补桩模式（`gapfill`）占用，撞名会连带关掉补桩（实测 90.09→87.70）。
+            if pstub_mod.STUB_ON:
+                try:
+                    comp_pins, pstub_stat = pstub_mod.filter_stubs(comps, comp_pins, _ink)
+                except Exception as e:
+                    traceback.print_exc()
+                    errs.append(f"pin_xstub: {type(e).__name__}: {e}")
             # ★ 把**墨迹掩膜**传给网络装配：`_weld_unions` 用它判断两个端点之间的
             # 直线上是否真的有墨。结点圆点造成的断口是**画出来的**（圆点本身就是墨），
             # 而「把不相干的两条线凑近」的假配对连线必然穿过空白。
