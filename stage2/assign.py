@@ -526,6 +526,37 @@ PART_STEAL = float(os.environ.get("STAGE2_PART_STEAL", "0"))
 PART_STEAL_CONF = float(os.environ.get("STAGE2_PART_STEAL_CONF", "0.55"))
 PART_STEAL_PEN = float(os.environ.get("STAGE2_PART_STEAL_PEN", "0.35"))
 
+# ---- ★ 页面尺度归一（`STAGE2_PAGE_SCALE` / `STAGE2_TEXT_MED`）---------------
+# 上面这一串归属/抢读半径（`NEAR`/`FAR`/`STEAL_R`/`VALUE_STEAL_R`/`PART_STEAL`/
+# `PINNUM_NEAR`）全是按 1× 图标定的**绝对像素**量。同一份图换个 DPI（导出倍率、
+# 截图缩放）它们就整体失效，而且失效方向不对称：
+#   · 1.4×（`work/_deg/s140`）——值文字框读得出来（`10nF` conf 0.82），却一颗
+#     元件都拿不到值（带值元件 13/23 → 1/23），位号退化成窗内前缀（`C151`→`C15`）；
+#   · 0.7×（`work/_deg/s070`）——文字框缩进 4~7px 桶（16 → 281 框），脚号读不出。
+# 这里按整页文字框高度中位数估尺度（1× 标定中位 = `STAGE2_TEXT_MED`），把这些
+# 半径一起缩放。`STAGE2_PAGE_SCALE=1`（默认）时与旧行为**逐位相同**。
+_pss = (os.environ.get("STAGE2_PAGE_SCALE", "1") or "1").strip().lower()
+PAGE_SCALE = 0.0 if _pss == "auto" else float(_pss)      # 0 = 不缩放（等 run.py 注入）
+TEXT_MED = float(os.environ.get("STAGE2_TEXT_MED", "10.8") or 10.8)
+
+
+def set_page_scale(s) -> float:
+    """由 `stage2/run.py` 按实测文字高度注入；夹在 [0.4, 3.0]。"""
+    global PAGE_SCALE
+    try:
+        PAGE_SCALE = max(0.4, min(3.0, float(s)))
+    except (TypeError, ValueError):
+        pass
+    return PAGE_SCALE
+
+
+def page_scale_from_heights(heights) -> float:
+    """整页文字框高度中位数 / `TEXT_MED`。没有文字框时保持当前尺度。"""
+    hs = sorted(float(h) for h in heights if h and float(h) > 0)
+    if not hs:
+        return PAGE_SCALE
+    return set_page_scale(hs[len(hs) // 2] / TEXT_MED)
+
 
 # ---- §5.222 贴中罚（GT-blind；**已按 §5.222.10 的 A/B 转默认开**） -----------------
 # 依据（`docs/RESULTS.md` §5.222.3）：位号形态的已认串按「离最近 GT 元件多远」量，
@@ -1316,7 +1347,7 @@ def _own_match_pick(desig_all: Dict[str, List[dict]]) -> List[Tuple[str, dict]]:
 
     候选池 = `desig_all`（每颗元件的 `desig_all` 条目，就是 `owned + steal` 那批
     已经算好的候选，**不新造任何候选生成**）。权值 = 条目上的 `score`，而它正是
-    贪心路径用的同一个 `_score(fit, conf, d, inside, dist_clamp=max(FAR, STEAL_R))`
+    贪心路径用的同一个 `_score(fit, conf, d, inside, dist_clamp=max(_far, _sr))`
     （`read_score` 的 `fit * (1-confit + confit*conf)` 项 × 距离衰减 × inside 加成），
     所以这一臂与现状**只差「谁来选」**，不差打分。
 
@@ -1413,6 +1444,11 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
     """
     global LAST_PIN_EVIDENCE
     LAST_PIN_EVIDENCE = pin_evidence or {}
+    # ★ 像素半径按页面尺度缩放（`PAGE_SCALE == 1` 时下面每个值都与旧常量相等）
+    _spx = PAGE_SCALE if PAGE_SCALE > 0 else 1.0
+    near, far = near * _spx, far * _spx
+    _far = far
+    _sr, _vsr, _psr = STEAL_R * _spx, VALUE_STEAL_R * _spx, PART_STEAL * _spx
     if global_match is None:
         global_match = env_on("STAGE2_GLOBAL_MATCH", "0")
     # ★ 「不删除只削弱」：一个 case 的降权/保留池从零开始累计（`structmatch.HIST_*`），
@@ -1457,7 +1493,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
 
     # ---- 「抢读」名单：别人名下、但离自己 <= STEAL_R 的框（只给位号用） ----
     steal: Dict[str, List[dict]] = {c["id"]: [] for c in comps}
-    if STEAL_R > 0:
+    if _sr > 0:
         for owner_id, rs in owned.items():
             for rec in rs:
                 if _too_wide(rec, DESIG_MAXW):
@@ -1467,7 +1503,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     if c["id"] == owner_id:
                         continue
                     d = dist_to_rect(cx, cy, c["bbox"])
-                    if d <= STEAL_R:
+                    if d <= _sr:
                         steal[c["id"]].append(dict(
                             rec, d=d, inside=inside(cx, cy, c["bbox"]),
                             stolen_from=owner_id))
@@ -1481,14 +1517,14 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
     # 所以自由文字也进抢读池（半径同 `STEAL_R`，冲突仍交给后面的全局去重裁决）。
     # 自由候选的 `d` 更大、`inside=False`，打分天然低于自家名下的框，
     # 只在「名下什么都没有」时才会胜出 —— 这一支纯补空，不改已有结果。
-    if FREE_STEAL and STEAL_R > 0:
+    if FREE_STEAL and _sr > 0:
         for rec in free:
             if _too_wide(rec, DESIG_MAXW) or not rec.get("center"):
                 continue
             cx, cy = rec["center"]
             for c in comps:
                 d = dist_to_rect(cx, cy, c["bbox"])
-                if d <= STEAL_R:
+                if d <= _sr:
                     steal[c["id"]].append(dict(
                         rec, d=d, inside=inside(cx, cy, c["bbox"]),
                         stolen_from=None))
@@ -1557,7 +1593,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         #   net_output 76/76、other 69/69、net_bidirection 13/13 —— 只有 1 个 `v` 例外。
         # 故对这些 type 直接不给位号候选（`desig_slots` 也一并清空，阶段三没有可仲裁的东西）。
         dcands = [] if ctype in NO_DESIGNATOR else (
-            cands if STEAL_R <= 0 else list(cands) + steal.get(cid, []))
+            cands if _sr <= 0 else list(cands) + steal.get(cid, []))
         if _dbg_want(cid):
             print("[dbg-D] cid=%s type=%s bbox=%s owned=%d steal=%d"
                   % (cid, ctype, c.get("bbox"), len(cands), len(steal.get(cid, []))))
@@ -1605,12 +1641,12 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 #    只允许用**贴着这颗元件**的印字当证据（抢读来的远端框不算）。
                 if conf < CONFORM_MIN_CONF:
                     continue
-                if how == "type" and t["d"] > FAR:
+                if how == "type" and t["d"] > _far:
                     continue
             # ★ 距离项必须放宽到 `STEAL_R`（见 `_score` 的 docstring）：位号候选池里
             # 有一大半是 `d > FAR` 的抢读候选，用 `FAR` 截断会让它们全部同分。
             sc = _score(fid, conf, t["d"], t["inside"],
-                        dist_clamp=max(FAR, STEAL_R))
+                        dist_clamp=max(_far, _sr))
             _dr = -1.0
             if NEAR_REV_W > 0.0:                                  # §5.222 贴中罚（默认开，§5.222.10）
                 _cb = c.get("bbox") or [0.0, 0.0, 0.0, 0.0]
@@ -1637,7 +1673,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 if not _sh or _cf < _SHAPE_MINCONF:
                     continue
                 _sc = _score(t.get("fit") or 0.0, _cf, t["d"], t["inside"],
-                             dist_clamp=max(FAR, STEAL_R)) - _SHAPE_PEN
+                             dist_clamp=max(_far, _sr)) - _SHAPE_PEN
                 _fb.append((_sc, {"text": _sh, "canon": _sh, "conf": _cf,
                                   "box": list(t["bbox"]), "d": t["d"],
                                   "fit": t.get("fit") or 0.0,
@@ -1918,9 +1954,9 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         # （实测 `MSP432E401YTPDT` 这种），按宽高比筛会把器件名整条筛掉。
         best = None
         _src = list(cands)
-        if want == "partname" and PART_STEAL > 0:
+        if want == "partname" and _psr > 0:
             for _t in steal.get(cid, []):
-                if float(_t.get("d", 1e9)) > PART_STEAL:
+                if float(_t.get("d", 1e9)) > _psr:
                     continue
                 _got = _best_read(_t["reads"], "partname", fit_partname)
                 if not _got:
@@ -1956,7 +1992,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 sc -= NAME_SHAPE_PEN * _bad
             if best is None or sc > best[0]:
                 best = (sc, txt, conf, t)
-        if best is None and want == "value" and VALUE_STEAL_R > 0:
+        if best is None and want == "value" and _vsr > 0:
             # **值兜底**（`STAGE2_VALUE_STEAL`）。阻容的「值」字在符号下方/右侧，
             # 但它离**邻居**的元件框往往更近，于是归属判定把它给了邻居，
             # 这颗元件就连候选都没有。实测 `work/stage2_v9` 上「键对上了、值空着」
@@ -1974,7 +2010,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 if tuple(tb) in _desig_boxes:
                     continue
                 d = dist_to_rect(ccx, ccy, tb)
-                if d > VALUE_STEAL_R:
+                if d > _vsr:
                     continue
                 got = _best_read(t["reads"], "value",
                                  lambda _t: fit_value_unitx(_t, ctype))
@@ -2081,7 +2117,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             pool = []
             # 引脚名可以更长（`VDDA`/`GNDA`），引脚号可以离框更远（大 IC 印在框外 29~44px）。
             _wlim = PINNAME_MAXW if slot == "name" else MAX_BOX_W
-            _dlim = PINNUM_NEAR if slot == "number" else NEAR
+            _dlim = (PINNUM_NEAR if slot == "number" else NEAR) * _spx
             _dw = PINNUM_DISTW if slot == "number" else 0.035
             # ★ 引脚号抢读（`STAGE2_PINNUM_STEAL`）：见常量的长注释。只抢
             #   「主人没位号（注定被 `DROP_UNKEYED` 丢）」或「无主」的框。

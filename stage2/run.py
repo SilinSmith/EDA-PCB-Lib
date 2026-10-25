@@ -30,7 +30,7 @@ except ImportError:                     # 直接跑脚本时 `sys.path[0]` 是�
 
 from .text import (DEFAULT_CKPT, LINESPLIT, TextEngine, detect_texts, imread_unicode,
                    read_stage1_texts)
-from .assign import assign, dist_to_rect
+from .assign import assign, dist_to_rect, page_scale_from_heights, set_page_scale
 from .assemble import build_doc
 from .expect import merge_runs, score_expect, should_grow
 from .growbox import grow_reading
@@ -157,6 +157,13 @@ MS_TEXT_NOVEL = env_on("STAGE2_MS_TEXT_NOVEL", "1")       # 只收 1× 池里还
 MS_TEXT_KEEP_RE = re.compile(r"^[A-Z]{1,3}\d{1,4}[A-Z]?$") if env_on(
     "STAGE2_MS_TEXT_KEYS", "1") else None
 
+# ★ 页面尺度归一（`STAGE2_PAGE_SCALE_AUTO`，**默认关**——§5.387 判否）
+#   `assign` 的归属/抢读半径是 1× 标定的绝对像素量，换 DPI 就整体失效；这里按
+#   整页文字高度中位数估尺度注入。§5.387 实测：把尺度**强制**成真值（0.7×/1.4×）
+#   后 GT10 降级集分数**一分不动**（69.54 / 59.30），而估准了反而会过冲到 2.3×
+#   把 pin 打崩（1.4× 集 59.53 → 33.43）⇒ 这族半径不是瓶颈，开关默认关。
+PAGE_SCALE_AUTO = env_on("STAGE2_PAGE_SCALE_AUTO", "0")
+PAGE_SCALE_DBG = env_on("STAGE2_PAGE_SCALE_DBG", "0")
 # ★ 引脚「信任闸门」：用队友 `stage1/pin_evidence.py` 的逐脚图像证据决定哪些脚
 #   不可信（`""`=关；`rejected` / `rejected+uncertain` / `uncertain`）。
 #   这是我们**缺的那条信息**（官方 10 张实测：trusted 的几何未命中率 23.2%，
@@ -696,6 +703,27 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         for k, (txt, conf) in list(r["reads"].items()):
             if conf < min_conf:
                 r["reads"][k] = ("", conf)
+
+    # ★ 页面尺度归一（`STAGE2_PAGE_SCALE_AUTO`，默认开）：把 `assign` 里那串
+    #   绝对像素半径（`NEAR`/`FAR`/`STEAL_R`/`VALUE_STEAL_R`/`PART_STEAL`）按整页
+    #   文字高度中位数缩放到 1× 标定尺度。1× 页面中位高度 = `STAGE2_TEXT_MED`(10)
+    #   ⇒ 尺度 1.0、产物逐位不变；1.4× 官方 case1 由 21.21 起、0.7× 由 69.54 起
+    #   再量（见 docs/RESULTS.md §5.387）。
+    if PAGE_SCALE_AUTO:
+        # ★ 尺度估计用**检测器自己**的整页框高（`min_h=3/max_h=60`），不用 `reads`
+        #   的高度：`reads` 走的是 stage1 文字框，框的分布随页面画法剧烈变化
+        #   （1× 官方 case1 中位 5px、case2/8 中位 10px），拿它当尺子会把同一批
+        #   1× 页面推出 0.5~1.0 的假尺度。标定值 `STAGE2_TEXT_MED`=10.8 是 1×
+        #   十页同一统计量的均值（`work/_scaleprobe.py`）。
+        if reads:
+            _hs = [b[3] - b[1] for b in
+                   detect_texts(bgr, min_h=3, max_h=60)]
+            _ps = page_scale_from_heights(_hs)
+            if PAGE_SCALE_DBG:
+                print("[pagescale] %.3f median_h=%.1f n=%d"
+                      % (_ps, sorted(_hs)[len(_hs) // 2] if _hs else 0.0, len(_hs)))
+        else:
+            set_page_scale(1.0)      # 没有任何文字框 ⇒ 回到标定尺度，避免上一案残留
 
     a = assign(doc.get("components") or [], doc.get("pins") or {}, reads,
                pincol=doc.get("pincol"), pin_evidence=doc.get("pin_evidence"))

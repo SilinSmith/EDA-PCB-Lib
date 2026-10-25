@@ -22,8 +22,10 @@ from typing import Dict, List, Optional, Tuple
 # ---------------------------------------------------------------- constants
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_DATA_ROOT = os.path.join(
-    REPO_ROOT, 'yolo_part', 'Dataset(waitforpreprocess)')
+# `EDA_DATA_ROOT` lets a synthetic/degraded dataset be scored with the same tools
+# (see `work/_degrade.py`); unset ⇒ the shipped dataset, unchanged.
+DEFAULT_DATA_ROOT = (os.environ.get('EDA_DATA_ROOT')
+                     or os.path.join(REPO_ROOT, 'yolo_part', 'Dataset(waitforpreprocess)'))
 
 SPLITS = ('10GT', '10_GTcase', '200_train_cases')
 

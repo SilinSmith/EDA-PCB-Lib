@@ -551,6 +551,44 @@ def _child_concurrency(a, n_lanes: int):
     return vw, s1
 
 
+def _scale_doc_xy(doc, s):
+    """把竞赛 JSON 里的**所有坐标**乘 s（等比缩放，底原点/顶原点都成立）。
+
+    只碰 `components[*].bbox`（4 个数）与任何含 `x`/`y` 的字典（脚点、网线端点），
+    也容忍 `[x, y]` 数对；其余字段（名字、类型、成员关系）逐字不动。
+    用于 `EDA_CANON_SCALE` 的「归一化后把坐标乘回原图尺寸」。
+    """
+    if abs(s - 1.0) <= 1e-9:
+        return doc
+
+    def _walk(node):
+        if isinstance(node, dict):
+            if set(node.keys()) == {"x", "y"} and all(
+                    isinstance(node[k], (int, float)) for k in ("x", "y")):
+                return {"x": float(node["x"]) * s, "y": float(node["y"]) * s}
+            return {k: _walk(v) for k, v in node.items()}
+        if isinstance(node, list):
+            if len(node) == 2 and all(isinstance(v, (int, float)) for v in node):
+                return [float(node[0]) * s, float(node[1]) * s]
+            return [_walk(v) for v in node]
+        return node
+
+    for _c in (doc.get("components") or {}).values():
+        bb = _c.get("bbox") if isinstance(_c, dict) else None
+        if isinstance(bb, list) and len(bb) == 4 and all(
+                isinstance(v, (int, float)) for v in bb):
+            _c["bbox"] = [float(v) * s for v in bb]
+    if isinstance(doc.get("pins"), dict):
+        doc["pins"] = _walk(doc["pins"])
+    if isinstance(doc.get("nets"), dict):
+        doc["nets"] = _walk(doc["nets"])
+    # `__pin_index` 之类辅助索引里也可能有坐标；缩放它对判题无影响，但保持一致更难出 bug
+    for _k in ("__pin_index", "__comp_index"):
+        if isinstance(doc.get(_k), dict):
+            doc[_k] = _walk(doc[_k])
+    return doc
+
+
 def _sanitize_pred(doc):
     """出口不变式：网表成员必须指向**存在**的元件与引脚。
 
@@ -938,6 +976,54 @@ def _run(a) -> int:
         fp.close()
         return 1
     _log(fp, "找到 %d 张图" % len(items))
+
+    # ------------------------------------------- 页面尺度归一化（`EDA_CANON_SCALE`）
+    # 为什么：整条管线的像素常量（文字高度闸 4~34px、`pad_min`、脚外扩、`EDGE_SNAP`、
+    #   线掩膜长度…）都是按本数据集的 DPI 调的。同一张图等比放大 1.4× 后官方 10 张
+    #   89.79 → **59.6**（`work/_degrade.py` + `EDA_DATA_ROOT`，RESULTS §5.387）。
+    #   做法：把每页按「文字高度中位数」缩到标准尺度再跑整条管线，导出时把坐标乘回去。
+    #   `EDA_CANON_SCALE=0`（默认）= 完全不动；>0 = 目标文字高度中位数（px）。
+    #   `EDA_CANON_DEADZONE`（默认 0.08）：|k-1| 小于它就不缩放，避免把基准集改坏。
+    _canon_k = {}
+    _canon = float(os.environ.get("EDA_CANON_SCALE", "0") or 0.0)
+    if _canon > 0.0:
+        _dz = float(os.environ.get("EDA_CANON_DEADZONE", "0.08") or 0.0)
+        _lo = float(os.environ.get("EDA_CANON_MIN", "0.5") or 0.5)
+        _hi = float(os.environ.get("EDA_CANON_MAX", "2.0") or 2.0)
+        _tmp = out_dir / "_canon"
+        _tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            import cv2 as _cv2                                        # noqa: PLC0415
+            from stage2.text import detect_texts as _dtexts, imread_unicode as _imr  # noqa: PLC0415
+        except Exception as _e:                                       # noqa: BLE001
+            _log(fp, "尺度归一化不可用（%s）⇒ 按原尺寸跑" % _e)
+            _canon = 0.0
+        if _canon > 0.0:
+            _new = []
+            for _cid, _p in items:
+                try:
+                    _bgr = _imr(str(_p))
+                    _hs = sorted((y1 - y0) for (x0, y0, x1, y1)
+                                 in _dtexts(_bgr, min_h=3, max_h=60))
+                    _mh = float(_hs[len(_hs) // 2]) if _hs else 0.0
+                    _k = min(_hi, max(_lo, _canon / _mh)) if _mh > 0 else 1.0
+                except Exception as _e:                               # noqa: BLE001
+                    _log(fp, "  %-28s 尺度估计失败（%s）⇒ 原尺寸" % (_cid, _e))
+                    _k = 1.0
+                if abs(_k - 1.0) <= _dz:
+                    _canon_k[_cid] = 1.0
+                    _new.append((_cid, _p))
+                    continue
+                _out = _tmp / ("%s.png" % _cid)
+                _bgr2 = _cv2.resize(_bgr, None, fx=_k, fy=_k,
+                                    interpolation=_cv2.INTER_AREA if _k < 1.0 else _cv2.INTER_CUBIC)
+                _cv2.imwrite(str(_out), _bgr2)
+                _canon_k[_cid] = _k
+                _new.append((_cid, str(_out)))
+                _log(fp, "  %-28s 尺度归一化 k=%.3f（文字高 %s → %.1f，%dx%d → %dx%d）"
+                     % (_cid, _k, ("%.0f" % _mh) if _mh else "?", _canon,
+                        _bgr.shape[1], _bgr.shape[0], _bgr2.shape[1], _bgr2.shape[0]))
+            items = _new
 
     from stage1.detect import DEFAULT_WEIGHTS
     from stage1.pipeline import run_cases
@@ -1889,6 +1975,24 @@ def _run(a) -> int:
     if edgecal_rows:
         _log(fp, "端点内收合计：%d 条边（%d 张图）"
              % (sum(r.get("moved", 0) for r in edgecal_rows), len(edgecal_rows)))
+    # ---------------- 尺度归一化的反向一步：把坐标乘回原图尺寸（`EDA_CANON_SCALE`）
+    # 必须放在**所有**改写之后（复读第二遍也会重写 `<cid>_Pred.json`），且只碰坐标字段。
+    if _canon_k and any(abs(_v - 1.0) > 1e-9 for _v in _canon_k.values()):
+        _nsc = 0
+        for _cid, _k in _canon_k.items():
+            if abs(_k - 1.0) <= 1e-9:
+                continue
+            _f = final_dir / ("%s_Pred.json" % _cid)
+            if not _f.exists():
+                continue
+            try:
+                _doc = json.loads(_f.read_text(encoding="utf-8"))
+                _scale_doc_xy(_doc, 1.0 / _k)
+                _atomic_write_text(_f, json.dumps(_doc, ensure_ascii=False))
+                _nsc += 1
+            except Exception as _e:                                   # noqa: BLE001
+                _log(fp, "  %-28s 坐标还原失败（%s）⇒ 该图保持归一化坐标" % (_cid, _e))
+        _log(fp, "尺度还原：%d 份 <case>_Pred.json 的坐标乘回原尺寸" % _nsc)
     _log(fp, "全部完成，墙钟 %.1fs（%.2f s/张）" % (wall, wall / max(1, len(items))))
     fp.close()
 
