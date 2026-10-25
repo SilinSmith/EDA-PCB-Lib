@@ -1116,6 +1116,8 @@ def fit_value_unitx(text: str, ctype: str) -> float:
 #: 单位在半径内再捞一次。收益尚未过噪，故不进默认（§5.345）。
 VALUE_FILL_R = float(os.environ.get("STAGE2_VALUE_FILL", "0"))
 VALUE_FILL_GAIN = float(os.environ.get("STAGE2_VALUE_FILL_GAIN", "0"))
+#: 值通道漏斗调试（`STAGE2_VAL_DBG=1`）：逐元件打印值候选的生成/拒绝原因。§5.388。
+VAL_DBG = env_on("STAGE2_VAL_DBG", "0")
 
 
 def fit_partname(text: str) -> float:
@@ -2025,6 +2027,38 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 sc = _score(s, conf, d, inside(_tcx, _tcy, c["bbox"]))
                 if best is None or sc > best[0]:
                     best = (sc, txt, conf, dict(t, d=d))
+        if want == "value" and VAL_DBG:
+            _rej = {"nodesig": 0, "far": 0, "noread": 0, "fit<1": 0, "ok": 0}
+            _bx = c["bbox"]
+            _ccx, _ccy = (_bx[0] + _bx[2]) / 2.0, (_bx[1] + _bx[3]) / 2.0
+            _near = []
+            for _t in texts:
+                _tb = _t.get("bbox")
+                if not _tb or len(_tb) != 4:
+                    continue
+                if tuple(_tb) in _desig_boxes:
+                    _rej["nodesig"] += 1
+                    continue
+                _d = dist_to_rect(_ccx, _ccy, _tb)
+                if _d > _vsr:
+                    _rej["far"] += 1
+                    continue
+                _got = _best_read(_t["reads"], "value",
+                                  lambda _t: fit_value_unitx(_t, ctype))
+                if not _got:
+                    _rej["noread"] += 1
+                    _near.append("%.1f:-" % _d)
+                    continue
+                if _got[3] < 1.0:
+                    _rej["fit<1"] += 1
+                    _near.append("%.1f:%s(%.2f)" % (_d, _got[1], _got[3]))
+                    continue
+                _rej["ok"] += 1
+                _near.append("%.1f:%s" % (_d, _got[1]))
+            print("[val] %s ctype=%s cands=%d vsr=%.1f best=%s rej=%s near=%s"
+                  % (cid, ctype, len(cands), _vsr,
+                     (best[1] if best else None), _rej,
+                     sorted(_near)[:6]))
         if want == "value" and VALUE_FILL_R > 0 and (
                 best is None or is_foreign_value(best[1], ctype)):
             # **值补候选**：只在「当前是空值/异类单位」时出手，不与已正确的值竞争。

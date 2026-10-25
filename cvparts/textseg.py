@@ -262,6 +262,32 @@ def glyphs(bgr: np.ndarray, ink: int = INK, line_len: int = LINE_LEN,
     return keep
 
 
+SORT_MODE = (os.environ.get("TEXTSEG_SORT") or "yx").strip().lower()
+"""字形处理顺序。`yx`（默认）是历史行为；`band` 先按「行带」再按 x，实测在 1.4× 页上
++1.02 但 0.7× 页 −0.67（把相邻两行混进同一带），故只作可选项保留。
+旧顺序的病灶（§5.388）：基线上下抖动 1px 的字形会排到整行**末尾**，于是扫描到该处时
+还没收到它、缝宽被算大 30px 以上，长串被切成两段（`STMPS2141STR` -> `STMPS2141`+`STR`）。
+切成两段后段与段各自 OCR，器件名/值就只剩半截。**修法不是改顺序，而是 `_merge_frags`
+二次合并**（顺序改动在 0.7× 页上得不偿失）。
+"""
+
+
+BAND_FRAC = float(os.environ.get("TEXTSEG_BAND", "0.7") or 0.7)
+"""行带粒度 = `BAND_FRAC × 中位字高`。太大 ⇒ 相邻两行混进同一带（0.7× 页上会串行）；
+太小 ⇒ 基线抖动又回到旧病灶。"""
+
+
+def _order_glyphs(glyphs_in: Sequence[Box]) -> List[Box]:
+    if SORT_MODE == "yx" or not glyphs_in:
+        return sorted(glyphs_in, key=lambda t: (t[1], t[0]))
+    hs = sorted(float(b[3]) - float(b[1]) for b in glyphs_in)
+    med = hs[len(hs) // 2] if hs else 1.0
+    band = max(1.0, BAND_FRAC * med)
+    return sorted(glyphs_in,
+                  key=lambda t: (int(round(((float(t[1]) + float(t[3])) / 2.0) / band)),
+                                 float(t[0])))
+
+
 def group_lines(glyphs_in: Sequence[Box], gap_frac: float = GAP_FRAC,
                 v_overlap: float = V_OVERLAP, h_ratio: float = H_RATIO,
                 max_w: float = MAX_LINE_W, max_h: float = 0.0) -> List[Box]:
@@ -276,7 +302,7 @@ def group_lines(glyphs_in: Sequence[Box], gap_frac: float = GAP_FRAC,
     （= `STITCH_H_MULT * 全图中位字高`）。上面 ② 只挡住「高低悬殊的两个字形」，
     挡不住一串高度相近的字形顺着子列一路并下去拼出 6 倍高的框。
     """
-    boxes = [list(b) for b in sorted(glyphs_in, key=lambda t: (t[1], t[0]))]
+    boxes = [list(b) for b in _order_glyphs(glyphs_in)]
     groups: List[Dict] = []
     for b in boxes:
         hb = b[3] - b[1]
@@ -307,7 +333,51 @@ def group_lines(glyphs_in: Sequence[Box], gap_frac: float = GAP_FRAC,
             g["x2"] = max(g["x2"], b[2])
             g["y2"] = max(g["y2"], b[3])
             g["h"] = max(g["h"], hb)
-    return [(g["x1"], g["y1"], g["x2"], g["y2"]) for g in groups]
+    out = [(g["x1"], g["y1"], g["x2"], g["y2"]) for g in groups]
+    return _merge_frags(out, max_w=max_w, max_h=max_h) if MERGE_FRAG > 0 else out
+
+
+MERGE_FRAG = float(os.environ.get("TEXTSEG_MERGE", "1") or 0)
+"""「同串被切成两段」的**二次**合并（0=关）。门槛比 `group_lines` 紧得多：
+
+`gap <= MERGE_GAP × min(h)` 且 `v_overlap >= MERGE_VOV × min(h)`。
+`group_lines` 的病灶是**处理顺序**：基线抖动 1px 的字形排到行尾，扫描到它之前缝宽被
+算大 30px 以上，于是长串断成两段，各段单独 OCR 只剩半截（`STMPS2141STR` -> `STMPS2141`+`STR`）。
+二次合并只看成品框，不受顺序影响；门槛取 0.5 倍字高，实测相邻两个**不同**串的缝
+是 0.6~1.4 倍字高（1× 页），所以不会把它们并起来。
+"""
+MERGE_GAP = float(os.environ.get("TEXTSEG_MERGE_GAP", "0.5") or 0.5)
+MERGE_VOV = float(os.environ.get("TEXTSEG_MERGE_VOV", "0.5") or 0.5)
+
+
+def _merge_frags(boxes: List[Box], max_w: float = MAX_LINE_W,
+                 max_h: float = 0.0) -> List[Box]:
+    """把「缝 < 半字高」的相邻串再并一轮（见 `MERGE_FRAG`）。"""
+    out = [list(b) for b in sorted(boxes, key=lambda t: (t[1], t[0]))]
+    for _ in range(3):
+        changed = False
+        i = 0
+        while i < len(out) - 1:
+            a, b = out[i], out[i + 1]
+            ha, hb = a[3] - a[1], b[3] - b[1]
+            m = min(ha, hb)
+            if m <= 0:
+                i += 1
+                continue
+            ov = min(a[3], b[3]) - max(a[1], b[1])
+            gap = b[0] - a[2]
+            if (gap <= MERGE_GAP * m and gap > -m and ov >= MERGE_VOV * m
+                    and max(b[2], a[2]) - min(a[0], b[0]) <= max_w
+                    and (max_h <= 0 or max(a[3], b[3]) - min(a[1], b[1]) <= max_h)):
+                out[i] = [min(a[0], b[0]), min(a[1], b[1]),
+                          max(a[2], b[2]), max(a[3], b[3])]
+                del out[i + 1]
+                changed = True
+                continue
+            i += 1
+        if not changed:
+            break
+    return [tuple(b) for b in out]
 
 
 GROUP_KEYS = ("gap_frac", "v_overlap", "h_ratio", "max_w", "max_h")

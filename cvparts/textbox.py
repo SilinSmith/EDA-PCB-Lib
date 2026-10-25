@@ -62,6 +62,15 @@ def _env_int(name: str, default: int) -> int:
 
 INK = _env_int("EDA_TEXTBOX_INK", 170)            # gray < INK 算墨
 LINE_LEN = 21        # 开运算结构元长度：>= 它的连续笔画会被当"长直线"减掉
+LINE_REL = float(os.environ.get("TEXTBOX_LINE_REL", "1.6") or 0)
+LINE_REL_MINH = float(os.environ.get("TEXTBOX_LINE_REL_MINH", "21") or 21)
+"""`>0` 时把「长直线」的判定长度改成**相对字高**：`line_len = clamp(LINE_REL * 中位字高, 9, 90)`，
+且只在**中位字高 ≥ `LINE_REL_MINH`**（页面被放大渲染）时启用。
+
+固定的 21px 是尺度相关的（§5.388）：页面放大到 1.4× 时字形横向笔画自己就能到 21px，
+于是 `_long_lines` 把 `10nF` 的 `n`/`F` 拦腰切掉，字形碎成上下两半、下游 OCR 读成 `0n`。
+1× 页上 21 恰好安全，所以以前没暴露。门限保证 1×（中位字高 18）与低清/模糊页逐位不变。
+"""
 MIN_H, MAX_H = 4, 34     # 字形高度范围
 MIN_W, MAX_W = 1, 70     # 字形宽度范围
 MIN_AREA = 5
@@ -130,12 +139,31 @@ def _merge_lines(g: Sequence[Box]) -> List[Box]:
     return [tuple(b) for b in boxes]
 
 
+def _line_len(ink: np.ndarray, min_h: int, max_h: int) -> int:
+    """长直线判定的结构元长度。`LINE_REL<=0` ⇒ 历史常量；否则按本页中位字高缩放。
+
+    `LINE_REL_MINH` 是启用门限：只有中位字高达到它（=页面被放大渲染）才改用相对长度。
+    低清/模糊/灰度页的中位字高仍是 1× 的原值，于是与历史行为逐位相同（实测 blur1 −2.18、
+    gray −0.95 都来自这里被误启用）。
+    """
+    if LINE_REL <= 0:
+        return LINE_LEN
+    raw = _glyphs(ink)
+    hs = sorted((b[3] - b[1]) for b in raw if min_h <= (b[3] - b[1]) <= max_h)
+    if not hs:
+        return LINE_LEN
+    med = hs[len(hs) // 2]
+    if med < LINE_REL_MINH:
+        return LINE_LEN
+    return int(max(9, min(90, round(LINE_REL * med))))
+
+
 def detect_boxes(bgr: np.ndarray, min_h: int = MIN_H, max_h: int = MAX_H) -> List[Box]:
     """返回文字**行**的框，图像坐标（左上原点）。"""
     gray = bgr if bgr.ndim == 2 else cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     ink = np.where(gray < INK, 255, 0).astype(np.uint8)
     ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8))
-    g = _glyphs(cv2.bitwise_and(ink, cv2.bitwise_not(_long_lines(ink))))
+    g = _glyphs(cv2.bitwise_and(ink, cv2.bitwise_not(_long_lines(ink, _line_len(ink, min_h, max_h)))))
     keep = [b for b in g if min_h <= (b[3] - b[1]) <= max_h]
     return _merge_lines(keep)
 
