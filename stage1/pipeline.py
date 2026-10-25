@@ -45,6 +45,8 @@ from stage1 import wires as wires_mod          # noqa: E402
 from stage1 import pintrace as ray_mod         # noqa: E402
 from stage1 import nets as nets_mod            # noqa: E402
 from stage1 import pincol as pincol_mod        # noqa: E402
+# ★ 「未连接脚」的 X 标记（`STAGE1_PIN_XMARK`，默认 0）：检出的 X 中心就是引脚外端。
+from stage1 import xnc as xnc_mod               # noqa: E402
 # ★ 队友分支 `codex/improve-pin-network-parsing` 的引脚证据链（2026-10-16 并入，默认关）：
 #   `pincolor` = 在图像上实测红色桩/绿线转折得到「彩色已确认的引脚端点」；
 #   `pin_evidence` = 逐脚量六项图像证据（框覆盖率/墨迹连续长度/文字重叠/分支率…）。
@@ -720,6 +722,17 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                 except Exception as e:
                     traceback.print_exc()
                     errs.append(f"pin_mono: {type(e).__name__}: {e}")
+            # ★★ 「未连接脚」的 X 标记（`STAGE1_PIN_XMARK`，默认 0；见 `stage1/xnc.py`）：
+            #   这套渲染把符号引线画成符号色、导线画成网络色，而 NC 脚在引线外端画一个
+            #   网络色的 X。官方 10 张实测：检出的 X 中心落在 GT 脚点 2.0px 内，而我们把
+            #   那两根脚发在了 9.0px / 169.8px 外 ⇒ 这是**可测**的端点证据（腿长则不可测）。
+            #   必须在 `build_nets` 之前，因为网络装配吃的是最终引脚序列。
+            if xnc_mod.XMARK_ON:
+                try:
+                    comp_pins, xnc_stat = xnc_mod.snap_x_marks(comps, comp_pins, bgr)
+                except Exception as e:
+                    traceback.print_exc()
+                    errs.append(f"pin_xmark: {type(e).__name__}: {e}")
             # ★ 把**墨迹掩膜**传给网络装配：`_weld_unions` 用它判断两个端点之间的
             # 直线上是否真的有墨。结点圆点造成的断口是**画出来的**（圆点本身就是墨），
             # 而「把不相干的两条线凑近」的假配对连线必然穿过空白。
