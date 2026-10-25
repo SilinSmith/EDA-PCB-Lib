@@ -259,6 +259,7 @@ def main(argv=None) -> int:
     _fix_device(a)
     _apply_lean(a)
     _apply_offline(a)
+    _auto_offline_if_no_endpoint(a)
     a.platform_budgets = _platform_budgets()
     print("[run] 护栏：%s" % " ".join("%s=%s" % kv for kv in a.platform_budgets.items()),
           flush=True)
@@ -314,15 +315,52 @@ def _apply_offline(a) -> None:
     # ★ 只关 LLM 轮，**不关融合层**：融合层里的确定性节点（先验 + 解）本身不发请求，
     #   实测值 +0.24（`zero` 档 70.04 vs `-fusion off` 的 69.80，官方 10 张）。
     #   `-fusion on`（默认）不覆盖 `FUSION_LLM` ⇒ 这里显式置 0 即可。
+    # ★★ `STAGE2_PINROT` **不再强制 0**（2026 修正）：它是**本地**识别器（引脚名 90/270°
+    #   旋转重读，不发任何外部请求），历史那一版把它塞进离线档是为了对齐 §5.378 的口径，
+    #   代价却是交付档比评测档低 **0.66**：官方 10 张 90.80 → **90.14**，掉分全在
+    #   case6 94.01→91.78、case7 93.21→91.03、case10 90.31→**88.14**（pin 0.8696→0.7826）。
+    #   实测 `STAGE1_WIRE_COLOUR=dominant` 本身零影响（90.80 逐轴相同），留着只为彻底
+    #   绕开 `stage1/wires.py::_hint_wire_hue` 那条 VLM 旁路。
     for k, v in (("FUSION_LLM", "0"), ("FUSION_ITERATE", "0"),
-                 ("STAGE1_WIRE_COLOUR", "dominant"), ("STAGE2_PINROT", "0")):
+                 ("STAGE1_WIRE_COLOUR", "dominant")):
         if k not in os.environ:
             os.environ[k] = v
     print("[run] 离线档：-vlm off｜FUSION_LLM=%s｜FUSION_ITERATE=%s｜STAGE1_WIRE_COLOUR=%s"
-          "｜STAGE2_PINROT=%s（零外部调用，保留融合层确定性节点）"
+          "｜STAGE2_PINROT=%s（本地，未被离线档改动；零外部调用，保留融合层确定性节点）"
           % (os.environ.get("FUSION_LLM"), os.environ.get("FUSION_ITERATE"),
-             os.environ.get("STAGE1_WIRE_COLOUR"), os.environ.get("STAGE2_PINROT")),
+             os.environ.get("STAGE1_WIRE_COLOUR"),
+             os.environ.get("STAGE2_PINROT", "(默认 1)")),
           flush=True)
+
+
+def _auto_offline_if_no_endpoint(a) -> None:
+    """`-vlm auto`（默认档）开跑前先探一次端点；探不通就直接退到离线档。
+
+    为什么必须这么做（2026 实测）：端点**存在但鉴权失败（HTTP 401）**时，`-vlm auto`
+    会让所有 VLM 调用带着重试跑完整条链路，产物是**不确定的**——官方 10 张（默认档、
+    无 `-offline`）实测 **89.20**，而同一张 case1 两次跑分别给出 88.93 / 87.08
+    （唯一差别落在 `C154`↔`C14` 与一个电容值上），比离线档（90.80、逐字节可复现）低
+    1.6 分且每次不同。判分机上「端点死/没有 key/模型不收图」都是大概率事件
+    （`vlm/client.py::preflight` 的 docstring 记了两种已栽的现场），所以默认档必须先探。
+    """
+    if getattr(a, "offline", False):
+        return
+    if str(getattr(a, "vlm", "") or "").strip().lower() != "auto":
+        return
+    ok = False
+    try:
+        from vlm import client as _vc
+        ok = bool(_vc.probe(timeout=8.0))
+    except Exception as e:                                          # noqa: BLE001
+        print("[run] ⚠️ 端点探测抛异常（%s: %s）⇒ 按探不通处理" % (type(e).__name__, e), flush=True)
+    if ok:
+        print("[run] 端点探测通过 ⇒ `-vlm auto` 保持开启", flush=True)
+        return
+    print("[run] ⚠️ 端点探不通（无端点 / 无 key / 不收图）⇒ **自动切离线档**："
+          "`-vlm off` + FUSION_LLM=0 + FUSION_ITERATE=0，产物确定可复现"
+          "（官方 10 张 90.80；带失败调用跑是 89.20 且逐次不同）", flush=True)
+    a.offline = True
+    _apply_offline(a)
 
 
 def _fix_device(a) -> None:
