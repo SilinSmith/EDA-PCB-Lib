@@ -30,9 +30,14 @@ def _env_on(key: str, default: str = "0") -> bool:
     return os.environ.get(key, default).strip().lower() not in ("", "0", "false", "off", "none")
 
 
-XMARK_ON = _env_on("STAGE1_PIN_XMARK", "0")
+XMARK_ON = _env_on("STAGE1_PIN_XMARK", "1")
 XMARK_ADD = _env_on("STAGE1_PIN_XMARK_ADD", "0")
 XMARK_SNAP = float(os.environ.get("STAGE1_PIN_XMARK_SNAP", "12") or 12)
+# X 中心**落在 GT 脚点外侧** 2~6px（case8 pin_1 +2.0 / pin_2 +1.5 / case10 pin_4 +6.0 实测），
+# 而我们的脚点总是在内侧 ⇒ 两侧误差方向相反。把「吸附」做成按比例混合，
+# `XMARK_BLEND` = 保留多少「我们原来的位置」：0 = 纯 X（§5.397.4 的 89.87），
+# 0.3 ⇒ 朝我们原位置回拉 30% 的间距（把 X 的中心偏置折掉一部分）。
+XMARK_BLEND = float(os.environ.get("STAGE1_PIN_XMARK_BLEND", "0.3") or 0.3)
 XMARK_LO = float(os.environ.get("STAGE1_PIN_XMARK_LO", "3") or 3)
 XMARK_HI = float(os.environ.get("STAGE1_PIN_XMARK_HI", "26") or 26)
 XMARK_MIN, XMARK_MAX = 12, 24
@@ -130,7 +135,10 @@ def snap_x_marks(comps, comp_pins: Dict[str, List[Tuple[float, float]]], ink,
         if mi in used or (cid, pi) in taken_pin:
             continue
         mx, my, _w, _h = marks[mi]
-        out[cid][pi] = (round(mx, 2), round(my, 2))
+        px, py = out[cid][pi]
+        nx = mx + XMARK_BLEND * (px - mx)
+        ny = my + XMARK_BLEND * (py - my)
+        out[cid][pi] = (round(nx, 2), round(ny, 2))
         used.add(mi)
         taken_pin.add((cid, pi))
         stat["snap"] += 1
