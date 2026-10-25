@@ -142,7 +142,7 @@ _ZOOM_KEEP_RE = {
 #   值 = 逗号分隔的放大倍数，如 `2` / `2,3`；只收 1× 高度 ≤ `STAGE2_MS_TEXT_MAXH` 的框
 #   （大标签 1× 已经检得出，重复加只会搅乱槽位），与已有框 IoU ≥ `STAGE2_MS_TEXT_IOU`
 #   的丢弃（同一串不重复入池）。
-MS_TEXT = tuple(float(x) for x in (os.environ.get("STAGE2_MS_TEXT", "").split(",")) if x.strip())
+MS_TEXT = tuple(float(x) for x in (os.environ.get("STAGE2_MS_TEXT", "2,3").split(",")) if x.strip())
 MS_TEXT_MAXH = float(os.environ.get("STAGE2_MS_TEXT_MAXH", "20") or 20)
 MS_TEXT_IOU = float(os.environ.get("STAGE2_MS_TEXT_IOU", "0.4") or 0.4)
 MS_TEXT_ROLES = tuple(x.strip() for x in os.environ.get(
