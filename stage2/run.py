@@ -96,14 +96,17 @@ PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "0")
 #   在本机仍是 no-op：号修复/彩色号要 PP-OCR，整词读数器净中性）。
 PIN_GREY_EVIDENCE = env_on("STAGE2_PIN_GREY_EVIDENCE", "1")
 
-# ★ 小字「放大重读」（`STAGE2_ZOOM_READ`，**默认 0 = 关**；=4 表示 4× 放大）。
+# ★ 小字「放大重读」（`STAGE2_ZOOM_READ`，**默认 4 = 开**；0 表示关）。
 #   依据（`work/_tinydesig.py` + 直接取证，页 `0001` 的 `C6`）：位号字高只有 **8px**，
 #   整页检测器在 1× 上根本不吐这个框（整页 909 个读数里没有 `C6`）；把元件周围
 #   ±40px 的窗口放大 **4×** 后再跑 `detect_texts(min_h=2)` + 同一 CRNN，读出
 #   `C6:0.98`。2×/3× 不够（历史上「上采样无效」的结论是 1×/2×/3× 窗口尺度下做的）。
-#   逐元件裁剪 ⇒ 每页只多 ~100 次小图前向，代价可控；命中的框坐标除回原尺度并并入
+#   逐元件裁剪 ⇒ 每页只多 ~100 次小图前向，代价可控；命中的框坐标除回原原点并并入
 #   `reads`，交给 `assign` 当普通候选参与打分（不直接改键）。
-ZOOM_READ = float(os.environ.get("STAGE2_ZOOM_READ", "0") or 0)
+#   转正读数（§5.397.10，`MODE=refine`、`ROLES=designator,value`）：官方 10 张
+#   90.71→**90.80**（只有 case8 变：72.86→73.72，pin 0.3226→0.3871；其余 9 张逐位不变，
+#   10 张流水线总耗时 106s vs 108s 无差别），池 50 案 34.285→**34.33**。
+ZOOM_READ = float(os.environ.get("STAGE2_ZOOM_READ", "4") or 0)
 ZOOM_READ_PAD = float(os.environ.get("STAGE2_ZOOM_READ_PAD", "40") or 40)
 ZOOM_READ_MINH = int(os.environ.get("STAGE2_ZOOM_READ_MINH", "2") or 2)
 ZOOM_READ_MAX = int(os.environ.get("STAGE2_ZOOM_READ_MAX", "0") or 0)

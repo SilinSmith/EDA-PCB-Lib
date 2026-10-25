@@ -3313,6 +3313,40 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         if os.environ.get("STAGE2_NET_PAIR_DBG"):
             print("[dbg net_pair] case=%s singletons %d merged %d nets %d"
                   % (case_id, len(_sing), _merged4, len(out_nets)))
+    # ★ 单成员网 + 有边 ⇒ 悬空线头（`STAGE2_NET_DROP_STUB`，默认 1）
+    # 判据来自 KiCad 的语义差别：**「不连接」占位网没有边**（官方 GT 里就存在这种
+    # 0 边单成员网，10 张共 5 个/160），而挂在单个引脚上的线头必然带 ≥1 条边 ⇒ 纯 FP，
+    # 既把 `net_hypergraph` 的分母撑大（软口径 `f1 = 2*soft_tp/(pred+gt)`），
+    # 又把这些边塞进导线轴的匹配里。
+    # 离线在出口文档上试算（`work/_dropstub.py`，官方 10 张、零外部调用）：
+    #   case4 89.65→90.86（丢 1）、case5 92.37→94.44（丢 2），其余 8 张逐位不变；
+    #   四轴 netH 0.9588→0.9677、line 0.6051→0.6067，总分 90.51→**90.83**。
+    #   但**只对 IC/box 脚生效**：池子 50 案的离线 A/B 里，非 IC 脚（R/C/p 符号）的
+    #   单成员网有一半是 GT 真网（KiCad 里悬空电阻腿就是一条 1 成员网），全量丢会换掉
+    #   池子的真网 ⇒ 官方 90.83 但池子 34.24→34.06。按 IC 收窄后两个尺子同时为正：
+    #   官方 90.51→**90.71**、池 34.24→**34.29**（`work/_dropstub.py` 口径）。
+    # 取值：`0/off` 关、`1/ic` 只丢 IC 脚（默认）、`all/2` 不限元件类型。
+    _stub_mode = os.environ.get("STAGE2_NET_DROP_STUB", "1").strip().lower()
+    if _stub_mode not in ("", "0", "false", "off", "no", "none"):
+        _stub_ic = ("box", "ic", "boxic")
+        _stub_any = _stub_mode in ("all", "2", "any", "every")
+        _stub_nets = []
+        for _k, _v in out_nets.items():
+            _refs = _hg_refs(_v.get("hyperGraph", ""))
+            if len(_refs) != 1 or not (_v.get("edges") or {}):
+                continue
+            if _stub_any:
+                _stub_nets.append(_k)
+                continue
+            _cname = _refs[0][0]
+            _ct = str((components.get(_cname) or {}).get("type") or "").strip().lower()
+            if _ct in _stub_ic:
+                _stub_nets.append(_k)
+        for _k in _stub_nets:
+            out_nets.pop(_k, None)
+        if os.environ.get("STAGE2_NET_DROP_STUB_DBG"):
+            print("[dbg net_drop_stub] case=%s mode=%s 丢 %d 个单成员网（有边），剩 %d"
+                  % (case_id, _stub_mode, len(_stub_nets), len(out_nets)))
     _pidx: Dict[str, Dict[str, str]] = {}
     for (_c, _k), _pk in pin_pk.items():
         _pidx.setdefault(_c, {})[str(_k)] = _pk
