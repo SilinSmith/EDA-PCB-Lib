@@ -849,9 +849,10 @@ def _letter(text: str) -> str:
     return "".join(ch for ch in text if ch.isalpha())
 
 
-# CRNN 在**数字位**上最常犯的形近错（`R14` -> `Rl4` / `R1O` / `RI4`）。
+# CRNN 在**数字位**上最常犯的形近错（`R14` -> `Rl4` / `RI4`）。
 # 只在「字母前缀已经对上类型」时才允许把尾部这些字符读成数字，见 `canon_designator`。
-_FIX_DIGIT = str.maketrans({"O": "0", "Q": "0", "D": "0", "U": "0",
+# `O` **不在此表**：这套渲染里 `0` 带斜线、`0`/`O` 本来就可分（§5.395 实测删除后官方 10 张逐字节不变）。
+_FIX_DIGIT = str.maketrans({"Q": "0", "D": "0", "U": "0",
                             "I": "1", "L": "1", "T": "7",
                             "S": "5", "B": "8", "Z": "2", "G": "6"})
 
@@ -862,7 +863,7 @@ def _digitize(tail: str) -> str:
     return d if d.isdigit() else ""
 
 
-# ★★ 位号「只读到数字」的补解（`STAGE2_DESIG_DIGITS`，默认 **0 = 关**）。
+# ★★ 位号「只读到数字」的补解（`STAGE2_DESIG_DIGITS`，默认 **1 = 开**，§5.389 转正）。
 #
 # 病（池 47 页实测，`work/_poolfunnel.py` + `work/_desigrebuild.py`）：
 # 1147 个真位号 GT 元件里 513 个（44.7%）整页读不到该串，但这 513 个里 **476 个
@@ -1709,7 +1710,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                               "fit": fid, "box_i": t.get("_i", -1),
                               "type_fix": tfix}))
         alts.sort(key=lambda x: -x[0])
-        # ★ 位号「只读到数字」的补解（`STAGE2_DESIG_DIGITS`，默认关）。
+        # ★ 位号「只读到数字」的补解（`STAGE2_DESIG_DIGITS`，默认 1 = 开，§5.389 转正）。
         #   `DIGITS_ONLY_EMPTY=1` 时只在**一条常规候选都没有**时启用，
         #   保证不会从已有读法那里抢键（开关关时逐位不变）。
         if DESIG_DIGITS and (not alts or not DIGITS_ONLY_EMPTY):
