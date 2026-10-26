@@ -106,12 +106,18 @@ PIN_GREY_EVIDENCE = env_on("STAGE2_PIN_GREY_EVIDENCE", "1")
 #   转正读数（§5.397.10，`MODE=refine`、`ROLES=designator,value`）：官方 10 张
 #   90.71→**90.80**（只有 case8 变：72.86→73.72，pin 0.3226→0.3871；其余 9 张逐位不变，
 #   10 张流水线总耗时 106s vs 108s 无差别），池 50 案 34.285→**34.33**。
+#   ★ §5.397.13：`ROLES` 解码头从 `designator,value` 扩到**再加 `pin_name,pin_number`**
+#   （官方 10 张 90.80→**91.04**、池 34.33→**34.38**）。角色表是 CRNN 的**解码提示**，
+#   同一张低置信度小图在不同角色表下会吐出不同字符：case1 那个 `C154` 在只有
+#   desig+value 时被读成 `C14`（少一位），加上引脚角色后读回 `C154`
+#   （comp 0.8636→0.9091、netH 0.9685→0.9875）。
 ZOOM_READ = float(os.environ.get("STAGE2_ZOOM_READ", "4") or 0)
 ZOOM_READ_PAD = float(os.environ.get("STAGE2_ZOOM_READ_PAD", "40") or 40)
 ZOOM_READ_MINH = int(os.environ.get("STAGE2_ZOOM_READ_MINH", "2") or 2)
 ZOOM_READ_MAX = int(os.environ.get("STAGE2_ZOOM_READ_MAX", "0") or 0)
 ZOOM_READ_ROLES = tuple(x.strip() for x in os.environ.get(
-    "STAGE2_ZOOM_READ_ROLES", "designator,value").split(",") if x.strip())
+    "STAGE2_ZOOM_READ_ROLES", "designator,value,pin_name,pin_number").split(",")
+    if x.strip())
 # 只把**形状像位号**的放大读数并进候选池（`desig`=位号形状 / `all`=不筛，用于对照）。
 # 教训：不筛就并（`all`）时官方 case1 85.54 → **75.63**（引脚 0.7308→0.5385）——
 # 放大窗口把**引脚名**也读成 designator/value，而 `assign` 的槽位是一对一竞争，
