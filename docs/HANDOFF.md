@@ -133,13 +133,22 @@ t 值（§5.347.5：官方 10 的 ±0.3 可能只是单案翻转），池上 |t|
    $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'; $env:CUDA_VISIBLE_DEVICES=''
    python -X utf8 eda-pcb\submission\run.py -input <输入目录> -output <输出目录> -device cpu
    ```
-   ⇒ 官方 10 张 **91.18**（交付路径实测）、池 50 案 **35.01**（§5.398.4/5.398.5）。
+   ⇒ 官方 10 张 **91.18**（交付路径实测）、池 50 案 **35.11**（§5.398.7 位号闸之后；
+   位号闸之前 35.01）。
    融合层照跑（确定性节点），只是不发 LLM 轮（官方 10 张上那一轮 **−1.13**）。
 3. **全默认档 `-vlm auto` + `-fusion on`（带 LLM 轮）**：官方 10 张 **90.11**
    （9B）/ 池 35.00 ⇒ 只在「要求 LLM 必须参与」的语义下用。
 
 端点在跑但答不出结果的旧读数 **89.20** 已作废（那是「没带 key」的 401，不是端点坏；
 key 在 `eda-pcb/.lmstudio_key`）。端点**完全探不通**时仍会自动退离线档（§5.397.12）。
+
+**报数字时先报尺子**：交付口径一律用 `tools\eval\fast.py --engine protocol4`
+（`bbox_tol=20 / pin_tol=5 / line_tol=5 / corners / net_soft / coord_center` +
+`net_pin_collapse_nonbox=True`，见 `fast.py:273-282`）。`python -m schematic_parser.evaluate`
+的**默认** `EvalConfig` 是另一把更严的尺子（`net_pin_collapse_nonbox=False`、
+`coord_gate=40.0`、`coord_center=False`、`net_mode='micro'`）：同一份 VLM 档预测在它下面
+只有 **82.884**（`docs/PACKAGING.md` §2 ④ 有两把尺子的对照表）。给队友打包/复现走 CLI 默认，
+对外报分走 protocol4，两者**不要混**。
 
 ## 4. 怎么验证
 

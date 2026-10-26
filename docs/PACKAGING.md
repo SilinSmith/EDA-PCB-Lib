@@ -75,17 +75,27 @@ git status --porcelain -uall | Where-Object { $_ -match '^\?\?' } |
 python -X utf8 -m schematic_parser.evaluate --self-test
 
 # ④ 口径复核：这一条必须复现 RESULTS.md 里记录的分数
-python -X utf8 -m schematic_parser.evaluate --pred ..\work\_fast_out_sjndef\final_results --split 10GT
+#    交付口径用 tools\eval\fast.py（protocol4 = 最终提交要求那一套），**不要**用
+#    `-m schematic_parser.evaluate` 的默认口径当交付数字（见下）
+python -X utf8 tools\eval\fast.py --score-only --engine protocol4 --out vlm9b_final10c
 ```
 
 ② 的期望值：`json` 220 个、`md` 1 个（`10GT/type_list.md`）；**出现 `png` 就说明 `.gitignore` 被改坏了**（`.gitignore` 里 GT 白名单的三条例外就是为这个留的）。
 
-④ 的期望值（交付口径，`-vlm-pin off` 的 `sjndef` 那一版）：
+④ 的期望值有**两把尺子**，别混：
 
-```
-component_f1 1.000000   pin_f1 0.816599   net_f1(micro) 0.820979   line_f1 0.579579
-mean_score   84.945
-```
+| 尺子 | 怎么跑 | 当前交付档读数 |
+|---|---|---:|
+| **protocol4**（交付口径，`bbox_tol=20 / pin_tol=5 / line_tol=5 / corners / net_soft / coord_center` + `net_pin_collapse_nonbox=True`） | `python -X utf8 tools\eval\fast.py --out <tag> --engine protocol4 --no-vlm` | 离线档 **91.04**、VLM 档（`-vlm-pin off` + `FUSION_LLM=0`）**91.24 ± 0.08** |
+| `schematic_parser.evaluate` 默认（`EvalConfig` 默认值：`net_mode='micro'`、`net_soft=True`、**`net_pin_collapse_nonbox=False`**、`coord_gate=40.0`、`coord_center=False`） | `python -X utf8 -m schematic_parser.evaluate --pred <预测目录> --split 10GT` | 同一份预测只到 **82.884**（`component 0.98337 / pin 0.885387 / netH 0.723152 / line 0.593786`） |
+
+两者差在「非 IC 引脚折不折成元件身份」+ 坐标门限，是**口径差不是实现差**：
+`docs/JUDGE.md` §1 那份配置是 2026-10 按当时判分机产物标定的，`protocol4` 是
+2026-11《评测要求.pdf》的最终口径（`tools/eval/fast.py:273-282` 逐条写着对齐关系）。
+⇒ 交付数字一律报 protocol4；CLI 默认口径只用来给队友做「同一个工具链」的复现。
+
+历史参照（旧 tag `sjndef` + 旧 CLI 口径）：`mean_score 84.945`、
+`component_f1 1.000000 / pin_f1 0.816599 / net_f1(micro) 0.820979 / line_f1 0.579579`。
 
 ---
 
@@ -169,7 +179,8 @@ Get-ChildItem -Recurse -Directory -Filter __pycache__ $dst | Remove-Item -Recurs
 Compress-Archive -Path "$dst\*" -DestinationPath ..\work\eda_judge.zip -Force
 # ⇒ 产物 ≈1.0 MB（220 个 GT json 未压缩 11.45 MB，json 压得很狠，最大单文件 212,777 B）
 # ⇒ 解压后：10GT 11 文件 / 10_GTcase 10 / 200_train_cases 200 / schematic_parser 6 / JUDGE.md，
-#   **0 张 png**；用 84.95 那版预测从解压包跑 `--data-root <解压目录>` 复现出同样的 84.945。
+#   **0 张 png**；用旧 tag `sjndef` 那版预测从解压包跑 `--data-root <解压目录>` 可复现 84.945
+#   （旧 CLI 口径；交付口径见 §2 ④ 的两把尺子）
 ```
 
 **队友侧三步跑通：**
@@ -185,7 +196,7 @@ python -X utf8 -m schematic_parser.evaluate --data-root . --pred <预测目录> 
 ```
 
 - `--pred` 目录里放每个用例一个 json：文件名 `NNNN_Pred.json`（也兼容 `NNNN.json`、去零写法），细节见 `docs/JUDGE.md`。
-- **给队友一份"标准答案"预测**，让他先复现我们的 84.95 再信这个工具：把 `work\_fast_out_sjndef\final_results` 一并给出（或任何一份 `NNNN_Pred.json` 目录）。
+- **给队友一份"标准答案"预测**，让他先复现我们的分数再信这个工具：把 `work\_fast_out_vlm9b_final10c\final_results` 一并给出（VLM 档，CLI 默认口径 **82.884**）；离线档对应 `work\_fast_out_f5399zdef10\final_results`。历史参照：旧 tag `work\_fast_out_sjndef\final_results` 在 CLI 默认口径下是 **84.945**（旧口径可比，别混）。
 - 判题机的默认口径（`schematic_parser/metrics.py:84-129` 的 `EvalConfig`）：`bbox_tol=20.0`、`pin_tol=5.0`、`line_tol=5.0`、`bbox_mode='corners'`、`net_mode='micro'`、`net_soft=True`、`unkeyed_match='gt'`、`coord_gate=40.0`、`pin_box_only=True`、`net_pin_collapse_nonbox=False`。这些都是**按官方判分器逐位校准过**的，别随手改。
 - 已知性质：**空预测仍有 25.0000 分**——因为 GT 里 7 个 `10_GTcase`/`200_train_cases` 派生用例没有 `box` 元件，此时 `pin_f1` 退化恒等 1.0（官方 10GT 不受影响）。看到"乱交也有 25 分"不要以为是 bug，解释在 `docs/JUDGE.md`。
 
