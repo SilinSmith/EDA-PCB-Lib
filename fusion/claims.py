@@ -542,8 +542,22 @@ def _add_vlm(pool: "ClaimPool", vlm: dict, comps: dict,
         ctype = vc.get("type") or ((pool.assigned.get("comps") or {})
                                    .get(cid) or {}).get("type")
         # (a) **键本身** = VLM 认定的位号
+        #
+        # ★★ 2026-06（§5.398.7）：**只有当前键还是占位符（`pNNN`）或压根没有键时，
+        #   才允许用 VLM 的键顶掉它。** 判据与下面 (b) 的 `Name` 那条完全同构 ——
+        #   这一条原先缺失，于是「干净键 → 干净键」的改名照样进池子。
+        #   `work/_desiggate.py` 逐件对账两个产物（官方 10 张，按 bbox 配对）：
+        #   「干净键 → 干净键」**赚 0 / 赔 3**（case1 `C152→C1`、`C153→C152`，
+        #   case6 `LED2→p016`，三件 GT 都写着原名，是模型读错了）；
+        #   「兜底键 `pNNN` → 真位号」赚 1 / 赔 2（那 2 条是 `p020↔p021` 互换，
+        #   两边都不在 GT 里，净值 0）。所以默认只放行兜底键；
+        #   想恢复旧行为（任何键都可被顶掉）：`FUSION_VLM_DESIG_CLEAN=1`。
+        _desig_clean = os.environ.get("FUSION_VLM_DESIG_CLEAN", "0").strip().lower() \
+            not in ("0", "off", "no", "false", "none", "")
         if PR.DESIG_RE.match(vkey) and vkey != rev.get(cid):
-            put(cid, "key", vkey, "键")
+            _cur_key = str(rev.get(cid) or "")
+            if _desig_clean or not _cur_key or FKEY_RE.match(_cur_key) is not None:
+                put(cid, "key", vkey, "键")
         # (b) `Name`：box 类上是器件型号；其余类上等于键，没有新信息
         nm = vc.get("Name")
         if nm and isinstance(nm, str):

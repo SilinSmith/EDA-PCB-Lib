@@ -729,12 +729,28 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
                                 _f.write('{"case": "%s", "old": "%s", "new": "%s"}\n'
                                          % (pred.get("case"), k, g))
         if GUARD and solo:
+            # ★ 2026-06（§5.398.7）**只允许改掉兜底键**：`work/_desiggate.py` 把
+            #   两个产物按 bbox 配对逐件对账（官方 10 张）——
+            #   「干净键 → 干净键」的改名 **赚 0 / 赔 3**（case1 `C152→C1`、`C153→C152`，
+            #   case6 `LED2→p016`：三件 GT 都写着原名，模型读错了）；
+            #   而「兜底键 `pNNN` → 真位号」赚 1 / 赔 2（那 2 条是 `p020↔p021` 互换，
+            #   两边都不在 GT 里，净值 0）。原来这里只要**前缀相同**就放行
+            #   （`_key_prefix(g) == _key_prefix(k)`），`C153 → C1` 正好混在这条规则里。
+            #   想恢复旧行为：`VLM_DESIG_CLEAN=1`。
+            _clean_ok = os.environ.get("VLM_DESIG_CLEAN", "1").strip().lower() \
+                not in ("0", "off", "no", "false", "none", "")
+            _reserved = opts.get("desig_reserved") or ()
             _kept = {g: k for g, k in solo.items()
-                     if _is_fallback_key(k) or _key_prefix(g) == _key_prefix(k)}
+                     if (_is_fallback_key(k)
+                         or (_clean_ok and _key_prefix(g) == _key_prefix(k)))
+                     and str(g).strip().upper() not in _reserved}
             if os.environ.get("VLM_DESIG_DBG"):
                 print("[desig guard] case=%s solo=%d kept=%d"
                       % (pred.get("case"), len(solo), len(_kept)), flush=True)
             solo = _kept
+        if os.environ.get("VLM_DESIG_DBG"):
+            print("[desig solo] case=%s %s" % (pred.get("case"),
+                  sorted("%s<-%s" % (g, k) for g, k in solo.items())), flush=True)
         if _rlog and solo:
             with open(_rlog, "a", encoding="utf-8") as _f:
                 for _g, _k in sorted(solo.items()):
@@ -805,7 +821,8 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
             # 而模型自报的位号形状合法、又没人占，就把它当成一次补读。
             # 兜底键本来就一分不得，换掉只有可能变好。
             if (opts.get("value_use_key") and kk and DESIG_RE.match(kk)
-                    and FKEY_RE.match(str(key)) and kk not in comps):
+                    and FKEY_RE.match(str(key)) and kk not in comps
+                    and str(kk).strip().upper() not in (opts.get("desig_reserved") or ())):
                 late.setdefault(key, kk)
             # **位号一致门控**（这是值通道从负转正的关键）：
             # 模型回的是 `位号=值`，如果它报的位号不是这颗元件自己的，说明它读到了邻居。
@@ -831,6 +848,9 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
             if new in taken or new in keep.values():
                 continue
             keep[old] = new
+        if os.environ.get("VLM_DESIG_DBG"):
+            print("[desig late] case=%s late=%s keep=%s"
+                  % (pred.get("case"), sorted(late.items()), sorted(keep.items())), flush=True)
         if keep:
             comps = {keep.get(k, k): v for k, v in comps.items()}
             pins = {keep.get(k, k): v for k, v in pins.items()}
@@ -1115,6 +1135,19 @@ def enrich_dir(indir, outdir, png_of, opts=None, workers=6, limit=0, cases=None,
     """对目录里的每份 `<case>.json` 做 VLM 补强，写到 `outdir`。返回统计 dict。"""
     o = dict(DEFAULTS)
     o.update(opts or {})
+    # §5.398.7：位号通道的**总闸**可以用环境变量关掉（`VLM_DESIG=0`）。
+    # 动机：官方 10 张上「兜底键 pNNN → 真位号」的改名赚 1 / 赔 3
+    # （case1 把 `p005` 读成 `C152`，把 GT 的 `C153` 顶掉、还把另一颗挤成 `C1`），
+    # 而值/型号通道不受影响 ⇒ 需要能单独关掉它做 A/B。
+    if "VLM_DESIG" in os.environ and "designator" not in (opts or {}):
+        o["designator"] = os.environ.get("VLM_DESIG", "1").strip().lower() \
+            not in ("0", "off", "no", "false", "none", "")
+    # 值通道「顺手捡位号」的独立闸（`VLM_VALUE_USE_KEY=0`）：实测官方 10 张里
+    # `位号调用=0` 时它仍改名 3 颗，其中 case1 把 `p005` 读成 `C152`、顶掉 GT 的
+    # `C153` 并把另一颗挤成 `C1`（该张 comp 0.9091 → 0.8636）。
+    if "VLM_VALUE_USE_KEY" in os.environ and "value_use_key" not in (opts or {}):
+        o["value_use_key"] = os.environ.get("VLM_VALUE_USE_KEY", "1").strip().lower() \
+            not in ("0", "off", "no", "false", "none", "")
     indir, outdir = Path(indir), Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     # 阶段三要读 `<s2>/_assigned/<case>.json`，所以补强目录必须把它一并镜像过来
@@ -1151,7 +1184,37 @@ def enrich_dir(indir, outdir, png_of, opts=None, workers=6, limit=0, cases=None,
                                              encoding="utf-8")
                 return
             stat = dict(desig=0, grid=0, value=0, value_set=0, name=0, name_set=0)
-            enrich_doc(pred, png, o, stat, log)
+            # 「保留集」对照臂：把**本页 stage2 已经算出的位号候选池**带进来，
+            # 模型自报的位号若已在池里就不采纳（想法来源：case1 的 `p005` 被值通道
+            # 读成 `C152`，而 `C152` 正是 OCR 给另一颗元件的候选 ⇒ 装配后撞键）。
+            # ⚠️ 实测**不成立**：候选池里几乎包含本页所有位号，一律挡掉会把正当补读
+            # 也挡掉 —— case1 该张 comp 0.9091 → **0.7273**（总分 87.75 → 77.04）。
+            # 因此默认关，只留 `VLM_DESIG_RESERVED=1` 这条可复现的对照臂。
+            o2 = o
+            _resv_on = os.environ.get("VLM_DESIG_RESERVED", "0").strip().lower() \
+                not in ("0", "off", "no", "false", "none", "")
+            if _resv_on or o.get("desig_reserved_gate"):
+                # `_assigned` 一般在 **stage2** 目录下（stage3 只放 `<case>.json`），
+                # 所以要沿几个候选位置找，不能只看 `indir`。
+                _asg_dir = None
+                for _c in (src_asg, indir.parent / "stage2" / "_assigned",
+                           indir.parent.parent / "stage2" / "_assigned"):
+                    if _c.is_dir():
+                        _asg_dir = _c
+                        break
+                try:
+                    _asg = json.loads((_asg_dir / (f.stem + ".json")).read_text(encoding="utf-8"))
+                    _res = set()
+                    for _cands in (_asg.get("desig_slots") or {}).values():
+                        for _cd in (_cands or []):
+                            _c = _cd.get("canon") or _cd.get("text")
+                            if _c:
+                                _res.add(str(_c).strip().upper())
+                    if _res:
+                        o2 = dict(o, desig_reserved=_res)
+                except Exception:       # noqa: BLE001
+                    pass
+            enrich_doc(pred, png, o2, stat, log)
             (outdir / f.name).write_text(json.dumps(pred, ensure_ascii=False),
                                          encoding="utf-8")
         except Exception as e:  # noqa: BLE001
