@@ -188,13 +188,16 @@ def main(argv=None) -> int:
                     type=float, default=80.0,
                     help="读器件型号时元件框外扩的像素（40 起就平了）。")
     ap.add_argument("-vlm-pin", "--vlm-pin", dest="vlm_pin",
-                    default="off", choices=("on", "off"),
+                    default="on", choices=("on", "off"),
                     help="用 VLM **引脚通道**（读 IC 的引脚号/名，替换引脚键）。"
-                         "**默认关**（§5.398 起）：当前基线下这条通道净负 —— "
-                         "官方 10 张 9B：全通道 89.13 vs 关掉 **91.24**（pin 0.8198→0.8854）；"
-                         "27B：90.41 vs 91.08；只留「号」那一半也负（pin 0.8634）。"
-                         "help 里旧记的「+2.88（58.6304→61.5112）」是 pin F1≈0.5 时代的读数，"
-                         "现在 pin 已 0.88、替换键只剩破坏力。想开回用 `-vlm-pin on`。"
+                         "**默认开**（§5.404 起，主尺 = open_GT-1020）："
+                         "该尺子上 9B `-vlm-pin on` **70.80** vs off **70.42**"
+                         "（pin 0.5495→0.5650，13 张逐位可复现）；"
+                         "只留「号」那一半（`-vlm-pin-name off`）只有 70.55。"
+                         "§5.398 当年在**官方 10 张**上判负（9B 91.24 vs 89.13、pin 0.8854 vs 0.8198）——"
+                         "那套图的引脚名本来就贴在框边、GT 脚名常等于号，换不到分；"
+                         "open_GT 是干净的 datasheet 风格页，脚名是可读的真名 ⇒ 符号翻转。"
+                         "想退回旧口径用 `-vlm-pin off`。"
                          "⚠ 这是**替换**引脚键那条路"
                          "（`VLM_PIN_MERGE=0`）；`VLM_PIN_MERGE=1` 是只并名的旧路线。")
     ap.add_argument("-vlm-pin-name", "--vlm-pin-name", dest="vlm_pin_name",
