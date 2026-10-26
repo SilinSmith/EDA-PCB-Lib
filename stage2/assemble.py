@@ -1408,6 +1408,15 @@ def split_dedup_edges(nets: Dict[str, dict], split_tol: float = None,
 #   **默认 0（关）**：机制留着，等有「哪些引脚真的在 GT 里切」的判据（见 RESULTS §5.75）。
 EDGE_SPLIT_PIN = float(os.environ.get("STAGE2_EDGE_SPLIT_PIN", "0"))  # 引脚切分容差 px，0 = 关
 
+# ★ `STAGE2_EDGE_SPLIT_PIN_IC`（默认 0 = 关）：只把 **IC（box）引脚点**当导线切点。
+#
+# 上面那条「官十上判否」的结论在 **open_GT 这套新图上反过来**：`work/_line13.py` 量到
+# open_GT-1020 13 张里 GT 边 723 / 我方 760、配上只有 247，而 **226 条 GT 边整条落在
+# 我方一条更长边内部**；且新 GT 的 box 脚点有 **159/191 落在网络边端点上**（官十只有 5/136）。
+# 离线上界（`work/_pinsplit13.py o13pinDef --tol=2 --box`）：13 张均值 70.86 → **71.31**
+# （导线 0.3056 → 0.3656 量级；12 张涨，只有 case11 −0.06）。全引脚版只 +0.37 ⇒ 只认 IC 更准。
+EDGE_SPLIT_PIN_IC = int(os.environ.get("STAGE2_EDGE_SPLIT_PIN_IC", "1") or 0)
+
 
 # ★★ 跨网顶点切分（`STAGE2_EDGE_SPLIT_XNET`，默认 0 = 关）。
 #   取值：`work/_inside.py` 取证 + `work/_xnet_ab.ps1` / `work/_psnap_ab.ps1` 扫描，见 RESULTS §5.76。
@@ -1536,17 +1545,27 @@ def split_edges_at_xnet(nets: Dict[str, dict], tol: float = None,
 
 
 def split_edges_at_pins(nets: Dict[str, dict], pins: Dict[str, dict],
-                        tol: float = None) -> Dict[str, int]:
+                        tol: float = None, comps: Dict[str, dict] = None,
+                        ic_only: bool = None) -> Dict[str, int]:
     """把每条网里**内部穿过引脚点**（≤ `tol`）的边在该引脚处一分为二。
+
+    `ic_only` 为真时只把 IC（`box`/`ic`/`boxic`）的引脚点当切点（见 `EDGE_SPLIT_PIN_IC`）。
 
     返回 `{"split": 切点数}`。端点附近（≤ `tol`）的引脚不切（那已经是结点）。
     """
     tol = EDGE_SPLIT_PIN if tol is None else tol
+    ic_only = bool(EDGE_SPLIT_PIN_IC) if ic_only is None else bool(ic_only)
+    if tol <= 0 and ic_only:
+        tol = 2.0
     st = {"split": 0}
     if tol <= 0:
         return st
     ppt: List[Tuple[float, float]] = []
     for _c, _pn in (pins or {}).items():
+        if ic_only:
+            _t = str((comps or {}).get(_c, {}).get("type") or "").strip().lower()
+            if _t not in ("box", "ic", "boxic"):
+                continue
         for _pv in (_pn or {}).values():
             _p = (_pv or {}).get("point")
             if isinstance(_p, dict) and "x" in _p and "y" in _p:
@@ -3202,10 +3221,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # 必须放在**全部合并/焊接之后**：这时每条网里的边才齐，切点才找得全。
         # 只动 `edges`（首尾两点），`hyperGraph`/引脚一律不碰 ⇒ 元件/引脚/netH 通道逐位不变。
         split_dedup_edges(out_nets)
-    if EDGE_SPLIT_PIN > 0:
-        # ★ 引脚切分（`STAGE2_EDGE_SPLIT_PIN`，见长注释）：必须在切分/去重**之后**、
+    if EDGE_SPLIT_PIN > 0 or EDGE_SPLIT_PIN_IC:
+        # ★ 引脚切分（`STAGE2_EDGE_SPLIT_PIN` / `_IC`，见长注释）：必须在切分/去重**之后**、
         #   自由端回缩**之前** —— 切出来的新端点在回缩那一步才算得上「结点」。
-        split_edges_at_pins(out_nets, pins)
+        split_edges_at_pins(out_nets, pins, comps=components)
     if EDGE_SPLIT_XNET > 0:
         # ★ 跨网顶点切分（`STAGE2_EDGE_SPLIT_XNET`，见长注释）：同一位置 —— 切分/去重之后、
         #   回缩之前。`split_dedup_edges` 只看本网，漏掉「别的网的导线搭在这条线上」的切点。

@@ -1315,3 +1315,4 @@
 §5.403 open_GT 元件轴的三个小实验与残差归口（bbox 外扩 / 电源符号 value / 值串普查，全部判否）
 §5.404 VLM 引脚通道在 open_GT 上翻正（`-vlm-pin` 默认 on；主尺 70.42 → 70.86 / strict 71.06）
 - 5.403.5 电源符号 bbox 并上最近文字框：13 张 70.86→69.51（−1.35）⇒ 判否（近邻文字常是别的网名）
+- §5.405 导线轴：只按 IC 引脚点切边（open_GT 转正 70.86 → **71.31 / strict 71.51**；`STAGE2_EDGE_SPLIT_PIN_IC` 默认 1，官十的 `STAGE2_EDGE_SPLIT_PIN` 仍 0）— `eda-pcb/docs/RESULTS.md`

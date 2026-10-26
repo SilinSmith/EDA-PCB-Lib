@@ -28849,3 +28849,82 @@ case1 九个的逐边差都是「`-9,-8,-9,-22`」这一族 ⇒ GT 框 = 符号 
 | **13 张均值** | **70.86** | **69.51（−1.35）** | |
 
 127 个框被合并，**净负 1.35**。原因：GT 的标签文字方位（上/下/左/右）与「30px 内最近的文字」并不总是同一块 —— 例子里 `GND` 常画在符号下方或侧面，而最近的文字框往往是**别的网络的网名**（`VIN`/`VOUT` 的旗标），合并后四坐标里有两边被推远 ⇒ 直接破掉 ≤20px。⇒ 判否，不实现。
+
+## 5.405 导线轴：只按 **IC 引脚点**切边（open_GT 转正，70.86 → 71.31）
+
+### 5.405.1 病灶：GT 的边在 IC 脚点处断开，我们的边是一条长线
+
+新探针 `work/_line13.py`（复刻官方打分链：`normalise_doc` → `assign_components` →
+`rewrite_keys` → `_net_sets`/`match_nets` → 逐条边配对）在 `o13pinDef`（open_GT-1020 13 张）上：
+
+| 量 | 值 |
+| --- | ---: |
+| GT 边 | 723 |
+| 我方边 | 760 |
+| 配上（两端 ≤5px） | 247 |
+| **GT 边整条落在我方一条更长边内部** | **226** |
+| 我方边整条落在 GT 边内部 | 71 |
+| GT 边附近没有任何我们的边 | 250 |
+| 我们多画 | 442 |
+
+⇒ 最大的一类是「我们画得更长、把 GT 的两段合成一段」。这与官十的老结论同因，但**修复方向相反**：
+官十的 GT 只在「导线—导线」T 结点切（`STAGE2_EDGE_SPLIT_PIN` 当年因此判否，见 §5.75），
+而 open_GT 的 GT **脚点就是网络边端点**——13 张 191 个 box 脚里 **159 个（83%）距最近 edge 端点 ≤0.5px**
+（官十只有 5/136）。
+
+### 5.405.2 离线上界（`work/_pinsplit13.py`，改 `*_Pred.json` 的 `edges` 再重打分）
+
+把每条边在「内部穿过的引脚点」处断开：
+
+| 臂 | 13 张均值 | 导线 |
+| --- | ---: | ---: |
+| 基线（不切） | 70.86 | 0.3113 |
+| 只切 **IC(box) 引脚**，tol 2.0 | **71.31（+0.44）** | 0.3656 |
+| 只切 IC 引脚，tol 3.5 | 71.31 | 0.3656 |
+| 切**全部**引脚，tol 2.0 | 71.24（+0.37） | 0.3570 |
+| 切全部引脚，tol 5.0 | 71.23（+0.37） | 0.3565 |
+
+逐案（IC 档，tol 2.0）：12 张涨（`2 +1.00`、`5 +0.98`、`4 +0.58`、`1 +0.56`、`6 +0.56`、`8 +0.56`、
+`10 +0.50`、`9 +0.36`、`3 +0.26`、`12 +0.25`、`13 +0.16`、`7 +0.05`），只有 `11 −0.06`。
+⇒ **只认 IC 引脚**比全引脚更准（+0.44 vs +0.37），且平台很宽（tol 2~3.5 同分）。
+
+### 5.405.3 落地（`stage2/assemble.py`）
+
+`split_edges_at_pins(nets, pins, tol, comps, ic_only)` 加 `comps` 与 `ic_only` 两个参数；
+新开关 `STAGE2_EDGE_SPLIT_PIN_IC`（默认 **1**，`=0` 回滚），打开时只把
+`type ∈ {box, ic, boxic}` 的引脚点当切点、并在 `STAGE2_EDGE_SPLIT_PIN` 为 0 时自带 `tol=2.0`。
+调用点条件从 `if EDGE_SPLIT_PIN > 0:` 改成 `if EDGE_SPLIT_PIN > 0 or EDGE_SPLIT_PIN_IC:`
+并传 `comps=components`。位置不变（`split_dedup_edges` 之后、`trim_free_ends` 之前）。
+
+⚠ 只动 `edges` ⇒ 元件 / 引脚 / netH 三轴逐位不变（实测确认）；官十当年「在引脚点切」判否的
+机理（GT 不在每个贴上的引脚处切）在 open_GT 不成立，**两个开关各自保留、互不覆盖**。
+
+### 5.405.4 定案读数
+
+| 档 | 总分 | strict | comp | pin | netH | line | 产物 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 离线，切之前 | 68.28 | 69.04 | 0.8092 | 0.5281 | 0.7937 | 0.2981 | `work/_o13v` |
+| **离线，切之后** | **68.72** | **69.51** | 0.8092 | 0.5281 | 0.7937 | **0.3462** | `work/_o13espOff` |
+| VLM，切之前 | 70.86 | 71.06 | 0.8603 | 0.5650 | 0.7948 | 0.3113 | `work/_o13pinDef` |
+| **VLM，切之后** | **71.31** | **71.51** | 0.8603 | 0.5650 | 0.7948 | **0.3559** | `work/_o13espV1` |
+
+离线档逐位可复现（+0.44）；VLM 档三轴完全等于切之前，只有导线 +0.0446 ⇒ +0.45，与离线上界一致。
+
+### 5.405.5 顺带记录的抖动
+
+VLM 档同臂两次跑出 `70.79`（pin 0.5478）与 `71.04`（pin 0.5580），差在 case7 的引脚集合
+⇒ open_GT 上的 VLM 抖动量级 **±0.2 分**，比官十的 ±0.08 大。报数时给区间。
+
+### 5.405.6 复现
+
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+$env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+  -output work\_o13espV1 -vlm auto -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
+New-Item -ItemType Directory -Force work\_fast_out_o13espV1\final_results
+Copy-Item work\_o13espV1\final_results\*_Pred.json work\_fast_out_o13espV1\final_results\
+python -X utf8 work\_line13.py o13espV1        # 导线账本
+python -X utf8 work\_pinsplit13.py o13pinDef --tol=2.0 --box   # 离线上界
+python -X utf8 work\_strictscore.py o13espV1 1 2 3 4 5 6 7 8 9 10 11 12 13
+```
