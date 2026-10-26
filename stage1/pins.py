@@ -121,8 +121,12 @@ PIN_WIRE_N = {"n": 0, "miss": 0}         # 诊断计数：改到的引脚数 / �
 # 带长。但这些图纸里**引线是符号色（暗红）、导线是绿色**，颜色把它们分开了：
 # 从框边向外走，红像素连续段有多长，引线就有多长；红段结束处常常就是导线起点。
 # 只在有色页面上生效（黑白页面没有符号色 ⇒ mask 为空 ⇒ 退回常数）。
-PIN_LEG_COLOR = int(os.environ.get("STAGE1_PIN_LEG_COLOR", "0"))
-PIN_LEG_COLOR_MAX = float(os.environ.get("STAGE1_PIN_LEG_COLOR_MAX", "30"))
+# 转正（§5.408）：open_GT-1020 离线 68.72 → 71.65、VLM 72.20 → 74.08。上限必须 ≥
+# 最长引线（新 GT 的 `TPS61240DRVR` 7 根脚全是 40px），MAX=30 时 case9 反而 −10.7。
+# 已知代价：case5 −0.9（框线粗细压短中位数）、case1/13 小幅负；三条加固尝试（段长下限
+# MIN / 引线行数下限 NMIN / 导线端点作证）全部实测更差，故保持原始中位数算法。
+PIN_LEG_COLOR = int(os.environ.get("STAGE1_PIN_LEG_COLOR", "1"))
+PIN_LEG_COLOR_MAX = float(os.environ.get("STAGE1_PIN_LEG_COLOR_MAX", "46"))
 PIN_LEG_COLOR_GAP = int(os.environ.get("STAGE1_PIN_LEG_COLOR_GAP", "2"))
 PIN_LEG_COLOR_N = {"n": 0, "empty": 0}
 # 「触到框边」的判定半径
