@@ -27985,3 +27985,41 @@ python -X utf8 eda-pcb/submission/run.py -input "...\10GT" -output work/_sub10c 
 单调性处理本身**（case8 那种「11/MOSI 绑到 15/LED_P 那行」是分组重启 + 空格子造成的
 整排错位），属于手术级改动、回归面覆盖全部 box 元件，风险与收益（官方 +0.2 量级）不成比例。
 本轮到此为止，记录在案以免重复投入。
+
+## 5.397.17 交付收尾复核：两个尺子重跑无漂移（91.04 / 34.33），HANDOFF 与 media 文档定稿
+
+一次**端到端回归**，目的是确认这一串转正（X 混合吸附 → 引线桩闸门 → 单成员网剪枝 → 4× 放大重读 → 四角色解码表）之后，
+交付口径里的两个数字没有被后续改动带漂移。
+
+命令行（全程 CPU 扇出 4 路、`FUSION_LLM=0 FUSION_ITERATE=0`，日志 UTF-16）：
+
+```
+python -X utf8 eda-pcb\tools\eval\fast.py --out final10 --engine protocol4 --no-vlm `
+    --extra "-device cpu" --cases "1,2,3,4,5,6,7,8,9,10"      # ≈ 2 min
+python -X utf8 eda-pcb\tools\eval\fast.py --out finalpool --engine protocol4 --no-vlm `
+    --extra "-device cpu" --cases ((Get-Content work\_eval50.txt) -join ',')   # ≈ 10 min
+```
+
+| 尺子 | 复现值 | 四轴 | 产物 |
+|---|---:|---|---|
+| 官方 10 张 `protocol4` | **91.04** | comp 0.9744 / pin 0.8798 / netH 0.9643 / line 0.6062 | `work/_fast_out_final10` |
+| 池 50 案 `protocol4` | **34.33** | comp 0.5928 / pin 0.1117 / netH 0.3689 / line 0.0841 | `work/_fast_out_finalpool` |
+
+两行都与 §5.397.13 的读数**逐位相同**（官方 tp 合计：元件 248 / 引脚 113 / 网络 154 / 导线 406，无爆 0 分项）⇒ 无漂移。
+
+### 5.397.17.1 文档定稿的三处更正
+
+1. **`docs/HANDOFF.md` §1**：删掉过期的「官方 10 `protocol4` 89.62（带融合 LLM）」当基线，改为——
+   **交付基线 91.04**（零外部调用、可复现）；默认档 `-vlm auto` 只在端点**活着且答得好**时才有意义，
+   本机 401 端点下它是 **89.20** 且同一张 case1 两次跑出 88.93 / 87.08（差异只在 `C154`↔`C14`）⇒ 明确标注**不要当基线**。
+   池 47 案 33.27 那行标注「已被池 50 案 34.33 取代」。
+2. **`docs/HANDOFF.md` §3** 补四个默认值开关（带读数与回滚写法）：`STAGE1_PIN_XMARK=1`（`_BLEND=0.3`）、
+   `STAGE1_PIN_XSTUB_NEAR=14`、`STAGE2_NET_DROP_STUB=1`（只 IC）、`STAGE2_ZOOM_READ=4` + `_ROLES=designator,value,pin_name,pin_number`；
+   「交付开关提醒」重写成两种合法姿势：`-offline`（推荐，与评测档 10/10 MD5 全等）与默认档 `-vlm auto`（`probe(8s)` 探不通自动退离线）。
+3. **`docs/media/README.md`** 整篇重写：补 §5.397.11 的「oracle 断点只 +0.42 ⇒ 该轴封口」、`bind_case6.mp4/.gif` 条目、
+   `work/_anim_bind.py` 的参数与数据来源（读 `<out>/runs/stage2/_assigned/<case>.json` 的 `desig_slots`/`comps`），
+   并新增「静态图」表把六张 PNG 登记进文档。
+
+**教训（隐藏字符）**：`docs/media/README.md` 里 `bind_case0020` 的 `b` 曾被写成 **`\b` 退格控制符**（`"\\b"` 在双引号字符串里就是 0x08），
+渲染出来是 `ind_case0020`、肉眼几乎看不出、`Select-String` 也匹配不到 ⇒ **凡是脚本里拼中文文档，一律走 `write` 落文件**，
+不要在 `python -c` 的内嵌字符串里写反斜杠路径。
