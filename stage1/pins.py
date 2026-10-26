@@ -88,9 +88,22 @@ LEG_INK_N = {"n": 0}                    # 诊断计数：实际量到墨迹腿�
 # 两脚件的引线端点就是导线端点（GT 的 `pin.point` 落在导线起端），所以直接在
 # 「已检出的线段端点」里找：朝外、`|切向 ≤ PIN_WIRE_TAN|`、距离 ≤ `PIN_WIRE_R`。
 # 度 1 端点优先（两条线段的交点不是引线端），找不到就退回原点位。
-PIN_WIRE_END = int(os.environ.get("STAGE1_PIN_WIRE_END", "0"))
-PIN_WIRE_R = float(os.environ.get("STAGE1_PIN_WIRE_R", "30"))
-PIN_WIRE_TAN = float(os.environ.get("STAGE1_PIN_WIRE_TAN", "4"))
+PIN_WIRE_END = int(os.environ.get("STAGE1_PIN_WIRE_END", "1"))
+PIN_WIRE_R = float(os.environ.get("STAGE1_PIN_WIRE_R", "45"))
+PIN_WIRE_TAN = float(os.environ.get("STAGE1_PIN_WIRE_TAN", "30"))
+# IC（box）也允许「引脚点落到朝外的度 1 导线端点」（`STAGE1_PIN_WIRE_END_IC`）。
+# 依据：20261026 新增的 open_GT（13 张干净页）里 191 个 box 脚有 159 个正好落在导线
+# 端点上（<=0.5px），而我们的脚停在内侧约 9px ⇒ 那套图的 pin F1 只有 0.017。
+PIN_WIRE_END_IC = int(os.environ.get("STAGE1_PIN_WIRE_END_IC", "1"))
+# 只吸「真的往外伸出去」的端点：脚点到端点 >= `PIN_WIRE_MIN` 才动。
+# 10GT 的脚本来就停在导线端点上（实测 2~3px）⇒ 这条闸让 10GT 逐位不变；
+# open_GT 里我们的脚停在内侧 9~20px、而导线已经画到 GT 位置 ⇒ 正好被吸过去。
+PIN_WIRE_MIN = float(os.environ.get("STAGE1_PIN_WIRE_MIN", "5"))
+# 候选端点必须来自「够长」的线段（真导线）才允许吸；符号自身的小笔画都短于这个值。
+PIN_WIRE_SEGLEN = float(os.environ.get("STAGE1_PIN_WIRE_SEGLEN", "25"))
+# 只收「度 1」端点（两条线段的交点不是引线端）。new2026 的干净页里 GT 脚点也常常
+# 落在「导线与导线相接」的端点上 ⇒ 放宽到全部端点（`STAGE1_PIN_WIRE_FREE=0`）更好。
+PIN_WIRE_FREE = int(os.environ.get("STAGE1_PIN_WIRE_FREE", "0"))
 PIN_WIRE_N = {"n": 0, "miss": 0}         # 诊断计数：改到的引脚数 / 没找到的引脚数
 # IC 逐元件逐侧腿长，用**符号色**量（`STAGE1_PIN_LEG_COLOR`）。
 # 墨迹法失败的原因已定案（§5.358）：引线与导线同为墨、在带内连成一片，`Pin.ln` 量到的是
@@ -828,8 +841,13 @@ def _snap_to_wire_end(pins, bb, ends, free=None):
     同一颗元件上的两个引脚各自找自己的端点，绝不抢（一对一）。
     """
     cx, cy = (bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0
-    cand = ends if free is None or not len(free) else ends[free]
-    if not len(cand):
+    if free is not None and len(free) and bool(np.any(free)):
+        cand = ends[free]
+    elif free is not None and len(free) and PIN_WIRE_SEGLEN > 0:
+        cand = ends[:0]                       # 没有真导线端点 ⇒ 一个都不吸
+    else:
+        cand = ends
+    if not len(cand) and PIN_WIRE_SEGLEN <= 0:
         cand = ends
     used = set()
     out = []
@@ -846,7 +864,7 @@ def _snap_to_wire_end(pins, bb, ends, free=None):
                 continue
             dx, dy = e[0] - p[0], e[1] - p[1]
             d = math.hypot(dx, dy)
-            if d > bd or d < 1.0:
+            if d > bd or d < PIN_WIRE_MIN:
                 continue
             along = dx * ux + dy * uy                    # 朝外分量
             across = abs(-dx * uy + dy * ux)             # 切向偏移
@@ -887,14 +905,24 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
     pts = sample_segments(segments, sample_step)
     # ★ 两脚元件「引脚点落到导线端点」的候选端点（`STAGE1_PIN_WIRE_END`）。
     _we_pos = _we_free = None
-    if PIN_WIRE_END and len(segments):
+    if (PIN_WIRE_END or PIN_WIRE_END_IC) and len(segments):
         _ends = np.asarray(
             [[float(s[0][0]), float(s[0][1])] for s in segments] +
             [[float(s[-1][0]), float(s[-1][1])] for s in segments], np.float64)
         if len(_ends):
             _d2 = ((_ends[:, None, :] - _ends[None, :, :]) ** 2).sum(-1)
+            # 只留「真导线」的端点：线段够长（符号里的小笔画都短），
+            # 否则 IC 的脚会被吸到符号自身的笔画端点上（实测 10GT 会因此掉到 80）。
+            _glen = []
+            for s in segments:
+                _glen.append(math.hypot(float(s[-1][0]) - float(s[0][0]),
+                                        float(s[-1][1]) - float(s[0][1])))
+            _glen = np.asarray(_glen, np.float64)
+            _ok = _glen >= PIN_WIRE_SEGLEN
             _we_pos = _ends
-            _we_free = (_d2 <= 4.0).sum(1) == 1        # 度 1 = 只属于一条线段
+            _deg1 = (_d2 <= 4.0).sum(1) == 1
+            _we_free = (_deg1 if PIN_WIRE_FREE else np.ones(len(_ends), bool)) & \
+                np.concatenate([_ok, _ok])
     # ★ 跨引线吸附的目标点集（见 `STAGE1_PIN_LEAD`）：整张图只算一次。
     _lead_tgt = _lead_mask = None
     if PIN_LEAD > 0 and len(segments):
@@ -1030,7 +1058,7 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
                 if _nsnap:
                     dedup = _snapped
                     _ev["lead"] = _nsnap
-        if PIN_WIRE_END and (not _is_ic) and _we_pos is not None and dedup:
+        if PIN_WIRE_END and (not _is_ic or PIN_WIRE_END_IC) and _we_pos is not None and dedup:
             dedup = _snap_to_wire_end(dedup, bb, _we_pos, _we_free)
             _ev["wire_end"] = len(dedup)
         out[c["id"]] = dedup[:MAX_PINS]
