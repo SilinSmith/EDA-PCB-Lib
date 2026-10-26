@@ -29134,3 +29134,78 @@ python -X utf8 work\_strictscore.py cvlmd 1 2 3 4 5 6 7 8 9 10 11 12 13
 ```
 
 单张诊断：`work/_legdbg.py <case> <x0> <y0> <x1> <y1> [--flip]`（打印四侧段长直方图与中位数；`open_GT` 的 json 是 y-up，图像是 y-down，比框时需要 `--flip`）。
+
+---
+
+## §5.409 电源/地符号的 `value`（官方口径 **63.18 → 70.62**，本地口径一分不动）
+
+#### 5.409.1 缺口在哪
+
+`评测要求.pdf` 的元件判据是「IC 比 `name`/`type`，**其余元件比 `type`/`name`/`value`**」，而我们的 `local` 指标（`schematic_parser/metrics.py::component_text_ok`）只对 `VALUE_TYPES`（r/c/l/fuse/crystal）比 value，**电源/地符号一律恒 True** ⇒ 这批缺口在本地口径上完全隐形。按官方判据写的探针 `work/_strictpow.py`（`official_auto_value`：IC 比 `Name`；其余比 `Name`（GT `∅NNN` 自动编号件豁免）+ **`value` 一律比**）测 `open_GT-1020` 13 张：
+
+| 口径 | total | comp |
+|---|---:|---:|
+| local（现指标） | 74.02 | 0.8570 |
+| `strict_auto_exempt`（旧 strict，auto 件连 value 一起豁免） | 73.57 | 0.8418 |
+| **`official_auto_value`（`评测要求.pdf`）** | **63.18** | **0.4956** |
+| 同上 + `--fill`（拿 GT 值填我们的 `None`，oracle 上界） | 73.79 | 0.8491 |
+
+`work/_valsplit.py` 逐件对账：配对件上 `both{ok 141, bad 6}`、**`miss 130 = gnd 78 + v 50 + r 2`**、`spurious 0` ⇒ 缺口几乎全是电源/地符号。GT 约定普查（`components[*]`）：
+
+| GT 集 | gnd 有值 | v 有值 | 备注 |
+|---|---|---|---|
+| `10GT` | 59/59 | 49/49 | gnd 恒字面 `GND`，v 例 `3.3V` |
+| `open_GT-1020` | 83/83 | 51/51 | 另有 net_input 8（`BAT`）、net_output 1（`VOUT`） |
+| 池 50 案 | 1090 有 / 1046 无 | 928 有 / 165 无 | 混合，非主尺 |
+
+#### 5.409.2 做法（三处，全部只对「本来没有网名」的符号生效）
+
+1. `stage2/assemble.py::POWER_VALUE`（`STAGE2_POWER_VALUE`，默认 1）：`gnd` 家族（`GND_TYPES`）直接给字面 `GND`；其余电源符号取 `partname`/`value`/`designator` 里第一个过 `_POWER_LABEL_RE`（`^[+\-]?[A-Za-z0-9][A-Za-z0-9_.+\-]{0,15}$`）的文字。`assign` 其实已经把一部分网名塞进了元件的 `partname`（case4 `c0019.partname='3.3V'`、case6 `c0035='+12V'`），这一档只吃这部分。
+2. `stage2/pwlabel.py` 第一遍（0°）：**复用手里的 `reads`**——框没被别的元件认领 + 读数形如网名 + 置信度 ≥0.70 + 长度 ≥3 + 中心在符号 26px 内 ⇒ 写 `partname`。这批网名横排、早就读对了（case2 `∅727` 的 25×10 框距符号 13.6px，`net_label` = `+5V` 0.876），只是 `assign` 没归给这个符号。
+3. `stage2/pwlabel.py` 第二遍（旋转帧）：**竖排网名**（旋转 90° 印，`+5V` 底→顶）横排 CRNN 只读得出 `'R'` 这类碎片 —— 取高瘦框（`h/w ≥ 1.5`、`w ≤ 26`、`h ≥ 12`），整图转 90°（顺/逆各试一次，取置信度高的）重读。证据：case2 `t0014 = [504,325,514,349]`（10×24）0° 读 `'R'`(0.47)，顺时针帧读 **`+5V`(0.95)**（`work/_vlab2.png` 目视 + `engine.read` 实测）。
+
+两条闸门是踩坑踩出来的：
+
+- **网名最短 3 字符**（两字符必须带数字）：转帧只读出 `VCC` 的尾巴 `CC`、或把无关笔画读成 `C`/`Q`/`R`；每个错值在官方口径里都是 fp+fn 双罚。
+- **角色优先级 > 置信度**：`+5V` 的四个角色都读对，只有 `pin_number` 走**收紧裁片**（`tight_ink_box` 切掉有色描边）会把 `+` 切掉读成 `45V`/`5V` 且置信度更高（实测 `[483,562,508,573]`：`net_label +5V` 0.876、`pin_number 5V` 0.920）⇒ 固定按 `net_label → designator → value → pin_name` 取第一个过闸的。
+- **电源符号自己的引脚槽不算「已认领」**：它的 `pin_0` 号本来就是内部随机号，OCR 常把旁边的网名读成它的「引脚号」（case2 `c0027.pin_0.number='5V'`、`c0021='45V'`），照旧当已认领会漏掉 9 个 `+5V`（`work/_pwdbg.py` 实测）。
+
+最终交付文档的键不变（`partname` 只是 `assign` 结果的字段，`build_doc` 读它），`_pin_stubs` 那类旁路键不受影响。
+
+#### 5.409.3 读数（`open_GT-1020`，13 张全量，离线档确定性）
+
+| 臂 | local | official | official comp | miss（GT 有/我们 `None`） | bad（都有值但不等） |
+|---|---:|---:|---:|---|---:|
+| §5.408 现默认 | 71.65 | 63.18 | 0.4956 | 130 = gnd 78 / v 50 / r 2 | 6 |
+| + `POWER_VALUE`（gnd + 已有 `partname`） | 71.65 | **68.10** | 0.6911 | 42 = v 35 / r 3 / c 3 / l 1 | 9 |
+| + 旋转帧补读（只高瘦框） | 71.65 | 68.54 | 0.7055 | 35 = v 28 / … | 11 |
+| + 0° 复用 `reads`（横排） | 71.65 | 69.21 | 0.7279 | 22 = v 15 / … | 16 |
+| + 最短 3 字符 + 双旋转 | 71.65 | 69.46 | 0.7364 | 25 = v 18 / … | 10 |
+| **+ 角色优先级 + 忽略电源符号自认领（现默认）** | **71.65** | **70.62** | **0.7750** | **11 = v 4 / r 3 / c 3 / l 1** | **10** |
+
+- **本地口径逐位不变**（`local 71.65`、comp/pin/netH/line 全同）——`component_text_ok` 不看这四类的 value，所以这条改动对主尺（`work/_percase.py`）零影响，只抬官方口径。
+- VLM 档同一臂：**local 74.08 / official 72.96**（`work/_o13pwv`；comp 0.8216 / pin 0.6263 / netH 0.8302 / line 0.3597）⇒ 官方口径 **63.18 → 72.96（+9.78）**，逼近 oracle 上界 73.79。
+- 剩下的 11 个 miss：`4 ∅413/∅128 VCC·+5V`、`9 ∅774/∅174 VCC` 四个电源符号附近根本没有可用文字框；`1 R14 '5k1'`、`12 R3/R4 '104'`、`12 L1 '2.2uH'`、`13 C1 '100nF'`/`C7 '22uf'` 是被动件的值读数问题（与本节无关）。
+- 10 个 bad 里 3 个是电源符号（`4 ∅196 3.3V→3V`、`6 ∅197 3,3V→3.3V`（GT 用逗号小数点）、`8 ∅814 VDD_1.9V→1.5V`），其余 7 个是被动件的值（`22uf→22u`、`2.7nf→27n`、`1k→1K` 大小写）。
+
+#### 5.409.4 定案与边界
+
+- 现默认：`STAGE2_POWER_VALUE=1`、`STAGE2_POWER_LABEL_ROT=1`（`pwlabel.fill` 在 `stage2/run.py` 的 `pinrot.fix` 之后、`build_doc` 之前调用）。回滚：两个环境变量置 0 即逐位恢复 §5.408。
+- 报数字必须**先说尺子**：`local` 71.65 / 74.08（VLM）不变，`official`（`评测要求.pdf`）63.18 → 70.62 / 72.96。最终评测按官方判据，所以这条是本轮最有价值的一处。
+- 池 50 案没重跑：它一半的 gnd/v 本来就没有 value，官方口径下会有一半错值，而池子已不是主尺（用户 m07469）。
+
+#### 5.409.5 复现
+
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+$env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'; $env:CUDA_VISIBLE_DEVICES=''
+python -X utf8 work\_warm.py qwen3.5-9b
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+  -output work\_o13pwv -vlm auto -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
+New-Item -ItemType Directory -Force work\_fast_out_o13pwv\final_results
+Copy-Item work\_o13pwv\final_results\*_Pred.json work\_fast_out_o13pwv\final_results\
+python -X utf8 work\_percase.py o13pwv 1 2 3 4 5 6 7 8 9 10 11 12 13      # local 74.08
+python -X utf8 work\_strictpow.py o13pwv 1 2 3 4 5 6 7 8 9 10 11 12 13   # official 72.96
+```
+
+逐件对账：`work/_valsplit.py <tag>`（ok/bad/miss/spurious）、`work/_valbad.py <tag>`（列出每个错值）、`work/_pwmiss.py <tag>`（剩余缺值的符号附近有哪些文字框）、`work/_pwdbg.py <case> <tag>`（逐个缺值符号打印邻域文本框）。

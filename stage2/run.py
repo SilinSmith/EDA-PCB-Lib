@@ -780,6 +780,16 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         _pr = _pinrot.fix(bgr, doc, a, engine)
     except Exception as _e:                      # noqa: BLE001
         _pr = {"on": True, "error": "%s: %s" % (type(_e).__name__, _e)}
+    # ★ 竖排网名补读（`stage2/pwlabel.py`，`STAGE2_POWER_LABEL_ROT` 默认**开**）：
+    #   电源符号的网名（`+5V`/`VCC`/`3.3V`）在这一版图里是**旋转 90° 竖排**印的，
+    #   横排 CRNN 只读得出 `'R'` 这类碎片（open_GT case2 实测 0.47 → 转帧 0.95）。
+    #   官方 GT 的电源符号都带 `value`，我们缺 35 个 `v` ⇒ 官方口径最大的一处缺口。
+    #   纯追加：只给「本来没有网名」的符号写 `partname`，写不进就什么都不做。
+    try:
+        from . import pwlabel as _pwlabel
+        _pl = _pwlabel.fill(bgr, doc, a, engine, reads=reads)
+    except Exception as _e:                      # noqa: BLE001
+        _pl = {"on": True, "error": "%s: %s" % (type(_e).__name__, _e)}
     pred = build_doc(doc, a, case)
     pin_index = pred.pop("__pin_index", None)
     t3 = time.time()

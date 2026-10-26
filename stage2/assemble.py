@@ -531,6 +531,21 @@ POWER_TYPES = frozenset((
     "gnd", "gnda", "gndd", "agnd", "dgnd", "pgnd", "gnd_ref", "earth",
     "v", "vcc", "vdd", "vbus_in", "net_input", "net_output", "power"))
 
+# ★ 电源/地符号的 `value`（`STAGE2_POWER_VALUE`，默认 1 = 开）。
+# 依据：官方 GT 里这批符号**都带 value** —— `10GT` 的 gnd 59 / v 49 全有、`open_GT-1020`
+# 的 gnd 83 / v 51 / net_input 8 / net_output 1 全有；而我们的 Pred 一律 `value=None`。
+# `work/_strictpow.py`（按 `评测要求.pdf` 的「其余元件比 type/name/value」）实测：
+# local 74.02 → official 63.18，其中 **130 个缺口全是这批符号**（gnd 78 / v 50 / r 2），
+# 用 GT 值填进去的 oracle 上界 73.79 ⇒ 这是当前最大单点缺口。
+# 地符号恒为字面 `GND`；电源符号是印在符号旁的网名（`+5V` / `VCC` / `3.3V`），OCR 把它
+# 当成了这个元件的 `partname`（case4 `c0019.partname='3.3V'`、case6 `c0035='+12V'` …）。
+# 本地指标对非 `VALUE_TYPES` 元件不查 value（`metrics.component_text_ok`）⇒ 对本地零风险。
+POWER_VALUE = env_on("STAGE2_POWER_VALUE", "1")
+GND_TYPES = frozenset((
+    "gnd", "gnda", "gndd", "agnd", "dgnd", "pgnd", "gnd_ref", "earth",
+    "vss", "vssa"))
+_POWER_LABEL_RE = re.compile(r"^[+\-]?[A-Za-z0-9][A-Za-z0-9_.+\-]{0,15}$")
+
 # ★ `net_line` 边的最小长度闸门（`STAGE2_MIN_EDGE_LEN`，默认 20.0）。
 # 官方 `metrics._seg_distance` 要求**两个端点都**在 `line_tol = 5.0` 内才算命中，
 # 所以边必须几乎和 GT 逐点重合。实测 case `1`：GT **102 条边、最短 12px、p50 = 67px**，
@@ -2518,6 +2533,22 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             vv = (info.get("value") or {}).get("text")
             if vv and VALUE_LIKE.search(vv):
                 val = vv
+        elif POWER_VALUE and ctype in POWER_TYPES:
+            # ★ 电源/地符号在官方 GT 里**都带 `value`**：`10GT` 的 gnd 59 / v 49 全有、
+            #   `open_GT-1020` 的 gnd 83 / v 51 / net_input 8 / net_output 1 全有。地符号
+            #   恒为字面 `GND`；电源符号是印在符号旁的网名（`+5V` / `VCC` / `3.3V`），
+            #   OCR 把它当成了这个元件的 `partname`（case4 `c0019.partname='3.3V'` 等）。
+            #   本地指标对非 `VALUE_TYPES` 元件不查 value（`metrics.component_text_ok`），
+            #   所以这条**不改本地读数**，只影响官方口径（`评测要求.pdf`：其余元件比
+            #   type/name/value）—— 见 `work/_strictpow.py`。
+            if ctype in GND_TYPES:
+                val = "GND"
+            else:
+                for _fld in ("partname", "value", "designator"):
+                    _t = (info.get(_fld) or {}).get("text")
+                    if _t and _POWER_LABEL_RE.match(str(_t).strip()):
+                        val = str(_t).strip()
+                        break
         components[key] = {"Name": name, "type": ctype, "value": val,
                            "bbox": [round(float(x), 2) for x in bbox]}
 
