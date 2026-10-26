@@ -315,7 +315,7 @@ def _pure_digit_read(t: dict):
     return txt if txt.isdigit() else None
 
 
-# ★★ 幻影脚点槽合并半径（`STAGE2_PIN_STUB_MERGE`，**默认 0 = 关**，单位 px）。
+# ★★ 幻影脚点槽合并半径（`STAGE2_PIN_STUB_MERGE`，**默认 20**，单位 px）。
 #
 # 病（10GT case 5 的 `U1`，2026-10 实测，见 `work/tools/dev/_slotdbg.py`）：
 # `stage1` 的 `pintrace` 在同一根真脚上给出**两个相距 ~5px 的触点** ——
@@ -341,7 +341,14 @@ def _pure_digit_read(t: dict):
 #   case 4 +1.7946 / case 5 +1.1180 / case 8 +3.0387，**pin fp 与 netL fp 不增反降**。
 #   ⇒ 与锚点是互补机制（锚点救「号被单调剪枝清掉」，这里救「号与名落在两个幻影触点上」），
 #   默认转正为 `12`。
-STUB_MERGE = float(os.environ.get("STAGE2_PIN_STUB_MERGE", "12"))
+#
+# ★ 2026-10 open_GT-1020（新主尺，RESULTS §5.402）：`12` 太小 —— 那套图里
+#   「只读出名」的槽与「只读出号」的槽相距 **12~20px**（名字印在框内、号印在框外
+#   上方一行），于是每颗 IC 都只交得出 1 根脚（case 6 `U2` 5 -> 1）。
+#   半径扫：`12`=68.28 / `16`=`18`=`20`=**77.74** / `22`=`25`=77.57 / `30`=77.57 /
+#   `45`=75.54（local 口径，13 张，comp .9142 pin .6643）⇒ 平台 16~20，取 **20**。
+#   代价（已按用户 m07469 定调接受）：官方 10 张 69.55 -> 69.03（`20`，`30` 是 68.64）。
+STUB_MERGE = float(os.environ.get("STAGE2_PIN_STUB_MERGE", "20"))
 # 引脚**名**框的宽高比上限。`MAX_BOX_W=3.0` 会把 `VDDA`(64x18=3.56)、
 # `GNDA`(67x18=3.72) 这类长名判成 `wide` 直接踢出候选池 —— 而它们恰恰
 # 是 `U1` 的合法引脚名。IC 引脚名本来就比位号长，这里单独放宽。
