@@ -363,6 +363,12 @@ BOX_PIN_NEED_NAME = _BOX_NEED_NAME_MODE not in ("", "0", "false", "off", "none")
 PIN_LEG_FILL = int(os.environ.get("STAGE2_PIN_LEG_FILL", "1"))
 PIN_LEG_FILL_TARGET = float(os.environ.get("STAGE2_PIN_LEG_FILL_TARGET", "19"))
 PIN_LEG_FILL_THRESH = float(os.environ.get("STAGE2_PIN_LEG_FILL_THRESH", "15"))
+# 页面级自检阈值（见 `build_doc` 里的 `_leg_fill_on_page`）：IC 脚里「到框边 ≥17px」的占比
+# 低于这个值就认为这页不是「长腿」约定、不做补齐。**默认 0 = 关掉自检（无条件补）**：
+# 实测 0.5 会把 open_GT 的 10/11/12/13 页（小件、没有可锚定脚 ⇒ 整页腿长都等于常数 12）判成
+# 「短腿页」，open_GT-1020 掉回 66.14；池子页的腿长同样落在 12（`work/_legstat.py`：池
+# median-of-medians 12.0 / open_GT 19.1，但两边的「全 12」页无法区分）⇒ 自检没找到可用判据。
+PIN_LEG_FILL_PAGE = float(os.environ.get("STAGE2_PIN_LEG_FILL_PAGE", "0"))
 # ★ 模式 `3` **也必须在「迟到」组里**：`:1335` 的早闸门是「非 LATE 且没名字 ⇒ 丢」，
 #   若 3 不置 LATE，桩在早闸门就被丢了、根本走不到下面那条被放宽的迟到闸门
 #   （实测：`STAGE2_BOX_PIN_NEED_NAME=3` 若 LATE=False，官方 10 张一根脚都不多）。
@@ -2235,6 +2241,31 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     comps = stage1.get("components") or []
     a = assigned.get("comps") or {}
     st1_pins = stage1.get("pins") or {}
+    # ★ 页面级「长腿」自检（`STAGE2_PIN_LEG_FILL_PAGE`，默认 0.5）：先看这一页的 IC 脚点是不是
+    #   本来就画在框边外 17px 以上。`open_GT` 家族是（不吸导线端点的脚也有 19~20px），
+    #   池子 200 训练集不是（p50 ≈11px）⇒ 只有占比够高时才启用腿长补齐，避免按 open_GT 的
+    #   约定去推池子页（实测池 50 案 33.47→32.52 的代价就是这么来的）。
+    _leg_fill_on_page = PIN_LEG_FILL
+    if PIN_LEG_FILL and PIN_LEG_FILL_PAGE > 0:
+        _n_far = _n_tot = 0
+        for _c1 in comps:
+            if str(_c1.get("type") or "").lower() not in ("box", "ic", "boxic"):
+                continue
+            _b1 = _c1.get("bbox_json") or _c1.get("bbox_img") or []
+            if len(_b1) < 4:
+                continue
+            _x0, _y0, _x1, _y1 = [float(v) for v in _b1[:4]]
+            _mx = max(abs(_x1 - _x0), abs(_y1 - _y0))
+            for _p1 in (st1_pins.get(_c1["id"]) or []):
+                _n_tot += 1
+                _jm = min(abs(float(_p1[0]) - _x0), abs(float(_p1[0]) - _x1),
+                          abs(H - float(_p1[1]) - _y0), abs(H - float(_p1[1]) - _y1))
+                if _jm >= 17.0:
+                    _n_far += 1
+        if _n_tot and (_n_far / float(_n_tot)) < PIN_LEG_FILL_PAGE:
+            _leg_fill_on_page = 0
+        if os.environ.get("STAGE2_PIN_LEG_FILL_DBG"):
+            print("[legfill] case=%s on=%d far=%d/%d" % (case_id, _leg_fill_on_page, _n_far, _n_tot))
 
     components: Dict[str, dict] = {}
     pins: Dict[str, dict] = {}
@@ -2675,7 +2706,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             while pk in group:
                 pk = base + "_%d" % (len(group) + 1)
             _jx, _jy = float(p[0]), H - float(p[1])
-            if ctype == "box" and PIN_LEG_FILL and len(bbox) >= 4:
+            if ctype == "box" and _leg_fill_on_page and len(bbox) >= 4:
                 # ★ IC 脚的「腿长补齐」（`STAGE2_PIN_LEG_FILL`）：new2026 的 GT 把脚点画在
                 #   框边外 19~20px（`open_GT` 实测 p10 19 / p50 20），没挂到导线端点的脚只有
                 #   常数腿长（10~12px）⇒ 差 8~10px 超过 `pin_tol=5`。必须放在**装配之后**：
