@@ -28583,3 +28583,129 @@ open_GT 19.1，但两边的「全 12」页无法区分）⇒ 自检找不到判�
 - `work/_slotrow.py`：stage2 引脚号槽位的行中心与 GT 脚行的对齐度（open_GT 13 张：
   175 个样本里 |dy| ≤ 3px 只有 0.6%、≤5px 41%、p50 = +5px ⇒ **槽位行不能直接当脚点行**，
   想靠「用号文字的行合成脚点」修整排错位这条路先验不过关）。
+## 5.401 open_GT 元件名与位号通道（`d` 取型号 / 库补全判否 / 数字补解与 VLM 冲突）
+
+主尺自此改为 `open_GT-1020`（13 张，用户 m07469 定调）。本节的四个实验都只动「名字」这一族，
+基线 = §5.400 的 `work/_o13v`（本地口径 68.28 / `strict_name` 69.04，`-offline`）。
+
+### 5.401.1 各类型的 `Name` 约定（决定「谁该发型号」）
+
+`open_GT-1020` 13 张共 346 个元件，按 `type` 统计 GT `Name` 的形态：
+
+| type | n | GT `Name` 是型号 | GT `Name` 是位号 | 样本 |
+| --- | ---: | --- | --- | --- |
+| `box` | 31 | 恒是 | — | `IP5306-4.35V` / `SX1308` / `XB7608A` |
+| `d` | 4 | **恒是** | — | `SS34` / `1N4007` |
+| `led` | 12 | 一部分 | 一部分 | `NCD0603Y2` / `GL0603UG01` vs `LED4` / `LED3` |
+| `c` `r` `l` `switch` `pin` | 80 / 61 / 11 / 2 / 2 | — | 恒是 | `C9` / `R2` / `L1` / `SW2` / `H1` |
+| `gnd` `v` | 83 / 51 | —（自动编号 `∅NNN`，官方规则豁免） | | `∅554` / `∅264` |
+
+改动：`eda-pcb/stage2/assemble.py` 的 name 段从「只 `box` 用型号」放宽成
+`ctype == "box" or ctype in NAME_PART_TYPES`，`NAME_PART_TYPES` 由 `STAGE2_NAME_PART_TYPES`
+（默认 `d`）决定。
+
+| 臂 | local | `strict_name` | comp |
+| --- | ---: | ---: | ---: |
+| 基线 `o13v` | 68.28 | 69.04 | 0.8343 |
+| `STAGE2_NAME_PART_TYPES=d`（`work/_o13d`） | 68.28 | **69.08** | **0.8356** |
+| `=d,led`（`work/_o13dl`） | 68.28 | 69.08（无增量：LED 的型号文字根本没读到） | 0.8356 |
+
+本地口径一分不动是**预期的**：`schematic_parser/metrics.py::component_text_ok` 只比 `ic/box` 的
+`Name` 与 `r/c/l` 的 `value`，`d`/`led` 的名字只有官方 `strict` 口径才看。+0.04 就是 2 颗管子
+（`SS34`、`1N4007`）从「发了位号」变成「发了型号」。
+
+### 5.401.2 「查库补全型号」判否（`stage2/libpins.py::LibCtx.key_for`）
+
+动机：型号被 OCR 截断（`STMPS2141T`←`STMPS2141STR`、`XB760A`←`XB7608A`、`MP2C12`←`MP2236CGJ-Z`、
+`TPA33`←`TP4333`），而 `cpntLibrary` 里的键是精确的。实现 `STAGE2_NAME_SNAP`（默认 **0**）：
+库键比 OCR 串长、且（前缀命中 或 `difflib` 比 ≥ `STAGE2_NAME_SNAP_RATIO`=0.85）时替换。
+
+实测 `key_for` 的返回（13 张里所有截断样本）：
+
+| OCR 名 | `key_for` |
+| --- | --- |
+| `STMPS2141T` | `None` |
+| `XB760A` | `None` |
+| `MP2C12` | `None` |
+| `TP4333` | `None` |
+| `TPA33` | `None` |
+| `TPEC8O3` | `None` |
+| `4.7uH` | `None` |
+| `IP5306` | `IP5306` |
+| `FAN` | `FAN` |
+
+⇒ 三档查表（精确 → 归一化 → 模糊 0.85）对这批**一个都命中不了**（截断掉的是 ≥2 个字符，
+相似度落到 0.75 以下）⇒ 整臂读数逐位不变（`work/_o13ns` = 68.28 / 69.08）。开关保留默认 0，
+等 `BoxICLibrary_200cases.json` 更新（Q&A A55/A45）后用 `STAGE2_NAME_SNAP=1` 复测。
+
+### 5.401.3 短串触发「长框重读」：通道接上了，但零增益
+
+动机：截断的位号会读成**看着干净**的短串（case1 印刷 `U1` 只剩 `1`、池子 `R59` 只剩 `R9`），
+而 `stage2/expect.py::should_grow` 对这种串一律 False ⇒ `--recut grow` 永远不碰它们。
+
+改动两处：
+* `eda-pcb/stage2/run.py`：`GROW_SHORT`（`STAGE2_GROW_SHORT`，默认 1）+ `GROW_SHORT_RE =
+  ^[A-Za-z]?\d{1,2}$`，`grow_candidates` 的门从「只认 `should_grow`」放宽成「或短串命中」；
+* 同文件 `process()` 首行 `recut = os.environ.get("STAGE2_RECUT") or recut`
+  —— 这样 `submission/run.py` 的整条管线也能开 `STAGE2_RECUT=grow`（以前只有 `stage2/run.py`
+  的命令行有）。
+
+| 臂（`-offline`） | local | `strict_name` |
+| --- | ---: | ---: |
+| 基线 | 68.28 | 69.08 |
+| `STAGE2_RECUT=grow`（`work/_o13grow`） | 68.28 | 69.07 |
+
+⇒ 长出来的新读法过不了 `GROW_MIN_SCORE`（0.9）或者根本没长出来（`U1` 的 `U` 距 `1` 超过
+`gap_mult×行高` 的空列预算）⇒ 这条**不再是**「补截断」的杠杆，先把通道留着。
+
+### 5.401.4 位号「只读数字」补解 vs VLM 通道（本节真正的收获）
+
+**病灶**（`work/_o13dbg1/runs/stage2/_assigned/1.json`，case1）：
+
+| cid | 读到的位号文本 | `canon` | 真实身份 |
+| --- | --- | --- | --- |
+| `c0001` | （无） | — | GT `U1` = `IP5306-4.35V` |
+| `c0003` | （无） | — | GT `U2` = `SX1308` |
+| `c0005` | `'2'` | **`U2`** | 一颗 `4..4` 的小框 |
+| `c0007` | `'1'` | **`U1`** | 一颗 `BAT+` 的小框 |
+
+`stage2/assign.py` 的 `STAGE2_DESIG_DIGITS`（§5.389 转正，默认 1）会把「只读到数字」的文本框
+（`_bare_digit_read`）补成 `TYPE_PREFIX` 首选前缀 + 数字 —— 于是 IC 旁边的**引脚号** `1`/`2`
+被补成 `U1`/`U2` 并抢走了真位号。下游连锁：
+
+1. VLM 档其实**读对了**：`VLM_DESIG_DBG=1` 打出 `[desig solo] case=1 [... 'U1<-p001', 'U2<-p003']`
+   （`p001` 就是那颗 IP5306）；
+2. 但 `U1` 已被 `c0007` 占住 ⇒ 唯一性判据把它挡掉，最终 `p001`/`p003` 留兜底键；
+3. `PIN_DROP_LAUNDERED`/`PIN_DROP_UNKEYED` 再把兜底键元件的引脚整颗丢掉
+   （stage2→stage3 有 7/4 个脚，`fusion` 输出 **0**）⇒ GT 那 15 个脚全 fn。
+
+| 臂（`open_GT-1020` 13 张） | local | `strict_name` | comp | pin | netH | line |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `-offline`，`DESIG_DIGITS=1`（`_o13v`） | 68.28 | 69.08 | 0.8092 | 0.5281 | 0.7937 | 0.3027 |
+| `-offline`，`DESIG_DIGITS=0`（`_o13nd`） | 67.97 | 68.77 | 0.8092 | 0.5281 | 0.7855 | 0.3002 |
+| VLM 档，`DESIG_DIGITS=1`（`_o13vlm`） | 69.51 | 69.71 | 0.8504 | 0.5324 | 0.7882 | 0.3098 |
+| **VLM 档，`DESIG_DIGITS=0`（`_o13vnd2`）** | **70.42** | **70.62** | **0.8590** | **0.5495** | **0.7944** | **0.3111** |
+
+⇒ 这条补解在**两个档里符号相反**：离线档它是 +0.31（池子/10GT 时代的老本行），VLM 档它是
+**−0.91**（抢走 VLM 能读对的位号）。所以做成**档位相关**：`submission/run.py` 新增
+`_apply_vlm_tuning(a)`，只在非离线档 `os.environ.setdefault("STAGE2_DESIG_DIGITS", "0")`。
+
+### 5.401.5 定案与复现
+
+* 新主尺：`open_GT-1020` 13 张 **local 70.42 / `strict_name` 70.62**（`work/_o13def2`），
+  交付路径 `submission/run.py -vlm auto -device cpu` 实测即是这个数。
+* 离线档（`-offline`）**未动**：68.28 / 69.08（`work/_o13off2`；与 `_o13v` 只差 3 份产物的
+  `d` 类型 `Name`，分数逐位相同）。
+* 复现：
+  ```powershell
+  $env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+  python -X utf8 work\_warm.py qwen3.5-9b
+  python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+      -output work\_o13def2 -vlm auto -device cpu -cases "1,...,13"
+  New-Item -ItemType Directory -Force work\_fast_out_o13def2\final_results
+  Copy-Item work\_o13def2\final_results\*_Pred.json work\_fast_out_o13def2\final_results\ -Force
+  $env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+  python -X utf8 work\_strictscore.py o13def2 1 2 3 4 5 6 7 8 9 10 11 12 13
+  ```
+* 教训：**同一个开关在不同通道配置下可以有相反符号** —— 以前所有判据都在零外部调用档上做
+  （§5.397.17.3 已记过这条纪律），这次是它的第一个实证。

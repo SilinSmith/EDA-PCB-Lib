@@ -40,6 +40,10 @@ from .growbox import grow_reading
 GROW_MIN_SCORE = float(os.environ.get("STAGE2_GROW_MIN", "0.9"))
 # 每颗元件最多为几个框做生长（控成本）
 GROW_PER_COMP = int(os.environ.get("STAGE2_GROW_PER_COMP", "4"))
+# 短串触发（`STAGE2_GROW_SHORT`，默认 1）：读出来只剩 1~2 个字符（字母前缀可缺）的框，
+# 也送去「长框重读」——截断的位号正是这种形态。只在 `--recut grow|both` 生效。
+GROW_SHORT = int(os.environ.get("STAGE2_GROW_SHORT", "1"))
+GROW_SHORT_RE = re.compile(r"^[A-Za-z]?\d{1,2}$")
 # ★★ 把 `stage1/pincol.py` 算好的引脚号窗口当文字框送进 OCR（默认开）。
 # 只取 `out_win`（框外的**号**）：名字在框内，检测器本来就检得到，而号漏检最狠。
 # 想连名字一起读就设 `STAGE2_PINCOL_WIN_KEYS=out_win,in_win`。
@@ -302,7 +306,10 @@ def grow_candidates(doc, reads, engine, bgr, max_new: int = 600):
         for _d, r in rs:
             if n >= GROW_PER_COMP:
                 break
-            if not should_grow(_longest_read(r.get("reads"))):
+            _rd = _longest_read(r.get("reads"))
+            # ★ 截断的位号会读成「看起来干净」的短串（`open_GT` case1 的印刷 `U1` 只剩 `1`、
+            #   池子 `R59` 只剩 `R9`），`should_grow` 对它一律 False ⇒ 这里追加一条短串触发。
+            if not (should_grow(_rd) or (GROW_SHORT and GROW_SHORT_RE.match(str(_rd).strip()))):
                 continue
             g = grow_reading(bgr, r["bbox"])
             if not g:
@@ -394,6 +401,8 @@ def _trust_drop(doc: dict, mode: str):
 def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
             roles=None, do_ocr: bool = True, min_conf: float = 0.0,
             texts: str = "both", recut: str = "off") -> dict:
+    # 命令行以外（`submission/run.py` 的整条管线）也能开「长框重读」：`STAGE2_RECUT=grow`。
+    recut = os.environ.get("STAGE2_RECUT") or recut
     t0 = time.time()
     doc = json.loads((stage1_dir / ("%s.stage1.json" % case)).read_text(encoding="utf-8"))
     png = (doc.get("image") or {}).get("path")

@@ -262,6 +262,7 @@ def main(argv=None) -> int:
     _apply_lean(a)
     _apply_offline(a)
     _auto_offline_if_no_endpoint(a)
+    _apply_vlm_tuning(a)
     a.platform_budgets = _platform_budgets()
     print("[run] 护栏：%s" % " ".join("%s=%s" % kv for kv in a.platform_budgets.items()),
           flush=True)
@@ -296,6 +297,21 @@ def _apply_lean(a) -> None:
         a.vlm_value_batch = 4
     print("[run] 精简档：-vlm-pin off｜-vlm-value-batch %s（官方 10 张：115 次 / "
           "93 181 token / 79.84，与默认档同级）" % a.vlm_value_batch, flush=True)
+
+
+def _apply_vlm_tuning(a) -> None:
+    """VLM 档才有意义的开关组合（离线档不动它）。
+
+    ★ `STAGE2_DESIG_DIGITS=0`（「位号只读到数字」的补解，默认 1）：它会把 IC 旁边的
+    **引脚号**（`1`/`2`）当成位号补成 `U1`/`U2`，从而抢占真正的 `U1`，让 VLM 后来读到的
+    `U1`（挂在兜底键 `p001` 的 IC 上）被唯一性判据挡掉。`open_GT-1020` 13 张实测：
+    关掉它 **69.51 → 70.42**（comp 0.8504→0.8590、pin 0.5324→0.5495）；而离线档里它是
+    **正贡献**（68.28 → 67.97）⇒ 只在 VLM 档关。
+    """
+    if getattr(a, "offline", False) or str(getattr(a, "vlm", "")).lower() == "off":
+        return
+    if "STAGE2_DESIG_DIGITS" not in os.environ:
+        os.environ["STAGE2_DESIG_DIGITS"] = "0"
 
 
 def _apply_offline(a) -> None:

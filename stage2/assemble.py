@@ -369,6 +369,20 @@ PIN_LEG_FILL_THRESH = float(os.environ.get("STAGE2_PIN_LEG_FILL_THRESH", "15"))
 # 「短腿页」，open_GT-1020 掉回 66.14；池子页的腿长同样落在 12（`work/_legstat.py`：池
 # median-of-medians 12.0 / open_GT 19.1，但两边的「全 12」页无法区分）⇒ 自检没找到可用判据。
 PIN_LEG_FILL_PAGE = float(os.environ.get("STAGE2_PIN_LEG_FILL_PAGE", "0"))
+# 除 `box` 之外，还有哪些类型的 `Name` 优先取「型号文字」（`STAGE2_NAME_PART_TYPES`）。
+# `open_GT`：`d` 的 GT `Name` 恒是型号（`SS34` / `1N4007`），`led` 一半是型号一半是位号
+# （`LED4`）⇒ 默认只给 `d`，`led` 用 `=d,led` 单独 A/B。
+NAME_PART_TYPES = frozenset(
+    t.strip().lower()
+    for t in os.environ.get("STAGE2_NAME_PART_TYPES", "d").split(",")
+    if t.strip()
+)
+# IC 型号名「补全」到元件库规范键（`STAGE2_NAME_SNAP`，**默认 0 = 关**）：OCR 常截掉型号尾部，
+# 库键是精确的。实测 `open_GT` 13 张上 `LibCtx.key_for` 对这批截断型号一个都命中不了
+# （`STMPS2141T`/`XB760A`/`MP2C12`/`TPA33` 全 None，见 `docs/RESULTS.md` §5.401.3）⇒ 零效果，
+# 默认关闭，留着只是给「库更新后用 `=1` 复测」留个入口。
+NAME_SNAP = int(os.environ.get("STAGE2_NAME_SNAP", "0"))
+NAME_SNAP_RATIO = float(os.environ.get("STAGE2_NAME_SNAP_RATIO", "0.85"))
 # ★ 模式 `3` **也必须在「迟到」组里**：`:1335` 的早闸门是「非 LATE 且没名字 ⇒ 丢」，
 #   若 3 不置 LATE，桩在早闸门就被丢了、根本走不到下面那条被放宽的迟到闸门
 #   （实测：`STAGE2_BOX_PIN_NEED_NAME=3` 若 LATE=False，官方 10 张一根脚都不多）。
@@ -2446,10 +2460,33 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         bbox = c.get("bbox_json") or c.get("bbox_img") or [0, 0, 0, 0]
 
         name = key
-        if ctype == "box":
+        if ctype == "box" or ctype in NAME_PART_TYPES:
+            # ★ `d` / `led` 这类分立器件的 `Name` 在 GT 里**有时是型号**（`open_GT` 的
+            #   `SS34` / `1N4007` / `NCD0603Y2`），有时是位号（`LED4`）—— 按页面约定不同。
+            #   `NAME_PART_TYPES`（`STAGE2_NAME_PART_TYPES`，默认 `d`）决定哪些类型优先用型号。
             pn = (info.get("partname") or {}).get("text")
             if pn:
                 name = pn
+        # ★ 型号名「补全」到元件库的规范键（`STAGE2_NAME_SNAP`）：OCR 常把型号尾部截掉
+        #   （`open_GT` 实测 `STMPS2141T`←`STMPS2141STR`、`XB760A`←`XB7608A`、`MP2C12`←`MP2236CGJ-Z`），
+        #   而库键是精确的。只在「库键更长且与前缀/相似度吻合」时替换，避免把读对的短型号改长。
+        if ctype == "box" and NAME_SNAP and os.environ.get("STAGE2_NAME_SNAP_OFF") != "1":
+            _ctx = _LIB_CTX
+            if _ctx is None:
+                from stage2 import libpins as _libpins2
+                _ctx = _libpins2.new_ctx()
+            try:
+                _k = _ctx.key_for(str(name))
+            except Exception:
+                _k = None
+            if _k:
+                _base = _k.split("_")[0].strip()
+                _cur = str(name).strip()
+                if _base and len(_base) > len(_cur):
+                    import difflib
+                    _r = difflib.SequenceMatcher(None, _cur.upper(), _base.upper()).ratio()
+                    if _base.upper().startswith(_cur.upper()) or _r >= NAME_SNAP_RATIO:
+                        name = _base
         val = None
         if ctype in VALUE_TYPES:
             vv = (info.get("value") or {}).get("text")
