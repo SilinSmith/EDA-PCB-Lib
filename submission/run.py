@@ -188,12 +188,14 @@ def main(argv=None) -> int:
                     type=float, default=80.0,
                     help="读器件型号时元件框外扩的像素（40 起就平了）。")
     ap.add_argument("-vlm-pin", "--vlm-pin", dest="vlm_pin",
-                    default="on", choices=("on", "off"),
+                    default="off", choices=("on", "off"),
                     help="用 VLM **引脚通道**（读 IC 的引脚号/名，替换引脚键）。"
-                         "**默认开**：官方 10GT 9 张交付口径 58.6304 → **61.5112（+2.88）**"
-                         "（pin F1 0.3920→0.4858、tp 37→45）；全量 220 按 split 拆开是"
-                         " 10GT **+2.59** / 10_GTcase **+0.76** / 200_train_cases **−0.25**"
-                         "（负号只在自动命名那一档）。⚠ 这是**替换**引脚键那条路"
+                         "**默认关**（§5.398 起）：当前基线下这条通道净负 —— "
+                         "官方 10 张 9B：全通道 89.13 vs 关掉 **91.24**（pin 0.8198→0.8854）；"
+                         "27B：90.41 vs 91.08；只留「号」那一半也负（pin 0.8634）。"
+                         "help 里旧记的「+2.88（58.6304→61.5112）」是 pin F1≈0.5 时代的读数，"
+                         "现在 pin 已 0.88、替换键只剩破坏力。想开回用 `-vlm-pin on`。"
+                         "⚠ 这是**替换**引脚键那条路"
                          "（`VLM_PIN_MERGE=0`）；`VLM_PIN_MERGE=1` 是只并名的旧路线。")
     ap.add_argument("-vlm-pin-name", "--vlm-pin-name", dest="vlm_pin_name",
                     default="on", choices=("on", "off"),
