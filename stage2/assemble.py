@@ -369,6 +369,12 @@ PIN_LEG_FILL_THRESH = float(os.environ.get("STAGE2_PIN_LEG_FILL_THRESH", "15"))
 # 「短腿页」，open_GT-1020 掉回 66.14；池子页的腿长同样落在 12（`work/_legstat.py`：池
 # median-of-medians 12.0 / open_GT 19.1，但两边的「全 12」页无法区分）⇒ 自检没找到可用判据。
 PIN_LEG_FILL_PAGE = float(os.environ.get("STAGE2_PIN_LEG_FILL_PAGE", "0"))
+# IC 脚被「迟到闸门」丢掉时，把「号 + 点」写进 `doc["_pin_stubs"]`
+# （`STAGE2_BOX_PIN_STUB_OUT`，默认 **0 = 关**）。
+# 动机：new2026（`open_GT`）里号印在框外、名印在框内，两槽配不上 ⇒ 整根脚被丢
+# （case6 `U2`/`U4` 各 4 根）。这些桩的**号读对了、点位也对**，缺的只是名字。
+# VLM 引脚通道只看得见已经写进 `pins` 的脚 ⇒ 先把桩留下来交给它补名（见 `vlm/enrich.py`）。
+BOX_PIN_STUB_OUT = int(os.environ.get("STAGE2_BOX_PIN_STUB_OUT", "1") or 0)
 # 除 `box` 之外，还有哪些类型的 `Name` 优先取「型号文字」（`STAGE2_NAME_PART_TYPES`）。
 # `open_GT`：`d` 的 GT `Name` 恒是型号（`SS34` / `1N4007`），`led` 一半是型号一半是位号
 # （`LED4`）⇒ 默认只给 `d`，`led` 用 `=d,led` 单独 A/B。
@@ -2279,6 +2285,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     #   池子 200 训练集不是（p50 ≈11px）⇒ 只有占比够高时才启用腿长补齐，避免按 open_GT 的
     #   约定去推池子页（实测池 50 案 33.47→32.52 的代价就是这么来的）。
     _leg_fill_on_page = PIN_LEG_FILL
+    _stub_out = []
     if PIN_LEG_FILL and PIN_LEG_FILL_PAGE > 0:
         _n_far = _n_tot = 0
         for _c1 in comps:
@@ -2756,6 +2763,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 if os.environ.get("STAGE2_DBG_PINS") or LIB_PINS_DBG:
                     print("[libpins] 迟到闸门 元件=%r 号=%s（号读到了、名没有、库也没补出）→ 丢"
                           % (name, num))
+                if BOX_PIN_STUB_OUT and str(num).isdigit():
+                    _stub_out.append({"comp": key, "num": str(num),
+                                      "point": {"x": round(float(p[0]), 2),
+                                                "y": round(float(H - float(p[1])), 2)}})
                 continue
             pk = "pin_%s" % num
             base = pk
@@ -3467,8 +3478,11 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         _ns = sum(1 for _v in out_nets.values() if ".*" in (_v.get("hyperGraph") or ""))
         print("[dbg sym_vertex] case=%s final nets with star=%d/%d"
               % (case_id, _ns, len(out_nets)))
-    return {"case": case_id, "components": components, "pins": pins,
+    _doc = {"case": case_id, "components": components, "pins": pins,
             "nets": out_nets, "__pin_index": _pidx}
+    if _stub_out:
+        _doc["_pin_stubs"] = _stub_out
+    return _doc
 
 
 def _trace_pts(raw):

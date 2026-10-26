@@ -28989,3 +28989,79 @@ python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_
   -output work\_o13sideC -offline -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
 python -X utf8 work\_percase.py sideC 1 2 3 4 5 6 7 8 9 10 11 12 13
 ```
+
+---
+
+## §5.407 「迟到闸门」丢掉的 IC 脚 → 交给 VLM 补名复活（open_GT **72.20 / strict 72.40**）
+
+### 5.407.1 病：号读到了、名没读到 ⇒ 整根脚被丢
+
+`open_GT-1020` 的 IC 常见排版是**号印在框外、名印在框内**（§5.406.1 实测 case6 `U2`：
+号框 x≈783~790、名框 x≈731~773），`stage2/assign.py` 的两轮配对（最近点 / 结构化
+单调对齐）都配不上，于是同一根脚裂成「只有号」「只有名」两个半满槽；
+`assemble.py` 的 `BOX_PIN_NEED_NAME` **late 闸门**再把「只有号」的那一半丢掉。
+
+逐件账（`work/_pindetail13.py <tag> <case…>`，交付文档 vs GT）：
+
+| case | 元件 | GT 脚 | 我们发 | 缺的脚（GT 名 / 最近我方脚距离） |
+|---|---|---:|---:|---|
+| 6 | `U2` | 5 | 1 | `1 OUT` d=20.0、`3 FAULT` d=20.0、`4 EN` d=160、`5 IN` d=160 |
+| 6 | `U4` | 5 | 1 | 同上（另一颗同型号） |
+| 6 | `U1`/`U3` | 3 | 2 | `1 IN` d=19.0 |
+| 12 | `U1` | 9 | 5 | 4 根（`d`≈18~20） |
+| 11 | `U1` | 8 | 4 | `6 VDD` d=18.5、`1 OUT` d=19.5、`7 LED2` d=38.5、`8 LED1` d=58.5 |
+
+`d=19~20` 的那批说明**点就在手里**（stage1 脚点 + `STAGE2_PIN_LEG_FILL` 推到 19px），
+缺的只是名字 —— 而「拿号当名」在官方口径里是 `name_mismatch` = fp+fn 双罚，
+所以老闸门宁可丢（只 fn）是对的；要赚只能**把名字读出来**。
+
+### 5.407.2 做法（两处，都是新开关，默认开）
+
+1. `eda-pcb/stage2/assemble.py`：late 闸门丢弃时，若号是纯数字，把
+   `{"comp": <键>, "num": <号>, "point": {x, y}}` 追加进 `_stub_out`，最后挂到
+   `doc["_pin_stubs"]`（开关 `STAGE2_BOX_PIN_STUB_OUT`，默认 **1**）。
+   最终 `<case>_Pred.json` **不含**这个键（融合层只搬 `case/components/pins/nets`），
+   交付契约不变（实测 `6_Pred.json` keys = `case/components/pins/nets/__pin_index`）。
+2. `eda-pcb/vlm/enrich.py`：引脚通道里对这些桩点**再发一次** `read_pins`
+   （沿用 `PINS_PROMPT`「格号:编号:名称」，同一套取景/拼图），
+   **只有读到非空名字**才把这根脚按 `pin_<号>` 复活；名字为空则继续丢。
+   号优先用 VLM 回的，回的不是 `^\d{1,3}$` 就退回桩里记的号。
+
+### 5.407.3 读数（open_GT-1020，13 张全量，`-vlm auto -device cpu`，9B）
+
+| 臂 | local | strict_name | comp | pin | netH | line | 产物 |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 上一版默认（§5.405） | 71.31 | 71.51 | 0.8603 | 0.5650 | 0.7948 | 0.3559 | `work/_o13espV1` |
+| **桩补名（现默认）** | **72.20** | **72.40** | 0.8570 | **0.5805** | **0.8107** | 0.3600 | `work/_o13stub3` |
+| 同臂重复跑 | 72.12 / 72.18 | — | | | | | `work/_o13stub` / `_o13stub2` |
+| 配对控制臂（`STUB_OUT=0`，同轮） | 70.79 | — | | | | | `work/_o13base2` |
+| 离线档（通道不生效） | **68.72**（逐位不变） | 69.51 | 0.8092 | 0.5281 | 0.7937 | 0.3462 | `work/_o13stuboff` |
+
+逐案（`work/_percase.py`，桩臂 vs 上一版默认）：
+`6 +7.50`（pin 0.545→**0.714**、netH 0.841→**0.950**）、`12 +3.07`（pin 0.286→0.375）、
+`1 +2.04`、`10 +1.74`、`5 +0.93`；反向 `7 −3.33`、`4 −0.97`、`11 −0.41`。
+case7 的引脚集合本来就逐次抖动（§5.405.5 记过同一现象），配对控制臂同轮只有 70.79
+⇒ 净收益 **+0.9 ~ +1.4**（三次桩臂 72.12/72.18/72.20 之间极稳）。
+
+### 5.407.4 成本与边界
+
+- 时间：13 张 4 路 CPU 扇出 **150 s → 240 s**（15.0 → 18.5 s/张），多出来的全是新增的
+  VLM 引脚格；token 取向是「分数优先，不管 token」（用户 m05221）。
+- 只在 **VLM 档**生效：离线档不进这个通道，`work/_o13stuboff` 与 §5.405 的
+  `work/_o13espOff` 逐位相同 ⇒ 兜底下界不受影响。
+- 旧尺（官方 10 张，按用户 m07469 已降级）VLM 档 61.27（pin 0.0983）——10GT 的 GT 脚
+  贴框边 5px 以内，复活点反而拉远，与 §5.399 的取舍同源，不作为目标。
+
+### 5.407.5 复现
+
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+$env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'; $env:CUDA_VISIBLE_DEVICES=''
+python -X utf8 work\_warm.py qwen3.5-9b          # 冷启动不热身会静默退离线档
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+  -output work\_o13stub3 -vlm auto -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
+New-Item -ItemType Directory -Force work\_fast_out_stub13c\final_results
+Copy-Item work\_o13stub3\final_results\*_Pred.json work\_fast_out_stub13c\final_results\
+python -X utf8 work\_percase.py stub13c 1 2 3 4 5 6 7 8 9 10 11 12 13
+python -X utf8 work\_strictscore.py stub13c 1 2 3 4 5 6 7 8 9 10 11 12 13
+```

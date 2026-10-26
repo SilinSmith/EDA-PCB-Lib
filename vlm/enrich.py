@@ -890,6 +890,61 @@ def enrich_doc(pred, png_path, opts, stat, log=None):
         #   `_pin_channel` 的文档把 `pins` 里的号/名当候选收进池子。没有这个标记，
         #   基线臂（引脚通道关着）的文档也会被收一遍 CRNN 读数，A/B 就不干净了。
         pred["_pin_channel"] = True
+    # ★ 迟到闸门丢掉的 IC 脚（`doc["_pin_stubs"]`，`STAGE2_BOX_PIN_STUB_OUT=1` 才会出现）：
+    #   这些桩的**号读对了、点位也对**，只是名字没读出来（new2026 把号印在框外、名印在框内）。
+    #   交给 VLM 读一次「号:名」，**只有读到名字才复活** —— 名读不到就继续丢，
+    #   因为「拿号当名」在官方口径里必然是 name_mismatch = fp+fn 双罚。
+    if opts.get("pin", PIN_CHANNEL) and pred.get("_pin_stubs"):
+        _stub_by: dict = {}
+        for _s in (pred.get("_pin_stubs") or []):
+            try:
+                _k0 = str(_s.get("comp"))
+            except Exception:  # noqa: BLE001
+                continue
+            _stub_by.setdefault(renames.get(_k0, _k0), []).append(_s)
+        stat["stub_comps"] = len(_stub_by)
+        stat["stub_add"] = stat.get("stub_add", 0)
+        for _k, _items in _stub_by.items():
+            _cv = comps.get(_k)
+            if not isinstance(_cv, dict):
+                continue
+            _bb = _cv.get("bbox")
+            if not _bb or len(_bb) < 4:
+                continue
+            _pts, _idx = [], []
+            for _i, _s in enumerate(_items):
+                try:
+                    _pts.append((float(_s["point"]["x"]), H - float(_s["point"]["y"])))
+                    _idx.append(_i)
+                except Exception:  # noqa: BLE001
+                    continue
+            if not _pts:
+                continue
+            _win = adaptive_window(_bb, opts["inner"], opts["cross"], opts["outer"], opts["ref"])
+            _ctr = ((_bb[0] + _bb[2]) / 2.0, H - (_bb[1] + _bb[3]) / 2.0)
+            _bbi = (_bb[0], H - _bb[3], _bb[2], H - _bb[1])
+            _ans = read_pins(bgr, _pts, _ctr, _win, opts, stat, bbox=_bbi)
+            _cur = dict(pins.get(_k) or {})
+            _add = 0
+            for _n, _i in enumerate(_idx):
+                if _n not in _ans:
+                    continue
+                _num = (_ans[_n][0] or "").strip()
+                _nm = (_ans[_n][1] or "").strip()
+                if not _nm:
+                    continue
+                if not _num or not _PIN_NUM_RE.match(_num):
+                    _num = str(_items[_i].get("num") or "")
+                if not _num or not _PIN_NUM_RE.match(_num):
+                    continue
+                _pk = "pin_%s" % _num
+                if _pk in _cur:
+                    continue
+                _cur[_pk] = {"pinname": _nm, "point": _items[_i]["point"]}
+                _add += 1
+            if _add:
+                pins[_k] = _cur
+                stat["stub_add"] += _add
     for key, cv_ in (list(comps.items()) if opts.get("pin", PIN_CHANNEL) else []):
         if str(cv_.get("type") or "").lower() not in IC:
             continue
