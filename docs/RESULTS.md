@@ -28471,3 +28471,90 @@ python -X utf8 work\_strictscore.py o13def 1 2 3 4 5 6 7 8 9 10 11 12 13
 - `work/_strictscore.py`：`local / strict_name / strict_name+value` 三口径；`GT_ROOT` 指向任意 `<root>/<cid>/*.json`。
 - `work/_openfunnel.py`：open_GT 家族的引脚漏斗（`ok / name_diff / pos_far / key_missing / extra`），在定案臂上报 `pos_far 17 / name_diff 9 / key_missing 7 / extra 2 / ok 13`（case1+case3 口径）。
 - `work/_we_gap.py`：脚点到「朝外导线端点」的间距分布（判断某个数据集是否用「脚＝导线端点」约定）。
+
+### 5.400 IC 脚「腿长补齐」：stage2 装配后推脚（open_GT-1020 66.26 → 68.28）
+
+§5.399 之后 open_GT-1020 的 `pin` 已经从 0.0169 拉到 0.4474，剩下的失分拆开只有两类。
+本节把它拆干净，并落地其中一类（沿法线偏短），另一类（沿行错位）留作下一步。
+
+#### 5.400.1 残差分型：pos_far 20 条错行 + 40 条沿法线偏短
+
+按「GT 脚点落在哪条边上」把 `pos_far` 的位移向量拆成沿行 / 沿法线两个分量
+（`work/_openres.py o13def`，13 张，62 条）：
+
+| 分型 | 条数 | 典型位移 |
+|---|---:|---|
+| 沿法线（横向偏短，x 差 8~10px） | **40** | `1 USB1 pin_5` `dx=+7.9 dy=+0.6` |
+| 沿行（纵向错一行，y 差 19~21px） | **20** | `1 U2 pin_2` `dx=+1.0 dy=−21.5` |
+| 离谱（另一个元件/另一根脚） | 2 | `1 USB1 pin_1` `d=197`、`8 U1` `d=337` |
+
+GT 腿长（脚点到自己 bbox 最近边）在这 62 条上是 `19:17 / 20:26 / 26:6 / 29:6 / 39:2 / 40:5`
+⇒ 大多数就是 19~20px，而我们没挂到导线端点的脚只有 stage1 的常数腿长（L12 / R10）。
+
+#### 5.400.2 离线上界扫描（`work/_legfix.py`，不改管线）
+
+把「到框边距离 < thresh」的 IC 脚沿最近边的外法线推到 `target`，再离线重打分：
+
+| target | thresh | 移动根数 | 总分 | pin |
+|---:|---:|---:|---:|---:|
+| 0 | 0 | 0 | 66.26 | 0.4474 |
+| 19 | 15 | 55 | **68.28** | **0.5281** |
+| 20 | 15 | 55 | 68.28 | 0.5281 |
+| 19 | 14 | 55 | 68.28 | 0.5281 |
+| 20 | 17 | 56 | 68.28 | 0.5281 |
+| 19 | 20 | 94 | 65.84 | 0.4308 |
+
+读数两件事：① 阈值卡在 14~17 是一个**平台**（同 55~56 根）；② 阈值放到 20 会把已经对的脚
+（GT 腿 26~40 的那些、以及吸到导线端点的那些邻脚）一起推走 ⇒ 净负。
+`comp / netH / line` 三轴逐位不变（只动脚点）。
+
+#### 5.400.3 落点位置是决定性的：stage1 负、stage2 正
+
+同一份逻辑放到 `stage1/pins.py` 的 `find_pins` 里（`_leg_fill`，`STAGE1_PIN_LEG_FILL`）实测
+**66.08（pin 0.4323）**，比不补的 66.26 还低 —— 因为 stage1 的脚点会进入 stage2 的**引脚候选池**，
+挪点会把脚号绑定带歪（`1 U2 pin_3` 被推到 `y=290.6`、`12 U1` 整排错位）。
+
+改成在 `stage2/assemble.py:2668` 一带**装配之后**写脚点时推（`STAGE2_PIN_LEG_FILL`）：
+
+```python
+_jx, _jy = float(p[0]), H - float(p[1])
+if ctype == "box" and PIN_LEG_FILL and len(bbox) >= 4:
+    _dm = min(abs(_jx - bx0), abs(_jx - bx1), abs(_jy - by0), abs(_jy - by1))
+    if _dm < PIN_LEG_FILL_THRESH:      # 默认 15
+        ...                            # 沿最近边推到 PIN_LEG_FILL_TARGET（默认 19）
+```
+
+| 臂 | open_GT-1020 local | strict_name | pin | 产物 |
+|---|---:|---:|---:|---|
+| §5.399 定案（`WIRE_END` 转正） | 66.26 | 67.01 | 0.4474 | `work/_o13def` / `_fast_out_o13def` |
+| 同一逻辑放 stage1 | 66.08 | 66.83 | 0.4323 | `work/_o13fill` / `_fast_out_o13fill` |
+| **同一逻辑放 stage2（现默认）** | **68.28** | **69.04** | **0.5281** | `work/_o13s2` / `_fast_out_o13s2` |
+
+stage2 版逐位复现了 5.400.2 的离线上界（68.28 / 0.5281）—— 说明「装配后改脚点」等价于离线改
+Pred，没有副作用。
+
+#### 5.400.4 残差（下一步）
+
+`work/_openres.py o13s2`：`pos_far` 62 → **44**、`key_missing` 仍 52。分型里
+「沿法线偏短」基本清零（剩下的 8~11px 只有 13 条，多是 GT 腿 26~40 的异常件），
+**主体变成「沿行错位」**：
+
+- `1 U2`：GT 三行 `213 / 233 / 252`，我们只两行 `211 / 232`，另外把 `pin_3 FB` 放到 `290.6`
+  （框底外 19px）—— 行不是「整体平移」而是「少一行 + 多一行」。
+- `12 U1`：GT 9 脚两列 `641 / 904`，我们 6 脚，`pin_2/3/4/5` 落在左列、`pin_6/8` 右列但行号全错。
+
+⇒ 下一步攻「行」：stage1 的触点行来自导线/桩，行数不对时 stage2 的单调绑定会把号整体错一行。
+
+#### 5.400.5 复现
+
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT -output work\_o13s2 -offline -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
+New-Item -ItemType Directory -Force work\_fast_out_o13s2\final_results | Out-Null
+Copy-Item work\_o13s2\final_results\*_Pred.json work\_fast_out_o13s2\final_results\ -Force
+python -X utf8 work\_strictscore.py o13s2 1 2 3 4 5 6 7 8 9 10 11 12 13
+```
+
+- `work/_legfix.py`：离线上界扫描（`TARGET THRESH`，读 `GT_ROOT`）。
+- `work/_openres.py`：`pos_far / key_missing` 分型（距离分档、所在边、GT 腿长、按元件汇总）。
+- `work/_pinrow_o.py`：单件逐脚并排（GT vs 我方，号/名/y/x）。

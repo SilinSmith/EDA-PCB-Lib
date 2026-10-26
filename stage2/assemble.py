@@ -354,6 +354,15 @@ def _named_slot_ok(nm, ctx=None) -> bool:
 #     （case 2），能补出号的只有 3 条 ⇒ 这条通道的本质收益就是「把库能认的那几根脚救回来」。
 _BOX_NEED_NAME_MODE = os.environ.get("STAGE2_BOX_PIN_NEED_NAME", "2").strip().lower()
 BOX_PIN_NEED_NAME = _BOX_NEED_NAME_MODE not in ("", "0", "false", "off", "none")
+# IC 脚的「腿长补齐」（`STAGE2_PIN_LEG_FILL`，默认开）：new2026 的 GT（`open_GT`）把 IC 脚点
+# 画在元件框外固定 19~20px（实测 p10 19 / p50 20），而没挂到导线端点的脚只有 stage1 的常数
+# 腿长（10~12px）⇒ 差 8~10px 直接超过 `pin_tol=5`。必须放在**装配之后**（同一改动放 stage1
+# 会改引脚候选池、把脚号绑定带歪：66.08 < 66.26）。离线扫描（`work/_legfix.py`，13 张）：
+#   不补 66.26 / pin 0.4474｜target 19~20 + thresh 14~17 补 55~56 根 ⇒ 68.28 / 0.5281
+#   thresh 20（补 94 根）⇒ 65.84（把已经对的脚也推走）⇒ 阈值卡在 15。
+PIN_LEG_FILL = int(os.environ.get("STAGE2_PIN_LEG_FILL", "1"))
+PIN_LEG_FILL_TARGET = float(os.environ.get("STAGE2_PIN_LEG_FILL_TARGET", "19"))
+PIN_LEG_FILL_THRESH = float(os.environ.get("STAGE2_PIN_LEG_FILL_THRESH", "15"))
 # ★ 模式 `3` **也必须在「迟到」组里**：`:1335` 的早闸门是「非 LATE 且没名字 ⇒ 丢」，
 #   若 3 不置 LATE，桩在早闸门就被丢了、根本走不到下面那条被放宽的迟到闸门
 #   （实测：`STAGE2_BOX_PIN_NEED_NAME=3` 若 LATE=False，官方 10 张一根脚都不多）。
@@ -2665,9 +2674,26 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             base = pk
             while pk in group:
                 pk = base + "_%d" % (len(group) + 1)
+            _jx, _jy = float(p[0]), H - float(p[1])
+            if ctype == "box" and PIN_LEG_FILL and len(bbox) >= 4:
+                # ★ IC 脚的「腿长补齐」（`STAGE2_PIN_LEG_FILL`）：new2026 的 GT 把脚点画在
+                #   框边外 19~20px（`open_GT` 实测 p10 19 / p50 20），没挂到导线端点的脚只有
+                #   常数腿长（10~12px）⇒ 差 8~10px 超过 `pin_tol=5`。必须放在**装配之后**：
+                #   同一改动放在 stage1 会改引脚候选池、把脚号绑定带歪（66.08 < 66.26）。
+                #   离线扫描：补 55 根 66.26→68.28，阈值放到 20（补 94 根）反而 65.84。
+                _bx0, _by0, _bx1, _by1 = [float(v) for v in bbox[:4]]
+                _dm = min(abs(_jx - _bx0), abs(_jx - _bx1), abs(_jy - _by0), abs(_jy - _by1))
+                if _dm < PIN_LEG_FILL_THRESH:
+                    if _dm == abs(_jx - _bx0):
+                        _jx = _bx0 - PIN_LEG_FILL_TARGET
+                    elif _dm == abs(_jx - _bx1):
+                        _jx = _bx1 + PIN_LEG_FILL_TARGET
+                    elif _dm == abs(_jy - _by0):
+                        _jy = _by0 - PIN_LEG_FILL_TARGET
+                    else:
+                        _jy = _by1 + PIN_LEG_FILL_TARGET
             group[pk] = {"pinname": nm,
-                         "point": {"x": round(float(p[0]), 2),
-                                   "y": round(H - float(p[1]), 2)}}
+                         "point": {"x": round(_jx, 2), "y": round(_jy, 2)}}
             num_of[(cid, k)] = num
             pin_pk[(cid, k)] = pk
         pins[key] = group

@@ -104,6 +104,17 @@ PIN_WIRE_SEGLEN = float(os.environ.get("STAGE1_PIN_WIRE_SEGLEN", "25"))
 # 只收「度 1」端点（两条线段的交点不是引线端）。new2026 的干净页里 GT 脚点也常常
 # 落在「导线与导线相接」的端点上 ⇒ 放宽到全部端点（`STAGE1_PIN_WIRE_FREE=0`）更好。
 PIN_WIRE_FREE = int(os.environ.get("STAGE1_PIN_WIRE_FREE", "0"))
+# IC 脚的「腿长补齐」（`STAGE1_PIN_LEG_FILL`）：new2026 的 GT（`open_GT`）把脚点画在框边外
+# 固定 19~20px 上（p10 19 / p50 20），而没挂到导线端点的脚只有常数腿长（10~12px）⇒ 差 8~10px
+# 直接超出 `pin_tol=5`。离线扫描（`work/_legfix.py`，open_GT-1020 13 张）：
+#   不补齐 66.26 / pin 0.4474｜target=19..20 + thresh=14..17 补齐 55~56 根 ⇒ **68.28 / 0.5281**
+#   thresh=20（补 94 根）⇒ 65.84（把已经对的脚也推走）⇒ 阈值必须卡在 15 附近。
+# 注意：这条在 **stage1** 里默认关（`STAGE1_PIN_LEG_FILL=0`）。同一份改动放在 stage1 时
+# 会改变 stage2 的引脚候选池、把脚号绑定带歪 ⇒ 实测 66.08（比不开的 66.26 还低）；
+# 真正有效的位置是 stage2 装配之后（`STAGE2_PIN_LEG_FILL`，见 `stage2/assemble.py`）。
+PIN_LEG_FILL = int(os.environ.get("STAGE1_PIN_LEG_FILL", "0"))
+PIN_LEG_FILL_TARGET = float(os.environ.get("STAGE1_PIN_LEG_FILL_TARGET", "19"))
+PIN_LEG_FILL_THRESH = float(os.environ.get("STAGE1_PIN_LEG_FILL_THRESH", "15"))
 PIN_WIRE_N = {"n": 0, "miss": 0}         # 诊断计数：改到的引脚数 / 没找到的引脚数
 # IC 逐元件逐侧腿长，用**符号色**量（`STAGE1_PIN_LEG_COLOR`）。
 # 墨迹法失败的原因已定案（§5.358）：引线与导线同为墨、在带内连成一片，`Pin.ln` 量到的是
@@ -833,6 +844,36 @@ def _color_leg_box(bb, sym):
     return tuple(out)
 
 
+def _leg_fill(pins, bb):
+    """把偏短的 IC 脚沿所在边的外法线推到固定腿长（`STAGE1_PIN_LEG_FILL`）。
+
+    new2026 的 GT 把脚点画在框边外 19~20px（`open_GT` 实测 p10 19 / p50 20），挂到导线
+    端点的脚已经在正确位置，剩下「到框边距离 < `PIN_LEG_FILL_THRESH`」的脚只有常数腿长
+    （10~12px）⇒ 差 8~10px 直接超过 `pin_tol=5`。离线扫描证明阈值必须卡在 15 附近：
+    补 55 根 +2.02 分，补 94 根反而 −0.42（把已经对的脚推走）。
+    """
+    if not pins or not bb or len(bb) < 4:
+        return pins, 0
+    x0, y0, x1, y1 = float(bb[0]), float(bb[1]), float(bb[2]), float(bb[3])
+    out, moved = [], 0
+    for p in pins:
+        dl, dr, dt, db_ = abs(p[0] - x0), abs(p[0] - x1), abs(p[1] - y0), abs(p[1] - y1)
+        m = min(dl, dr, dt, db_)
+        if m >= PIN_LEG_FILL_THRESH:
+            out.append(p)
+            continue
+        if m == dl:
+            out.append((x0 - PIN_LEG_FILL_TARGET, p[1]))
+        elif m == dr:
+            out.append((x1 + PIN_LEG_FILL_TARGET, p[1]))
+        elif m == dt:
+            out.append((p[0], y0 - PIN_LEG_FILL_TARGET))
+        else:
+            out.append((p[0], y1 + PIN_LEG_FILL_TARGET))
+        moved += 1
+    return out, moved
+
+
 def _snap_to_wire_end(pins, bb, ends, free=None):
     """把两脚件的引脚点挪到「朝外的、度 1 的导线端点」上（`STAGE1_PIN_WIRE_END`）。
 
@@ -1061,6 +1102,13 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
         if PIN_WIRE_END and (not _is_ic or PIN_WIRE_END_IC) and _we_pos is not None and dedup:
             dedup = _snap_to_wire_end(dedup, bb, _we_pos, _we_free)
             _ev["wire_end"] = len(dedup)
+        # ★ IC 脚的「腿长补齐」：没挂到导线端点的脚只有常数腿长（10~12px），而 new2026
+        #   的 GT 把脚点画在框边外 19~20px ⇒ 沿所在边外法线推出去（`STAGE1_PIN_LEG_FILL`）。
+        if _is_ic and PIN_LEG_FILL and dedup:
+            _new, _moved = _leg_fill(dedup, bb)
+            if _moved:
+                dedup = _new
+                _ev["leg_fill"] = _moved
         out[c["id"]] = dedup[:MAX_PINS]
         if _latent:
             LATENT[c["id"]] = list(_latent)
