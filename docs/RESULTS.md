@@ -29315,3 +29315,106 @@ python -X utf8 work\_linewhy2.py o13pwv 1 2 3 4 5 6 7 8 9 10 11 12 13
 python -X utf8 work\_snapends13.py o13pwv --r=12      # 74.14（+0.06，判否）
 python -X utf8 work\_xsplit13.py  o13pwv --minlen=40   # 74.02（−0.06，判否）
 ```
+
+## 5.411 零边网剪除（`STAGE2_NET_DROP_NOEDGE`）：离线 71.65 → 71.97
+
+§5.410 把引脚与导线两轴都判否之后，网轴还剩一处**结构性**的噪声：我们偶尔会发出
+**一条边都没有的网**。这种网在打分器眼里等于"凭空断言一条根本没画出来的连线"，
+配不上任何 GT 网（GT 的网都是画出来的），却白占一个 fp 名额。
+
+### 5.411.1 现场
+
+open_GT-1020 13 张（VLM 档 `work/_fast_out_o13pwv`）逐案网数：
+
+| case | GT | 我们 | 配上 | 未配 GT | 未配我们 |
+|---|---:|---:|---:|---:|---:|
+| 1 | 40 | 35 | 35 | 5 | 0 |
+| 3 / 9 | 16 / 11 | 16 / 11 | 全配 | 0 | 0 |
+| 10 | 15 | 17 | 15 | 0 | 2 |
+| 11 | 14 | 10 | 10 | 4 | 0 |
+| 12 | 16 | 12 | 12 | 4 | 0 |
+| **13** | 11 | **17** | 11 | 0 | **6** |
+
+case13 的 6 个多余网里，`net_15 (H1.1,H1.5)` 与 `net_17 (P19.3,P19.2)` 是**零边网**：
+`edges` 是空的，`hyperGraph` 却写着两根脚相连。
+
+先排除了一个假假设：`net_6 (C2.1,C1.1,C3.1)` 与 `net_11 (C2.2,C1.2,C3.2)` 看着重复，
+实际**脚号不同**（`work/_netdup13.py` 一开始按 `rec["pins"]` 去重，结果全 `merged 0`——
+Pred 的 `nets[n]["pins"]` 是空表，顶点只在 `hyperGraph` 字符串里）。⇒ 不是冗余网，
+这条路作废。
+
+### 5.411.2 试算（`work/_netprune13.py`，改动 Pred 后离线重打分）
+
+| 规则 | open_GT-1020（基线 74.08） | 池 50 案（基线 35.31） |
+|---|---:|---:|
+| 零边即丢（`--mode=both`，13 个） | **74.52（+0.44）** | **34.67（−0.64）**，丢 278 个 |
+| 零边且 ≥2 顶点（`--mode=noedge`，5 个） | 74.29（+0.21） | — |
+| 零边且 ≤1 顶点（`--mode=single`，8 个） | 74.32（+0.23） | — |
+| 零边且 **顶点全是 IC/box**（`--mode=zeroic`，12 个） | **74.45（+0.37）** | **35.27（−0.04，噪声）** |
+| 零边且 ≥2 顶点且含 IC（`--mode=zeromulti_ic`，4 个） | 74.22（+0.13） | 35.15（−0.16） |
+
+⇒ 取 `zeroic`：**为什么必须收窄到 IC** —— KiCad 里一根悬空电阻腿本身就是一条
+1 成员零边网（池子里 278 个零边网绝大多数是这种真网），全量丢等于把它们一起删掉。
+IC 的脚不一样：一块 IC 的脚不可能"不画线就连上"，所以它的零边网一定是噪声。
+
+逐案（`zeroic`，对 VLM 档 preds）：`10 +2.06`（netH 0.8831→0.9420）、
+`13 +1.80`（0.6695→0.7210）、`11 +0.37`，其余 10 张逐位不动。
+
+### 5.411.3 落地
+
+`eda-pcb/stage2/assemble.py`（`STAGE2_NET_DROP_STUB` 块之后、`_pidx` 之前）：
+
+```python
+    _noedge_mode = os.environ.get("STAGE2_NET_DROP_NOEDGE", "1").strip().lower()
+    if _noedge_mode not in ("", "0", "false", "off", "no", "none"):
+        _ne_ic = ("box", "ic", "boxic")
+        _ne_nets = []
+        for _k, _v in out_nets.items():
+            if _v.get("edges") or {}:
+                continue
+            _refs = _hg_refs(_v.get("hyperGraph", ""))
+            if not _refs:
+                continue
+            if all(str((components.get(_r[0]) or {}).get("type") or "").strip().lower()
+                   in _ne_ic for _r in _refs):
+                _ne_nets.append(_k)
+        for _k in _ne_nets:
+            out_nets.pop(_k, None)
+```
+
+（`_hg_refs` 定义在同文件 `:3901`，`build_doc` 里用它是既有用法——`STAGE2_NET_DROP_STUB`
+块已这么调。）
+
+### 5.411.4 读数（离线档，确定性可复现）
+
+`work/_strictpow.py` 四口径，同一份代码、只差 `STAGE2_NET_DROP_NOEDGE`：
+
+| 口径 | §5.409 默认（`work/_o13pw4`） | **本节默认（`work/_o13ne2`）** | 变化 |
+|---|---:|---:|---:|
+| local | 71.65 | **71.97** | +0.32 |
+| strict_auto_exempt | 71.29 | 71.61 | +0.32 |
+| official_auto_value | 70.62 | **70.95** | +0.33 |
+| comp | 0.8092 / 0.7972 / 0.7750 | **逐位相同** | 0 |
+| pin | 0.6003 | 0.6003 | 0 |
+| **netH** | **0.8237** | **0.8329** | +0.0092 |
+| line | 0.3536 | 0.3536 | 0 |
+
+（comp/pin/line 三列在三个口径下都逐位不动 ⇒ 归因干净；`line` 不动是因为被删的网
+本来就没有边。）
+
+VLM 档（主尺 74.08）本轮**未复跑**：本机 LM Studio 端点当时拒绝连接
+（`work/_warm.py` 三次 `WinError 10061`），`-vlm auto` 会静默退离线档。
+按 `zeroic` 对 VLM 档 preds 的离线试算（+0.37）预期主尺约 **74.45**，
+端点恢复后需补一次复跑再改 `HANDOFF.md` 的主尺行。
+
+### 5.411.5 复现
+
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_netprune13.py o13pwv 1 2 3 4 5 6 7 8 9 10 11 12 13 --mode=zeroic   # 74.45
+$ids=@(Get-Content work\_eval50.txt | Where-Object {$_ -match '\S'})
+$env:GT_ROOT='eda-pcb\yolo_part\Dataset(waitforpreprocess)\200_train_cases'
+python -X utf8 work\_netprune13.py freezepool @ids --mode=zeroic                          # 35.27
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+  -output work\_o13ne2 -offline -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
+```

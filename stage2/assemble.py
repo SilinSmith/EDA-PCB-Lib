@@ -3502,6 +3502,33 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         if os.environ.get("STAGE2_NET_DROP_STUB_DBG"):
             print("[dbg net_drop_stub] case=%s mode=%s 丢 %d 个单成员网（有边），剩 %d"
                   % (case_id, _stub_mode, len(_stub_nets), len(out_nets)))
+    # ★★ 零边网剪除（`STAGE2_NET_DROP_NOEDGE`，默认 1）。
+    #   一个「边数为 0」的网等于凭空断言一条根本没画的连线：它配不上任何 GT 网（GT 的网
+    #   都是画出来的）却白占一个 fp 名额。**但只对 IC/box 脚成立**：KiCad 里悬空的电阻腿
+    #   本身就是一条 1 成员网，全量丢会把池子的真网一起丢掉。
+    #   open_GT-1020 13 张、VLM 档 `work/_netprune13.py` 离线试算（基线 74.08）：
+    #     `--mode=both`（零边即丢）**74.52（+0.44）**，但池 50 案 **−0.64**（278 个）；
+    #     `--mode=zeroic`（零边且顶点**全是 IC/box**）**74.45（+0.37）**，池 **−0.04**（98 个，噪声）。
+    #   逐案（zeroic）：`10 +2.06`（netH 0.8831→0.9420）、`13 +1.80`（0.6695→0.7210）、`11 +0.37`，其余不动。
+    #   取值 `0` 可一键回滚。
+    _noedge_mode = os.environ.get("STAGE2_NET_DROP_NOEDGE", "1").strip().lower()
+    if _noedge_mode not in ("", "0", "false", "off", "no", "none"):
+        _ne_ic = ("box", "ic", "boxic")
+        _ne_nets = []
+        for _k, _v in out_nets.items():
+            if _v.get("edges") or {}:
+                continue
+            _refs = _hg_refs(_v.get("hyperGraph", ""))
+            if not _refs:
+                continue
+            if all(str((components.get(_r[0]) or {}).get("type") or "").strip().lower()
+                   in _ne_ic for _r in _refs):
+                _ne_nets.append(_k)
+        for _k in _ne_nets:
+            out_nets.pop(_k, None)
+        if os.environ.get("STAGE2_NET_DROP_NOEDGE_DBG"):
+            print("[dbg net_drop_noedge] case=%s 丢 %d 个零边 IC 网，剩 %d"
+                  % (case_id, len(_ne_nets), len(out_nets)))
     _pidx: Dict[str, Dict[str, str]] = {}
     for (_c, _k), _pk in pin_pk.items():
         _pidx.setdefault(_c, {})[str(_k)] = _pk
