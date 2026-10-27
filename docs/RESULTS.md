@@ -31113,6 +31113,8 @@ case12 的标签读出来了（`VIN`、`VIN_2` 两个键都发对了），但分
 （`1BAT`、`VBAT`、`USByV`、`SPI_CP9`、`C1C4R`、`PMCGPI0O`）—— 这些键在定稿代码里根本不会出现。
 **规则：先 `git status` 确认干净，再起 `work/_smoke.py`。**
 
+冻结后重跑（job `pwsh-1521`，代码 = commit `26fa9ab`）：**6 族 30 案全 PASS**（Altium Designer 6/6 · Datasheet 6/6 · KiCad 4/4 · jlc 6/6 · kicad 2/2 · other 6/6）。另加独立复检脚本 `work/_contractchk.py <tag>`（自带 E4 键形态 / E5 网成员无实体两条规则，不依赖 smoke 的产物）：对 `work/_o13pl/final_results` 13 份交付 Pred **0 违例**。
+
 ### 5.435.6 复现
 
 ```
