@@ -31048,3 +31048,75 @@ python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_
     -offline -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
 python -X utf8 work\_percase.py o13dd 1 2 3 4 5 6 7 8 9 10 11 12 13      # mean 76.96
 ```
+
+## 5.435 端口键 / 同侧补号两条都判否（+0.06、+0.02），外加一次「0 分页」事故
+
+### 5.435.1 端口键 oracle：上界只有 +0.18
+
+`work/_portoracle13.py <tag> [case…] [--tol=30]`：把「我们没配上的 `net_*` 符号」改名为 30px 内最近的
+未用 GT `net_*` 键（同时重写 `hyperGraph` 顶点），只改键、别的都不动。13 张：
+
+| case | base | port-key oracle | 改名次数 |
+|---|---:|---:|---:|
+| 1 | 55.36 | **57.01** | 4 |
+| 12 | 55.20 | **55.95** | 1 |
+| 其余 11 张 | — | ±0.00 | 0 |
+| **mean** | **76.96** | **77.14** | 5 |
+
+⇒ 即使标签全部读对，端口键这条路在 `open_GT-1020` 上也只有 **+0.18**。
+
+### 5.435.2 真做出来只有 +0.06（`STAGE2_PORT_KEY`，判否）
+
+端口标签其实**就在箭头外侧**（`open_GT` case12 三个端口：`t0009 [1353,266,1390,283]` 中心距 34.8、
+`t0063 [564,554,602,572]` 32.1、`t0071 [1025,590,1049,617]` 36.2），而 `pwlabel` 的第一遍用的是
+**中心距 ≤ `NEAR_H`=26** ⇒ 全被漏掉。于是加了一条「边到边间距 ≤ 8px」的端口标签遍
+（`_gap()`，`STAGE2_PORT_LABEL_GAP`），并把键也换成标签（`STAGE2_PORT_KEY`）：
+
+| 臂 | local | case1 | case12 | 说明 |
+|---|---:|---:|---:|---|
+| 26fa9ab 基线 | 76.96 | 55.36 | 55.20 | 键 `pNNN` |
+| `work/_o13pk3`（标签当键） | **77.02** | 56.12 | 55.20 | 只 case1 变 |
+
+case12 的标签读出来了（`VIN`、`VIN_2` 两个键都发对了），但分数不动：GT 那页有 **5 颗** `net_*`
+（`VIN`/`VIN_2`/`VIN_3`/`VIN_4`/`VOUT`），我们只发 3 颗，重名的 `_2`/`_3` 是**按我们的出现序**编的、
+和 GT 的编号必然错位 ⇒ 键对上 bbox 也对不上。要吃到上界必须先把端口**检出**补齐，不是键的问题。
+⇒ `STAGE2_PORT_KEY` 默认 **0**，`pwlabel` 的端口标签遍一并回退（无键配合时它不影响任何分数）。
+
+### 5.435.3 同侧补号只补「有名槽」：+0.02，判否
+
+`STAGE2_PINNUM_SEQ=1` 的整版在 §5.427 是 −2.16（它连「号名都没读到」的幽灵槽也编号）。
+这次的窄版只补**名字读到了**的槽（`STAGE2_PINNUM_SEQ_NAMED`）：
+
+| 臂 | local | case11 pin | case11 netH | case13 |
+|---|---:|---:|---:|---:|
+| 基线 | 76.96 | 0.357 | 0.476 | 61.87 |
+| `work/_o13sq` | **76.98** | **0.345** | 0.499 | **61.70** |
+
+净 +0.02 但最差的一页反而更差（补错就是 fp+fn 双罚）⇒ 默认关。
+
+### 5.435.4 事故：两页 0 分（`_gap(None)` 被 try/except 吞掉）
+
+`_gap()` 第一版写成 `if not (len(a) >= 4 and len(b) >= 4)`，某个元件没有 `bbox` 时 `len(None)`
+抛 `TypeError`；`pwlabel.fill` 的调用点是 `try/except` 包着的，于是**该 lane 后面一张都导不出**：
+`work/_o13pk2` 里 case4 / case8 的 `Pred` 是空的（`components/nets/pins` 全 0），13 张均值 63.93。
+
+诊断口径（以后再遇到「某几页突然 0 分」先查这里）：
+1. `work/_o13<tag>/final_results/<case>_Pred.json` 的 `components` 条数；
+2. `work/_o13<tag>/_lanes/lane<N>/final_results/run.log` 尾部有没有「导出 N 份」这一行 ——
+   缺这一行就是 lane 中途断了；
+3. 单测这类几何工具函数时先喂 `None` / 短列表。
+
+### 5.435.5 纪律：自检必须在代码**冻结后**跑
+
+第 `pwsh-1443` 轮 smoke（20:0x 起跑）期间我还在改 `assemble.py` / `pwlabel.py`，后半程的
+`kicad`/`jlc` 族跑到的是 `PORT_KEY=1` 的中间态，于是报了 6 条 `E4 元件键形态异常`
+（`1BAT`、`VBAT`、`USByV`、`SPI_CP9`、`C1C4R`、`PMCGPI0O`）—— 这些键在定稿代码里根本不会出现。
+**规则：先 `git status` 确认干净，再起 `work/_smoke.py`。**
+
+### 5.435.6 复现
+
+```
+python -X utf8 work\_portoracle13.py o13dd 1 2 3 4 5 6 7 8 9 10 11 12 13     # 76.96 -> 77.14
+$env:STAGE2_PINNUM_SEQ='1'; python -X utf8 eda-pcb\submission\run.py … -output work\_o13sq …
+python -X utf8 work\_percase.py o13sq 1 2 3 4 5 6 7 8 9 10 11 12 13          # mean 76.98
+```
