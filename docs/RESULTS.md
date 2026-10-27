@@ -30868,3 +30868,85 @@ python -X utf8 work\_compok2.py o13pk 1                    # 逐配对拆 bbox /
 ```
 
 回滚：`$env:STAGE2_PORT_NAME='0'`（回到 76.23 / 75.00）。
+
+## 5.432 电源/地/端口符号的框长到「整颗」（open_GT 76.24 → **77.02**，official 75.79）
+
+### 5.432.1 病：我们发的是「符号内腔」，GT 发的是「整颗符号」
+
+`work/_compok2.py o13pk 1` 把 case1 配上对的 47 组元件逐个判 bbox / 文本：
+
+```
+case 1 pairs=47 ok=24 bad_box=15 bad_txt=8
+```
+
+15 组全死在小符号的框上（`bbox_tol=20` 逐坐标）：
+
+| 族 | 例 | GT 框 | 我们 |
+|---|---|---|---|
+| `gnd` | `∅141` | `[990,983,1027,1016]` 37×33 | `[997.4,1008.4,1017.4,1027.4]` 20×19 |
+| 端口 | `BAT` | `[1383,894,1425,916]` 42×22 | `[1412,899.6,1442,909.6]` 30×10 |
+| `led` | `LED2` | `[674,696,725,726]` 51×30 | `[767.1,696,781.1,716]` 14×20 |
+| `r` | `R12` | `[1334,667,1395,688]` | `[1355.1,673.5,1375.1,681.5]` |
+
+图像实证（`work/_crop2.py 1 975 1040 120 180 work\_gnd1.png`）：GND 符号 = 标签 `GND`
+在上 + 三条横杠与竖杆在下；stage1 的框套在**标签附近**，GT 的框是**横杠+竖杆**。
+
+上界先量了一遍：`work/_pwrbbOracle13.py o13pk`（把这些符号的框按 GT 对齐）⇒
+`MEAN 77.09 / comp 0.8523`（当时 76.24 / 0.8228）——**+0.85 分的空间**，且必须靠几何。
+
+### 5.432.2 做法：符号色连通块 + 窄窗口求并（`eda-pcb/stage1/symbox.py`）
+
+`STAGE1_SYM_BOX`（默认 1）/ `_WIN`（14）/ `_CAP`（70）/ `_MINPX`（60）。
+对每个 `type ∈ {gnd*, v, vcc, vdd, vbus_in, net_input, net_output, net_short, net_bidirection}`
+的元件：
+
+1. 红掩膜 = HSV `(h<=10 or h>=170) & s>=60 & v>=40`（连线是绿、标注是蓝、符号是暗红）；
+2. `cv2.connectedComponentsWithStats` 取连通块，**在 `±WIN` 的窗口内裁剪**，裁剪后范围
+   `≤CAP×CAP` 且块内像素 `≥MINPX` 的才要（挡住把 IC 框线整条并进来的情形）；
+3. 取「离当前框中心最近」的那块，与当前框**求并**写回 `bbox_img` / `bbox_json`。
+
+窗口扫描（`work/_symbb2.py`，13 张 131 个符号，逐坐标 ≤20px 算过）：
+`34 → 88%`、`26 → 91%`、`22 → 95%`、`20 → 97%`、`18 → 98%`、`16 → 98%`、`14 → 98%`
+（原样 89%）。窗口再大就把相邻的 IC 框线 / 红色引脚号并进来，14 是拐点。
+
+⚠ 落点必须在 **stage1**：`fusion/run.py::_assemble` 会用**原始 `s1_doc`** 重新
+`build_doc`，在 stage2 里改 `doc` 的框一分都留不下来（先按 stage2 挂过一次，
+产物 `work/_o13sg14` 与基线**逐位相同** 76.24 —— 与 §5.426/§5.427 同一条教训）。
+
+### 5.432.3 读数（open_GT 13 张、只 CPU、离线）
+
+| 臂 | local | official | comp | pin | netH | line |
+|---|---:|---:|---:|---:|---:|---:|
+| §5.431 基线 `work/_o13pk` | 76.24 | 75.01 | 0.8228 | 0.7377 | 0.8403 | 0.3664 |
+| **`STAGE1_SYM_BOX_WIN=14`（现默认，`work/_o13sb`）** | **77.02** | **75.79** | **0.8308** | 0.7383 | 0.8416 | 0.3616 |
+| `WIN=10`（`work/_o13sb10`） | 76.98 | — | — | — | — | — |
+| `WIN=18`（`work/_o13sb18`） | 76.61 | — | — | — | — | — |
+| stage2 挂（无效落点，`work/_o13sg14`） | 76.24 | — | — | — | — | — |
+
+逐案（对 §5.431）：`1 50.78 → 56.12`（comp 0.425 → **0.602**）、`13 57.07 → 61.87`
+（comp 0.410 → **0.564**）、`8 +0.79`、`2 +0.60`、`4 +0.30`、`7 +0.15`、`5 −1.06`、
+`6 −0.65`、`3 −0.21`，`9/10/11/12` 逐位不变。
+`line` 略降（0.3664 → 0.3616）是框变大后 `STAGE2_PIN_LEG_FILL` 的补齐点与
+`STAGE2_EDGE_SPLIT_PIN_IC` 的切点跟着动 —— 净收益仍是正的。
+
+### 5.432.4 边界
+
+这套只治「框小了一圈」。治不了「框根本在别处」：`led` 的 `LED2` 差 93px、`gnd` 的
+`∅141` 窗口内没有干净的红色块（与 IC 框线连成一片，被 `CAP` 挡掉）。要治得让检测器
+直接给整颗框（`led` 的箭头、`r` 的整段色带），属检测面。
+
+### 5.432.5 复现
+
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+  -output work\_o13sb -offline -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
+New-Item -ItemType Directory -Force work\_fast_out_o13sb\final_results
+Copy-Item work\_o13sb\final_results\*_Pred.json work\_fast_out_o13sb\final_results\
+python -X utf8 work\_percase.py o13sb                     # local 77.02
+python -X utf8 work\_strictpow.py o13sb 1 2 3 4 5 6 7 8 9 10 11 12 13   # official 75.79
+python -X utf8 work\_symbb2.py o13pk --win=14             # 符号框合格率 89% -> 98%
+```
+
+回滚：`$env:STAGE1_SYM_BOX='0'`（回到 76.24 / 75.01）。

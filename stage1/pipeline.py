@@ -811,6 +811,16 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
     tm["bigic_s"] = round(t_big, 2)
     tm["pins_s"] = pin_s
     tm["total_s"] = round(time.time() - t0, 2)
+    # ★ 电源/地/端口符号的框长到「整颗」（`stage1/symbox.py`，`STAGE1_SYM_BOX` 默认 1）：
+    #   GT 的符号框覆盖整个符号（横杠+竖杆+箭头），我们给的是内腔/标签附近，逐坐标差
+    #   20~33px ⇒ 元件通道直接判错（case1 配上对的 47 组里 15 组死在框）。
+    #   用符号色连通块在窄窗口（14px）内补齐：13 张 131 个符号的合格率 89% → 98%。
+    #   落在 stage1 是因为 `fusion/run.py::_assemble` 会用原始 s1_doc 重新 build_doc。
+    try:
+        from . import symbox as _symbox
+        _sb = _symbox.grow(bgr, comps)
+    except Exception as _e:                                          # noqa: BLE001
+        _sb = {"on": False, "error": f"{type(_e).__name__}: {_e}"}
     doc = {
         "case": case.case_id,
         "image": {"path": str(case.png_path), "w": W, "h": H},

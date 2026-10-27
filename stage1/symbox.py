@@ -1,0 +1,102 @@
+# -*- coding: utf-8 -*-
+"""把电源/地/端口符号的框长到「整颗」——用符号色（暗红）连通块在**窄窗口**内补齐。
+
+病（`work/_compok2.py o13pk 1`）：case1 里配上对的 47 组元件有 15 组死在 bbox
+（`bbox_tol=20` 逐坐标），全是 `gnd` / `net_input` / `led` 这类**小符号**：
+
+| 族 | GT 框 | 我们 |
+|---|---|---|
+| `gnd` `∅141` | `[990,983,1027,1016]` 37×33 | `[997,1008,1017,1027]` 20×19 |
+| 端口 `BAT` | `[1383,894,1425,916]` 42×22 | `[1412,899,1442,910]` 30×10 |
+
+GT 的符号框覆盖**整个符号**（横杠 + 竖杆 + 箭头），stage1 给的是**内腔/标签附近**。
+这两类符号的图形都是暗红色（HSV `h<=10 or h>=170, s>=60, v>=40`），所以取「离当前框
+中心最近的红色连通块」、把它在**窄窗口**内与当前框求并，就落到 GT 约定上。
+
+实测（`work/_symbb2.py`，13 张 131 个符号，逐坐标 ≤20px 算过）：
+窗口 34/26/22/20/18/16/14 对应 88%/91%/95%/97%/98%/98%/98%（原样 89%）。
+窗口越大越容易把相邻的 IC 框线/引脚号并进来，14px 是拐点。
+
+※ 只治「框小了一圈」，治不了「框根本在别处」（`led` 的 `LED2` 差 93px、`gnd` 的
+`∅141` 这类窗口里没有可用红色块）——那要检测器自己给整颗框。
+
+※ 落在 **stage1**（而不是 stage2）：`fusion/run.py::_assemble` 会用原始 `s1_doc`
+重新 `build_doc`，Stage2 里改 `doc` 不留痕（§5.426/§5.427 同一条教训）。
+"""
+import os
+
+import cv2
+import numpy as np
+
+SYM_BOX = int(os.environ.get("STAGE1_SYM_BOX", "1") or 0)
+SYM_WIN = float(os.environ.get("STAGE1_SYM_BOX_WIN", "14"))
+SYM_CAP = float(os.environ.get("STAGE1_SYM_BOX_CAP", "70"))
+SYM_MINPX = int(os.environ.get("STAGE1_SYM_BOX_MINPX", "60"))
+SYM_TYPES = frozenset((
+    "gnd", "gnda", "gndd", "agnd", "dgnd", "pgnd", "gnd_ref", "earth", "vss",
+    "v", "vcc", "vdd", "vbus_in", "net_input", "net_output", "net_short",
+    "net_bidirection",
+))
+
+
+def _red_cc(bgr):
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    m = (((h <= 10) | (h >= 170)) & (s >= 60) & (v >= 40)).astype(np.uint8)
+    n, lab, stats, _c = cv2.connectedComponentsWithStats(m, 8)
+    return lab, stats, n
+
+
+def grow(bgr, comps):
+    """就地改 `comps[*]["bbox_img"]` / `bbox_json`；返回统计。"""
+    stat = {"on": bool(SYM_BOX), "n": 0, "grew": 0}
+    if not SYM_BOX or bgr is None or not comps:
+        return stat
+    lab, stats, n = _red_cc(bgr)
+    H, W = bgr.shape[:2]
+    for c in comps:
+        _ct = str(c.get("type") or "").strip().lower()
+        if _ct not in SYM_TYPES and not _ct.startswith("gnd"):
+            continue
+        bb = c.get("bbox_img")
+        if not bb or len(bb) != 4:
+            continue
+        ix0, iy0, ix1, iy1 = [float(v) for v in bb]
+        stat["n"] += 1
+        wx0, wx1 = ix0 - SYM_WIN, ix1 + SYM_WIN
+        wy0, wy1 = iy0 - SYM_WIN, iy1 + SYM_WIN
+        cx, cy = (ix0 + ix1) / 2.0, (iy0 + iy1) / 2.0
+        best = None
+        for i in range(1, n):
+            x, y, w, hh, area = stats[i]
+            if area < SYM_MINPX:
+                continue
+            bx0, by0 = max(float(x), wx0), max(float(y), wy0)
+            bx1, by1 = min(float(x + w), wx1), min(float(y + hh), wy1)
+            if bx1 - bx0 < 6 or by1 - by0 < 5:
+                continue
+            if (bx1 - bx0) > SYM_CAP or (by1 - by0) > SYM_CAP:
+                continue
+            sub = lab[int(by0):int(by1) + 1, int(bx0):int(bx1) + 1]
+            hit = (sub == i)
+            if int(hit.sum()) < SYM_MINPX:
+                continue
+            ys, xs = np.nonzero(hit)
+            nx0, nx1 = bx0 + xs.min(), bx0 + xs.max()
+            ny0, ny1 = by0 + ys.min(), by0 + ys.max()
+            d = ((nx0 + nx1) / 2.0 - cx) ** 2 + ((ny0 + ny1) / 2.0 - cy) ** 2
+            if best is None or d < best[0]:
+                best = (d, nx0, ny0, nx1, ny1)
+        if best is None:
+            continue
+        _d, nx0, ny0, nx1, ny1 = best
+        ux0, ux1 = max(0.0, min(ix0, nx0)), min(float(W - 1), max(ix1, nx1))
+        uy0, uy1 = max(0.0, min(iy0, ny0)), min(float(H - 1), max(iy1, ny1))
+        if abs(ux0 - ix0) + abs(uy0 - iy0) + abs(ux1 - ix1) + abs(uy1 - iy1) < 1.0:
+            continue
+        c["bbox_img"] = [round(ux0, 2), round(uy0, 2), round(ux1, 2), round(uy1, 2)]
+        if c.get("bbox_json"):
+            c["bbox_json"] = [round(ux0, 2), round(float(H) - uy1, 2),
+                              round(ux1, 2), round(float(H) - uy0, 2)]
+        stat["grew"] += 1
+    return stat
