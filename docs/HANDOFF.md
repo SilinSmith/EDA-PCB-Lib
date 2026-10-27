@@ -12,8 +12,14 @@
 口径：`--no-vlm` + `$env:FUSION_LLM='0'` + `$env:CUDA_VISIBLE_DEVICES=''`（CPU-only 确定性路径），
 **不设任何覆盖变量**；`--cases` 必须加引号（不加会被 PowerShell 当数字数组，静默跑全部 220 案）。
 
+> ❗**2026-10 起约束（优先级最高）**：**不再使用 GPU**，本机 VLM 端点（LM Studio）一并停用。
+> 现行交付读数一律取**离线档**（`submission/run.py -offline -device cpu`）：主尺 open_GT-1020
+> **71.97 local / 70.95 official**。下表里所有 `-vlm auto` 的数字都是「端点时代」的留档，
+> 仍可复现（代码默认值未改），但**不作为当前交付承诺**。
+
 | 样本 | 尺 | 总分 | component | pin | netH | netLine | 复核 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| **open_GT-1020（13 张，新标准）** | 现交付档 `-offline -device cpu` | **71.97** | 0.8092 | 0.6003 | 0.8329 | 0.3536 | `work/_delivoff`（交付路径实测，CPU-only、零外部调用、**105.5 s = 8.12 s/张**；与评测档 `work/_o13ne2` **13/13 MD5 全等**；官方口径 `work/_strictpow.py` **70.95**）。⇒ **这一行是当前唯一交付读数**；同表下一行是同一主尺的 VLM 历史值（74.31），需要 GPU 端点、已停用 |
 | **open_GT-1020（13 张，新标准）** | `submission/run.py -vlm auto -device cpu`（`work/_new2026\open_GT-1020\open_GT`） | **74.31** | 0.8570 | 0.6263 | 0.8408 | 0.3597 | `work/_o13ne4`（§5.411 零边网剪除；13 张全量，两次 74.23 / 74.39 均值 74.31。§5.408 时是 74.02 / `work/_o13cvlmd`）。`strict_name` 口径（`work/_strictscore.py`，复刻 `评测要求.pdf`）**73.94**；**官方口径**（`work/_strictpow.py`；电源/地符号也比 value）**73.27**（同臂 `work/_o13ne3` 73.11；§5.409 时 72.96）。离线档（`-offline`）**71.97** / 官方口径 70.95（`work/_o13ne2`，§5.411 零边网剪除；此前 71.65 / 70.62 = `work/_o13pw4`）。**VLM 档已复跑两次**：local **74.23 / 74.39**（均值 **74.31**）、官方口径 **73.11 / 73.27**（`work/_o13ne3`、`work/_o13ne4`，§5.411；netH 两次都 0.8302→0.8399/0.8408，其余三轴在抖动带内）。同一份 preds 的纯 A/B（`work/_netprune13.py o13pwv --mode=zeroic`）是 **74.45（+0.37）**。上一版 71.31 / `work/_o13espV1`（§5.405）。演进：首测 57.25（引脚 0.0169）⇒ `STAGE1_PIN_WIRE_END`（§5.399）66.26 ⇒ `STAGE2_PIN_LEG_FILL`（§5.400）68.28 ⇒ VLM 档关掉「位号只读数字」补解（§5.401.4）**70.42** ⇒ VLM 引脚通道默认开（§5.404）**70.86** ⇒ `STAGE2_EDGE_SPLIT_PIN_IC`（§5.405）**71.31** ⇒ `STAGE2_BOX_PIN_STUB_OUT` + 桩补读（§5.407）**72.20** ⇒ 符号色腿长 `STAGE1_PIN_LEG_COLOR`（§5.408）**74.02** ⇒ 电源/地符号 `value`（§5.409）**本地口径不动（74.08）、官方口径 63.18→72.96**。**VLM 档逐次抖动 ±0.2~0.5**（同臂不同轮差在 case7 的引脚集合）。⚠ 打分**必须传全 13 个 case id**：`work/_strictscore.py` 不传时只跑前 10 张，两者差 7 分（§5.402.3 的事故）。**这是 2026-10 之后的交付主尺**：Q&A A37 明确最终图为「干净页」，池子 50 张只作参考 |
 | 官方 10 | 默认档 `-vlm auto`（端点**活着**）+ `FUSION_LLM=0 FUSION_ITERATE=0` | **91.24** | 0.9834 | 0.8854 | 0.9595 | 0.6021 | `work/_fast_out_vlm9b_nopin_nofusion`（本机 LM Studio `qwen3.5-9b`；`-vlm-pin off` 已转为默认，§5.398.2）。同臂 `qwen3.8-27b@iq3_s` = **91.08**（`work/_fast_out_vlm38_nopin_nofusion`）。**交付路径**（`submission/run.py -vlm auto -device cpu`，4 lane×2 worker）实测 **91.18**（`work/_subvlm_best`，§5.398.5；§5.398.7 之后复跑仍 **91.18** = `work/_subvlm_d2`，同时 `-offline` 交付档 **91.04** 与评测档 **10/10 MD5 全等**），差 0.06 来自并发下的服务端批处理 ⇒ 交付承诺写 91.18 ± 0.06。⚠ §5.398.7：同一配置**十张并发**跑会在 91.16/91.24 之间抖（case6 comp 0.9610↔0.9870，逐案跑可复现）⇒ 本行数字应读作 **91.24 ± 0.08**。❗§5.399：这一行是 `STAGE1_PIN_WIRE_END=0`（旧脚位约定）下的读数，现默认已开 ⇒ 当前默认在官方 10 张上是 **69.55**（`work/_fast_out_wiredef10`），**不要再用 91.24 当现行默认** |
 | 官方 10 | 默认档 `-vlm auto`（端点**活着但不可信**时） | **89.20** | 0.93xx | 0.86xx | 0.95xx | 0.60xx | `work/_subvlm10`，本机端点回 HTTP 401 时的实测 ❗**这一行已被 §5.398 取代**：401 是「没带 key」而不是「端点不可用」，key 在 `eda-pcb/.lmstudio_key`。真实 9B 档见上一行 91.24（`-vlm-pin off`）与 §5.398.2 的全通道 89.13 |
@@ -154,24 +160,22 @@ t 值（§5.347.5：官方 10 的 ±0.3 可能只是单案翻转），池上 |t|
 真正的洞是 `component.missing 1145 / extra 1032`（每案约 13 颗小件没检出）+ `pin.missing 2577`。
 池 GT 本身标注错误多（m08705），所以这块**不作为优化目标**。
 
-**交付开关提醒**：上面的读数都是 `--no-vlm`（零外部调用档）。`eda-pcb/submission/run.py`
-默认 `-vlm auto`；`-vlm-pin` 自 §5.398 起默认 **off**。三种合法交付姿势：
+**交付开关提醒（2026-10 更新：只用 CPU、只用离线档）**：用户要求**不再使用 GPU**，
+本机 VLM 端点（LM Studio）也一并停用 ⇒ 交付姿势**只有一种**：
 
-1. **`-offline`（兜底下界）**：零外部调用、逐字节可复现 ⇒ 官方 10 张 **91.04**
-   （§5.397.15 已复核 `-offline` 产物与评测档 10/10 MD5 全等）。
-2. **VLM 档 + 融合 LLM 轮关（当前最高分）**：
-   ```powershell
-   $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'; $env:CUDA_VISIBLE_DEVICES=''
-   python -X utf8 eda-pcb\submission\run.py -input <输入目录> -output <输出目录> -device cpu
-   ```
-   ⇒ 官方 10 张 **91.18**（交付路径实测）、池 50 案 **35.11**（§5.398.7 位号闸之后；
-   位号闸之前 35.01）。
-   融合层照跑（确定性节点），只是不发 LLM 轮（官方 10 张上那一轮 **−1.13**）。
-3. **全默认档 `-vlm auto` + `-fusion on`（带 LLM 轮）**：官方 10 张 **90.11**
-   （9B）/ 池 35.00 ⇒ 只在「要求 LLM 必须参与」的语义下用。
+```powershell
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+python -X utf8 eda-pcb\submission\run.py -input <输入目录> -output <输出目录> -offline -device cpu
+```
+⇒ 主尺 open_GT-1020（13 张）**71.97 local / 70.95 official**（`work/_o13ne2`，逐字节可复现）；
+旧尺官方 10 张 **69.55**、池 50 案 **33.47**（数字只作留档，不再是优化目标）。
 
-端点在跑但答不出结果的旧读数 **89.20** 已作废（那是「没带 key」的 401，不是端点坏；
-key 在 `eda-pcb/.lmstudio_key`）。端点**完全探不通**时仍会自动退离线档（§5.397.12）。
+- `-vlm auto` / `-fusion on` 两档仍在代码里（默认值未改），但**当前机器不再用**：
+  VLM 档在 open_GT 上是 **74.39 local / 73.27 official**（`work/_o13ne4`，13 张 ≈210 s，
+  16.2 s/张），比离线档高约 2.4 分 —— 那是需要 GPU 端点时的历史读数，不再复跑。
+- `-vlm-pin` 自 §5.398 起默认 **off**（§5.404 起 open_GT 上翻正又改 **on**，见 §3 开关表）。
+- 端点在跑但答不出结果的旧读数 **89.20** 已作废（那是「没带 key」的 401，不是端点坏）。
+  端点**完全探不通**时管线仍会自动退离线档（§5.397.12），所以 `-vlm auto` 不会跑挂。
 
 **报数字时先报尺子**：交付口径一律用 `tools\eval\fast.py --engine protocol4`
 （`bbox_tol=20 / pin_tol=5 / line_tol=5 / corners / net_soft / coord_center` +

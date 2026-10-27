@@ -29803,3 +29803,38 @@ python -X utf8 work\_mono13.py o13ne4 1 2 3 4 5 6 7 8 9 10 11 12 13        # 臂
 python -X utf8 work\_namecost.py o13left                                   # 臂二官方口径 comp F1
 python -X utf8 work\_gtofficialwhy.py o13ne4 1 11 12 13                    # 缺口归因
 ```
+
+## 5.417 交付姿势改判：只用 CPU、只报离线档（2026-10 用户约束）
+
+### 5.417.1 约束
+用户在本轮明确要求「从现在开始不要使用 GPU」。本机 VLM 端点由 LM Studio 服务
+（`127.0.0.1:1234`，`qwen3.5-9b`），推理也吃显存，因此一并停用。此后：
+
+- 所有评测 / 自检：`$env:CUDA_VISIBLE_DEVICES=''` + `-device cpu`；
+- VLM 档只在「端点可用且允许用 GPU」时才跑，当前不再复跑；
+- 对外只报离线档读数。
+
+### 5.417.2 交付路径复核（open_GT-1020，13 张，CPU-only）
+```
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+    -output work\_delivoff -offline -device cpu -cases "1,2,...,13"
+```
+| 口径 | total | comp | pin | netH | line |
+|---|---:|---:|---:|---:|---:|
+| local | **71.97** | 0.8092 | 0.6003 | 0.8329 | 0.3536 |
+| strict（自动名豁免） | 71.61 | 0.7972 | 同 | 同 | 同 |
+| official（电源符号也比 value） | **70.95** | 0.7750 | 同 | 同 | 同 |
+
+- 墙钟 **105.5 s = 8.12 s/张**（4 路扇出，纯 CPU）。
+- 与评测档 `work/_o13ne2` 的 13 份 `_Pred.json` **13/13 MD5 全等** ⇒ 交付路径与评测路径
+  产出同一份结果，可逐字节复现。
+- 契约自检 `work/_smoke.py`（6 族 30 案，`--no-vlm`，CPU-only）**30/30 全通过**
+  （Altium 6/6、Datasheet 6/6、KiCad 4/4、jlc 6/6、kicad 2/2、other 6/6）。
+
+### 5.417.3 订正
+`docs/HANDOFF.md` §1 表首行改成离线档读数（71.97 / 官方 70.95），VLM 档 74.31 降为历史行；
+同一行的分轴数字此前误抄了 §5.399 时代的 `pin 0.5281 / line 0.3462`，按本次实测改为
+`pin 0.6003 / line 0.3536`（用权重 0.30/0.25/0.35/0.10 回算得 71.98，与总分一致；
+旧值回算只有 70.19，本身就自相矛盾）。`submission/run.py` 的 `-vlm` 默认值**保持 `auto`**：
+正式提交侧按 Q&A A49 使用 qwen3.8 API，默认值不该为本地资源限制而降级。
