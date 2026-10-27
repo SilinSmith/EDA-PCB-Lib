@@ -30525,3 +30525,84 @@ python -X utf8 work\_sidseq.py                 # GT 同侧号码单调性普查
 ⇒ 中位偏移接近 0（没有整体平移这类坐标 bug），但**塌方页能配上的网只有 3~9 个**（case1 有 26 个），
 这是「顶点集合本来就不同」的问题，不是几何平移；也就是说 `netH` 的损失仍然回到引脚键上。
 
+## 5.428 名字识别的地板在哪：帧预算不足，不是库、不是框
+
+### 5.428.1 约束与问题
+
+用户明确要求（m13811）：**元件名与引脚名必须靠图像识别读准，禁止用元器件库回填**——因为真实
+输入里会出现库里没有的器件。这一节把「读不准」这件事定位到具体环节，并交代哪些是机制错、
+哪些是识别器的物理上限。
+
+先摆一个反证：库这条路本来也走不通。`work/_libcover13.py` 用我方型号查
+`data/BoxICLibrary_200cases.json`（360 个键），13 张里 **43 个缺脚对应 0 个命中**
+（`SY6912AFCC` / `TP4333` / `RT7272BGSP` / `TPEC8O3` 都不在库里）。
+
+### 5.428.2 两处**机制**错（已修，见 §5.427）
+
+读到了却用不上，与识别器无关：
+
+1. `fit_partname('TP4333')` 返回 **0.0**——`expect_kind` 给出 kind=`designator` 且
+   `DESIGNATOR_RE = ^[A-Za-z]{1,4}\d{1,4}[A-Za-z]?$` 命中（`TP`+`4333`），型号框直接不是候选，
+   只能用借读的 `TPA333`。修法 `MODEL_LIKE_RE = ^[A-Za-z]{2,}\d{3,}[A-Za-z]?$`。
+2. 截断读数比完整读数更「像」——`TP404M`（缺 `54-MS`）在 74×10 的框里被选中，
+   而同一框的 `TP4054-MS` 是借读。修法 `READ_FILL`：`框宽/字数` 大于 `0.8×框高` 的串按
+   `READ_FILL_PEN` 扣分（普查 n=429 的 p50 1.00 / p99 1.62）。
+
+两处合起来 +0.25（75.20 → 75.45）。
+
+### 5.428.3 帧预算取证：细字形落在两帧之间
+
+以 case12 `U1`（`SY6912AFCC`）的 `TIM` 框 `[679,273,710,287]`（图像 y-down）为例，
+`work/_framechar.py <case> x0 y0 x1 y1` 直接调 `Recognizer.logits_many` 并打印逐帧 argmax：
+
+```
+crop (677,271,712,289) (18,35)  runs [(1,11),(13,16),(18,31)]
+T = 5   frame argmax: T__MM
+beam: TM 0.511 | TMM | TMMM | TWM | TTM
+```
+
+`textrec/dataset.py::crop_gray` 把裁片等高缩放到 `IMG_H=32`（`MAX_W=384` 不是约束），
+所以这块 35×18 的裁片变成 62px 宽；模型的时步是 `宽 // WIDTH_REDUCTION(8)` ⇒ **T≈7 帧**，
+而 `I` 只有 3px 宽 ⇒ 约 **0.34 帧**，没有一帧能为它发射。这解释了全部同类残差
+（`CEL→CE`、`LX→L`、`GL0603UG01→G70603uG01`）。
+
+配套三条反证（都说明「不是框、不是权重」）：
+
+| 实验 | 探针 | 结果 |
+|---|---|---|
+| 换 7 个识别权重 | `work/_ckptcmp2.py` | `textrec_best/ft3/ft5/mine1/mine2/mine3/official_pool` **全部**读 `TM`（0.72~0.999） |
+| 9 档补白重读 | `work/_padscan.py` | `TM`(0,1,2,4,6) / `TM4`(8) / `IM4`(12) / `1IM`(16) / `14`(24)：只会引入 `T→1` |
+| 逐字形单读 | `work/_glyphread.py` | 段宽 `[10,3,13]` ⇒ `T`(0.908) / `4`(0.164) / `M`(0.460) |
+| 横向拉伸后再读 | `work/_stretch.py` | fx=1.5/2.0 能吐出 `TIN1`/`TII1` 但置信度塌到 0.00（比例失真） |
+
+### 5.428.4 推理侧两个开关判否
+
+`textrec/config.py` 里有两条「小字专用」的推理开关，在 open_GT 13 张上都是负的：
+
+| 开关 | local | 差 |
+|---|---:|---:|
+| 基线（§5.427 定案 `_o13d427`） | **75.45** | — |
+| `TEXTREC_SMALL_UP=2`（裁片先 CUBIC 放大再归一） | 75.21 | −0.24 |
+| `TEXTREC_INK_YNORM=1`（垂直范围对齐到墨迹） | 61.96 | −13.49 |
+
+### 5.428.5 结论
+
+1. 名字的残差**不是**「没检出」——框就在那儿（`work/_textsIn.py` 能列出来），也不是「框被裁小」——
+   放大/补白都无解；是**时步分辨率**（宽/8）容不下 3px 宽的竖笔画。
+2. 现有能做到的是把「读到的完整串」用在正确的位置（§5.427 的两处机制），以及在字形段数
+   与读数长度不符时按 `LENFIX`（精确 CTC）在高低置信度之间做取舍（默认 `MARGIN=3.0`，
+   单页读数中性）。
+3. 要再往上走只能在识别器内部动手（提高水平分辨率 / 多尺度推理 / 重训），属于模型训练范畴，
+   不在这套管线里。
+
+### 5.428.6 复现
+
+```powershell
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+$env:TEXTREC_SMALL_UP='2'   # 或 TEXTREC_INK_YNORM='1'
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+  -output work\_o13su2 -offline -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
+python -X utf8 work\_percase.py o13su2        # 需先拷 *_Pred.json 到 work\_fast_out_o13su2
+python -X utf8 work\_framechar.py 12 679 273 710 287     # 帧预算取证
+python -X utf8 work\_glyphread.py 12 679 273 710 287     # 逐字形单读
+```
