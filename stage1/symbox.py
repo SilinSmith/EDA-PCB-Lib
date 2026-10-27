@@ -37,6 +37,17 @@ SYM_TYPES = frozenset((
     "v", "vcc", "vdd", "vbus_in", "net_input", "net_output", "net_short",
     "net_bidirection",
 ))
+# ★ 被动件/二极管也一样「内腔 ≠ 整颗」。逐类合格率实测（`work/_bboxall.py o13sb`，13 张）：
+#   `led 29%→71%`、`l 80%→90%`、`r 98%→100%`、`c 99%→99%`。
+#   但整轮 A/B 不以「合格率」为准、只认总分：
+#   `r,c,l,d,led` 77.02 ≡ 只符号 77.02 > `r,c,l` 76.95，`led,d` 77.01/77.05（两个方向各跑一次），
+#   官方口径 75.72（带 `d,led`）< 75.79（只符号）⇒ **默认关**（`STAGE1_SYM_BOX_EXTRA=''`）。
+#   把 `r` 的框拉长会改 `STAGE2_PIN_LEG_FILL_TARGET` 的证据样本，case1 反而掉 1.9 分。
+#   IC/大框/开关/测试点任何时候都不动（它们本来就整颗）。
+SYM_EXTRA = frozenset(
+    t.strip() for t in os.environ.get("STAGE1_SYM_BOX_EXTRA", "").split(",")
+    if t.strip()
+)
 
 
 def _red_cc(bgr):
@@ -56,7 +67,7 @@ def grow(bgr, comps):
     H, W = bgr.shape[:2]
     for c in comps:
         _ct = str(c.get("type") or "").strip().lower()
-        if _ct not in SYM_TYPES and not _ct.startswith("gnd"):
+        if _ct not in SYM_TYPES and not _ct.startswith("gnd") and _ct not in SYM_EXTRA:
             continue
         bb = c.get("bbox_img")
         if not bb or len(bb) != 4:
