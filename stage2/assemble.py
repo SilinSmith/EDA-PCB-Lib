@@ -225,6 +225,9 @@ BOX_PIN_PARTIAL = env_on("STAGE2_BOX_PIN_PARTIAL", "1")
 #   所以「这一侧只有一格没读到号、其余都读到」时，缺的号是集合差而不是猜测。
 #   见 `build_doc` 里 `raw` 之后的补全块。
 PINNUM_SIDE = env_on("STAGE2_PINNUM_SIDE", "1")
+# ★ `STAGE2_PIN_DUPNUM`（默认 **1**，§5.430）：同一颗元件上两个槽读到同一个引脚号时，
+#   保留「名字也读到了」的那个槽（原来按 stage1 候选顺序，跟谁是那根脚无关）。
+PIN_DUPNUM = env_on("STAGE2_PIN_DUPNUM", "1")
 # ★ `STAGE2_PINNUM_SEQ`（默认 **1**）：同侧号码补全的加强版 —— 一侧的号是**一段连续整数、
 #   且沿该侧槽位顺序单调**（`open_GT` 普查：28 条多脚侧里 21 条严格单调连号，12 递减 / 9 递增）。
 #   所以「窗口 + 方向」只要和已读到的号一致，两格以上的缺号也能定位（原版只处理恰好缺一格）。
@@ -2793,7 +2796,18 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 # 其余用位置号补，并避开已用掉的号（保证键不撞）。
                 used, tmp = set(), list(nums)
                 kept = [False] * len(tmp)
-                for i, n in enumerate(tmp):
+                # ★ `STAGE2_PIN_DUPNUM`（默认 1）：同一颗元件上**两个槽读到同一个号**时，
+                #   谁保留这个号？原来按槽序（第一个），但槽序只是 stage1 的候选顺序，
+                #   跟「哪个槽才是这根脚」无关。改成**名字读到了的优先**（其次名字更长）。
+                #   `open_GT` 实测：43 根「GT 有、我们没发」的 IC 脚里 11 根是这一族
+                #   （`case13 U1 pin_7 RLIM`：真槽读到 `RLM`、假槽只读到号 `7`，按槽序
+                #   假槽抢走键、真槽被位置补号 ⇒ 两边都算错）。
+                _ord = list(range(len(tmp)))
+                if PIN_DUPNUM:
+                    _ord.sort(key=lambda _i: (not bool(raw[_i]["nm"]),
+                                              -len(raw[_i]["nm"]), _i))
+                for i in _ord:
+                    n = tmp[i]
                     v = int(n) if (n and n.isdigit()) else 0
                     if 1 <= v <= 999 and v not in used:
                         used.add(v)
@@ -2951,7 +2965,21 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             pk = "pin_%s" % num
             base = pk
             while pk in group:
+                # ★ `STAGE2_PIN_DUPNUM`（默认 1）：同一颗元件上**号重复**时，后到的槽
+                #   不要改名成 `pin_7_2`（那不是合法脚号 = 纯 fp，还把真脚挤成 fn）。
+                #   `open_GT` 13 张实测：43 根「GT 有、我们没发」的 IC 脚里有 **11 根**
+                #   属于这一族（`case13 U1 pin_7 RLIM` 的真槽被另一个读成 7 的槽抢了键）。
+                #   后到的直接不发；它仍可能是对的那个，但「发一个错号」在这个判据下
+                #   （`pin_f1` 号不对 = fp+fn）严格劣于不发。
+                if PIN_DUPNUM:
+                    if os.environ.get("STAGE2_DBG_PINS"):
+                        print("[dbg dupnum] cid=%s num=%s nm=%r 已有同号槽 -> 不发"
+                              % (cid, num, r["nm"]))
+                    pk = ""
+                    break
                 pk = base + "_%d" % (len(group) + 1)
+            if not pk:
+                continue
             _jx, _jy = float(p[0]), H - float(p[1])
             _lt = _leg_target
             if ctype == "box" and _leg_fill_on_page and len(bbox) >= 4:

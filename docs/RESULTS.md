@@ -30708,3 +30708,83 @@ python -X utf8 work\_usbslots.py o13d427 11                  # 连接器槽位
 四个 oracle 的结论仍然成立（键 +0.05 / 名 0.72 / 点 1.38 / 只换腿长 −1.88），但要按本条更正
 来读：能真正拿到的只有「把该发的脚发出去」这一块，而它的根因要么是 OCR 没读出号/名
 （`case12` 的 `TIM`、`case11` 的字母数字号），要么是 stage1 没给出那个槽位（`case5 U1 pin_2`）。
+
+## 5.430 引脚号撞号时按「名字也读到了」定归属（open_GT 13 张 75.45 → 76.23）
+
+### 5.430.1 病：一根脚的号读到两次，谁拿这个键由 stage1 的候选顺序决定
+
+`build_doc` 的引脚闸门（`stage2/assemble.py`）在 `not ok` 时走 `BOX_PIN_PARTIAL` 分支：逐槽看
+「读出来的号是不是 1..999 的整数、有没有跟别人撞」，撞号的那个被清空号、稍后用**位置补位号**
+（`nxt` 递增）填。原来的保留顺序是 `for i, n in enumerate(tmp)` —— **stage1 的候选顺序**，
+跟「哪个槽才是这根脚」毫无关系。
+
+逐根核对 43 根「GT 有、我们没发」的 IC 脚（新探针 `work/_absent43.py`，按 GT 脚点到最近槽的
+距离分档）后，其中 **11 根**属于这一族，典型是 `case13 U1 pin_7 RLIM`：
+
+```
+真槽  num='7'  name='RLM'   （名字差一个字母，键是对的就会命中）
+假槽  num='7'  name=''      （只读到号）
+```
+
+按槽序假槽抢走 `pin_7`，真槽被位置补号成 `pin_9` 之类 ⇒ 两边都错（GT 的 `pin_7` 记 fn，
+我们的 `pin_9` 记 fp）。
+
+### 5.430.2 做法：`STAGE2_PIN_DUPNUM`（默认 1）
+
+冲突裁决改成**「名字读到了的优先，其次名字更长」**：
+
+```python
+_ord = list(range(len(tmp)))
+if PIN_DUPNUM:
+    _ord.sort(key=lambda _i: (not bool(raw[_i]["nm"]), -len(raw[_i]["nm"]), _i))
+for i in _ord:
+    ...
+```
+
+同号多槽时，带名字的那个先拿号；其余照旧清空、由位置补位号兜住。另外 `while pk in group`
+（键真撞上时的 `pin_7_2` 兜底）在 `PIN_DUPNUM` 下改成**直接不发**——`pin_7_2` 不是合法脚号，
+纯 fp 还把真脚挤成 fn，官方判据下严格劣于不发。
+
+### 5.430.3 读数（open_GT-1020 13 张，只 CPU、离线、确定性）
+
+| 臂 | local | official | comp | pin | netH | line |
+|---|---:|---:|---:|---:|---:|---:|
+| §5.427 基线（`work/_o13d427`） | 75.45 | 74.22 | 0.8228 | 0.7168 | 0.8340 | 0.3617 |
+| **撞号裁决（`work/_o13dn`，现默认）** | **76.23** | **75.00** | 0.8228 | **0.7377** | 0.8398 | 0.3664 |
+
+逐案（Δ 相对基线）：`12 +5.64`（pin 0.625 → **0.824**）、`4 +3.08`（0.783 → 0.833）、
+`8 +1.90`（0.733 → 0.800）、`13 +0.25`、`1 −0.51`、`5 −0.29`，其余 7 张逐位不变。
+「GT 有、我们没发」的 IC 脚 **43 → 39**（`work/_absent43.py` 重跑：`dupnum 11 → 9`、
+`noslot4 10 → 9`、`noslot 6 → 5`）。
+
+### 5.430.4 三条判否（都实测过，代码已回退）
+
+1. **同一引脚的重复触点合并**（`STAGE2_PIN_PT_MERGE`）：欧氏 6px 合并 75.39、3px 73.84；
+   改成分侧 + 沿边坐标聚合 **73.9 左右**（case9 pin 0.667 → 0.500）。原因：槽一减少，
+   网的顶点成员跟着少（`num_of[(cid, idx)]` 是网的引脚来源），netH 掉得比 pin 涨得多。
+2. **同号前置清空 + 唯一空洞补号**：`_o13dn2` 与 `_o13dn` **逐位相同**（补号条件
+   `len(raw) >= 3` 且「恰好一格缺号」在这些页上不成立），已删除该块（避免留死代码）。
+3. **连接器字母数字号放行**（§5.429）：−0.22，号对名错是 fp+fn 双罚。
+
+### 5.430.5 复现
+
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+  -output work\_o13dn -offline -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
+New-Item -ItemType Directory -Force work\_fast_out_o13dn\final_results
+Copy-Item work\_o13dn\final_results\*_Pred.json work\_fast_out_o13dn\final_results\
+python -X utf8 work\_percase.py o13dn          # local 76.23
+python -X utf8 work\_strictpow.py o13dn 1 2 3 4 5 6 7 8 9 10 11 12 13   # official 75.00
+python -X utf8 work\_absent43.py work\_o13dn   # 43 -> 39 根缺脚，按病根分档
+```
+
+回滚：`$env:STAGE2_PIN_DUPNUM='0'`（回到 75.45）。
+
+### 5.430.6 残差（39 根）现在长什么样
+
+`{'noslot': 5, 'dupnum': 9, 'unnamed': 4, 'numonly': 6, 'noslot4': 9, 'name_ok': 6}`：
+`noslot/noslot4` 是 stage1 压根没给槽或给的位置差 12~45px（检出面）；
+`numonly` 是号读到了、名字没读到（`BOX_PIN_NEED_NAME` 的迟到闸门宁可丢，因为号当名 = fp+fn）；
+`name_ok` 是名字读到了、号没读到；剩下的 `dupnum` 是号读错（名字对）。
