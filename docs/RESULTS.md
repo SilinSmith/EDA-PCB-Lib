@@ -30038,3 +30038,88 @@ python -X utf8 work\_valsplit.py o13lagt5           # miss 8 / bad 13
 ```
 回滚：`STAGE2_PIN_LEG_TARGET_AUTO=0`（回常数 19）、`STAGE2_NAME_PART_TYPES=d`、
 `STAGE2_POWER_VALUE_FROM_PIN=0`。
+
+## 5.422 塌方页的四个「看起来能修」的点逐个结账
+
+§5.421 之后主尺 open_GT-1020 = **74.96 local / 73.94 official**（`work/_o13lagt5`），
+五张弱页仍然把均值往下拽：`1 48.11 / 11 45.53 / 12 49.56 / 13 56.82`。用户点名要
+「把 LED 型号文字没被 OCR 读到这件事解决掉，以及其余问题」。逐个结账如下。
+
+### 5.422.1 LED/二极管型号：文字**检出了、也读了**，是 CRNN 读不准
+
+`work/_ledprobe.py` + `work/_ledtext2.py`（后者用 `stage2.text.TextEngine` 现场重读）：
+
+- open_GT 13 张里 `type in (led, d)` 的 GT 元件 **16 个**，`Name` 分布 =
+  **型号 7**（`NCD0603Y2`、`GL0603UG01`、`NCD0805R1`）/ **位号 5**（`LED1..LED4`）/
+  **空 1**（case10）/ 其余是 `d` 的型号（`SS34`、`1N4007`）。
+- case4 `LED1`（GT `NCD0603Y2`，bbox `[964,420,1006,471]`）旁边确实有文本框
+  `[904,606,982,616]`（78×10），五个角色读出来是
+  `designator 'NCD8032'(0.72)` / `value 'NCD6032'(0.77)` / `net_label 'NCD6032'(0.83)`。
+- `work/_growled.py` 把它**左扩 0~8px、右扩 0~32px** 共 22 种裁法重读：
+  最好也只到 `NCD6032` / `NCD0632`，永远读不出 `NCD0603Y2` 的 `Y`。
+  case3/7/10 的 `1N4007` 更差（`WMeO7`、`21Me`）。⇒ **不是管线没接，是识别器到顶了**。
+- 于是「`Name` 用型号」和「`Name` 用位号」之间只能二选一。用位号能命中 5 个（case1 的
+  `LED4`、case10、case12 的 `LED1`…），用型号命中 0 个 ⇒ **现行为（位号优先，只有
+  `partname` 长得像型号且命中才覆盖）已经是这套识别器下的最优**，`STAGE2_NAME_LED_MODEL`
+  保留、默认开、读数 Δ0。
+- 顺带的类型混淆（`led` 被判成 `d`）也在这一族：case1 `LED1`→`D2`、case12 `LED1`→`D4`，
+  是 YOLO 类别 + 位号前缀共同作用，改不了单个开关。
+
+### 5.422.2 位号绑错一颗：oracle 上界只有 +0.27 总分，且没有无 GT 的判据
+
+`work/_nameoracle3.py <tag> [case…]`（把我们的元件键改成「同类型、中心最近的那个 GT 元件」
+的键，pins 与 hyperGraph 同步改，用交付口径 `EvalConfig` 重打分）：
+
+| case | 基线 | 位号全对 | 改名数 | comp |
+|---|---:|---:|---:|---|
+| 1 | 48.11 | **51.65** | 21 | 0.333→0.404 |
+| 11 | 45.53 | 45.53 | 4 | 0.538→0.538 |
+| 12 | 49.56 | **51.91** | 10 | 0.429→0.450 |
+| 13 | 56.82 | **58.40** | 4 | 0.410→0.737→0.800(pin) |
+| 四张均值 | 50.01 | 51.87 | 39 | |
+
+⇒ **把四张弱页的位号全部绑对，13 张均值只从 74.96 涨到 ~75.23（+0.27）**；case1 即使
+位号全对，comp 也只到 0.404（还有 39 个 fn / 37 个 fp 是「根本没检出」与「多检出」）。
+§5.416 已经量过两条「位号归左侧符号」的先验（结果 −0.045 comp / −0.011 comp），
+这次的上界又这么低，**这条轴结账：不再投入**。
+
+### 5.422.3 两个「后处理能不能白捡」的实测：管线里都归零
+
+| 试验 | 离线（只改 Pred 的 bbox/list） | 真管线（`stage2/boxfit.py` 落在 `build_doc` 之前） |
+|---|---:|---:|
+| 小框贴到相邻符号墨迹（`work/_inkbox2.py`） | 74.96 → **75.27**（case1 +1.58、case13 +3.08、case6 +0.78、case12 **−1.43**） | 74.96 → **74.96**（case1 +1.46、case13 **−1.53** 抵消） |
+| 同类型近重合件去重（`work/_dedup13.py`） | 74.96 → **75.09**（只 case12，−2 fp） | `STAGE2_COMP_DEDUP_TOL=20` 仍 **74.96** |
+
+差别的原因：bbox 一改，`STAGE2_PIN_LEG_FILL` 的补齐点、`_leg_target` 的证据样本、
+`STAGE2_EDGE_SPLIT_PIN_IC` 的切点都会跟着动 ⇒ **离线只改框会高估**；真管线里两处收益
+互相抵消。代码已回退，工作树干净（`boxfit.py` 删除、`stage2/run.py` 还原）。
+
+### 5.422.4 值串大小写：我们已经和 GT 同约定，只有 2 个反例
+
+`work/_valcase2.py`：GT 的 value 后缀分布 `nF 59 / K 41 / uF 16 / k 14 / uH 11 / uf 4 / nf 1`，
+我们 `nF 58 / K 42 / uF 15 / k 12 / uH 9 / u 2 / n 2`；逐件比只有 **7 条不同**，其中
+`1 R1/R15` 是 **GT `1k` 而我们 `1K`**（另有 5 条是 `22uf→22u`、`2.7nf→27n` 的裁框截断）。
+既然 GT 自己 `K`/`k` 混用（41 : 14），把它统一成任何一边都会打破 41 条 ⇒ **不归一化**。
+
+### 5.422.5 结论
+
+这一轮「用户点名的四个点」全部量过：LED 型号是识别器上限（不是管线问题）、位号轴
+上界 +0.27 且无无 GT 判据、两个后处理在真管线里归零、值大小写已是同约定。
+主尺保持 **74.96 / 73.94**，没有为 +0.1 量级的收益引入会互相抵消的复杂度。
+
+### 5.422.6 复现命令
+
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_ledprobe.py                        # LED/二极管型号普查
+python -X utf8 work\_ledtext2.py 4                      # 现场读 case4 LED 附近的文本框
+python -X utf8 work\_growled.py 4 904 606 982 616       # 22 种裁法重读型号文字
+python -X utf8 work\_nameoracle3.py o13lagt5 1 11 12 13 # 位号全对的上界
+python -X utf8 work\_inkbox2.py o13lagt5                # 小框贴墨迹（离线）
+python -X utf8 work\_dedup13.py o13lagt5                # 近重合件去重（离线）
+python -X utf8 work\_valcase2.py o13lagt5               # 值串大小写普查
+```
+
+（`work/_dupcomp.py`、`work/_bftest.py`、`work/_crop2.py`、`work/_s1comps.py`、
+`work/_s1one.py` 是这一轮的取证小工具：重复件普查、`boxfit` 单测、局部放大裁图、
+stage1 元件框清单。）
