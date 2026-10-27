@@ -30677,3 +30677,34 @@ python -X utf8 work\_pinoracle4.py o13d427 --mode=legs       # 只换腿长（�
 python -X utf8 work\_pindelta.py o13d427                     # 点偏差分布
 python -X utf8 work\_usbslots.py o13d427 11                  # 连接器槽位
 ```
+
+### 5.429.5 更正：IC 引脚的点其实几乎全对（p50 = 1.4px），残差是「不发」与「重名配对」
+
+上一小节把 `p50 = 19.4px` 读成「同侧槽位错位」，那是**把被动件也算进去了**。按元件类型分开量
+（`work/_pindelta2.py <tag> [case…]`，只统计「键与名都对上」的脚）：
+
+```
+== ic  n=132   p50 = 1.4px  p75 2.6   p90 18.8   p95 30.2
+   <=5px: 116   5~10: 1   10~20: 5   >20: 10
+== other n=316 p50 = 20.2px p75 37.1  p90 59.5
+   <=5px: 0     10~20: 144   >20: 172
+```
+
+被动件的 19~70px 是「GT 把被动件的脚点画在导线末端」这一约定差异，而官方 `pin_f1` **只评
+`IC_TYPES`**，所以那 316 个与我们无关。IC 这一侧 116/132 都在 5px 内，点几乎是准的。
+
+把 IC 引脚残差按「点对/名对/有没有发」重新分（`work/_pinnamediff2.py <tag> [case…]`）：
+
+| 类别 | 数量 | 说明 |
+|---|---:|---|
+| 点 ≤5px 但名不对 | **6** | `case1 U1 pin_2 LED1←VIN`、`case1 USB2 pin_2 D-←VCC`、`case5 U3 pin_1 ADJ(GND)←ADIGN`、`case5 U3 pin_2 VOUT(TAB)←VIN`、`case7 U1 pin_2 IN←2B`、`case12 U1 pin_1 TIM←16` |
+| 名对但点 >5px | **26** | 其中 9 个是「名对、点远」的**重名配对**（`case8 U1 pin_1 NC d=177`、`pin_13 NCS d=67`、`case6 U4 pin_5 IN d=49`、`case5 U2 pin_2 VOUT d=40`、`case1 U2 pin_3 FB d=40`、`case9 U2 pin_1 BS d=34`）——同侧有多个同名脚时，号/名与槽位的配对是任意的，GT 那侧的顺序我们猜不中；其余是 `USB1 pin_1 GND←VBUS d=197`、`case10 U2 pin_3 Vin←C` 这类真错位 |
+| 完全没发 | **43** | `case5 U1 pin_2 VOUT`、`case6 U1/U3 pin_1 IN`、`case8 U1 pin_11 MOSI / pin_9 MOTION / pin_16 NC`、`case11 USB1 pin_A12/A9/A5/B5/B9`（字母数字号被纯数字闸门挡，见 5.429.1）、`case1 U2 pin_2 GND / pin_4 EN` 等 |
+
+⇒ 引脚轴现在的三个抽屉里，**「没发」43 根最大**，其次「名对点远」26 根（其中重名配对 9 根
+无法从图像唯一解），「名错」只有 6 根。也就是说 §5.429.2 里 `names +0.72` 的 oracle 高估了
+名字的可修空间——那个模式会把名换成「最近的 GT 脚的名」，等价于顺手把重名脚的配对也改对了。
+
+四个 oracle 的结论仍然成立（键 +0.05 / 名 0.72 / 点 1.38 / 只换腿长 −1.88），但要按本条更正
+来读：能真正拿到的只有「把该发的脚发出去」这一块，而它的根因要么是 OCR 没读出号/名
+（`case12` 的 `TIM`、`case11` 的字母数字号），要么是 stage1 没给出那个槽位（`case5 U1 pin_2`）。
