@@ -29895,3 +29895,45 @@ python -X utf8 work\_pinleg13.py delivoff 12 13
 python -X utf8 work\_wireleg13.py delivoff 1 2 ... 13
 python -X utf8 work\_pwrbbOracle13.py delivoff 1 2 ... 13
 ```
+
+## 5.419 腿长轴第四次：让几何桩用「量到的逐侧腿长」判否（71.97 → 67.22）
+
+### 5.419.1 动机
+§5.418 定位到塌方页的真因是「腿长差一截」：case12 `U1` 的 GT 腿长 **26**、case13 `U1` **29**，
+我们恒定 **19**（= `STAGE2_PIN_LEG_FILL_TARGET`），每根脚差 7~10px，直接掉出 `pin_tol=5`。
+新探针 `work/_leghist.py`（复刻 `_color_leg_box` 的取段，逐侧打直方图 + GT 腿长）显示：
+case12 `U1` 的符号色取段 **L n=15 med=24、R n=19 med=24**（真值 26）——**颜色尺子其实量得对**。
+
+### 5.419.2 病根：量到的腿长只进了 `pins_from_touch`，桩通道还在用常数
+`stage1/pins.py`：`_color_leg_box` 的结果经 `_leg_tuple` 进 `_leg`，只被 `pins_from_touch` 用；
+`_stub_points(bb, ink, out_dist, min_len)` 一律把桩重排到**常数 `_od`（12px）**。
+而这两页真正进 Pred 的脚正是桩产出的（`_assigned/12.json` 的候选全是 leg 12 一族）。
+
+### 5.419.3 改动与读数
+`_stub_points` 支持四元组（逐侧腿长），调用点改成
+`_sp = _stub_points(bb, _ink_s, (_leg if (STUB_LEG and _is_ic) else _od), ...)`，
+新常量 `STUB_LEG = os.environ.get("STAGE1_PIN_STUB_LEG", "1")`。
+
+| 臂 | 13 张均值 | 说明 |
+|---|---:|---|
+| 基线（桩固定 12 + stage2 补到 19） | **71.97** | `work/_delivoff` |
+| 桩用逐侧量到的腿长 | **67.22（−4.75）** | `work/_o13sleg`：case9 pin .667→**.000**、case13 .211→**.000**、case2 .800→.710、case4 .783→.455；只有 case5（.242→.514）、case7（.800→.933）变好 |
+
+⇒ **判否**，代码已 `git -C eda-pcb checkout -- stage1/pins.py` 回退，工作树干净。
+
+### 5.419.4 结论：腿长轴到此封口（四次尝试全负）
+| 尝试 | 读数 | 出处 |
+|---|---:|---|
+| `STAGE1_PIN_LEG_FILL`（在 stage1 补到 19） | 66.08 vs 66.26 | §5.400.3 |
+| `PIN_LEG_COLOR_DEGEN`（中位数退化时取长簇） | 72.12（+0.15，但 case3 −9.63） | §5.414 |
+| 脚点事后推到视线终点 | 62.78 | §5.418.3 |
+| 桩用逐侧量到的腿长 | **67.22** | 本节 |
+规律：**「量得准的页面本来就已经对了，量不准的页面照它挪反而更差」** —— 逐侧中位数在
+「框线同色」的页面里由框边像素主导，任何「取长簇/取端点/取量测值」的变体都会把一部分
+本来靠常数 19 落在容差内的脚推出 5px。**常数 19 是本数据集上的稳健最优**，不要再动。
+
+### 5.419.5 复现
+```
+python -X utf8 work\_leghist.py delivoff 12
+python -X utf8 work\_percase.py o13sleg
+```
