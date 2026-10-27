@@ -31122,3 +31122,73 @@ python -X utf8 work\_portoracle13.py o13dd 1 2 3 4 5 6 7 8 9 10 11 12 13     # 7
 $env:STAGE2_PINNUM_SEQ='1'; python -X utf8 eda-pcb\submission\run.py … -output work\_o13sq …
 python -X utf8 work\_percase.py o13sq 1 2 3 4 5 6 7 8 9 10 11 12 13          # mean 76.98
 ```
+
+## 5.436 收尾取证：残余 23 分卡在哪一层（2026-10，open_GT 13 张，纯 CPU 离线）
+
+### 5.436.1 读数保持（本轮不改代码）
+
+| 口径 | 值 | 产物 |
+|---|---:|---|
+| local（四轴加权） | **76.96** | `work/_o13pl` |
+| official（`评测要求.pdf` 名/值口径） | **75.73**（strict 76.40） | 同 |
+| 分轴 | comp 0.8294 / pin 0.7383 / netH 0.8411 / line 0.3616 | 同 |
+| 契约 | `work/_smoke.py` **30/30 全通过**；交付 Pred 的 E4/E5 **零违例** | `work/_contractchk.py` |
+
+### 5.436.2 元件轴实证一：case11 的两颗 LED 是叠画符号被连通域合成一颗
+
+```
+GT   LED1 led NCD0805R1  [1104.0, 374.0, 1145.0, 425.0]
+GT   LED2 led NCD0805R1  [1104.0, 354.0, 1145.0, 406.0]   ← 两框上下错开 20px、重叠 30px
+我方 c0008 led           [1119.3, 383.8, 1139.3, 397.8]   ← 只有一颗，正好落在两者中间
+```
+
+探针 `work/_lednear.py <tag> <case>`（GT 的 `led/d` 元件 vs 我方 stage1 检出就近三条）。
+⇒ 这不是阈值问题：一个连通域把两个叠画的符号连成一块，输出一颗居中的实例。
+
+### 5.436.3 元件轴实证二：case12 的 `LED1` 是框太小 + 类型判错
+
+```
+GT   LED1 led [979, 359, 1055, 406]          ← 76×47
+我方 c0004 d  [1028.6, 364.1, 1042.6, 384.1] ← 14×20，type=d，中心距 18.6px
+```
+
+`STAGE1_SYM_BOX_EXTRA=led`（§5.432.5）能把这一族的**合格率** 29%→71%，但整轮 official
+75.79→75.72 ⇒ 框的来源（实例检出）才是瓶颈，后处理扩张补不回来。
+
+### 5.436.4 已死的假设：假槽落错节距（`work/_griddrop.py`）
+
+`work/_griddrop.py <tag> [case…] [--tol=0.35]`：读交付 Pred，对每个 `box/ic` 元件按「离 bbox
+最近边」分侧、按沿边坐标排序、取相邻差**中位数**当节距，凡残差 > `tol·pitch` 的点判为假槽，
+摘掉该引脚与它在所有网里的顶点后重新打分（CFG 与 `_percase.py` 一致）。
+
+```
+13 张：dropped = 0，mean 76.96 → 76.96（逐案 Δ0）
+```
+
+原因（`work/_usbslots.py o13pl 12` 对照交付 Pred）：`case12 U1` 的 stage1 给了 **19 个槽**，
+但装配层最后只发 8 根、且点全在 26.5px 的规则节距上（`pin_1 640.6,478.0` … `pin_8 904.4,477.5`）
+⇒ 假槽在装配层已经被挡掉，节距过滤没有可摘的东西。
+
+`case12 U1 pin_9 GND` 之所以丢，是**号读重**：槽 14（名 `GND`）与槽 17（名 `STAT`）都读到 `6`，
+`STAGE2_PIN_DUPNUM` 按「名字读到了」保留其一，而 `9` 被两个假槽（名都空）占着 —— 号源本身错了，
+不是几何。
+
+### 5.436.5 残余空间与成本（GPU 资源就绪后的清单）
+
+| 方向 | 现状证据 | 预期收益 | 前置条件 |
+|---|---|---|---|
+| 识别器帧预算 | `TIM` 的 `I` 在 62px 裁片里只占 **0.34 个时步**（`IMG_H=32`、`WIDTH_REDUCTION=8`），7 个权重（`textrec_best`/`ft3`/`ft5`/`mine1..3`/`official_pool`）**一致**读成 `TM` | 名字侧 oracle **+0.72** | 提高输出分辨率/降低宽度降采样后**重训**（GPU） |
+| 符号实例切分 | §5.436.2 / .3：叠画 LED 合成一颗、大 LED 只框到中心 | case11/12 各 1~3 件元件 | 实例分割（训练或几何切开）—— GPU |
+| 引脚槽召回 | 40 根缺脚：`dupnum 9` / `noslot4 9`（12~45px 无槽）/ `numonly 6` / `name_ok 6` / `unnamed 4` / `noslot 6` | 点 oracle +1.38、名 oracle +0.72（注意名 oracle 含重名脚配对，会高估） | 前两类靠 OCR，后两类靠 stage1 引脚点召回 |
+| 端口检出 | 端口键 oracle **+0.18**，真做只有 **+0.06**，因为 case12 那页 GT 5 颗我们只发 3 颗 | +0.18 | 先补端口符号检出 |
+| 导线轴 | 6.38 丢分跨页均匀；GT 端点切分 oracle +2.08 却**无可用切点源**（结点圆点 42.5% 覆盖只换 +0.08、我方引脚点 −0.05、T 投影 0 候选）；`EDGE_MERGE=1` −0.86、T 接触焊网 −0.79、`EDGE_SNAP=20` −0.48 | 0 | 已封口，不再投入 |
+
+### 5.436.6 复现
+
+```powershell
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+python -X utf8 work\_lednear.py o13pl 11        # 叠画 LED 取证
+python -X utf8 work\_lednear.py o13pl 12        # LED1 框太小 + 类型判错
+python -X utf8 work\_griddrop.py o13pl --tol=0.35   # 假槽节距假设（dropped=0）
+python -X utf8 work\_contractchk.py o13pl       # E4/E5 契约复检（0 违例）
+```
