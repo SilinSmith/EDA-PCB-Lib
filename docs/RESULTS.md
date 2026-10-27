@@ -30276,3 +30276,75 @@ python -X utf8 work\_splitceil13b.py work\_o13lagt5 1 2 3 4 5 6 7 8 9 10 11 12 1
 python -X utf8 work\_junctions.py 1 3 5 11 12 13
 python -X utf8 work\_legside13.py work\_o13lagt5 1 2 3 4 5 6 7 8 9 10 11 12 13
 ```
+## 5.425 导线端点延长、网碎片化 oracle 与 case12 线轴归因（三条负结果）
+
+### 5.425.1 导线端点延长到引脚点：负
+
+`STAGE2_EDGE_SNAP` 就是「把边端点吸到**同一张网**自己的引脚点」（半径 = 该常量，默认 **0 = 关**，
+实现见 `stage2/assemble.py:3002` 附近）。既然 `work/_geombox.py` 量到「我方边到最近 GT 边的距离
+p50 就有 16.9~17.8px」，而 GT 的边端点正是落在引脚点上（引脚点在框外 19~26px），这条该有收益。
+实测（13 张离线、`work/_o13snp`）：
+
+| 臂 | 总分 | comp | pin | netH | line |
+|---|---:|---:|---:|---:|---:|
+| 默认（`EDGE_SNAP=0`） | **74.96** | 0.8092 | 0.7168 | 0.8329 | 0.3617 |
+| `STAGE2_EDGE_SNAP=20` | **74.48（−0.48）** | 0.8092 | 0.7168 | 0.8329 | 0.3540 |
+
+逐案：case1 −1.88、case3 −0.95、case10 −0.86、case13 −0.65，只有 case4 +0.17。line 分轴几乎不动
+（0.3617 → 0.3540）⇒ **端点差那 17px 不是问题所在**。原因：`_seg_distance(p, q, unordered)` 取的是
+**两个端点的最大距离**（`schematic_parser/metrics.py:270-279`），只把一个端点挪到位、另一个仍在原处，
+cost 还是超 `line_tol`；而两端都挪等于重画这条边，会连带把 `net_line` 的 fp 拉高。
+
+### 5.425.2 网碎片化 oracle：探针设计作废，不是结论
+
+`work/_netfrag13.py` 想量化「一个 GT 网被我们拆成几个网、并回去能拿多少」。做法是把我方网按
+「与某个 GT 网有顶点交集」分组并合并，再重打分。结果 netH 0.8329 → **0.5399（−10.25）**，
+13 张全负 —— **过并**：一个我方网可以同时与多个 GT 网相交，而 `net_pin_collapse_nonbox=True`
+又把被动件顶点折成通配，交集判据本身没有区分力。第一次跑还因为 Pred 的 `nets[*]` 里没有 `_refs`
+（`build_doc` 已 `pop`）导致 hyperGraph 拼成 `()`、**全页 0 分**。
+
+⇒ 该探针**不要当结论、也不要照抄**；要做这条轴必须用一对一匹配（`M.match_nets`）而不是交集分组。
+
+### 5.425.3 case12 线轴 0.000 的归因：是网构造，不是导线读错
+
+`work/_linecase.py`（配对网内逐对我方边到 GT 边的最小距离）+ `work/_geombox.py`（全页边包围盒）：
+
+| 页 | 我方边到最近 GT 边 | ≤5px |
+|---|---:|---:|
+| case12 | p50 75.8、p90 132.1 | **1 / 29** |
+| case1 | p50 17.8、p90 100.4 | 41 / 134 |
+| case3 | p50 16.9、p90 38.0 | 19 / 51 |
+
+但 `work/_netgeom.py`（每个网：自己的引脚点离自己的导线多远）显示 **我方网内部是自洽的**：
+case12 的 14 个网里 11 个「脚点到导线 ≤ 11px」，只有 3 个 >30px。既然我方引脚点就落在
+我方导线上、而引脚点与 GT 引脚点又都能配上，那么「配对网里导线相距 75px」只能是
+**我方网 ↔ GT 网的对应关系错了**（`net_soft` 允许只靠一个共同顶点配对，不带位置约束），
+也就是 **netH 那一轴的问题**（case12 netH 0.602），不是导线提取的问题。
+
+⇒ case12 的 line 0.000 是 netH 的下游后果；先把网构造修对才有意义，单独在 line 轴上做任何
+文章都会落空（这也是 §5.424 里所有切分尝试都 ≈0 的另一半解释）。
+
+### 5.425.4 复现
+
+```powershell
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+# 5.425.1
+$env:STAGE2_EDGE_SNAP='20'
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+  -output work\_o13snp -offline -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_percase.py o13snp
+# 5.425.3
+$env:PYTHONPATH='Y:\workspace\EDA\eda-pcb'
+python -X utf8 work\_geombox.py work\_o13lagt5 1 3 12
+python -X utf8 work\_netgeom.py work\_o13lagt5 12
+```
+
+### 5.425.5 结论
+
+三条都不改代码：端点延长 −0.48（判否）；碎片化 oracle 探针作废；case12 的线轴 0 是网构造的下游。
+至此 open_GT-1020 上「导线」这条轴的**信号源**已被逐一证伪：端点（§5.410 吸附 +0.06 /
+本次延长 −0.48）、端点种类（§5.424 五种切点源 ≤ +0.08）、切分机制（§5.411 跨网切分 −0.06）、
+合并机制（`EDGE_MERGE` 平、§5.425.2 碎片 oracle 无意义）—— 全部指向同一处：
+**网构造（哪些引脚属于同一个网）**，而它在 stage1 的走线追踪层。
+
