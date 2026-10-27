@@ -30606,3 +30606,74 @@ python -X utf8 work\_percase.py o13su2        # 需先拷 *_Pred.json 到 work\_
 python -X utf8 work\_framechar.py 12 679 273 710 287     # 帧预算取证
 python -X utf8 work\_glyphread.py 12 679 273 710 287     # 逐字形单读
 ```
+
+## 5.429 引脚轴的残差分解：键没问题、名值 0.72、点值 1.38——而点错是「槽位错位」
+
+### 5.429.1 字母数字引脚号（判否，−0.22）
+
+连接器的引脚号常是 `A12 / B5 / A9` 这种「字母+数字」，而 `stage2/assemble.py` 的 box 闸门要求
+`all(n.isdigit())`：一撞上字母，整颗元件的号作废、退化到「位置补位号」，读出来的 `A12`/`B5` 被丢。
+
+普查（`work/_usbslots.py <tag> <case>`）确认这些号**是读到了**的：
+
+```
+case11  c0001 USB1 (TPE-C-SPIOT3) pts=13 slots=13
+   slot 2  num='A12'  slot 8  num='A8'   slot 9  num='B5'
+   slot 11 num='A5'   slot 12 num='B12'  slot 7  num='7' name='EH'
+```
+
+放过它们（`STAGE2_PINNUM_ALNUM=1`，`_pinnum_ok()` 接受 `^[A-Za-z]{1,2}\d{1,3}$`）：
+
+| 臂 | local | case11 pin | case1 |
+|---|---:|---:|---:|
+| §5.427 定案 | **75.45** | 0.357 | 51.13 |
+| 字母数字号放行 | 75.23（−0.22） | **0.312** | 50.52 |
+
+**为什么放行反而更差**：官方 `pin_f1` 里「发出去但名不对」记 `fp+fn`（2 单位），「不发」只记 `fn`
+（1 单位）。case11 `USB1` 的 GT 是 `A5 CC1 / B5 CC2 / A9 VBUS / B12 GND`，我们读到的是
+`A5 VBUS / B5 VBUS / B12 '12'` —— 号对、名错，等于双罚。所以这条闸门的存在是对的，
+代码已 `git checkout` 回退。
+
+### 5.429.2 三个 oracle：把引脚残差拆成键/名/点
+
+`work/_pinoracle3.py <tag> [case…] --mode=keys|names|points`、`work/_pinoracle4.py … --mode=legs`：
+逐个把 GT 的某一种信息灌进我方 Pred（其余保持我方读数），再走同一个 `EvalConfig` 重打分。
+
+| 灌入 GT 的 | 含义 | pin F1 | 总分 | Δ |
+|---|---|---:|---:|---:|
+| 键（`keys`） | 键错占多少 | 0.7168 → 0.7189 | 75.50 | **+0.05** |
+| 名（`names`） | 名错占多少 | 0.7168 → 0.7455 | 76.17 | **+0.72** |
+| 点（`points`） | 点错占多少 | 0.7168 → 0.7720 | 76.83 | **+1.38** |
+| 只换腿长（`legs`，切向不动） | 点错是不是腿长 | 0.7168 → **0.6414** | 73.57 | **−1.88** |
+
+⇒ ①**键几乎全对**（+0.05）；②名错值 0.72；③点错值 1.38，但**不是腿长**（只改腿长会崩），
+所以是点的**位置在切向上错了**。
+
+### 5.429.3 点的错位长什么样
+
+`work/_pindelta.py <tag> [case…]`（键与名都对上的 448 根脚，我方点 vs GT 点）：
+
+```
+p50 = 19.4px   p75 = 21.5   p90 = 58.9   p99 = 72.2   max = 177.5
+<=5px: 116   5~10: 1   10~20: 149   >20: 182      dx==0: 316   dy==0: 167
+```
+
+`p50 = 19.4px` 且 `dx==0`/`dy==0` 各占大半 ⇒ 大量脚是**沿某一条轴整体挪了一格**（同侧相邻槽位
+的间距恰好 ~20px），不是噪声。`work/_pinboxcmp.py <tag> <case> [comp…]` 进一步确认两边
+bbox 与「点到框边距离」都一致（GT `U1` box `[667,373,878,531]` 的 9 根脚都是 26px，
+我们 `[667.6,372.7,877.4,529.7]` 是 25.2~27.0px）⇒ 差距不在尺寸口径上。
+
+**结论**：引脚轴下一步该做的是「**同侧槽位对齐**」（把读到的号/名按侧内排序与槽位一一配对，
+而不是逐槽找最近文字框），这与 §5.426 位号行内重绑是同一类错误；几何（腿长/框）这条路
+已经四次判否（§5.419），不要再碰。
+
+### 5.429.4 复现
+
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_pinoracle3.py o13d427 --mode=names      # 名 oracle
+python -X utf8 work\_pinoracle3.py o13d427 --mode=points     # 点 oracle
+python -X utf8 work\_pinoracle4.py o13d427 --mode=legs       # 只换腿长（负）
+python -X utf8 work\_pindelta.py o13d427                     # 点偏差分布
+python -X utf8 work\_usbslots.py o13d427 11                  # 连接器槽位
+```
