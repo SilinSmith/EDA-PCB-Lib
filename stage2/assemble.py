@@ -369,6 +369,16 @@ PIN_LEG_FILL_THRESH = float(os.environ.get("STAGE2_PIN_LEG_FILL_THRESH", "15"))
 # 「短腿页」，open_GT-1020 掉回 66.14；池子页的腿长同样落在 12（`work/_legstat.py`：池
 # median-of-medians 12.0 / open_GT 19.1，但两边的「全 12」页无法区分）⇒ 自检没找到可用判据。
 PIN_LEG_FILL_PAGE = float(os.environ.get("STAGE2_PIN_LEG_FILL_PAGE", "0"))
+# ★ 腿长目标改成**运行时按页判定**（`STAGE2_PIN_LEG_TARGET_AUTO`，默认 **1 = 开**）。
+#   旧做法是用常数 19（`PIN_LEG_FILL_TARGET`），那只对 `open_GT` 的「标准腿」成立：实测
+#   同一批页里 GT 腿长在 19 / 26 / 29 / 40 上都有（case12 `U1` = 26、case13 `U1` = 29），
+#   常数 19 让这些页整颗 IC 的脚都差 7~10px、直接掉出 `pin_tol=5`（case12/13 的 pin 归零）。
+#   判定办法：同一颗 IC 的同一侧引脚共享同一条腿长 ⇒ 取「每颗 IC 每侧最远引脚到框边的距离」，
+#   再取**本页中位数**当补齐目标（夹在 [12, 48]）。页内量不到（没有 IC / 全是贴框短桩）时
+#   回落到 `PIN_LEG_FILL_TARGET`。
+#   `STAGE2_PIN_LEG_TARGET_MAX` 是夹取上界（超过它的「最远引脚」多半是导线端点或邻件误入）。
+PIN_LEG_TARGET_AUTO = int(os.environ.get("STAGE2_PIN_LEG_TARGET_AUTO", "1") or 0)
+PIN_LEG_TARGET_MAX = float(os.environ.get("STAGE2_PIN_LEG_TARGET_MAX", "48"))
 # IC 脚被「迟到闸门」丢掉时，把「号 + 点」写进 `doc["_pin_stubs"]`
 # （`STAGE2_BOX_PIN_STUB_OUT`，默认 **0 = 关**）。
 # 动机：new2026（`open_GT`）里号印在框外、名印在框内，两槽配不上 ⇒ 整根脚被丢
@@ -380,9 +390,19 @@ BOX_PIN_STUB_OUT = int(os.environ.get("STAGE2_BOX_PIN_STUB_OUT", "1") or 0)
 # （`LED4`）⇒ 默认只给 `d`，`led` 用 `=d,led` 单独 A/B。
 NAME_PART_TYPES = frozenset(
     t.strip().lower()
-    for t in os.environ.get("STAGE2_NAME_PART_TYPES", "d").split(",")
+    for t in os.environ.get("STAGE2_NAME_PART_TYPES", "d,led").split(",")
     if t.strip()
 )
+# `led` 的 `Name` 在 open_GT 里一半是型号（`NCD0603Y2` / `GL0603UG01`）、一半是位号
+# （`LED4`）；只有「像型号」的文字才替换成 partname，否则保留位号
+# （`STAGE2_NAME_LED_MODEL`，默认 1）。
+NAME_LED_MODEL = env_on("STAGE2_NAME_LED_MODEL", "1")
+_MODEL_RE = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9][A-Za-z0-9\-\+/.]{3,}$")
+
+
+def looks_like_model(s):
+    """型号样式的文字：至少 4 字符、同时含字母和数字（`SS34` / `NCD0603Y2`）。"""
+    return bool(_MODEL_RE.match(str(s or "").strip()))
 # IC 型号名「补全」到元件库规范键（`STAGE2_NAME_SNAP`，**默认 0 = 关**）：OCR 常截掉型号尾部，
 # 库键是精确的。实测 `open_GT` 13 张上 `LibCtx.key_for` 对这批截断型号一个都命中不了
 # （`STMPS2141T`/`XB760A`/`MP2C12`/`TPA33` 全 None，见 `docs/RESULTS.md` §5.401.3）⇒ 零效果，
@@ -545,6 +565,8 @@ GND_TYPES = frozenset((
     "gnd", "gnda", "gndd", "agnd", "dgnd", "pgnd", "gnd_ref", "earth",
     "vss", "vssa"))
 _POWER_LABEL_RE = re.compile(r"^[+\-]?[A-Za-z0-9][A-Za-z0-9_.+\-]{0,15}$")
+# 读不到标签的 `v` 符号，用「同网 IC 脚名」兜底（`STAGE2_POWER_VALUE_FROM_PIN`，默认 1）。
+POWER_VALUE_FROM_PIN = env_on("STAGE2_POWER_VALUE_FROM_PIN", "1")
 
 # ★ `net_line` 边的最小长度闸门（`STAGE2_MIN_EDGE_LEN`，默认 20.0）。
 # 官方 `metrics._seg_distance` 要求**两个端点都**在 `line_tol = 5.0` 内才算命中，
@@ -2322,6 +2344,36 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         if os.environ.get("STAGE2_PIN_LEG_FILL_DBG"):
             print("[legfill] case=%s on=%d far=%d/%d" % (case_id, _leg_fill_on_page, _n_far, _n_tot))
 
+    # ★ 腿长目标的运行时判定（`STAGE2_PIN_LEG_TARGET_AUTO`，见模块顶层注释）：同侧引脚共享
+    #   同一腿长 ⇒ 每侧取最远引脚、页级取中位数。这样同一份代码在「腿长 19 的页」和「腿长
+    #   26/29 的页」上都能对上，不再依赖常数。
+    _leg_target = PIN_LEG_FILL_TARGET
+    if PIN_LEG_TARGET_AUTO and PIN_LEG_FILL:
+        # 证据 = 「已经超过补齐阈值的那批脚」：它们要么挂上了导线端点、要么本来就被画在
+        # 框外 19~40px，正好代表这一页的腿长约定。取它们的中位数当目标；一个都没有时
+        # 才回落到 `PIN_LEG_FILL_TARGET`。逐侧最远引脚那条先验不行（被导线端点/邻件误入
+        # 抬高：case2 的页级中位数 26 把已经对的 19px 脚推出去，pin 0.800→0.400）。
+        _ev = []
+        for _c2 in comps:
+            if str(_c2.get("type") or "").lower() not in ("box", "ic", "boxic"):
+                continue
+            _b2 = _c2.get("bbox_json") or _c2.get("bbox_img") or []
+            if len(_b2) < 4:
+                continue
+            _x0, _y0, _x1, _y1 = [float(v) for v in _b2[:4]]
+            for _p2 in (st1_pins.get(_c2["id"]) or []):
+                _px, _py = float(_p2[0]), H - float(_p2[1])
+                _dd = min(abs(_px - _x0), abs(_px - _x1), abs(_py - _y0), abs(_py - _y1))
+                if PIN_LEG_FILL_THRESH <= _dd < PIN_LEG_TARGET_MAX:
+                    _ev.append(_dd)
+        if _ev:
+            _ev.sort()
+            _med = _ev[len(_ev) // 2]
+            _leg_target = min(PIN_LEG_TARGET_MAX, max(12.0, round(_med)))
+        if os.environ.get("STAGE2_PIN_LEG_FILL_DBG"):
+            print("[legtarget] case=%s target=%.1f ev=%d %s"
+                  % (case_id, _leg_target, len(_ev), [round(v, 1) for v in _ev][:12]))
+
     components: Dict[str, dict] = {}
     pins: Dict[str, dict] = {}
     keymap: Dict[str, str] = {}
@@ -2506,6 +2558,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             #   `SS34` / `1N4007` / `NCD0603Y2`），有时是位号（`LED4`）—— 按页面约定不同。
             #   `NAME_PART_TYPES`（`STAGE2_NAME_PART_TYPES`，默认 `d`）决定哪些类型优先用型号。
             pn = (info.get("partname") or {}).get("text")
+            if pn and ctype == "led" and NAME_LED_MODEL and not looks_like_model(pn):
+                pn = None          # `LED4` 这类位号文字不该覆盖 Name
             if pn:
                 name = pn
         # ★ 型号名「补全」到元件库的规范键（`STAGE2_NAME_SNAP`）：OCR 常把型号尾部截掉
@@ -2804,6 +2858,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             while pk in group:
                 pk = base + "_%d" % (len(group) + 1)
             _jx, _jy = float(p[0]), H - float(p[1])
+            _lt = _leg_target
             if ctype == "box" and _leg_fill_on_page and len(bbox) >= 4:
                 # ★ IC 脚的「腿长补齐」（`STAGE2_PIN_LEG_FILL`）：new2026 的 GT 把脚点画在
                 #   框边外 19~20px（`open_GT` 实测 p10 19 / p50 20），没挂到导线端点的脚只有
@@ -2813,14 +2868,15 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 _bx0, _by0, _bx1, _by1 = [float(v) for v in bbox[:4]]
                 _dm = min(abs(_jx - _bx0), abs(_jx - _bx1), abs(_jy - _by0), abs(_jy - _by1))
                 if _dm < PIN_LEG_FILL_THRESH:
+                    _lt = _leg_target
                     if _dm == abs(_jx - _bx0):
-                        _jx = _bx0 - PIN_LEG_FILL_TARGET
+                        _jx = _bx0 - _lt
                     elif _dm == abs(_jx - _bx1):
-                        _jx = _bx1 + PIN_LEG_FILL_TARGET
+                        _jx = _bx1 + _lt
                     elif _dm == abs(_jy - _by0):
-                        _jy = _by0 - PIN_LEG_FILL_TARGET
+                        _jy = _by0 - _lt
                     else:
-                        _jy = _by1 + PIN_LEG_FILL_TARGET
+                        _jy = _by1 + _lt
             group[pk] = {"pinname": nm,
                          "point": {"x": round(_jx, 2), "y": round(_jy, 2)}}
             num_of[(cid, k)] = num
@@ -3536,6 +3592,44 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         _ns = sum(1 for _v in out_nets.values() if ".*" in (_v.get("hyperGraph") or ""))
         print("[dbg sym_vertex] case=%s final nets with star=%d/%d"
               % (case_id, _ns, len(out_nets)))
+    # ★ 电源符号 `value` 的兜底（`STAGE2_POWER_VALUE_FROM_PIN`，默认 1）：open_GT / 10GT 的
+    #   `v`（VCC 之类）符号 100% 带 `value`（`+5V` / `VCC` / `3.3V`），读不到标签的只有
+    #   个位数（case1 ∅413 / case2 ∅128 / case9 ∅774、∅174）。这些符号所在的网上往往接
+    #   着 IC 的电源脚，脚名本身就是标签 ⇒ 用「同网 IC 脚名」补，比留 `null` 贴近 GT。
+    if POWER_VALUE_FROM_PIN and POWER_VALUE:
+        for _ck, _cv in components.items():
+            if str(_cv.get("type") or "").strip().lower() not in POWER_TYPES:
+                continue
+            if _cv.get("value"):
+                continue
+            if str(_cv.get("type") or "").strip().lower() in GND_TYPES:
+                continue
+            _votes: Dict[str, int] = {}
+            for _nk, _nv in out_nets.items():
+                _hg = _nv.get("hyperGraph") or ""
+                if _ck + "." not in _hg:
+                    continue
+                for _r in _hg_refs(_hg):
+                    _c3, _k3 = _r
+                    if _c3 == _ck:
+                        continue
+                    # `_pidx` 的内层键是**内部 cid** 侧的引脚索引，这里拿到的是交付键
+                    # （`U3`），所以直接按 `pin_<号>` 在 `pins[交付键]` 里找。
+                    _pg3 = pins.get(_c3) or {}
+                    _pk3 = ("pin_" + _k3) if ("pin_" + _k3) in _pg3 else None
+                    _pn = ((_pg3.get(_pk3) or {}).get("pinname")
+                           if _pk3 else None)
+                    if not _pn:
+                        continue
+                    _s3 = str(_pn).strip()
+                    if _POWER_LABEL_RE.match(_s3) and _s3.upper() == _s3 and len(_s3) >= 2:
+                        _votes[_s3] = _votes.get(_s3, 0) + 1
+            if _votes:
+                _best = sorted(_votes.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+                _cv["value"] = _best
+                if os.environ.get("STAGE2_POWER_VALUE_DBG"):
+                    print("[dbg pwr_value] case=%s %s <- pin name %r"
+                          % (case_id, _ck, _best))
     _doc = {"case": case_id, "components": components, "pins": pins,
             "nets": out_nets, "__pin_index": _pidx}
     if _stub_out:

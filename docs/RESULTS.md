@@ -29980,3 +29980,61 @@ python -X utf8 work\_pwrpad13.py delivoff --d=8
 python -X utf8 work\_globalmerge13.py delivoff
 python -X utf8 work\_strictpow.py delivoff 1 2 3 4 5 6 7 8 9 10 11 12 13
 ```
+
+## 5.421 三条「按 open_GT 约定」的机制（腿长运行时判定转正：71.97 → **74.96**）
+
+### 5.421.1 决定
+用户定调：**不再采信官方 10 张（`10GT`）的证据，一切以 `open_GT-1020` 为分数指标**；常数腿长换成
+运行时按页判定；`Name` 与电源符号 `value` 也按 `open_GT` 的约定各自做出机制。
+所以本章三条都只按 `open_GT-1020`（13 张、`-offline -device cpu`）读数，10GT/池子的数字只作历史。
+
+### 5.421.2 腿长：常数 → 运行时按页判定（`STAGE2_PIN_LEG_TARGET_AUTO`，默认 1）
+旧默认是常数 `STAGE2_PIN_LEG_FILL_TARGET=19`。它在 `open_GT` 上也不是普适的：同一批页里
+GT 腿长 19 / 26 / 29 / 40 都有（case12 `U1`=26、case13 `U1`=29、case5 `U1`/`U2`=40），
+常数 19 让这些页整颗 IC 的脚差 7~21px，直接掉出 `pin_tol=5`（case12/13 的 pin 一度归零）。
+
+判据（`stage2/assemble.py::build_doc`，装配后、写脚点前）：**已经超过补齐阈值（15px）的那批 IC 脚**
+就是这一页的腿长证据 —— 它们要么挂到了导线端点、要么本来就被画在框外 19~40px。
+取这批判据的中位数当本页目标（夹在 `[12, 48]`：`STAGE2_PIN_LEG_TARGET_MAX`），
+一个都没有时才回落到常数 19。
+
+| 臂（13 张、离线、确定性） | 均值 | comp | pin | netH | line | 产物 |
+|---|---:|---:|---:|---:|---:|---|
+| 常数 19（旧默认） | 71.97 | 0.8092 | 0.6003 | 0.8329 | 0.3536 | `work/_delivoff` |
+| 逐侧「最远引脚」中位数 | 73.41 | 0.8092 | 0.6581 | 0.8329 | 0.3533 | `work/_o13lagt` |
+| 同上 + 逐件上界 | 72.34 | 0.8092 | 0.6165 | 0.8329 | 0.3533 | `work/_o13lagt4` |
+| 最密簇（±2px）众数 | 69.99 | 0.8092 | 0.5100 | 0.8329 | 0.3533 | `work/_o13lagt3` |
+| **证据中位数（现默认）** | **74.96** | 0.8092 | **0.7168** | 0.8329 | 0.3617 | `work/_o13lagt5` |
+
+逐案（现默认 vs 旧默认）：`5 74.18→84.14`（pin .242→**.606**）、`12 33.93→49.56`（pin .000→**.625**）、
+`13 43.47→56.82`（pin .211→**.737**）、`1 48.11→48.11`、`2 85.20→85.20`，**其余 9 张逐位不变**
+（逐侧最远引脚那一版会把 case2 的 pin 从 .800 打到 .400，因为页级中位数被导线端点抬高到 26）。
+官方口径（`_strictpow.py`）同步：70.95 → **73.94**。
+
+### 5.421.3 `Name`：型号只在「像型号」时使用（`STAGE2_NAME_LED_MODEL`，默认 1）
+`open_GT` 的 `Name` 约定：`box` 恒型号、`d` 恒型号（`SS34` / `1N4007`）、`led` **一半型号一半位号**
+（`NCD0603Y2` / `GL0603UG01` vs `LED4`）、`c`/`r`/`l`/`switch`/`pin` 恒位号、`gnd`/`v` 是自动名。
+把 `led` 加进 `STAGE2_NAME_PART_TYPES`（默认 `d,led`），但只有 `partname` **同时含字母和数字、
+≥4 字符**（`looks_like_model`）时才覆盖位号 —— 否则 `LED4` 这种位号文字会把 `Name` 弄丢。
+读数：**74.96 → 74.96（Δ0）**：`open_GT` 里 LED 的型号文字本身就没被 OCR 读出来（`partname` 空），
+机制在位但这条页面上没有可用输入。留着是因为它是「按约定该有」的那一半。
+
+### 5.421.4 电源符号 `value`：读不到标签时用「同网 IC 脚名」兜底（`STAGE2_POWER_VALUE_FROM_PIN`，默认 1）
+`open_GT` 的 `gnd`/`v` 100% 带 `value`（`GND` / `+5V` / `VCC` / `3.3V`）。§5.409 的标签补读之后仍有
+4 个 `v` 读不到（case1 `∅413`、case2 `∅128`、case9 `∅774`、`∅174`）。这些符号所在网上都挂着 IC 的
+电源脚（case2 `p017` 的网 = `(U3.2,p017.*)`、`U3.2` 脚名 `VCC`）⇒ 用同网脚名里「全大写、形如网名」
+的众数补上。
+读数：`miss 11 → 8`（`v` 4 → 1），`bad 10 → 13`（补的 3 个与 GT 不同：`VIN`/`VCC`/`+5V` 各错一处），
+**官方口径 73.94 → 73.94（Δ0）** —— 官方规则下「错值」与「空值（`null`）」同样不计分，所以这条
+不涨分，只是让字段更符合「必须有值」的书面要求。
+
+### 5.421.5 复现
+```
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT ^
+    -output work\_o13lagt5 -offline -device cpu -cases "1,2,...,13"
+python -X utf8 work\_percase.py o13lagt5            # 74.96
+python -X utf8 work\_strictpow.py o13lagt5 1 2 3 4 5 6 7 8 9 10 11 12 13   # 73.94
+python -X utf8 work\_valsplit.py o13lagt5           # miss 8 / bad 13
+```
+回滚：`STAGE2_PIN_LEG_TARGET_AUTO=0`（回常数 19）、`STAGE2_NAME_PART_TYPES=d`、
+`STAGE2_POWER_VALUE_FROM_PIN=0`。
