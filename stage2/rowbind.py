@@ -20,13 +20,50 @@ from typing import Dict, List, Optional
 
 from envflag import env_on
 
-ROW_BIND = env_on("STAGE2_ROW_BIND", "0")
+ROW_BIND = env_on("STAGE2_ROW_BIND", "1")
 ROW_TOL = 12.0          # 行内 y 中心容差
 ROW_MIN = 3             # 行内至少这么多元件才动手
 ROW_DROP_COST = 60.0    # 丢掉一个位号文字框的代价（相当于位移 60px）
 ROW_MAX_DROP = 1        # 行内最多容忍丢这么多个，再多就认为不是这条约定
 ROW_TYPES = frozenset(("r", "c", "l"))
 ROW_GAP_MAX = 70.0      # 一颗符号到它该认领的文字框之间的允许距离
+
+
+def rename(doc: dict, mapping: Dict[str, str]) -> dict:
+    """把交付文档里的位号键整体改名（`old → new`），连同 `pins` 与 `nets` 的顶点。
+
+    只在 `STAGE2_ROW_BIND` 生效时由 `fusion/run.py` 在 `_assemble` **之后**调用：
+    最终位号是 claim 解的产物，装配前改 `assigned` 会被 `doc.apply(…, sol, …)` 覆盖。
+    """
+    comps = doc.get("components") or {}
+    pins = doc.get("pins") or {}
+    moves = [(o, n) for o, n in mapping.items() if o in comps and o != n]
+    if not moves:
+        return doc
+    tmp = {}
+    for i, (old, new) in enumerate(moves):
+        tk = "\x00rb%d" % i
+        comps[tk] = comps.pop(old)
+        if old in pins:
+            pins[tk] = pins.pop(old)
+        tmp[tk] = new
+    for tk, new in tmp.items():
+        comps[new] = comps.pop(tk)
+        if tk in pins:
+            pins[new] = pins.pop(tk)
+    for v in (doc.get("nets") or {}).values():
+        hg = (v.get("hyperGraph") or "").strip()
+        if not (hg.startswith("(") and hg.endswith(")")):
+            continue
+        parts = []
+        for t in [x.strip() for x in hg[1:-1].split(",") if x.strip()]:
+            if "." in t:
+                a, b = t.rsplit(".", 1)
+                parts.append("%s.%s" % (mapping.get(a, a), b))
+            else:
+                parts.append(t)
+        v["hyperGraph"] = "(" + ",".join(parts) + ")"
+    return doc
 
 
 def _cx(b) -> float:

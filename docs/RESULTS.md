@@ -30348,3 +30348,81 @@ python -X utf8 work\_netgeom.py work\_o13lagt5 12
 合并机制（`EDGE_MERGE` 平、§5.425.2 碎片 oracle 无意义）—— 全部指向同一处：
 **网构造（哪些引脚属于同一个网）**，而它在 stage1 的走线追踪层。
 
+## 5.426 行内位号重绑落到 fusion 之后（74.96 → 75.20）
+
+### 5.426.1 病：最终位号不是 stage2 的读数
+`open_GT` case1 的电阻条带（符号中心 x 1799…2056）：`R20/R19/R16/R17/R18` 都印在自己符号
+右侧 ~6px（`work/_c1strip.png` 目视），但交付文档给的是 `R4/R20/R19/R16/R15` —— 整体右偏一颗。
+
+`stage2` 侧的 `rowbind`（§5.423，行内按「位号归左/右最近符号」重排）在 stage2 里做对了
+（`runs/stage2/_assigned/1.json` 的 `c0043 R20 / c0047 R19 / c0036 R16 / c0042 R17 / c0038 R18`），
+可这些改动**到不了交付文档**：`fusion/claims.py::from_assigned`（`:713`）把 `assigned` 的位号
+全部降级成候选（`:722` 遍历 `desig_slots`），最终由 `solve` 全局重裁、再经
+`DC.apply(base, s1_doc, assigned0, sol, …)`（`stage2/doc_apply.py` 侧）写回。
+
+`[rb]` 调试输出暴露了重裁的性质：行内 6 颗符号、5 个位号文字框，
+`labels=[1822.5, 1874.0, 1923.5, 1975.0, 2081.5]`、`bodies=[1799.7, 1848.6, 1897.1, 1947.4, 1997.9, 2056.0]`
+—— 每个文字框都在自己符号右侧 ~23px，`rowbind` 的 `side=+1` 配对 **cost 127.7、drop 0** 说明
+「框属于左边那颗」这条页面约定成立；但 `moved=0`：解的 `canon` 早被换过，**框与符号的从属关系
+（cid）并没有错**，错的是「哪一串文字该给谁」。⇒ 任何在 stage2 里改文字的做法都会被重裁覆盖。
+
+### 5.426.2 做法：只对最终文档改键
+`eda-pcb/fusion/run.py` 在 `pred = _assemble(...)` **之后**新增一块（`STAGE2_ROW_BIND`，默认 1）：
+1. 深拷贝 `assigned0`（`pool.apply()` 之前那份，位号仍与文字框同源），跑 `rowbind.fix(doc, a2)` 做行内对齐；
+2. 逐 cid 取「最终位号（`assigned`）」与「`assigned0` 修正后位号」，不同则记进映射 `old → new`，
+   同时把该 cid 的 `value` 一起搬（位号与值印在同一块文字区，错位是同时发生的）；
+3. `stage2/rowbind.py::rename(pred, mapping)` 改 `components` / `pins` 的键与 `nets[*].hyperGraph`
+   里的 `R4.1` 顶点。⚠ 第一版每一步都写 `if new in comps: continue`，**循环置换**（`R4→R20` 而 `R20`
+   已存在）会被整组跳过 ⇒ 现在先把所有旧键搬到 `\x00rb<i>` 临时键，再落到新键。
+4. `stage2/run.py` 里原先那个「装配前调 `rowbind.fix`」的钩子撤掉（不生效，见下表）。
+
+### 5.426.3 三臂读数（open_GT-1020 13 张，离线确定性，墙钟 105 s）
+| 臂 | 落点 | local | case1 | comp |
+|---|---|---:|---:|---:|
+| §5.421 默认 | 无 | **74.96** | 48.11 | 0.8092 |
+| `_o13rb6` | 装配**前**改 `assigned` | 74.93（逐位不动） | 47.66 | 0.8068 |
+| `_o13rb8` | 装配后用 `assigned`（解之后）算映射 | 74.93（`moved=0 renamed=0`） | 47.66 | 0.8068 |
+| **`_o13rb13`（现默认）** | 装配后用 **`assigned0`**（解之前）算映射 | **75.20** | **51.13** | **0.8165** |
+
+`_o13rb13`：comp 0.8165 / pin 0.7168 / netH 0.8333 / line 0.3617；**只有 case1 变**
+（48.11 → 51.13，comp 0.333 → 0.429），其余 12 张逐位不变。官方口径 **73.97**（旧 73.94），
+strict 74.63。复盘：`work/_rbchk13.py` 显示 case1 里 stage2 有 30 个位号、其中 4 个在最终文档里
+找不到（被重裁改名），与错排规模一致。
+
+### 5.426.4 引脚补齐的上界（下一个杠杆，本轮只测不做）
+`work/_pinoracle13.py <tag> [case…] [--mode=fill|renum]`：把 GT 里我们缺的 IC 脚按（名 + 点）
+灌进 Pred 再打分（`fill` 是上界，`renum` 只改「点已对上但号不对」的脚）：
+
+| 页 | 1 | 2 | 4 | 5 | 6 | 7 | 8 | 10 | 11 | 12 | 13 | 13 张均值 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 基线 | 51.13 | 85.20 | 82.07 | 84.14 | 85.85 | 85.88 | 82.00 | 89.98 | 45.53 | 49.56 | 56.82 | **75.20** |
+| `--mode=fill` | 54.76 | 87.07 | 83.34 | 87.04 | 88.60 | 87.76 | 84.88 | 91.16 | **59.22** | 53.38 | 59.83 | **78.19** |
+| 补脚数 | 8 | 2 | 1 | 3 | 3 | 1 | 3 | 1 | **14** | 2 | 2 | 40 |
+
+⇒ 引脚补齐值 **+2.99**（case11 一张就 +13.69）；`--mode=renum` 全 0（没有「点对号错」可捡，
+号错总是伴随点错）。
+
+名字从哪来？**库里没有**：`work/_libcover13.py` 拿我方型号查 `data/BoxICLibrary_200cases.json`
+（360 个库键），43 个缺脚里 **0 个**命中（`SY6912AFCC` / `TP4333` / `RT7272BGSP` / `TPEC8O3` 都不在库里，
+只有 `TPS61240DRVR` 这类在）⇒ 只能靠 OCR。而 `work/_pingrow.py`（对 `_assigned` 的 name 框
+原样重读 + `grow_reading`）显示是识别器上限、不是框截断：case12 `U1` 的 `slot10 'TM'`（GT `TIM`）、
+`slot16 'L'`（GT `LX`，重读 0.61 得 `1`）、`slot18 'CE'`（GT `CEL`）；`stage2/assign.py` 的
+`STAGE2_PIN_STUB_MERGE`（默认 20）已经在做「半满槽互补合并」，这些槽两边都没读全，合不起来。
+
+### 5.426.5 复现
+```powershell
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+  -output work\_o13rb13 -offline -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
+# 打分
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_percase.py o13rb13            # local 75.20
+python -X utf8 work\_strictpow.py o13rb13 1 2 3 4 5 6 7 8 9 10 11 12 13   # official 73.97
+# 上界 / 覆盖率 / 逐槽
+$env:PYTHONPATH='Y:\workspace\EDA\eda-pcb'
+python -X utf8 work\_pinoracle13.py o13rb13 --mode=fill
+python -X utf8 work\_libcover13.py o13rb13
+python -X utf8 work\_slots3.py work\_o13rb13 12 c0000
+```
+回滚：`STAGE2_ROW_BIND=0`（fusion 块与 `rowbind.fix` 同时关掉）。
+

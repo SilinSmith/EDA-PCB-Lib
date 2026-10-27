@@ -514,6 +514,51 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
                          if k not in ("rows", "skip", "blocked")}
     pred = _assemble(doc, assigned, case, vlm_doc, sol, assigned0,
                      pin_index=pin_index)
+    # ---- ⓪.98 行内位号重绑（`STAGE2_ROW_BIND`，默认 0）：落点必须在装配之后 --
+    # 位号印在符号**右侧** ⇒ 逐颗捡最近文字框在等距排里必然右偏一颗（§5.423）。
+    # 最终位号是 `DC.apply(base, s1_doc, assigned0, sol, …)` 按 claim 解写回的：
+    # `claims.from_assigned` 把 stage2 的位号全部降级成候选、由 `solve` 全局重裁，
+    # 而重裁不看「这个文字框印在哪个符号旁边」——实测 case1 栏内被整体错排
+    # （body 1799 的框里印着 `R20`，解却给它 `R4`）。装配前改什么都不留痕
+    # （`work/_o13rb6` 74.93 逐位不动），所以这里改成：拿 `assigned0`（`pool.apply()`
+    # 之前那份，位号仍与文字框同源）跑 `rowbind.fix` 做行内对齐，再把
+    # **最终文档**的键按 cid 改名，`components` / `pins` / `nets.hyperGraph` 一起改。
+    if os.environ.get("STAGE2_ROW_BIND", "1").strip() not in ("", "0"):
+        rep_rb = {}
+        try:
+            import copy as _copy
+            from stage2 import rowbind as _rb
+            a2 = _copy.deepcopy(assigned0 or assigned)
+            rep_rb = _rb.fix(doc, a2)
+            _mp, _vals = {}, {}
+            for _cid, _rec in (assigned.get("comps") or {}).items():
+                _o = str(((_rec.get("designator") or {}).get("canon")
+                          or (_rec.get("designator") or {}).get("text") or ""))
+                _r0 = ((a2.get("comps") or {}).get(_cid) or {})
+                _n = str((_r0.get("designator") or {}).get("canon")
+                         or (_r0.get("designator") or {}).get("text") or "")
+                if _o and _n and _o != _n:
+                    _mp[_o] = _n
+                    _v = (_r0.get("value") or {})
+                    _vt = str(_v.get("canon") or _v.get("text") or "")
+                    if _vt:
+                        _vals[_n] = _vt
+            if _mp:
+                pred = _rb.rename(pred, _mp)
+                rep_rb["renamed"] = len(_mp)
+            # 值也一起搬：同一行里位号与值印在同一块文字区，错位是同时发生的。
+            _pc = pred.get("components") or {}
+            for _k, _v2 in _vals.items():
+                if _k in _pc and isinstance(_pc[_k], dict):
+                    _pc[_k]["value"] = _v2
+            if os.environ.get("STAGE2_ROW_BIND_DBG"):
+                print("[rb] %s moved=%s renamed=%d map=%s"
+                      % (case, rep_rb.get("moved"), len(_mp), _mp))
+        except Exception as exc:                           # noqa: BLE001
+            rep_rb = {"err": str(exc)}
+            if log:
+                log("  [rowbind] 跳过：%s" % exc)
+        rep["row_bind"] = {k: v for k, v in rep_rb.items() if k != "rows"}
     # ---- ⑩ 库名回填：用官方库按 `(型号, 号) → 库名` 校准已 emit 的引脚名 --------
     # 必须在这之后：`_assemble` 才把 VLM 的引脚读数落进 `pred`，而 VLM 会覆盖
     # `build_doc` 里库规则 B 已经写好的名字（见 `stage2/librefine.py` 顶部）。
