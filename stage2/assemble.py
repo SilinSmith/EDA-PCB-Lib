@@ -2400,7 +2400,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     components: Dict[str, dict] = {}
     pins: Dict[str, dict] = {}
     keymap: Dict[str, str] = {}
-    _port_nm: Dict[str, int] = {}
+    _port_lab: Dict[str, str] = {}
     _port_keys: set = set()
     num_of: Dict[Tuple[str, int], str] = {}
     # ★ 引脚**索引 → 交付文档里的那个键**（`pin_<num>`，撞名时带 `_N` 后缀）。
@@ -2544,21 +2544,17 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                             _lab = str(_t0).strip()
                             break
                 if _lab:
-                    # ★★ 端口符号的**标识**就是它印的标签（`STAGE2_PORT_NAME`，默认 1）：
-                    #   `net_input`/`net_output` 在官方 GT 里 `Name` 与键都是标签文字
-                    #   （`open_GT` case1 `BAT`/`LED+`/`LED-`/`BAT_2`，case12 `VIN`/`VIN_2..4`/`VOUT`），
-                    #   重名按出现顺序加 `_2`/`_3`。评测的元件配对**只认 dict 键**
-                    #   （`metrics.assign_components` 第 1 步 `set(gc) & set(pc)`），
-                    #   所以只把 `Name` 改成标签而键仍是 `pNNN` 的话一分都拿不到
-                    #   （`work/_o13port` 实测逐位不变）。
-                    _cnt0 = _port_nm.get(_lab, 0) + 1
-                    _port_nm[_lab] = _cnt0
-                    _k0 = _lab if _cnt0 == 1 else "%s_%d" % (_lab, _cnt0)
-                    if _k0 in components:
-                        key = "p%03d" % i
-                    else:
-                        key = _k0
-                        _port_keys.add(_k0)
+                    # ★★ 端口符号的 `Name` 就是它印的标签（`STAGE2_PORT_NAME`，默认 1）：
+                    #   `net_input`/`net_output` 在官方 GT 里 `Name` 是标签文字
+                    #   （`open_GT` case1 `BAT`/`LED+`/`LED-`，case12 `VIN`/`VOUT`）。
+                    #   **键仍是 `pNNN`**：契约自检（`work/_smoke.py`）E4 要求
+                    #   `[A-Z]{1,3}\d{1,4}` / `pNNN` 形态，标签键（`PNVN_3`、`58me-10N2`）
+                    #   会被判异常；E5 还会抓到「网顶点引用了加后缀前的旧键」（`N2` 无实体）。
+                    #   把键也换成标签曾拿到 +0.01（`work/_o13pk` 76.24 vs 77.01 的
+                    #   `work/_o13sb*`），不值得破契约。
+                    key = "p%03d" % i
+                    _port_keys.add(key)
+                    _port_lab[key] = _lab
                     _unkeyed = True
                 else:
                     key = "p%03d" % i
@@ -2671,8 +2667,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 _bx[3] = max(_bx[3], float(_pb[3]))
                 if (_bx[2] - _bx[0]) <= POWER_BBOX_MAX and (_bx[3] - _bx[1]) <= POWER_BBOX_MAX:
                     bbox = _bx
-        if PORT_NAME and key in _port_keys:
-            name = key
+        if PORT_NAME and key in _port_lab:
+            name = _port_lab[key]
         components[key] = {"Name": name, "type": ctype, "value": val,
                            "bbox": [round(float(x), 2) for x in bbox]}
 

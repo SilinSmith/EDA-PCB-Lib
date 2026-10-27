@@ -30975,3 +30975,30 @@ python -X utf8 work\_symbb2.py o13pk --win=14             # 符号框合格率 8
 ```
 
 回滚：`$env:STAGE1_SYM_BOX='0'`（回到 76.24 / 75.01）。
+
+## 5.433 端口符号的键回到 `pNNN`（契约优先，76.96 / 75.73）
+
+§5.431 把 `net_input`/`net_output` 的**字典键**也换成了标签（GT 约定 `BAT`/`VIN_2`/`VOUT`），
+在 open_GT-1020 上拿到 +0.06（case1 端口 FN/FP 4/4 → 1/1）。但那一步破坏了两条交付契约：
+
+`work/_smoke.py` 的 E4 要求元件键形如 `[A-Z]{1,3}\d{1,4}` 或 `p\d{3}`，标签键
+（`PNVN_3`、`IPNM1A`、`58me-10N2`）会被判「形态异常」；E5 还抓到真 bug ——
+网顶点引用了**加后缀前**的旧键（`net_36 成员 N2 无实体`），因为同名标签的第二颗
+落到 `N2_2`、而网表里的顶点仍写 `N2`。整份自检从 30/30 掉到 **6 项失败**
+（`work/_smoke.py`，CPU，job `pwsh-1291`：`other 0097` / `other 0123`）。
+
+定案：**键回到 `p%03d`，只把 `Name` 换成标签**（`_port_lab` 映射，`STAGE2_PORT_NAME` 默认 1）。
+`eda-pcb/stage2/assemble.py` 里两处：`_port_lab: Dict[str, str]` 取代 `_port_nm`（不再累加重名后缀），
+`if PORT_NAME and key in _port_lab: name = _port_lab[key]`。
+
+| 臂 | 键 | local | official | comp | pin | netH | line | 契约 |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| `work/_o13sb` | 标签 | **77.02** | 75.79 | 0.8308 | 0.7383 | 0.8416 | 0.3616 | ✗ 6 项失败 |
+| **`work/_o13pn`（定案）** | `pNNN` | **76.96** | **75.73** | 0.8294 | 0.7383 | 0.8411 | 0.3616 | ✓ 30/30 |
+
+差的 0.06 全在 case1（55.36 vs 56.12：GT 的端口键是 `BAT`/`LED+`/`LED-`，键对上才算命中）。
+要拿回来必须同时(a) 把同名端口加后缀后的键自洽地写进网表、(b) 放宽 `_smoke.py` 的 E4
+（GT 自己就用标签当键）。两条都不难但都不是「读图」问题，收益 0.06 ⇒ 先放弃。
+
+复现：`python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT -output work\_o13pn -offline -device cpu -cases "1,…,13"`
+⇒ `work/_percase.py o13pn` **76.96**、`work/_strictpow.py o13pn 1 … 13` **official 75.73** / strict 76.40。
