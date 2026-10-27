@@ -790,6 +790,15 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         _pl = _pwlabel.fill(bgr, doc, a, engine, reads=reads)
     except Exception as _e:                      # noqa: BLE001
         _pl = {"on": True, "error": "%s: %s" % (type(_e).__name__, _e)}
+    # ★ 行内位号/值重绑（`stage2/rowbind.py`，`STAGE2_ROW_BIND` 默认**关**）：
+    #   同一行同类型元件的位号与值整体错位一颗（open_GT case1 电阻条带：
+    #   GT `R20/R19/R16/R17` ← 我们 `R4/R20/R19/R16`），起因是行里多读一个错位号、
+    #   少读一个真位号。这里按「位号印在自己符号哪一侧」的行级约定重新配对。
+    try:
+        from . import rowbind as _rowbind
+        _rb = _rowbind.fix(doc, a)
+    except Exception as _e:                      # noqa: BLE001
+        _rb = {"on": False, "error": "%s: %s" % (type(_e).__name__, _e)}
     pred = build_doc(doc, a, case)
     pin_index = pred.pop("__pin_index", None)
     t3 = time.time()

@@ -565,6 +565,11 @@ GND_TYPES = frozenset((
     "gnd", "gnda", "gndd", "agnd", "dgnd", "pgnd", "gnd_ref", "earth",
     "vss", "vssa"))
 _POWER_LABEL_RE = re.compile(r"^[+\-]?[A-Za-z0-9][A-Za-z0-9_.+\-]{0,15}$")
+# 电源/地符号的框要不要并上它的标签文字框（GT 的口径是「符号 + 标注」，见 :2606 的注释）。
+# `open_GT` 实测：只看工位尺寸 129 个配对里 116 已经 ≤20px，需要并的是 case1 那一族
+# （竖排 `GND` 34×38 vs 我们 19×20）⇒ 收益小，但并错框会立刻变负，所以开关默认关。
+POWER_BBOX = env_on("STAGE2_PWR_BBOX", "0")
+POWER_BBOX_MAX = float(os.environ.get("STAGE2_PWR_BBOX_MAX", "90"))
 # 读不到标签的 `v` 符号，用「同网 IC 脚名」兜底（`STAGE2_POWER_VALUE_FROM_PIN`，默认 1）。
 POWER_VALUE_FROM_PIN = env_on("STAGE2_POWER_VALUE_FROM_PIN", "1")
 
@@ -2603,6 +2608,23 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                     if _t and _POWER_LABEL_RE.match(str(_t).strip()):
                         val = str(_t).strip()
                         break
+        if POWER_BBOX and ctype in POWER_TYPES:
+            # ★ 电源/地符号的 GT 框**包含它的标签文字**（`open_GT` case12 `VIN` 81×29 vs
+            #   我们箭头 30×10；case1 的 `GND` 34×38 vs 我们 19×20）。`pwlabel` 已经把标签
+            #   文字的框记在 `partname.box` 上，这里把它并进来。
+            #   只在「标签文字确实读到了网名形状」时并：`_pb` 为空或文字不像网名就不动，
+            #   否则会把引脚号、位号框并进来（§5.418 那次 `STAGE2_PWR_BBOX` 就是并错框）。
+            _pi = info.get("partname") or {}
+            _pt = str(_pi.get("text") or "").strip()
+            _pb = _pi.get("box")
+            if _pb and len(_pb) >= 4 and _pt and _POWER_LABEL_RE.match(_pt) and not _pt.isdigit():
+                _bx = [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])]
+                _bx[0] = min(_bx[0], float(_pb[0]))
+                _bx[1] = min(_bx[1], float(_pb[1]))
+                _bx[2] = max(_bx[2], float(_pb[2]))
+                _bx[3] = max(_bx[3], float(_pb[3]))
+                if (_bx[2] - _bx[0]) <= POWER_BBOX_MAX and (_bx[3] - _bx[1]) <= POWER_BBOX_MAX:
+                    bbox = _bx
         components[key] = {"Name": name, "type": ctype, "value": val,
                            "bbox": [round(float(x), 2) for x in bbox]}
 

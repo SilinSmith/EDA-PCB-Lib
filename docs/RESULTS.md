@@ -30123,3 +30123,64 @@ python -X utf8 work\_valcase2.py o13lagt5               # 值串大小写普查
 （`work/_dupcomp.py`、`work/_bftest.py`、`work/_crop2.py`、`work/_s1comps.py`、
 `work/_s1one.py` 是这一轮的取证小工具：重复件普查、`boxfit` 单测、局部放大裁图、
 stage1 元件框清单。）
+
+## 5.423 位号/值「行内重绑」三版实测 —— 都是负的，且发现 stage2 的位号不是最终结论
+
+### 5.423.1 病（`open_GT` case1 的电阻条带，`work/_sidebyside.py`）
+
+符号中心 x 从 1795 到 2065，GT 与我们的位号一一对不上：
+
+| 符号中心 x | 1799 | 1848 | 1898 | 1947 | 1999 | 2056 |
+|---|---|---|---|---|---|---|
+| GT `Name` | `R20` | `R19` | `R16` | `R17` | `R18` | `R15` |
+| 我们（`_assigned`） | `R20` | **空** | `R19` | `R16` | `R17` | `R15` |
+
+位号印在自己符号的**右侧**（`R19` 文字框 `[1862,845,1886,855]`，符号框右缘 ~1856）。
+「逐颗捡最近文字框」在这种等距排里必然往右偏一颗（`1874−1848 = 26` vs `1897−1874 = 23`），
+而且 `R18` 那块文字压根没读出来 ⇒ `1848` 那颗空着，后面一串全部错位。
+
+### 5.423.2 三版实现（`eda-pcb/stage2/rowbind.py`，`STAGE2_ROW_BIND` 默认 **0**）
+
+按 `bbox_img` 中心 y 把同类型（`r/c/l`）元件聚成行，行内元件都是「符号」，有位号文字的
+才是「候选位号」。对「位号归左边最近的符号」「归右边最近的符号」两种印刷约定各算一次
+按 x 序一一配对的总位移（同侧没有空位就丢弃该文字，记 `ROW_DROP_COST=60`），取代价小的那个。
+
+| 版 | 判据 | 13 张均值 | 备注 |
+|---|---|---:|---|
+| v1 | 按「当前归属的左右侧占比 ≥0.7」判约定 | **74.96** | 零动作：当前归属本身错位，判侧自证成「文字都在符号左侧」⇒ 每次都 bail |
+| v2 | 两约定取代价小者，行内没有位号的符号**清空** | **74.83（−0.13）** | case1 −0.45、case4 −1.25；case1 的 `netH 0.631→0.615`（清号把网顶点名也清了） |
+| v3 | 只在「行里有符号没拿到位号」时动手（case4 不再被碰） | **74.93（−0.03）** | case1 仍 −0.45 |
+| v4 | 行内缺号用序号补齐（`R20/R19/R16/R17/R15` 缺 `R18` ⇒ 空符号补 `R18`） | **74.93（−0.03）** | `_assigned` 已完全正确（`c0043 R20 / c0047 R19 / c0036 R16 / c0042 R17 / c0038 R18`），**但最终 Pred 又变回错位** |
+
+### 5.423.3 为什么 v4 白干：stage2 的位号只是候选
+
+`work/_sidebyside.py o13rb5 1` 显示最终 Pred 仍是
+`1799 R4 / 1848 R20 / 1947 R19 / 1998 R16 / 2056 R15`，而同一份产物的
+`runs/stage2/_assigned/1.json` 里六个电阻的位号**已经全部正确**。
+原因写在 `eda-pcb/fusion/claims.py`：`from_assigned()`（`:713 ClaimPool(case, doc, assigned)`）
+把 `assigned` 里的一切**降级成候选**（`desig_slots`，`:722`），最终位号由 `solve` 重新裁决；
+`vlm/enrich.py` 还会直接改 `assigned.comps[cid].designator.text`（`:11` 的文件头注释）。
+⇒ **在 stage2 改位号不会到达交付文档**。这条轴要落地必须在 `fusion` 的 `solve` **之后**
+（`ClaimPool.apply()`，`claims.py:397`）对最终 key 再做一次行内重排 —— 而它的上界是
+`work/_nameoracle5.py` 量到的 **74.96 → 76.76（+1.80，位号与值一起改写）**，
+比只改名（`_nameoracle4.py`，+0.46）大四倍。
+
+### 5.423.4 同时判否的两条（同日）
+
+- 电源/地框并上标签文字框（`STAGE2_PWR_BBOX`，`partname.box`）：**74.88（−0.08）**，
+  case4 −1.12；case1 那 8 个 `gnd` 根本没有 `partname` ⇒ 零动作。默认 0。
+- 行内重绑（本节的 `rowbind`）：默认 0，机制留在代码里，落点应上移到 `fusion`。
+
+### 5.423.5 复现
+
+```
+$env:STAGE2_ROW_BIND='1'   # 或 STAGE2_PWR_BBOX='1'
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+    -output work\_o13rb5 -offline -device cpu -cases "1,2,…,13"
+# 打分：拷 *_Pred.json 到 work\_fast_out_o13rb5\final_results，再
+python -X utf8 work\_percase.py o13rb5
+python -X utf8 work\_strictpow.py o13rb5 1 2 3 4 5 6 7 8 9 10 11 12 13
+```
+探针：`work/_sidebyside.py`（GT/Pred 同类型并排）、`work/_nameoracle4.py`（只改名上界）、
+`work/_nameoracle5.py`（位号+值一起改写的上界）、`work/_bodylabel.py`（符号 vs 文字框中心）、
+`work/_rbtest.py`（单独跑 `rowbind.fix` 并打统计）。
