@@ -31002,3 +31002,49 @@ python -X utf8 work\_symbb2.py o13pk --win=14             # 符号框合格率 8
 
 复现：`python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT -output work\_o13pn -offline -device cpu -cases "1,…,13"`
 ⇒ `work/_percase.py o13pn` **76.96**、`work/_strictpow.py o13pn 1 … 13` **official 75.73** / strict 76.40。
+
+## 5.434 消重守卫在交付面失效：被网引用的元件被删掉，网里留下悬空键（E5）
+
+### 5.434.1 病
+
+`fusion/dedup.py` 的 `FUSION_COMPDEDUP`（默认 1）在**两处**跑：fusion 内部（`doc` 还带 `nets[*]._refs`）
+和发布面（`submission/run.py::_compdedup_step` → `apply_file` 就地改写 `final_results/<case>_Pred.json`）。
+后者的 `_refs` 已被 `build_doc` pop 掉，而 `_anchored()` 只查 `_refs` ⇒ 守卫在那里是**死的**：
+
+- 契约自检 `work/_smoke.py`（6 族 30 案、CPU）最后一轮 **1 项失败**：
+  `smk_altium designer 0045` → `E5 net net_12 member p040 missing`；
+- 该案 `_assigned` 50 颗、交付文档 49 颗 —— 少的这颗假键 `p040` 仍被 `net_12` 引用；
+- 因为失败行的族名（`altium designer`，带空格）在 `Select-Object -Last 6` 之外，第一轮只看到「1 项失败」，
+  用 `work/_smkdiag2.py`（独立复刻 E1~E6，不 import `_smoke.py`）重放既有产物才定位到具体 case。
+
+### 5.434.2 做法（`eda-pcb/fusion/dedup.py`）
+
+1. `_hg_verts(net)`：把 `hyperGraph` 的 `"(U1.1,p040.3)"` 拆成顶点串；
+2. `_anchored()` 同时看 `nets[*]._refs` **和** `hyperGraph` 顶点（`v == key` 或 `v.startswith(key + ".")`）
+   ⇒ 发布面与 fusion 内的判据一致，被引用的元件一律不删；
+3. 新增 `_drop_verts(doc, gone)`：`comps.pop` 之后把已删元件的顶点从每张网的 `hyperGraph` 里摘掉，
+   摘空的网整张删掉 —— 兜底，保证任何路径下都不会留下悬空键。
+
+单元验证（`work/_dedupunit.py` / `work/_dedupunit2.py`）：
+- 合成件 `p010`（假键 `led`，与真键 `LED1` 几何重合）被 `net_1` 引用 ⇒ trace 空、不删（守卫生效）；
+- 直接调 `_drop_verts({"p040"}, …)` ⇒ `n1 (p040.1,U1.2)` → `(U1.2)`、`n2 (p040.2)` 整张删掉。
+
+### 5.434.3 读数
+
+| 项 | 结果 |
+|---|---|
+| `smk_altium designer 0045` 契约 | 修前 `E5 net net_12 member p040 missing` → 修后 `check() == []` |
+| open_GT-1020 13 张 local | **76.96（逐位不变）**，`work/_o13dd` |
+| 分轴 | comp 0.8294 / pin 0.7383 / netH 0.8411 / line 0.3616（与 `work/_o13pn` 逐位相同） |
+
+⇒ 这是**契约修复**，不是分数机制：open_GT 上没有一颗被引用的假键落在消重窗口里，所以主尺不动。
+
+### 5.434.4 复现
+
+```
+python -X utf8 eda-pcb\tools\eval\fast.py --cases 0045 --engine protocol3 --no-vlm --out smkfix --save smkfix
+python -X utf8 work\_smkdiag2.py            # 重放既有 _fast_out/_fast_base 产物，列出失败 case
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT -output work\_o13dd `
+    -offline -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
+python -X utf8 work\_percase.py o13dd 1 2 3 4 5 6 7 8 9 10 11 12 13      # mean 76.96
+```

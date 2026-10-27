@@ -89,15 +89,56 @@ def _cy(b) -> float:
     return (b[1] + b[3]) / 2.0
 
 
+def _hg_verts(net):
+    """`hyperGraph` 的顶点串列表（`(U1.1,p040.3)` → ['U1.1', 'p040.3']）。"""
+    hg = str((net or {}).get("hyperGraph") or "").strip()
+    hg = hg.strip("()[]")
+    return [v for v in (s.strip() for s in hg.split(",")) if v]
+
+
 def _anchored(doc, key) -> bool:
-    """这颗元件是否被脚或网引用（引用了就不许删）。"""
+    """这颗元件是否被脚或网引用（引用了就不许删）。
+
+    ★ 交付面（`final_results/<case>_Pred.json`）里的 `nets[*]._refs` 已被 `build_doc` pop 掉，
+    只剩 `hyperGraph` 字符串 ⇒ 必须两个都看。只认 `_refs` 时守卫是死的：2026-10 的
+    `smk_altium designer 0045` 就把一颗被 `net_12` 引用的 `p040` 删掉，网里留下悬空键
+    （契约自检 E5）。
+    """
     if (doc.get("pins") or {}).get(key):
         return True
+    heads = (str(key), str(key) + ".")
     for net in (doc.get("nets") or {}).values():
         for r in (net or {}).get("_refs") or []:
             if isinstance(r, (list, tuple)) and r and str(r[0]) == str(key):
                 return True
+        for v in _hg_verts(net):
+            if v == heads[0] or v.startswith(heads[1]):
+                return True
     return False
+
+
+def _drop_verts(doc, gone):
+    """把已删元件的顶点从每张网的 `hyperGraph` 里摘掉；摘空的网整张删掉。"""
+    if not gone:
+        return 0
+    pref = tuple(str(k) + "." for k in gone)
+    nets = doc.get("nets") or {}
+    dead, touched = [], 0
+    for nid, net in nets.items():
+        vs = _hg_verts(net)
+        if not vs:
+            continue
+        keep = [v for v in vs if not v.startswith(pref)]
+        if len(keep) == len(vs):
+            continue
+        touched += 1
+        if not keep:
+            dead.append(nid)
+            continue
+        net["hyperGraph"] = "(" + ",".join(keep) + ")"
+    for nid in dead:
+        nets.pop(nid, None)
+    return touched
 
 
 def dedup_doc(doc):
@@ -156,6 +197,7 @@ def dedup_doc(doc):
         gone.add(drop)
     for k in gone:
         comps.pop(k, None)
+    _drop_verts(doc, gone)
     return trace
 
 

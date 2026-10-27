@@ -1344,3 +1344,4 @@
 | §5.431 | 端口符号的标识改成它印的标签（`STAGE2_PORT_NAME`）：配对只认字典键，端口 FN/FP 从 4/4 降到 1/1；local 76.23 → 76.24、official 75.01；顺带拆清 case1 元件轴 0.425 的来源（47 配对上 15 组死在框、8 组死在文本） |
 | §5.432 | 电源/地/端口符号的框长到「整颗」（`stage1/symbox.py`，`STAGE1_SYM_BOX` 默认 1）：符号色连通块 + 14px 窄窗口求并，符号框合格率 89% → 98%；local 76.24 → **77.02**、official 75.79；落点必须在 stage1（fusion 用原始 s1_doc 重建，stage2 改框无效） |
 | §5.433 | 端口符号的键回到 `pNNN`（契约优先）：§5.431 用标签当键在 open_GT 上是 +0.06，但破坏 E4（键形态）与 E5（网顶点引用加后缀前的旧键 `N2` 无实体），自检 30/30 → 6 项失败 ⇒ 回退，local **76.96** / official **75.73**（`work/_o13pn`） |
+| §5.434 | 消重守卫在交付面失效：`fusion/dedup.py::_anchored` 只查已 pop 的 `nets[*]._refs`，发布面会把仍被 `hyperGraph` 引用的假键元件删掉（`smk_altium designer 0045` 的 `E5 net net_12 member p040 missing`）⇒ 守卫也看 `hyperGraph`，并加 `_drop_verts` 摘顶点兜底；契约 1 项失败 → 干净，主尺 **76.96 逐位不变**（`work/_o13dd`） |
