@@ -572,6 +572,13 @@ POWER_TYPES = frozenset((
 # 当成了这个元件的 `partname`（case4 `c0019.partname='3.3V'`、case6 `c0035='+12V'` …）。
 # 本地指标对非 `VALUE_TYPES` 元件不查 value（`metrics.component_text_ok`）⇒ 对本地零风险。
 POWER_VALUE = env_on("STAGE2_POWER_VALUE", "1")
+# ★ `STAGE2_PORT_NAME`（默认 **1**，§5.431）：`net_input` / `net_output` 这类端口符号的
+#   `Name` 在 GT 里**就是那个标签文字**（`open_GT` case1 `BAT` / `LED+` / `LED-` / `BAT_2`、
+#   case12 `VIN` / `VIN_2` / `VIN_3` / `VIN_4` / `VOUT`），重复的用 `_2`/`_3` 后缀区分 ——
+#   这跟 `pNNN` 这类自动名不同：自动名不参与比较，但**身份配对**用的是 Name，所以
+#   `Name=p031` 的端口永远配不上 GT 的 `BAT`（每颗贡献 1 fn + 1 fp）。
+PORT_NAME = env_on("STAGE2_PORT_NAME", "1")
+PORT_TYPES = frozenset(("net_input", "net_output", "net_short", "net_bidirection"))
 GND_TYPES = frozenset((
     "gnd", "gnda", "gndd", "agnd", "dgnd", "pgnd", "gnd_ref", "earth",
     "vss", "vssa"))
@@ -2393,6 +2400,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     components: Dict[str, dict] = {}
     pins: Dict[str, dict] = {}
     keymap: Dict[str, str] = {}
+    _port_nm: Dict[str, int] = {}
+    _port_keys: set = set()
     num_of: Dict[Tuple[str, int], str] = {}
     # ★ 引脚**索引 → 交付文档里的那个键**（`pin_<num>`，撞名时带 `_N` 后缀）。
     # 融合层要改引脚就必须知道这个映射：`num` 会被下面的「结构期望」重写过
@@ -2526,8 +2535,34 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                     print("[boxgap] cid=%s 兜底键 → %s（已用 U 号 %s / 共 %d 颗 box）"
                           % (cid, _gap, sorted(_used_u), _n_box))
             else:
-                key = "p%03d" % i
-                _unkeyed = True
+                _lab = None
+                if PORT_NAME and _ct_here in PORT_TYPES:
+                    for _fld in ("partname", "value", "designator"):
+                        _t0 = (info.get(_fld) or {}).get("text")
+                        if _t0 and _POWER_LABEL_RE.match(str(_t0).strip()) \
+                                and not str(_t0).strip().isdigit():
+                            _lab = str(_t0).strip()
+                            break
+                if _lab:
+                    # ★★ 端口符号的**标识**就是它印的标签（`STAGE2_PORT_NAME`，默认 1）：
+                    #   `net_input`/`net_output` 在官方 GT 里 `Name` 与键都是标签文字
+                    #   （`open_GT` case1 `BAT`/`LED+`/`LED-`/`BAT_2`，case12 `VIN`/`VIN_2..4`/`VOUT`），
+                    #   重名按出现顺序加 `_2`/`_3`。评测的元件配对**只认 dict 键**
+                    #   （`metrics.assign_components` 第 1 步 `set(gc) & set(pc)`），
+                    #   所以只把 `Name` 改成标签而键仍是 `pNNN` 的话一分都拿不到
+                    #   （`work/_o13port` 实测逐位不变）。
+                    _cnt0 = _port_nm.get(_lab, 0) + 1
+                    _port_nm[_lab] = _cnt0
+                    _k0 = _lab if _cnt0 == 1 else "%s_%d" % (_lab, _cnt0)
+                    if _k0 in components:
+                        key = "p%03d" % i
+                    else:
+                        key = _k0
+                        _port_keys.add(_k0)
+                    _unkeyed = True
+                else:
+                    key = "p%03d" % i
+                    _unkeyed = True
         elif PIN_DROP_LAUNDERED and FKEY_RE.match(str(key)):
             # ★★ 2026-1x 修：兜底键**不总是这里发的** —— 融合/求解层会把已经发过的
             #   `pNNN` 当成「读出来的位号」回填（`assigned[cid]["designator"]["canon"]`，
@@ -2636,6 +2671,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 _bx[3] = max(_bx[3], float(_pb[3]))
                 if (_bx[2] - _bx[0]) <= POWER_BBOX_MAX and (_bx[3] - _bx[1]) <= POWER_BBOX_MAX:
                     bbox = _bx
+        if PORT_NAME and key in _port_keys:
+            name = key
         components[key] = {"Name": name, "type": ctype, "value": val,
                            "bbox": [round(float(x), 2) for x in bbox]}
 

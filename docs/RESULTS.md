@@ -30788,3 +30788,83 @@ python -X utf8 work\_absent43.py work\_o13dn   # 43 -> 39 根缺脚，按病根�
 `noslot/noslot4` 是 stage1 压根没给槽或给的位置差 12~45px（检出面）；
 `numonly` 是号读到了、名字没读到（`BOX_PIN_NEED_NAME` 的迟到闸门宁可丢，因为号当名 = fp+fn）；
 `name_ok` 是名字读到了、号没读到；剩下的 `dupnum` 是号读错（名字对）。
+
+## 5.431 端口符号的标识就是它印的标签（open_GT 76.23 → 76.24，official 75.01）
+
+### 5.431.1 病：`net_input` / `net_output` 的键是自动名 `pNNN`，与 GT 的标签键永远配不上
+
+元件配对**只认字典键**（`schematic_parser/metrics.py:335` `for key in set(gc) & set(pc)`），
+`Name` 字段只参与 `component_text_ok` 的文本比较。而 `open_GT` 把端口符号的**键**直接写成它
+印的标签：
+
+```
+case1  GT: BAT / BAT_2 / LED+ / LED-      （type=net_input，value 同名）
+case12 GT: VIN / VIN_2 / VIN_3 / VIN_4 / VOUT
+我们       : p031 / p032 / p033 / p034    （`work/_compdiff4.py` 的 FP 行）
+```
+
+每颗端口符号因此贡献 **1 fn + 1 fp**：13 张合计 `net_input` fn 8 / fp 7、`net_output` fn 1。
+
+### 5.431.2 做法：`STAGE2_PORT_NAME`（默认 1）
+
+`eda-pcb/stage2/assemble.py` 常量区（`POWER_VALUE` 之后）：
+
+```python
+PORT_NAME = env_on("STAGE2_PORT_NAME", "1")
+PORT_TYPES = frozenset(("net_input", "net_output", "net_short", "net_bidirection"))
+```
+
+兜底键分支（`key = "p%03d" % i` 那处）先试着用标签当键：从 `info` 的
+`partname → value → designator` 取第一个过 `_POWER_LABEL_RE`、非纯数字的文字；重名按出现顺序
+加 `_2`/`_3`（与 GT 同名约定），撞到已用键时退回 `pNNN`。`_port_nm` 是页级计数器，
+`_port_keys` 记下「键来自标签」的元件，`name = key` 保持与 GT 一致。
+
+⚠ 只改 `Name` 不改键是**零收益**的：`work/_o13port`（`Name=BAT` 而键仍 `p032`）13 张
+**逐位不变**——这条踩过一次，别再走。
+
+### 5.431.3 读数
+
+| 臂 | local | official | comp | pin | netH | line |
+|---|---:|---:|---:|---:|---:|---:|
+| §5.430 基线（`work/_o13dn`） | 76.23 | 75.00 | 0.8228 | 0.7377 | 0.8398 | 0.3664 |
+| **端口键 = 标签（`work/_o13pk`，现默认）** | **76.24** | **75.01** | 0.8228 | 0.7377 | **0.8403** | 0.3664 |
+| 同上 + `STAGE2_PWR_BBOX=1` | 76.16（−0.07） | — | 0.8228 | 0.7377 | 0.8403 | 0.3664 |
+
+- 逐案只有 case1 变：`50.56 → 50.78`（netH 0.628 → 0.635），其余 12 张逐位不变。
+- case1 的端口 FN/FP 从 **4 fn / 4 fp** 降到 **1 / 1**（只剩 `LED+` 被读成 `1ED+`，
+  `work/_compdiff4.py o13pk 1`）。
+
+### 5.431.4 顺带查清：case1 的元件轴为什么只有 0.425（新探针 `work/_compok2.py`）
+
+`case1 pairs=47 ok=24 bad_box=15 bad_txt=8` —— 配对成功的 47 组里 15 组死在 **bbox**
+（`bbox_tol=20` 逐坐标），8 组死在文本。bbox 那 15 组：
+
+| 族 | 例 | GT 框 | 我们 |
+|---|---|---|---|
+| `gnd` 符号 | `∅141` | `[990,983,1027,1016]` 37×33 | `[997.4,1008.4,1017.4,1027.4]` 20×19 |
+| 端口 | `BAT` | `[1383,894,1425,916]` 42×22 | `[1412,899.6,1442,909.6]` 30×10 |
+| `led` | `LED2` | `[674,696,725,726]` 51×30 | `[767.1,696,781.1,716]` 14×20 |
+| `r` | `R12` | `[1334,667,1395,688]` | `[1355.1,673.5,1375.1,681.5]` |
+
+即 GT 的符号框覆盖**整个符号（含标签/箭头/引脚腿）**，stage1 给的是**符号内腔**。
+`STAGE2_PWR_BBOX`（把 `partname.box` 并进来）在这一版上仍是负的（case4 −1.12、case1 零动作
+——case1 的 gnd 根本没有 `partname`），所以并入标签框这条路依旧不成立；要治只能让 stage1
+的符号框本身长到「整颗」，属检测面（与 §5.424 的 `bbox2pins` 结论一致：>20px 的件里
+`box 24 / led 6 / r 4 / l 2`）。
+
+### 5.431.5 复现
+
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+  -output work\_o13pk -offline -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
+New-Item -ItemType Directory -Force work\_fast_out_o13pk\final_results
+Copy-Item work\_o13pk\final_results\*_Pred.json work\_fast_out_o13pk\final_results\
+python -X utf8 work\_percase.py o13pk                      # local 76.24
+python -X utf8 work\_strictpow.py o13pk 1 2 3 4 5 6 7 8 9 10 11 12 13   # official 75.01
+python -X utf8 work\_compdiff4.py o13pk 1                  # 端口 FN/FP 4/4 -> 1/1
+python -X utf8 work\_compok2.py o13pk 1                    # 逐配对拆 bbox / 文本
+```
+
+回滚：`$env:STAGE2_PORT_NAME='0'`（回到 76.23 / 75.00）。
