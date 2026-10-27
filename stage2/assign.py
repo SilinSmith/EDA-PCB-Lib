@@ -680,6 +680,37 @@ PINNUM_RE = re.compile(r"^[A-Za-z]{0,2}\d{1,3}[A-Za-z]?$")
 VALUE_RE = re.compile(r"^[+-]?(\d+(\.\d+)?|\.\d+)\s*[pnu\u00b5\u03bcmkKMGR]?[FHV\u03a9AWRJ]?$")
 NETNAME_RE = re.compile(r"^[+\-]?[A-Za-z_][A-Za-z0-9_+\-\.]{0,14}$")
 PARTNAME_RE = re.compile(r"^(?=.*\d)[A-Za-z0-9][A-Za-z0-9_\-\./+]{3,30}$")
+# ★★ `STAGE2_PARTNAME_MODEL_LIKE`（默认 **1**，§5.427）：型号名也可能是「字母前缀 + 数字」，
+#   不能一律按位号形状否掉。病（`open_GT` case11 `U1`）：真实型号 `TP4333` 命中
+#   `DESIGNATOR_RE`（`TP`+`4333`）⇒ `fit_partname` 直接给 0 ⇒ 型号框只能用借读的
+#   `TPA333`（错），`Name` 必然失配。判据：**前导字母 ≥2 且数字 ≥3** 时更像型号，
+#   按型号处理（`R20`/`C151`/`LED4`/`TP12` 这些都不满足，位号判定不变）。
+MODEL_LIKE_RE = re.compile(r"^[A-Za-z]{2,}\d{3,}[A-Za-z]?$")
+PARTNAME_MODEL_LIKE = env_on("STAGE2_PARTNAME_MODEL_LIKE", "1")
+# ★★ `STAGE2_READ_FILL`（默认 **1**，§5.427）：文字的「填充合理性」。
+#   病（`open_GT` case4 `U3`）：型号框 `[786,739,860,749]`（74×10）只读出 `TP404M`（6 字），
+#   而 GT 是 `TP4054-MS`（9 字）—— 裁片把尾巴切掉了。量化判据：`cw = 框宽/字数` 与
+#   `exp = 0.80*框高` 的比值（全 13 张 429 条事实读数：p50 1.00 / p95 1.21 / p99 1.62），
+#   比值 > `READ_FILL_TOL(1.30)` 就是「框里还有空、但没读出来」⇒ 压低它的分数，
+#   让同一个框里更完整的读法（别的角色/借读）胜出。
+READ_FILL = env_on("STAGE2_READ_FILL", "1")
+READ_FILL_RATIO = float(os.environ.get("STAGE2_READ_FILL_RATIO", "0.80"))
+READ_FILL_TOL = float(os.environ.get("STAGE2_READ_FILL_TOL", "1.30"))
+READ_FILL_PEN = float(os.environ.get("STAGE2_READ_FILL_PEN", "0.60"))
+
+
+def _fill_factor(txt, box) -> float:
+    if not READ_FILL or not txt or not box:
+        return 1.0
+    try:
+        w = float(box[2]) - float(box[0])
+        h = float(box[3]) - float(box[1])
+    except Exception:
+        return 1.0
+    if w <= 2.0 or h <= 2.0:
+        return 1.0
+    cw = w / max(1, len(str(txt)))
+    return READ_FILL_PEN if cw > READ_FILL_RATIO * h * READ_FILL_TOL else 1.0
 # **电压型网络名**（`3.3V` / `5V` / `1.8V`）：`NETNAME_RE` 要求首字符是字母，
 # 所以电源网名**永远进不了**网络标签集 —— 而这恰恰是最该按名字合并的一类。
 RAILNAME_RE = re.compile(r"^[+\-]?\d+(\.\d+)?\s*(V|mV|kV|v)$")
@@ -1184,7 +1215,8 @@ def fit_partname(text: str) -> float:
     if len(text) < 4:
         return 0.0
     lo, _hi, kind = expect_kind(text)
-    if kind == "designator" and DESIGNATOR_RE.match(text):
+    if (kind == "designator" and DESIGNATOR_RE.match(text)
+            and not (PARTNAME_MODEL_LIKE and MODEL_LIKE_RE.match(text))):
         return 0.0                      # 形态与期望一致地指向「位号」
     base = 1.0 if PARTNAME_RE.match(text) else 0.3
     return base * (1.0 - 0.6 * fragment_score(text))
@@ -1238,12 +1270,24 @@ def _score(fit: float, conf: float, d: float, inside_flag: bool,
 
 
 _BORROW_PREF = 0.0 if (os.environ.get("STAGE2_NO_BORROW") or "").strip() not in ("", "0") else 0.85
+READ_PREFER_OWN = env_on("STAGE2_READ_PREFER_OWN", "1")
+READ_NO_BORROW = frozenset(
+    t.strip() for t in (os.environ.get("STAGE2_READ_NO_BORROW") or "partname").split(",")
+    if t.strip())
 
 
 def _best_read(reads: Dict[str, Tuple[str, float]], role: str,
-               fit) -> Optional[Tuple[str, float, float]]:
+               fit, box=None) -> Optional[Tuple[str, float, float]]:
     """在 5 种读法里取该角色适配度最高的一次。也允许串角色借读
-    （例如 `pin_name` 框在 `designator` 角色下读出来更像），因为角色条件只是弱条件。"""
+    （例如 `pin_name` 框在 `designator` 角色下读出来更像），因为角色条件只是弱条件。
+
+    ★ 但**借读不能赢在一段截断上**（`STAGE2_READ_PREFER_OWN`，默认 1）。
+    病（`open_GT` case12 `U1` 的 `CEL`/`LX`，2026-10 实测）：同一个文字框在角色条件下
+    裁片不同 —— `pin_number` 走 `tight_ink_box` 收紧裁片（`text.py:776`），`CEL` 只剩 `CE`；
+    它的置信度反而更高（0.95 vs 0.79），`_best_read` 的 `f * pref * (0.3+0.7*conf)`
+    于是让借读的 `CE` 压过本角色的 `CEL`（0.917 > 0.853），名字被截断。
+    规则：当借读串是**本角色读法的真前缀/后缀**（= 同一串被裁掉了一头）时，保留更完整的那个。
+    """
     best = None
     for r, (txt, conf) in reads.items():
         if not txt:
@@ -1252,9 +1296,30 @@ def _best_read(reads: Dict[str, Tuple[str, float]], role: str,
         if f <= 0:
             continue
         pref = 1.0 if r == role else _BORROW_PREF
-        s = f * pref * (0.3 + 0.7 * max(0.0, min(1.0, conf)))
+        s = f * pref * (0.3 + 0.7 * max(0.0, min(1.0, conf))) * _fill_factor(txt, box)
         if best is None or s > best[0]:
             best = (s, txt, float(conf), f)
+    if READ_PREFER_OWN and best is not None:
+        own = reads.get(role) or ("", 0.0)
+        a, b = str(own[0] or ""), str(best[1] or "")
+        if len(a) > len(b) and b and (a.startswith(b) or a.endswith(b)):
+            fa = fit(a)
+            if fa > 0:
+                conf_a = float(own[1] or 0.0)
+                return (fa * (0.3 + 0.7 * max(0.0, min(1.0, conf_a))), a, conf_a, fa)
+    if best is not None and role in READ_NO_BORROW:
+        # ★ 这些角色的读法**不许串角色借读**（`STAGE2_READ_NO_BORROW`，默认 `partname`）。
+        #   病（`open_GT` case11 `U1`，2026-10 实测）：型号框在 `partname` 角色下读成
+        #   `TP4333`（对），在 `pin_name` 角色下是 `TPA333`（错）—— 借读把它顶掉了，
+        #   于是 `Name` 失配。型号是**唯一只在型号角色下裁片合适**的东西。
+        #   例外：借读串**明显更长**（比本角色多 2 字以上）时仍然采信 —— 那是裁片把本角色的
+        #   串截断了（case4 `U3`：`partname` 读到 `TP404M`，借读有 `TP4054-MS`，GT 是后者）。
+        own = reads.get(role)
+        if own and own[0]:
+            f0 = fit(own[0])
+            if f0 > 0 and len(str(best[1] or "")) <= len(str(own[0])) + 1:
+                conf0 = float(own[1] or 0.0)
+                return (f0 * (0.3 + 0.7 * max(0.0, min(1.0, conf0))), own[0], conf0, f0)
     return best
 
 
@@ -2040,7 +2105,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             for _t in steal.get(cid, []):
                 if float(_t.get("d", 1e9)) > _psr:
                     continue
-                _got = _best_read(_t["reads"], "partname", fit_partname)
+                _got = _best_read(_t["reads"], "partname", fit_partname, _t.get("bbox") or _t.get("box"))
                 if not _got:
                     continue
                 _s, _txt, _cf, _f = _got
@@ -2052,7 +2117,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         for t in _src:
             if rec["designator"] and list(t["bbox"]) == rec["designator"]["box"]:
                 continue
-            got = _best_read(t["reads"], want, fit)
+            got = _best_read(t["reads"], want, fit, t.get("bbox") or t.get("box"))
             if not got:
                 continue
             s, txt, conf, f = got
@@ -2457,7 +2522,7 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     continue
                 if t.get("cfrac", 0.0) > PINNAME_CFRAC:
                     continue
-                got = _best_read(t["reads"], "pin_name", fit_pinname)
+                got = _best_read(t["reads"], "pin_name", fit_pinname, t.get("bbox") or t.get("box"))
                 if not got:
                     continue
                 s0, txt, conf, f = got

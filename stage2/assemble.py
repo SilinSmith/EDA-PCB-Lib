@@ -221,6 +221,14 @@ TP_LEDGER: List[dict] = []
 # 采信号撞，就用它；否则用位置号补，并避开已经用掉的号。**严格弱于全对**（全对时
 # 两者输出相同），但把「71 对 1 错」从「全错」救回「71 对」。
 BOX_PIN_PARTIAL = env_on("STAGE2_BOX_PIN_PARTIAL", "1")
+# ★ `STAGE2_PINNUM_SIDE`（默认 **1**，§5.427）：IC 一侧的引脚号在图上恒为一段**连续整数**，
+#   所以「这一侧只有一格没读到号、其余都读到」时，缺的号是集合差而不是猜测。
+#   见 `build_doc` 里 `raw` 之后的补全块。
+PINNUM_SIDE = env_on("STAGE2_PINNUM_SIDE", "1")
+# ★ `STAGE2_PINNUM_SEQ`（默认 **1**）：同侧号码补全的加强版 —— 一侧的号是**一段连续整数、
+#   且沿该侧槽位顺序单调**（`open_GT` 普查：28 条多脚侧里 21 条严格单调连号，12 递减 / 9 递增）。
+#   所以「窗口 + 方向」只要和已读到的号一致，两格以上的缺号也能定位（原版只处理恰好缺一格）。
+PINNUM_SEQ = env_on("STAGE2_PINNUM_SEQ", "0")
 
 # ★ `STAGE2_BOX_ALONE_U1`（默认 **1**，§5.262）：整页只有一颗 `box`、它又没读到位号时，
 #   按惯例命名为 `U1`。动机：`10_GTcase`（datasheet 派生 10 张）里 6 张**不印位号**、
@@ -2667,6 +2675,71 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             num = ((rec.get("number") or {}).get("text") or "").strip()
             nm = ((rec.get("name") or {}).get("text") or "").strip()
             raw.append({"num": num, "nm": nm})
+        # ★ 同侧号码补全（`STAGE2_PINNUM_SIDE`，默认 1）：IC 一侧的引脚号在图上恒为**一段连续整数**，
+        #   所以「这一侧只有一格没读到号、其余都读到」时，缺的那个号是**集合差**，不用猜。
+        #   病（`open_GT` case11 `U1`，2026-10 实测）：三个槽位只有 `OUT` 一格没号，而这一侧另外两格
+        #   读到了 `2`/`3` ⇒ 缺的就是 `1`；补上后 `OUT` 才可能和 GT 的 `pin_1 OUT` 对上（名字本来读对了，
+        #   缺号让整根脚发不出去 —— 官方口径下「没发」与「发错」同罚 fp+fn）。
+        #   只处理「恰好一格缺号、且补出的号唯一」的情形；两格以上缺号时区间不唯一，直接放弃。
+        if PINNUM_SIDE and ctype in ("box", "ic", "boxic") and len(raw) == len(pts) and len(raw) >= 3:
+            _bc = None
+            for _c2 in comps:
+                if _c2.get("id") == cid:
+                    _bc = _c2
+                    break
+            _bb2 = []
+            if _bc:
+                _bb2 = _bc.get("bbox_json") or _bc.get("bbox_img") or []
+            if len(_bb2) >= 4:
+                _qx0, _qy0, _qx1, _qy1 = [float(v) for v in _bb2[:4]]
+                _iy0, _iy1 = (H - _qy1, H - _qy0) if (_bc or {}).get("bbox_json") else (_qy0, _qy1)
+                _side: Dict[str, List[int]] = {}
+                for _i, _p in enumerate(pts):
+                    _px, _py = float(_p[0]), float(_p[1])
+                    _pick = min(((abs(_px - _qx0), "l"), (abs(_px - _qx1), "r"),
+                                 (abs(_py - _iy0), "t"), (abs(_py - _iy1), "b")))
+                    _side.setdefault(_pick[1], []).append(_i)
+                for _sn, _ix in _side.items():
+                    _miss = [_i for _i in _ix if not raw[_i]["num"]]
+                    _have = [int(raw[_i]["num"]) for _i in _ix if raw[_i]["num"].isdigit()]
+                    if not _miss:
+                        continue
+                    _nk = len(_ix)
+                    # ★ 按序补号（`STAGE2_PINNUM_SEQ`，默认 1）：一侧的号是**一段连续整数、且沿该侧
+                    #   按槽位顺序单调**（普查：`open_GT` 28 条多脚侧里 21 条严格单调连号）。
+                    #   于是「窗口 + 方向」只要和已读到的号一致，缺的号就被定位。
+                    if PINNUM_SEQ and len(_have) >= 2 and len(_have) * 2 >= _nk:
+                        _order = sorted(_ix, key=lambda _i: (float(pts[_i][1]) if _sn in ("l", "r")
+                                                             else float(pts[_i][0])))
+                        _cand = []
+                        for _lo in range(max(1, max(_have) - _nk + 1), min(_have) + 1):
+                            _win = list(range(_lo, _lo + _nk))
+                            for _dir in (1, -1):
+                                _map = dict(zip(_order, _win if _dir > 0 else _win[::-1]))
+                                if all(int(raw[_i]["num"]) == _map[_i] for _i in _ix
+                                       if raw[_i]["num"].isdigit()):
+                                    _cand.append(_map)
+                        if len(_cand) == 1:
+                            for _i in _miss:
+                                raw[_i]["num"] = str(_cand[0][_i])
+                            if os.environ.get("STAGE2_DBG_PINS"):
+                                print("[dbg pinnum seq] cid=%s side=%s filled=%s (have=%s)"
+                                      % (cid, _sn, [_cand[0][_i] for _i in _miss], sorted(_have)))
+                            continue
+                    if len(_miss) != 1 or len(_have) < 2:
+                        continue
+                    _holes = []
+                    for _lo in range(min(_have) - _nk + 1, min(_have) + 1):
+                        _want = set(range(_lo, _lo + _nk))
+                        if set(_have) <= _want:
+                            _hd = _want - set(_have)
+                            if len(_hd) == 1:
+                                _holes.append(_hd.pop())
+                    if len(set(_holes)) == 1:
+                        raw[_miss[0]]["num"] = str(_holes[0])
+                        if os.environ.get("STAGE2_DBG_PINS"):
+                            print("[dbg pinnum side] cid=%s side=%s slot=%d -> %s (have=%s)"
+                                  % (cid, _sn, _miss[0], _holes[0], sorted(_have)))
         # **结构期望**（2025-10 按官方 Q&A 重定）。
         #
         # 旧口径下这里有一条「OCR 必须交出完整的 1..N 排列才采信」的门控，理由是

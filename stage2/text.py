@@ -168,6 +168,72 @@ GLYPH_VOTE_CONF = float(os.environ.get("STAGE2_GLYPH_VOTE_CONF", "0.35") or 0.35
 GLYPH_VOTE_OVERRIDE = float(os.environ.get("STAGE2_GLYPH_VOTE_OVERRIDE", "0.6") or 0.6)
 GLYPH_VOTE_BEAM = int(os.environ.get("STAGE2_GLYPH_VOTE_BEAM", "8") or 8)
 GLYPH_VOTE_MAX = int(os.environ.get("STAGE2_GLYPH_VOTE_MAX", "4000") or 4000)
+# ★★ 「图上有几个字形」约束解码（`STAGE2_READ_LENFIX`，默认 **1**，§5.427）。
+#   贪心 CTC 会整字吞掉窄字/夹在中间的字（`TIM→TM`、`TP4333→TP433`），七个权重一致、
+#   补白也救不回；但字形段数（列投影连通段）与模型无关，是可靠的独立信号。
+READ_LENFIX = os.environ.get("STAGE2_READ_LENFIX", "1") not in ("0", "", "off", "False", "false")
+LENFIX_ROLES = tuple(r.strip() for r in
+                     (os.environ.get("STAGE2_READ_LENFIX_ROLES")
+                      or "pin_name,designator,value,partname,net_label,pin_number").split(",")
+                     if r.strip())
+LENFIX_INK = float(os.environ.get("STAGE2_READ_LENFIX_INK", "0.8") or 0.8)
+LENFIX_MINW = int(os.environ.get("STAGE2_READ_LENFIX_MINW", "2") or 2)
+LENFIX_NARROW = int(os.environ.get("STAGE2_READ_LENFIX_NARROW", "4") or 4)
+LENFIX_MAXN = int(os.environ.get("STAGE2_READ_LENFIX_MAXN", "14") or 14)
+LENFIX_MAXDIFF = int(os.environ.get("STAGE2_READ_LENFIX_MAXDIFF", "3") or 3)
+LENFIX_K = int(os.environ.get("STAGE2_READ_LENFIX_K", "10") or 10)
+LENFIX_BEAM = int(os.environ.get("STAGE2_READ_LENFIX_BEAM", "24") or 24)
+LENFIX_DBG = os.environ.get("STAGE2_READ_LENFIX_DBG", "0") not in ("0", "", "off")
+LENFIX_MARGIN = float(os.environ.get("STAGE2_READ_LENFIX_MARGIN", "3.0") or 0.0)
+
+
+def _beam_rank(tc: Tuple[str, float]) -> float:
+    """beam 候选的**总发射对数概率**：`_beam` 给的 conf 是 `exp(ssum/n)`，还原成 `ssum`。"""
+    t, conf = tc
+    if not t:
+        return -1e9
+    return len(t) * float(np.log(max(1e-6, min(1.0, float(conf)))))
+
+
+def _ctc_logprob(lp: np.ndarray, label: str, itos: Dict[int, str]) -> float:
+    """标准 CTC 前向：给定 `log_softmax` 矩阵与候选串，返回 `log p(label)`。
+
+    `_beam` 里的 conf 是**发射概率的几何平均**（与路径概率不成比例），不能用来比较
+    「多一个字」和「少一个字」的候选 —— 这里按定义算，够快（T≤40、L≤14）。
+    """
+    if not label:
+        return -1e9
+    stoi = {ch: i for i, ch in itos.items()}
+    ids = [stoi.get(ch, -1) for ch in label]
+    if any(i < 0 for i in ids):
+        return -1e9
+    L = len(ids)
+    neg = -1e18
+    # 扩展标签：blk, l1, blk, l2, ..., lL, blk
+    ext = [0]
+    for i in ids:
+        ext.extend([i, 0])
+    S = len(ext)
+    prev = np.full(S, neg)
+    prev[0] = lp[0, 0]
+    if S > 1:
+        prev[1] = lp[0, ext[1]]
+    for t in range(1, lp.shape[0]):
+        cur = np.full(S, neg)
+        for s in range(S):
+            a = prev[s]
+            if s >= 1:
+                a = np.logaddexp(a, prev[s - 1])
+            if s >= 2 and ext[s] != 0 and ext[s] != ext[s - 2]:
+                a = np.logaddexp(a, prev[s - 2])
+            cur[s] = a + lp[t, ext[s]]
+        prev = cur
+    out = prev[S - 1]
+    if S > 1:
+        out = np.logaddexp(out, prev[S - 2])
+    return float(out)
+
+
 # ★★ 单位字母的**墨迹判别**（`STAGE2_VALUE_MU` / `STAGE2_VALUE_NU`，默认 0 = 关）。
 #
 # 病：GT 里微符号恒为 **U+03BC**（池子 200 页 110 个、GT10 1 个），我们只输出 ASCII `u`；
@@ -833,11 +899,93 @@ class TextEngine:
                         reads[i][r] = (txt, float(conf))
         if GLYPH_VOTE > 0:
             self._glyph_vote(bgr, gray, boxes, roles, rec, reads)
+        if READ_LENFIX:
+            self._length_fix(gray, boxes, roles, rec, reads)
         if VALUE_MU or VALUE_NU:
             self._fix_units(bgr, boxes, roles, reads)
         return [{"bbox": boxes[i], "reads": reads[i],
                  **({"cfrac": colored_frac(bgr, boxes[i])} if TEXT_INK else {})}
                 for i in range(len(boxes))]
+
+    # ------------------------------------------------------------------
+    def _length_fix(self, gray: np.ndarray, boxes: Sequence[Box], roles: Sequence[str],
+                    rec, reads: List[Dict]) -> None:
+        """`STAGE2_READ_LENFIX`（默认 1）：**用「图上有几个字形」约束解码**，救回被 CTC 吞掉的字。
+
+        病（`open_GT`，2026-10 实测）：贪心 CTC 解码会**整字吞掉**窄字或夹在两个字中间的字 ——
+        `TIM` 读成 `TM`（case12 `U1` 的 `pin_1`）、`TP4333` 读成 `TP433`（case11 `U2` 的型号）。
+        换权重无用（7 个 ckpt 一致读错），补白无用（`_padscan` 只会引入 `T→1` 混淆）。
+        但**图里有几个字是能数的**：列投影的连通段数就是字数，与模型无关。
+
+        做法：贪心串的字数 ≠ 字形段数时，取同一裁片的 `log_softmax` 做 n-best beam 解码，
+        在「字数正好等于段数」的候选里挑分最高的；再乘两道图像侧的罚：
+          * 窄段（宽 ≤ `LENFIX_NARROW`）配宽字母 ⇒ 罚（`W`/`M` 不可能只有 3px 宽）；
+          * 相邻重复字母 ⇒ 罚（这套图的文字里没有 `TT`/`MM` 这类叠字，beam 里却大量产生）。
+        只有候选串和原读法不同才替换；仍保留原置信度（置信度是发射概率的几何平均，
+        换了字符串以后它的含义不变，只是不再对应那条路径）。
+        """
+        if rec is None:
+            return
+        want = [r for r in roles if r in LENFIX_ROLES]
+        if not want:
+            return
+        H, W = gray.shape[:2]
+        for i, b in enumerate(boxes):
+            for r in want:
+                cur = reads[i].get(r)
+                if cur is None or not cur[0]:
+                    continue
+                txt, conf = cur[0], float(cur[1])
+                cb = pad_box(b, self.pad_min, self.pad_frac,
+                             pad_min_y=self.pad_min_y, pad_frac_y=self.pad_frac_y)
+                x0, y0, x1, y1 = (int(round(v)) for v in cb)
+                x0, y0 = max(0, x0), max(0, y0)
+                x1, y1 = min(W, x1), min(H, y1)
+                g = gray[y0:y1, x0:x1]
+                if g.size == 0 or g.shape[1] < 4:
+                    continue
+                dark = g < max(1.0, float(g.mean()) * LENFIX_INK)
+                runs = [t for t in _glyph_runs(dark) if (t[1] - t[0]) >= LENFIX_MINW]
+                n = len(runs)
+                if n < 2 or n > LENFIX_MAXN or n == len(txt):
+                    continue
+                if abs(n - len(txt)) > LENFIX_MAXDIFF:
+                    continue
+                try:
+                    lp = rec.logits_many(gray, [(tuple(cb), r)])[0]
+                except Exception:                                    # noqa: BLE001
+                    continue
+                lp = np.asarray(lp)
+                itos = getattr(getattr(rec, "charset", None), "itos", None) or {}
+                base_lp = _ctc_logprob(lp, txt, itos)
+                hyps = rec._beam(lp, k=LENFIX_K, beam=LENFIX_BEAM)
+                # 只接受「在贪心串里插字」得到的候选（不允许改字/删字）：
+                # 吞字是**插入**型错误，改字是另一类问题（`_BEAM` 里它常常更差）。
+                cands = []
+                for t, _c in hyps:
+                    if len(t) != n or t == txt:
+                        continue
+                    _i = 0
+                    for _ch in t:
+                        if _i < len(txt) and _ch == txt[_i]:
+                            _i += 1
+                    if _i == len(txt):
+                        cands.append(t)
+                if not cands:
+                    continue
+                _best, _best_lp = None, -1e18
+                for t in cands:
+                    clp = _ctc_logprob(lp, t, itos)
+                    if clp < base_lp - LENFIX_MARGIN:
+                        continue
+                    if clp > _best_lp:
+                        _best, _best_lp = t, clp
+                if _best is None:
+                    continue
+                if LENFIX_DBG:
+                    print("[lenfix] %-10s %r(%d) -> %r(%d) n=%d d=%.2f"
+                          % (r, txt, len(txt), _best, len(_best), n, _best_lp - base_lp))
+                reads[i][r] = (_best, conf)
 
     # ------------------------------------------------------------------
     def _fix_units(self, bgr: np.ndarray, boxes: Sequence[Box], roles: Sequence[str],

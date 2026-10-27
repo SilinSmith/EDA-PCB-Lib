@@ -30440,3 +30440,88 @@ python -X utf8 work\_slots3.py work\_o13rb13 12 c0000
 （GT `pin_1 OUT`，位上侧序列端点）与 case11 `USB2` 的 `VCC/D-/D+`（只有 `8`、`2` 两个号可参照）
 是这个方向的两类样本）。
 
+## 5.427 名字必须靠读：型号形似位号的误判 + 「填不满框就是被截断」（open_GT 75.20 → 75.45）
+
+### 5.427.1 病：两处「读对了却用不上」
+
+`open_GT` 塌方页的元件失配里，有两条与「读」直接相关，而且都不是识别器读不出字：
+
+1. **型号被当成位号丢掉**。case11 `U1` 的真实型号是 `TP4333`，文字框在 `partname` 角色下读的就是 `TP4333`（0.78）。
+   可 `fit_partname()` 先问「这个形状该不该是位号」，`DESIGNATOR_RE = ^[A-Za-z]{1,4}\d{1,4}[A-Za-z]?$`
+   正好命中 `TP` + `4333` ⇒ 适配度直接 `0.0`，于是型号框只能用借读来的 `TPA333`（错），
+   `Name` 必然失配（`TP4333 != TPA333`）。实测 `fit_partname('TP4333') = 0.0`、`fit_partname('TPA333') = 1.0`。
+2. **框里还有空，但没读出来**。case4 `U3` 的型号框 `[786,739,860,749]`（74×10）只读出 `TP404M`（6 字），
+   GT 是 `TP4054-MS`（9 字）—— 裁片把尾巴切掉了。全 13 张 429 条事实读数里 `cw/(0.80*h)`（`cw = 框宽/字数`）
+   的分布是 **p50 1.00 / p90 1.11 / p95 1.21 / p99 1.62 / max 2.08**，所以「填满」本身就是一条可量化的先验。
+
+### 5.427.2 做法（两处，各自可回滚）
+
+| 开关 | 默认 | 判据 |
+|---|---|---|
+| `STAGE2_PARTNAME_MODEL_LIKE` | 1 | `MODEL_LIKE_RE = ^[A-Za-z]{2,}\d{3,}[A-Za-z]?$` 命中时**不**按位号形状否掉型号（`R20`/`C151`/`LED4`/`TP12` 都不命中，位号判定不变；`TP4333`/`RP2350B`/`TPA333` 命中） |
+| `STAGE2_READ_FILL` | 1 | `_best_read` 评分乘 `_fill_factor(txt, box)`：`cw > 0.80*h*1.30` 时乘 `0.60`（框里有空 = 这条读法被截断） |
+
+`_best_read(reads, role, fit, box=None)` 新增 `box` 形参；型号/`want`/`pin_name` 三个调用点传入文本框。
+数值来源：`work/_fillstat.py <run>` 打印比值分布与最大的 20 条（`TP404M 1.54`、`TPS120DRR 1.46`、
+`TPEC8O3 1.44`、`NCD6032 1.38` 全部是已知的截断读数，说明判据落在正确的位置上）。
+
+### 5.427.3 读数（open_GT-1020 十三张，离线确定性）
+
+| 臂 | local | comp | case11 | case4 | case6 | official |
+|---|---:|---:|---:|---:|---:|---:|
+| §5.426 基线 `work/_o13rb13` | 75.20 | .8165 | 45.53 | 82.07 | 85.85 | 73.97 |
+| +`PARTNAME_MODEL_LIKE` `work/_o13ml` | 75.30 | — | **47.84** | 80.82 | 85.85 | — |
+| +`READ_FILL` **（定案）** `work/_o13d427` | **75.45** | **.8228** | 47.84 | **82.07** | **86.63** | **74.22** |
+
+- 定案臂分轴：comp 0.8228 / pin 0.7168 / netH 0.8340 / line 0.3617；strict 74.89、official **74.22**。
+- 逐案只有三张动：case11 `45.53→47.84`、case6 `85.85→86.63`、case4 先 −1.25 再随 `READ_FILL` 复原到 82.07（+1.81 净）。
+- 两条机制互相咬合：`MODEL_LIKE` 让「本角色的短读」有了发言权，`READ_FILL` 才把它按下去，
+  于是 `TP4333`（case11）与 `TP4054-MS`（case4）同时成立。
+
+### 5.427.4 三条判否（同一轮实测，代码保留开关、默认关）
+
+| 试验 | 读数 | 结论 |
+|---|---:|---|
+| `STAGE2_PINNUM_SEQ=1`（同侧连续整数 + 沿侧单调，两格以上缺号也补） | 激进版 **73.29（−2.16）**（case5 pin .606→.235、case7 .800→.308） | 一侧只读到 1 个号时「窗口+方向」仍唯一，补出来的号系统性错 |
+| 同上，收紧到「已读号 ≥2 且 ≥ 半数槽位」 | **75.48（+0.03）** | 只剩 case11 +0.50 / case13 −0.17，在抖动带内，默认关 |
+| `STAGE2_READ_LENFIX`（字形数约束解码，精确 CTC 前向，`MARGIN=3.0`） | 单独 **75.46（Δ0）** | 机制本身成立（case12 `TM→TIM` 差 2.6 nats、case11 `TP433→TP4333` 差 2.19 nats），但救回的名字那格**没有脚号**，发不出引脚 ⇒ 默认 1、读数中性 |
+
+普查依据（`work/_sidseq.py`）：`open_GT` 28 条多脚侧里 **21 条严格单调连号**（12 递减 + 9 递增），
+7 条乱序（`case8 U1` 左 `16,6,2,1,10,14,12,15,9,11`、`case11 USB1` 右 `B9,A5,B5,A9` 非数字）。
+所以「连续」这条先验是对的，坏在**已读号太少时方向不唯一**。
+
+### 5.427.5 复现
+
+```powershell
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+  -output work\_o13d427 -offline -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"
+New-Item -ItemType Directory -Force work\_fast_out_o13d427\final_results | Out-Null
+Copy-Item work\_o13d427\final_results\*_Pred.json work\_fast_out_o13d427\final_results\
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_percase.py o13d427
+python -X utf8 work\_strictpow.py o13d427 1 2 3 4 5 6 7 8 9 10 11 12 13
+python -X utf8 work\_fillstat.py o13d427      # 填充比值分布
+python -X utf8 work\_sidseq.py                 # GT 同侧号码单调性普查
+```
+
+### 5.427.6 顺手体检：网配对没有系统性坐标错
+
+`work/_netdelta2.py <tag> [case…]`（按 `work/_line13.py` 的匹配方式：
+`M._net_sets(gt["nets"], gt["components"], True)` + `M.match_nets(…, soft=True)`，
+注意配对是 `(pred_i, gt_j)`）逐网量「我方边集合中心 − GT 边集合中心」：
+
+| case | 配上网 | 中心差 ≤15px | dx 中位 | dy 中位 |
+|---|---:|---:|---:|---:|
+| 1 | 26 | 12 | +0.5 | −0.7 |
+| 2 | 24 | 17 | +4.9 | +0.4 |
+| 3 | 16 | 13 | −0.4 | +1.6 |
+| 5 | 17 | 8 | +0.0 | −0.5 |
+| 9 | 11 | 8 | −0.7 | −0.1 |
+| 11 | 3 | 0 | +33.7 | −4.0 |
+| 12 | 9 | 2 | +4.5 | −1.2 |
+| 13 | 8 | 1 | +16.7 | −4.4 |
+
+⇒ 中位偏移接近 0（没有整体平移这类坐标 bug），但**塌方页能配上的网只有 3~9 个**（case1 有 26 个），
+这是「顶点集合本来就不同」的问题，不是几何平移；也就是说 `netH` 的损失仍然回到引脚键上。
+
