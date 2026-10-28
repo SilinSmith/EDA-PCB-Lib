@@ -31703,3 +31703,78 @@ python -X utf8 work\_portbox.py work\_cv_run_o13pkl
 python -X utf8 work\_unkeyed.py o13kl 1 2 3 4
 ```
 
+
+## 5.444 池子回归「−0.66」的归因：一页 `MemoryError` 空壳 + CV 增加空产物判据
+
+### 5.444.1 现象
+
+`work/_cv.py o13pkl --pool --pool-ref ef20`（30 案、跨 6 族）报：
+
+```
+pool: mean 27.35  (Δ -0.66, worst 0050 -21.15)
+```
+
+单看这一行会得出「端口键改动让池子掉了 0.66 分」的结论 —— 实际不是。
+
+### 5.444.2 归因过程
+
+1. `work/_fast_out_cvpool_o13pkl/final_results/0050_Pred.json` 的 `components / nets / pins` **全是 0 条** ⇒ 这一页根本没跑出东西，不是分低。
+2. `work/_fast_out_cvpool_o13pkl/_lanes/lane3/stdout.log`：
+
+```
+[11:54:58]   [4] 0050   阶段二失败 MemoryError: Unable to allocate 12.2 MiB
+                        for an array with shape (2850, 4500) and data type bool
+[11:55:32]   0050       没有产物（阶段一/二失败）→ 已写空壳
+[11:55:33] 导出 6 份 0050-lane 的 <case>_Pred.json（另有 1 份空壳兜底）
+```
+
+3. 单独重跑该页（无并发）：
+
+```powershell
+python -X utf8 eda-pcb\tools\eval\fast.py --cases 0050 --engine protocol4 --no-vlm --out cvp50 --save cvp50
+```
+
+| 口径 | 基线 `ef20.json` | 重跑 `cvp50.json` | Δ |
+|---|---:|---:|---:|
+| 0050 score | 21.1486 | 21.1469 | **−0.002** |
+
+4. 重算整套池子（`work/_fast_base/ef20.json` vs `cvpool_o13pkl.json`）：
+
+| 口径 | n | Δ |
+|---|---:|---:|
+| 全量 | 30 | **−0.664** |
+| 剔除 0050 | 29 | **+0.042** |
+
+剔除后最差 `0046 −0.227`、`0097 −0.203`、`0001 −0.162`，最好 `0091 +0.632`、`0093 +0.450`、`0087 +0.396`
+⇒ 端口键与其它本轮改动**跨族中性、微正**，没有回归。
+
+5. 根因：本机同时跑着另一个项目的训练/服务进程（`scripts/train.py`、
+   `on_big_cores.py -m silinflow.cli.main serve`），4 lane 再叠上去就吃到 `(2850, 4500) bool`
+   这种 12 MiB 的分配都失败。
+
+### 5.444.3 做法：CV 把「没产出」和「分低」分开
+
+`work/_cv.py` 两处加判据（不改主尺）：
+
+* `stage_local` 每页多记 `"empty": len(pr["components"]) == 0 and len(gt["components"]) > 0`；
+* `stage_pool` 跑完逐个读 `work/_fast_out_cvpool_<tag>/final_results/<case>_Pred.json`，`components` 为 0 或缺文件记进 `pool["empty"]`；
+* 打印新增 `NO-OUTPUT: …` / `pool NO-OUTPUT: …` 两行；
+* 判决里 `empty` 与 `pool.empty` 都直接判 **FAIL**（理由 `no-output` / `pool no-output`），
+  与「低于基线」区分开 —— 空壳不该被当成能力差距，也不该被静默记为 PASS。
+
+改动后自校验：`work/_cv.py o13pkl --baseline o13pkl` ⇒ 13/13 clean、`VERDICT: PASS`（无 NO-OUTPUT 行）。
+
+### 5.444.4 纪律（写进流程）
+
+* 池子（30 案 ≈36 min）与契约自检（30 案 ≈50 min）都必须在**机器空闲**时跑；
+  同刻只跑一条 `submission/run.py`（本轮 OOM 两次都是并发叠出来的）。
+* 池子读数先看有没有 `NO-OUTPUT`：有就先重跑该页，再谈 Δ。
+
+### 5.444.5 复现
+
+```powershell
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_cv.py o13pkl --baseline o13pkl           # 13 张四级判决
+python -X utf8 work\_cv.py o13pkl --pool --pool-ref ef20      # 池子 30 案（要空闲机器）
+```
