@@ -32120,3 +32120,48 @@ python -X utf8 work\_cv.py o13sp40 --run --baseline o13g14                      
 python -X utf8 work\_cv.py o13sp42 --run --baseline o13g14 --env STAGE2_PIN_STAMP_SPAN=42   # 77.89（塌）
 python -X utf8 work\_cv.py o13tSTAGE2PIN_STAMP0 --run --baseline o13g14 --env STAGE2_PIN_STAMP=0
 ```
+
+# §5.451 近重复边并集的跨度闸门：14 → 16（78.50 → **78.56 local / 77.33 official**）
+
+## 5.451.1 为什么这个常数要跟着 §5.450 动
+
+`merge_overlapping_edges` 只把两条近共线、投影重叠的边合成一条，但合成用**并集跨度**，
+所以会把「本来只该留较长那条」的碎边对也拉长。`STAGE2_EDGE_OVERLAP_GROW` 就是这道的闸门：
+并集后跨度增长超过它就不合并。§5.447 定值时（无源件脚点还在 ±20px）扫出的是 4~14 平台期，
+取 14；§5.450 把脚点挪到 ±40 之后，导线端头整体外移，同样的边对「增长量」分布也随之上移，
+闸门的最优位置必须重扫。
+
+## 5.451.2 读数（`work/_cv.py … --run --baseline o13sp40 --env STAGE2_EDGE_OVERLAP_GROW=G`，13 张 CPU 离线）
+
+| G | local | line | 判决 |
+|---:|---:|---:|---|
+| 10 | 78.45 | 0.458 | FAIL（−0.05） |
+| **14（§5.447 旧默认）** | **78.50** | 0.463 | WARN（5 −0.39） |
+| **16（新默认）** | **78.56** | **0.469** | **PASS** |
+| 18 | 78.55 | 0.468 | PASS |
+| 20 | 78.55 | 0.468 | PASS |
+| 22 | 78.16 | 0.429 | FAIL（−0.34） |
+| 26 | 78.19 | 0.431 | FAIL（−0.32） |
+
+- 平台期 **16~20**（78.55~78.56），两侧都掉 ⇒ 取平台左端的 **16**（不是取最高点的 0.01 差异，
+  而是取「离两侧塌陷都最远」的位置）。
+- 22 起塌的机制：并集不再被拦，`merge_overlapping_edges` 把「一条长边 + 一条贴着的短边」
+  拉成超出 GT 的长边，`_seg_distance` 取两端点最大距离 ⇒ 两端同时超 `line_tol=5` 就全丢。
+
+## 5.451.3 同轮复扫（跨度 40 之后，其余旋钮全部保持原值）
+
+| 设置 | local | 结论 |
+|---|---:|---|
+| 基线 `o13sp40` | 78.50 | — |
+| `STAGE2_NET_WELD=21` / `=23` | 78.47 | 19 仍最优 |
+| `STAGE2_EDGE_SPLIT_PIN=3.0` | 78.50 | Δ0 |
+| `STAGE2_EDGE_MIN_FINAL=16` / `=24` | 78.46 | 20 仍最优 |
+
+## 5.451.4 复现
+
+```
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_cv.py o13d451 --run --baseline o13sp40      # 78.56 / 77.33，契约 13/13 clean
+python -X utf8 work\_cv.py o13rg16 --run --baseline o13sp40 --env STAGE2_EDGE_OVERLAP_GROW=16   # 同一读数（默认即 16）
+python -X utf8 work\_cv.py o13rg22 --run --baseline o13sp40 --env STAGE2_EDGE_OVERLAP_GROW=22   # 78.16（塌）
+```

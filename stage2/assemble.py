@@ -913,7 +913,7 @@ EDGE_OVERLAP_MIN = float(os.environ.get("STAGE2_EDGE_OVERLAP_MIN", "0.35"))  # �
 EDGE_OVERLAP_UNION = env_on("STAGE2_EDGE_OVERLAP_UNION", "1")
 # ★ `STAGE2_EDGE_OVERLAP_GROW`（默认 **0** = 不限）：取并集后**跨度增长超过这么多 px** 时，
 #   宁可不合并（两条都留）—— 增长大的合并会把一条边拉得比 GT 那条长出一大截。
-EDGE_OVERLAP_GROW = float(os.environ.get("STAGE2_EDGE_OVERLAP_GROW", "14"))
+EDGE_OVERLAP_GROW = float(os.environ.get("STAGE2_EDGE_OVERLAP_GROW", "16"))
 
 # ★★ 自由端外推（`STAGE2_EDGE_EXT_FREE`，默认 8 px，0 = 关）。
 #
