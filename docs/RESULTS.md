@@ -31854,3 +31854,57 @@ python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_
   -output work\_o13dbgw -offline -device cpu -cases "10,13,5"
 # 打印落在 work\_o13dbgw\_lanes\lane*\stdout.log
 ```
+
+# §5.446 端口符号：框长到整支箭头 + 标签贴边认领（77.40 → 77.51）
+
+## 5.446.1 病
+
+端口符号（`net_input`/`net_output`）在 GT 里是**实心红箭头**（矩形 + 箭头尖，长 ~82px），外层标签
+`VIN`/`VIN_3` 紧贴箭头左/上侧。我们的框只有箭头左侧一段（case12 `VIN [1314.7,464,1358.7,493]` vs
+GT `[1258,464,1339,493]`，逐坐标差 22.7~58px），因此
+
+- 框过不了 `bbox_tol=20`；
+- 标签认领用「标签中心 ↔ 框中心」距离（`NEAR_H=26`），框一旦被撑长，中心就飘走，标签反而认不到。
+
+## 5.446.2 做法
+
+`eda-pcb/stage1/symbox.py`（`STAGE1_SYM_BOX` 默认 1 的既有钩子里）：
+
+1. 把原来的连通块搜索抽成 `_grab(mask, lab, stats, n, box, W, H)`；
+2. 新增 `_port_extent(mask, box)`：沿主轴逐列/行统计「带内红像素厚度」，从当前框最厚列向两侧走，
+   连续 3 列低于 `max(3, 中位厚度 × SYM_PORT_FRAC)` 即停，得到箭头的完整跨度（受 `SYM_PORT_CAP` 限制）；
+3. 端口的生长顺序改成 **先 `_grab`（抓箭头的连通块）→ 再 `_port_extent`（补齐箭头尖）**：
+   go 之前直接在标签小框上做剖面，只能量到标签后面的第一小段。
+4. 新开关：`STAGE1_SYM_PORT`（默认 1）、`STAGE1_SYM_PORT_CAP`（60）、`STAGE1_SYM_PORT_FRAC`（0.6）、
+   `STAGE1_SYM_PORT_PAD`（4）。
+
+`eda-pcb/stage2/pwlabel.py`：
+
+- `PORT_TYPES` 端口符号走单独的距离判据：中心距 ≤ `STAGE2_POWER_LABEL_NEAR_PORT`（默认 46）
+  **或** 标签框到符号框的边距 ≤ `STAGE2_POWER_LABEL_PORT_GAP`（默认 26，新 `_gap()` 助手）。
+
+## 5.446.3 读数（`work/_cv.py`，13 张、纯 CPU、离线）
+
+| 臂 | local | official | case12 | 备注 |
+|---|---:|---:|---:|---|
+| `o13d445`（§5.445 基线） | 77.40 | 76.17 | 55.20 | comp 0.850 / netH 0.848 |
+| `o13pg`（只加 `_port_extent`，顺序错） | 77.40 | 76.17 | 55.20 | Δ0 —— 生长被随后的 `_grab` 覆盖 |
+| `o13pg2`（`_grab`→`_port_extent` 顺序对，但标签没挂上） | 77.40 | 76.17 | 55.20 | 框已对上（`[1260,464,1358.7,493]`），键仍是 `pNNN` |
+| **`o13pg3`（框 + 贴边标签一起）** | **77.51** | **76.28** | **56.63（+1.43）** | comp 0.853；其余 12 张逐位不变 |
+
+- case12 的端口现在发 `VIN`（贴 GT `VIN`）、`VIN_2`（贴在 GT `VIN_3` 的箭头上）、`p014`（未挂标签）。
+  GT 那页有 5 颗（`VIN`/`VIN_2`/`VIN_3`/`VIN_4`/`VOUT`），我们只检出 3 颗 ⇒ 键序号与 GT 的编号次序
+  不同，`VIN_2` 落在 `VIN_3` 的位置上，仍算错；剩下两颗 `VOUT`/`VIN_4` 根本没有件（最近件 83~119px）。
+
+## 5.446.4 离线判据（`work/_portgrow2.py`）
+
+对 13 张 GT 端口框逐坐标 ≤20 判合格：原样 **2/9**，加生长后 **5/9**（case12 `0/5 → 3/5`、case1 `2/4` 不变）。
+参数网格 `frac 0.5/0.6/0.75 × pad 2/4 × cap 60`：`frac ≥ 0.6` 都到 3/5，取 0.6 / pad 4 / cap 60。
+
+## 5.446.5 复现
+
+```
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_portgrow2.py work\_cv_run_o13d445      # 离线合格率 2/9 -> 5/9
+python -X utf8 work\_cv.py o13pg3 --run --baseline o13d445  # 13 张：77.40 -> 77.51
+```

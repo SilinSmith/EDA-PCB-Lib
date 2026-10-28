@@ -41,6 +41,12 @@ ON = env_on("STAGE2_POWER_LABEL_ROT", "1")
 CONF = float(os.environ.get("STAGE2_POWER_LABEL_CONF", "0.70"))
 NEAR = float(os.environ.get("STAGE2_POWER_LABEL_NEAR", "46.0"))
 NEAR_H = float(os.environ.get("STAGE2_POWER_LABEL_NEAR_H", "26.0"))
+# ★ 端口符号（net_input/output/...）的标签比电源符号印得更远（§5.446）：
+#   case12 三颗端口的标签中心距 32~36px、读数很干净（VIN 0.92~1.00），却因 NEAR_H=26 一颗都没认领。
+PORT_NEAR = float(os.environ.get("STAGE2_POWER_LABEL_NEAR_PORT", "46.0"))
+PORT_GAP = float(os.environ.get("STAGE2_POWER_LABEL_PORT_GAP", "26.0"))
+PORT_TYPES = frozenset(("net_input", "net_output", "net_short", "net_bidirection"))
+
 DBG = env_on("STAGE2_POWER_LABEL_DBG", "0")
 
 #: 要补网名的类型（地符号不在内：它的 value 恒为字面 `GND`，`assemble.py` 直接给）。
@@ -76,6 +82,13 @@ def _center(box):
 
 def _key(box):
     return tuple(round(float(v), 1) for v in box[:4])
+
+
+def _gap(a, b):
+    """两轴对齐矩形的边到边间距（相交＝0）。"""
+    dx = max(0.0, max(float(a[0]), float(b[0])) - min(float(a[2]), float(b[2])))
+    dy = max(0.0, max(float(a[1]), float(b[1])) - min(float(a[3]), float(b[3])))
+    return (dx * dx + dy * dy) ** 0.5 if dx and dy else max(dx, dy)
 
 
 def _has_label(rec):
@@ -164,7 +177,9 @@ def fill(bgr, doc, a, engine, reads=None) -> dict:
         bb = c.get("bbox_img") or c.get("bbox_json")
         if not bb or len(bb) < 4:
             continue
-        need[str(cid)] = _center(bb)
+        need[str(cid)] = _center(bb) + (
+            str(c.get("type") or "").strip().lower() in PORT_TYPES,) + (
+            [float(v) for v in bb],)
     if not need:
         return stat
     claimed = _claimed(a, comps)
@@ -199,9 +214,14 @@ def fill(bgr, doc, a, engine, reads=None) -> dict:
             continue
         bx, by = _center(b)
         best = None
-        for cid, (cx, cy) in need.items():
-            d = ((bx - cx) ** 2 + (by - cy) ** 2) ** 0.5
-            if d <= NEAR_H and (best is None or d < best[0]):
+        for cid, ctr in need.items():
+            d = ((bx - ctr[0]) ** 2 + (by - ctr[1]) ** 2) ** 0.5
+            _port = len(ctr) > 3 and ctr[2]
+            ok = d <= (PORT_NEAR if _port else NEAR_H)
+            if not ok and _port and _gap(b, ctr[3]) <= PORT_GAP:
+                # 端口框可能已被撑到整支箭头，中心飘走 ⇒ 只要标签贴着框边就算
+                ok = True
+            if ok and (best is None or d < best[0]):
                 best = (d, cid)
         if best is not None:
             cands.append((best[0], _key(b), txt, conf, b, best[1]))
@@ -233,8 +253,8 @@ def fill(bgr, doc, a, engine, reads=None) -> dict:
     for b in tall:
         bx, by = _center(b)
         best = None
-        for cid, (cx, cy) in need.items():
-            d = ((bx - cx) ** 2 + (by - cy) ** 2) ** 0.5
+        for cid, ctr in need.items():
+            d = ((bx - ctr[0]) ** 2 + (by - ctr[1]) ** 2) ** 0.5
             if d <= NEAR and (best is None or d < best[0]):
                 best = (d, cid)
         if best is not None:

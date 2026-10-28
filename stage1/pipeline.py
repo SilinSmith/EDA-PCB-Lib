@@ -821,6 +821,9 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         _sb = _symbox.grow(bgr, comps)
     except Exception as _e:                                          # noqa: BLE001
         _sb = {"on": False, "error": f"{type(_e).__name__}: {_e}"}
+    if os.environ.get("STAGE1_SYM_BOX_DBG"):
+        print("[symbox doc] %s" % [(c.get("id"), c.get("type"), c.get("bbox_img"))
+                                   for c in comps if str(c.get("type") or "") in _symbox.PORT_TYPES])
     doc = {
         "case": case.case_id,
         "image": {"path": str(case.png_path), "w": W, "h": H},
