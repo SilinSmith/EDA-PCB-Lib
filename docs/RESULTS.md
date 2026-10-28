@@ -32024,3 +32024,41 @@ python -X utf8 work\_lednear.py o13g14 11                          # GT 的 led/
 $env:RUNS='work\_cv_run_o13g14'; $env:SCALE='3'
 python -X utf8 work\_crop2.py 11 1170 1240 320 430 work\_c11gnd.png
 ```
+
+# §5.449 冻结面回归（§5.447 之后）+ 三横杠检测原型判否
+
+## 5.449.1 回归（代码 = commit `cec6600`，纯 CPU）
+
+| 检查 | 结果 |
+|---|---|
+| 主尺 `work/_cv.py o13g14 --baseline o13pg3` | **78.05 local / 76.82 official**，comp 0.853 / pin 0.738 / netH 0.848 / line 0.430，axis loss 21.95 |
+| 契约（自跑 13 份交付 Pred 的 E4/E5） | **13/13 clean** |
+| 池子（6 族 30 案、`protocol4 --no-vlm`、`--pool-ref ef20`） | mean **28.00**、**Δ −0.01**、worst `0148 −1.22` ⇒ **PASS**（跨族中性） |
+| 契约自检 `work/_smoke.py`（job `pwsh-601`，冻结后跑） | Altium Designer 6/6 · Datasheet 6/6 · KiCad 4/4 · jlc 6/6 · kicad 2/2 · other 6/6，**结论: 全通过**、exit 0 |
+
+⇒ §5.447 的「并集跨度只在增长 ≤14px 时做」在 13 张主尺上 +0.54，在池子上 −0.01（中性），契约无损。
+
+## 5.449.2 判否：三横杠（GND）符号检测原型
+
+动机：case11 的 `∅346/∅695` 是两颗 90° 旋转、纵向错 20px 的叠画 GND，stage1 那片**连候选都没有**（§5.448），补两件的上界是 +2.97（≈均值 +0.23）。
+
+两版原型（都在 `work/`）：
+
+- `work/_gndbar2.py`：红掩膜 + 方向形态学开运算取「细条」连通块，再对三条做「等距 + 中心对齐 + 中间最长」成组。**失败**：条与竖杆/导线连成一块，`h<=5` 的厚度闸门把它们全滤掉 ⇒ case11 只剩 1 个候选、case3 为 0。
+- `work/_gndbar3.py`：改用 `cv2.HoughLinesP`（`minLineLength=7`、`maxLineGap=1`）取短线段再成组。检出框普遍只有 10~20px（碎段拼不出整条的 42×20），命中 **case3 1/9、case11 0/5、case1 0/17**。
+
+判否理由（不只是「没调好」）：
+
+1. 收益面很窄——除 case11 那一对外，其余页的 GND 框 stage1 已经合格（§5.432 生长后合格率 98%），这条只为 +0.23 均值服务；
+2. 真正缺的是「叠画实例切分」（§5.448 的上界 +0.52 里 LED 对占一半，而 LED 不是三横杠形态），单做一个 GND 形态检测覆盖不到；
+3. 形态学/Hough 在 2px 抗锯齿细线上都不稳，需要「按符号模板做多尺度匹配」这类检测模型级方案 ⇒ 归入 GPU 档（HANDOFF §8 第 ②条）。
+
+## 5.449.3 复现
+
+```
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_gndbar3.py 11        # Hough 版：hit 0/5
+python -X utf8 work\_gndbar2.py 3         # 形态学版：cand 0
+python -X utf8 work\_cv.py o13g14 --baseline o13pg3
+python -X utf8 work\_cv.py o13g14 --pool --pool-ref ef20
+```
