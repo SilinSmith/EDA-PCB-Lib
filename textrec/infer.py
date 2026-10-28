@@ -103,11 +103,15 @@ def normalize_device(device) -> str:
 
 class Recognizer:
     def __init__(self, model: CRNN, charset: Charset, device: torch.device,
-                 img_h: int = None, max_w: int = None):
+                 img_h: int = None, max_w: int = None,
+                 width_reduction: int = None):
         self.model = model.to(device).eval()
         self.charset = charset
         self.device = device
-        self.img_h = img_h or C.IMG_H
+        self.img_h = int(img_h or C.IMG_H)
+        # 解码时步数用它，不与 `model` 里的宽度池化因子脱钩（否则截断长度算错）。
+        self.width_reduction = int(
+            width_reduction or getattr(model, "width_reduction", None) or C.WIDTH_REDUCTION)
         self.max_w = max_w or C.MAX_W
         # 同一个宽度桶内一次前向的样本数上限（桶内宽度全等，补白为 0）。
         self.bucket_max = max(1, int(os.environ.get("TEXTREC_BUCKET_MAX", "64")))
@@ -123,17 +127,24 @@ class Recognizer:
         ck = torch.load(ckpt, map_location="cpu", weights_only=False)
         charset = Charset(ck["charset"])
         cfg = ck.get("config", {}) or {}
-        model = CRNN(charset.num_classes)
+        # 分辨率由**这份权重自己**的 config 决定，不再读全局 `C.IMG_H`：
+        # 同一进程里可以同时装 32px 与 64px 的模型（`STAGE2_CKPT_ROLES_CKPT`
+        # 的混合集成就是这种用法），各用各的池化结构。
+        # `TEXTREC_IMG_H` / `TEXTREC_WR` 只用于「拿老权重按新结构试跑」的实验，
+        # 显式设置时才覆盖。
+        env_h = (os.environ.get("TEXTREC_IMG_H") or "").strip()
+        env_wr = (os.environ.get("TEXTREC_WR") or "").strip()
+        ck_h = int(cfg.get("img_h") or C.IMG_H)
+        ck_wr = int(cfg.get("width_reduction") or C.WIDTH_REDUCTION)
+        img_h = int(env_h) if env_h else ck_h
+        wr = int(env_wr) if env_wr else ck_wr
+        if env_h or env_wr:
+            print("[textrec] %s：ckpt 是 %dpx/WR%d，按环境变量跑成 %dpx/WR%d"
+                  % (ckpt.name, ck_h, ck_wr, img_h, wr))
+        model = CRNN(charset.num_classes, img_h=img_h, width_reduction=wr)
         model.load_state_dict(ck["model"])
-        # 裁剪高度必须与 `CRNN` 的池化层数一致，而模型是按**当前 config** 建的：
-        # 老 checkpoint 的 `config["img_h"]` 是训练时的值，用它会让裁剪高度和网络
-        # 结构对不上（实测 IMG_H=64 + ckpt 里的 32 ⇒ `MaxPool2d` 把高度压成 0）。
-        img_h = C.IMG_H
-        ck_h = cfg.get("img_h")
-        if ck_h and int(ck_h) != int(C.IMG_H):
-            print("[textrec] 用当前 config 的 IMG_H=%d 覆盖 ckpt 里的 %s"
-                  % (C.IMG_H, ck_h))
-        r = cls(model, charset, dev, img_h=img_h, max_w=cfg.get("max_w", C.MAX_W))
+        r = cls(model, charset, dev, img_h=img_h, max_w=cfg.get("max_w", C.MAX_W),
+                width_reduction=wr)
         r.ckpt_meta = {k: v for k, v in ck.items()
                        if k not in ("model", "opt", "charset")}
         return r
@@ -215,7 +226,7 @@ class Recognizer:
                 idx = logp.argmax(2)                              # T,B
                 # 有效时步 = w // WIDTH_REDUCTION（与训练侧 input_len 同式）；
                 # 桶内宽度全等，所以这里恒等于 T，截断是恒等变换，留着只为防御。
-                tmax = max(1, min(idx.shape[0], w // WIDTH_REDUCTION))
+                tmax = max(1, min(idx.shape[0], w // self.width_reduction))
                 for k, i in enumerate(part):
                     out[i] = self._decode(idx[:tmax, k].tolist(),
                                           logp[:tmax, k].tolist())
@@ -253,7 +264,7 @@ class Recognizer:
         T = idx.shape[0]
         out = []
         for b in range(len(arrays)):
-            tmax = max(1, min(T, widths[b] // WIDTH_REDUCTION + EXTRA_STEPS))
+            tmax = max(1, min(T, widths[b] // self.width_reduction + EXTRA_STEPS))
             out.append(self._decode(idx[:tmax, b].tolist(), logp[:tmax, b].tolist()))
         return out
 
@@ -288,7 +299,7 @@ class Recognizer:
             role_t = torch.tensor([_role_id(role)], dtype=torch.long,
                                   device=self.device)
             logp = self.model(batch, role_t).log_softmax(2)[:, 0, :].cpu().numpy()
-            tmax = max(1, min(logp.shape[0], a.shape[1] // WIDTH_REDUCTION + EXTRA_STEPS))
+            tmax = max(1, min(logp.shape[0], a.shape[1] // self.width_reduction + EXTRA_STEPS))
             out.append(self._beam(logp[:tmax], k=k, beam=beam))
         return out
 
@@ -312,7 +323,7 @@ class Recognizer:
                                   device=self.device)
             with torch.no_grad():
                 logp = self.model(batch, role_t).log_softmax(2)[:, 0, :].detach().cpu().numpy()
-            tmax = max(1, min(logp.shape[0], a.shape[1] // WIDTH_REDUCTION + EXTRA_STEPS))
+            tmax = max(1, min(logp.shape[0], a.shape[1] // self.width_reduction + EXTRA_STEPS))
             out.append(logp[:tmax].astype(np.float32))
         return out
 

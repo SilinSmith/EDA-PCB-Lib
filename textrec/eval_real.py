@@ -149,6 +149,39 @@ def main(argv=None) -> int:
     print("%-12s %7d %8.4f %9.4f %9d"
           % ("ALL", tot_n, tot_ed / max(1, tot_ln), tot_ex / max(1, tot_n), tot_ex))
 
+    # ---- 留出 / 训练过的真实 case 分开报（`TEXTREC_REAL_HOLDOUT=N`）----
+    # `split == "real"` 的这批既是 `--include-real` 的训练数据、又是这份评测集，
+    # 不分开就会出现「真实语料涨 8 个点、管线反而掉分」这种自相矛盾的结论。
+    if C.REAL_HOLDOUT <= 0:
+        print("\n[留出] TEXTREC_REAL_HOLDOUT=0（未划分）：上面的真实数字含训练过的 case，"
+              "不能当泛化看")
+    else:
+        for label, keep in (("holdout(未训练)", True), ("seen(训练过)", False)):
+            _st = defaultdict(lambda: [0, 0, 0, 0])
+            _ncase = 0
+            for k in keys:
+                _sub = [r for r in by_image[k] if C.is_real_holdout(r.get("case")) is keep]
+                if not _sub:
+                    continue
+                _ncase += len({r["case"] for r in _sub})
+                with Image.open(k) as im:
+                    im = im.convert("L")
+                    preds = rec.read_many(im, [(r["bbox"], r["role"]) for r in _sub])
+                for r, (pred, _gt) in zip(_sub, preds):
+                    s = _st[r["role"]]
+                    s[0] += levenshtein(pred, r["text"])
+                    s[1] += max(1, len(r["text"]))
+                    s[2] += 1
+                    s[3] += int(pred == r["text"])
+            if not _st:
+                continue
+            tn = sum(v[2] for v in _st.values())
+            tl = sum(v[1] for v in _st.values())
+            te = sum(v[0] for v in _st.values())
+            tx = sum(v[3] for v in _st.values())
+            print("[留出] %-16s n=%5d  CER %.4f  exact %.4f  (cases=%d)"
+                  % (label, tn, te / max(1, tl), tx / max(1, tn), _ncase))
+
     # ---- role × GT 长度：验收判据（§5.156 人类裁定 / §5.161 预注册）看的表 ----
     if args.by_len and stats_len:
         buckets = ("1-2", "3-4", "5-7", "8-11", "12+")

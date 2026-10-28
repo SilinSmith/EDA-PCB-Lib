@@ -32294,3 +32294,109 @@ python -u -X utf8 -m textrec.train --resume weights\textrec_best.pt --epochs 73 
 python -X utf8 -m textrec.eval_real --ckpt textrec\runs\ft64c\best.pt --device cuda
 python -X utf8 work\_recA.py "eda-pcb\weights\textrec_best.pt" 12 679 273 710 287 pin_name work\_cv_run_o13g14
 ```
+
+## 5.454 查 bug（识别器换权重后管线掉分）：两个真 bug + 一个被证否的假设
+
+### 5.454.1 症状
+
+§5.453 的 64px 满量重训在「真实 32 案」上 exact `0.7224 → 0.8056`（+8.3pp），
+但同权重接进管线却是 **78.56 → 77.87（−0.69）**。数字互相矛盾 ⇒ 先查 bug，不做调参。
+
+### 5.454.2 真 bug ①：`Recognizer.load` 把全局 `IMG_H` 强加给每一份权重
+
+`textrec/infer.py::Recognizer.load` 原来写死 `img_h = C.IMG_H`，并用它建 `CRNN`。
+后果两条：
+
+1. 想用 64px 权重必须改全局 env，`32px` 与 `64px` **无法在同一进程里共存**；
+2. `STAGE2_CKPT_ROLES_CKPT`（`text.py:788 recognizer2`）与 `STAGE2_CKPT_ENS` 本来
+   就是「一个进程装两份权重」的机制 —— 一份 64px 一份 32px 时，后装的那份会被按
+   前者的池化结构建网，`load_state_dict` **不会报错**（池化无参数），凭空产出乱码。
+
+修法：分辨率跟着**权重自己的** `config` 走（`img_h` / `width_reduction` 都存进了 ckpt），
+`TEXTREC_IMG_H` / `TEXTREC_WR` 只在显式设置时覆盖（实验用）；
+`CRNN.__init__` 与 `_cnn_layers()` 接受 `img_h` / `width_reduction`；
+解码时步数改用 `self.width_reduction`（原先读模块级常量，与网络脱钩）。
+
+验证（`work/_ckmix.py`，同一进程先后装两份权重，case12 `U1` 的 `TIM` 框 `[679,273,710,287]`）：
+
+| 权重 | img_h | 读法 |
+|---|---:|---|
+| `weights/textrec_best.pt` | 32 | `TM` 0.994（与 §5.428 一致） |
+| `textrec/runs/ft64full/best.pt` | 64 | **`TIM` 0.799** |
+
+⇒ 64px 权重确实补回了 32px 七个权重都读不出的那个 `I`；而「混装」以前是坏的。
+
+### 5.454.3 真 bug ②：`eval_real` 与 `--include-real` 是同一份数据（评测泄漏）
+
+`manifest.jsonl` 里 `split == "real"` 的 **6642 条 / 32 个 case** 同时是
+`--include-real` 的训练数据与 `eval_real.py` 的评测集（`train.py:233-236` 只按
+`split` 分流，`eval_real.py:77` 直接取 `split == "real"`）⇒ §5.453 那个
+「真实 +8.3pp」是在训练集上量的，不能当泛化。
+
+修法：`config.REAL_HOLDOUT`（`TEXTREC_REAL_HOLDOUT=N`，按 case 名 `crc32` 留出 1/N，
+默认 0＝旧行为）+ `config.is_real_holdout(case)`；`train.py` 的 `--include-real`
+跳过留出 case；`eval_real.py` 末尾分别报 `holdout(未训练)` 与 `seen(训练过)`。
+
+诚实读数（`TEXTREC_REAL_HOLDOUT=5` ⇒ 6 个 case / 935 条）：
+
+| 权重 | ALL exact | holdout exact | seen exact |
+|---|---:|---:|---:|
+| `weights/textrec_best.pt`（32px 基线） | 0.7224 | **0.7070** | 0.7249 |
+| `textrec/runs/ft64full/best.pt`（64px） | 0.8166 | **0.8214** | 0.8158 |
+| `textrec/runs/wr4/best.pt`（32px、宽度 T 翻倍） | 0.7279 | **0.7390** | 0.7261 |
+
+⇒ 64px 是**真泛化增益 +11.4pp**（holdout 甚至略高于 seen，不像记忆）；
+宽度降采样 4 单独只值 +3.2pp。**识别器这一层没有骗人。**
+
+### 5.454.4 那 −0.69 从哪来：绑定层，不是识别器
+
+同一个 64px 权重（`work/_cv_run_o13v64c`，无桶、cuda），逐页对基线：
+
+| case | 1 | 4 | 5 | 7 | 9 | 11 | 13 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Δ | −0.70 | −3.78 | −3.28 | **+3.33** | **−6.02** | +2.31 | −4.33 |
+
+拆开看是两处**绑定**被更好的读数打乱，而不是读数变差：
+
+- **case1 元件轴 0.602→0.518**：`R18 d=203.3`、`R17 d=54.9`、`R16 d=53.4`
+  （`work/_compok4.py work\_cv_run_o13v64c 1`）—— 位号**行内重绑**（§5.426
+  `stage2/rowbind.py::fix`）把那一排按 x 序重排成了另一个方向。基线那一排是
+  「全都有位号」⇒ `len(labels) >= len(bodies)` 直接 `continue`；64px 下有一个位号
+  文字没读出来 ⇒ 触发重排 ⇒ 整排错位。同一机制在 §5.423 是 +0.24，在这里是 −。
+- **case9 引脚轴 0.667→0.500**：`U2` 的 `slot 1` 号从 `6` 变成空
+  （`work/_pindiff2.py`），该脚直接发不出去；`pin_number` 的 holdout exact 也确实
+  只从 0.834 涨到 0.849（涨得最少的一档）。
+- 反向证据：把 `pin_number` 这一档换回 32px 权重（`STAGE2_CKPT_ROLES_CKPT=weights/textrec_best.pt`
+  `STAGE2_CKPT_ROLES=pin_number`，产物 `work/_cv_run_o13mix1`）⇒ **case9 回到 87.44（逐位等于基线）**，
+  但 case1 −3.87 / case5 −3.90 / case13 −2.12 ⇒ 混装 = 77.85（−0.71），整体仍不划算。
+  混装能跑起来本身，就是 5.454.2 那个 bug 修好之后才有的能力。
+
+### 5.454.5 判否：给行内重绑加「保持现状」守卫
+
+想法：只有重排比「位号留在原位」更省位移时才重排。实测**基线就被打坏**：
+`STAGE2_ROW_BIND_GUARD=1` 时 case1 **57.93 → 55.35（−2.58）**，整轮 13 张从 78.56 掉到 77.x。
+原因是 identity 正是 rowbind 要修的那种「位号落在错符号上」的绑定，位移和自然很小 ⇒
+守卫等于关掉机制。**立即 `git checkout` 回退，不留代码。**
+
+### 5.454.6 结论与下一步
+
+- 识别器（64px）**确实更好**（honest holdout +11.4pp），管线掉分来自
+  「换读数 ⇒ 触发了绑定层的启发式」，两处已定位：`rowbind.fix` 的按行重排、
+  引脚号的同侧/重复号归属。
+- 下一步该做的是**让绑定层对读数不敏感**（用值/位号共现、列内顺序一致性做交叉验证），
+  而不是继续换权重；`STAGE2_ROW_BIND_GUARD` 那条死路已记录在此。
+
+### 5.454.7 复现
+
+```powershell
+cd Y:\workspace\EDA
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+# 混装自检（同进程两分辨率）
+python -X utf8 work\_ckmix.py 12 679 273 710 287
+# 诚实真实语料评测
+cd eda-pcb; $env:TEXTREC_REAL_HOLDOUT='5'
+python -X utf8 -m textrec.eval_real --ckpt textrec\runs\ft64full\best.pt --device cuda
+# 管线两臂（默认 78.56 不动；64px 权重 77.87）
+python -X utf8 work\_cv.py d454   --run --baseline o13d451 --device cuda
+python -X utf8 work\_cv.py o13v64c --run --baseline o13d451 --device cuda --env STAGE2_CKPT=eda-pcb/textrec/runs/ft64full/best.pt
+```

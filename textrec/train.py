@@ -233,7 +233,12 @@ def main(argv=None) -> int:
     train_recs = [r for r in recs if r["split"] == "train"]
     val_recs = [r for r in recs if r["split"] == "val"]
     if args.include_real:
-        train_recs += [r for r in recs if r["split"] == "real"]
+        _real = [r for r in recs if r["split"] == "real"]
+        _ho = [r for r in _real if C.is_real_holdout(r.get("case"))]
+        train_recs += [r for r in _real if not C.is_real_holdout(r.get("case"))]
+        if _ho:
+            print("[real] 留出 %d 条 / %d 个 case 不参与训练（TEXTREC_REAL_HOLDOUT=%d）"
+                  % (len(_ho), len({r.get("case") for r in _ho}), C.REAL_HOLDOUT))
     if args.limit:
         train_recs = train_recs[: args.limit]
     if args.val_limit:

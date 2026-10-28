@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import zlib
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -38,6 +39,21 @@ DATA_DIR = HERE / "data"
 RUNS_DIR = HERE / "runs"
 MANIFEST = DATA_DIR / "manifest.jsonl"
 CHARSET_PATH = DATA_DIR / "charset.json"
+
+# ---------------- 真实语料的留出划分 ----------------
+# `manifest.jsonl` 里 `split == "real"` 的 6642 条（Dataset300 的 32 个 case）**既是**
+# `--include-real` 的训练数据、**又是** `eval_real.py` 的评测集 —— 不做留出的话
+# 「真实语料 exact 0.7224 → 0.8056」这类数字是在训练集上量的（实测泄漏）。
+# `TEXTREC_REAL_HOLDOUT=N`（N≥2）按 case 名哈希留出 1/N 的 case：训练时被排除，
+# `eval_real` 里单独报一档。默认 0＝不划分（保持旧行为）。
+REAL_HOLDOUT = int(os.environ.get("TEXTREC_REAL_HOLDOUT", "0") or 0)
+
+
+def is_real_holdout(case) -> bool:
+    """该真实 case 是否属于留出集（同一个 case 的所有文字要么全留出、要么全训练）。"""
+    if REAL_HOLDOUT <= 0:
+        return False
+    return zlib.crc32(str(case or "").encode("utf-8")) % REAL_HOLDOUT == 0
 
 # ---------------- 文本角色 ----------------
 # 顺序必须与 synth/emit.py 的 TEXT_ROLES 一致（它决定 labels_text 的类别号）。

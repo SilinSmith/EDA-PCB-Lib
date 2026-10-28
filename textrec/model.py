@@ -59,8 +59,10 @@ def _pool_plan(img_h: int, width_reduction: int):
     return per_stage, tuple(tail)
 
 
-def _cnn_layers():
-    per_stage, tail = _pool_plan(C.IMG_H, C.WIDTH_REDUCTION)
+def _cnn_layers(img_h: "int | None" = None, width_reduction: "int | None" = None):
+    # 每份权重自带 `img_h` / `width_reduction`：同一进程里可以同时装 32px 与 64px
+    # 的模型（混合集成分辨率），结构必须按**该权重的**配置生成，不能读全局 config。
+    per_stage, tail = _pool_plan(int(img_h or C.IMG_H), int(width_reduction or C.WIDTH_REDUCTION))
     layers = []
     for (cin, cout), (hf, wf) in zip(_CONV_STAGES, per_stage):
         layers += [nn.Conv2d(cin, cout, 3, padding=1), nn.BatchNorm2d(cout), nn.ReLU(True)]
@@ -73,12 +75,15 @@ def _cnn_layers():
 
 class CRNN(nn.Module):
     def __init__(self, num_classes: int, n_roles: int = C.N_ROLES,
-                 rnn_hidden: int = 256, role_dim: int = 32, dropout: float = 0.1):
+                 rnn_hidden: int = 256, role_dim: int = 32, dropout: float = 0.1,
+                 img_h: "int | None" = None, width_reduction: "int | None" = None):
         super().__init__()
         self.num_classes = num_classes
         self.n_roles = n_roles
+        self.img_h = int(img_h or C.IMG_H)
+        self.width_reduction = int(width_reduction or C.WIDTH_REDUCTION)
 
-        self.cnn = nn.Sequential(*_cnn_layers())
+        self.cnn = nn.Sequential(*_cnn_layers(self.img_h, self.width_reduction))
         # 到这里高度已经被压成 1（IMG_H 与 WIDTH_REDUCTION 都是 2 的幂，
         # 池化层数由 `_pool_plan` 按 config 生成；默认 32/8 与旧结构逐层一致）。
 

@@ -175,6 +175,7 @@ t 值（§5.347.5：官方 10 的 ±0.3 可能只是单案翻转），池上 |t|
 | 端口轴取证（§5.443）｜case1 端口 4/4 检出、case12 只检出 3/5；`VOUT`/`VIN_4` 根本没有候选件。端口框「红块求并」24 组参数无一优于原样（2/7）⇒ 端口框与漏检都要改检测模型，CPU 侧封口。兜底键 `pNNN` 电源符号靠 `unkeyed_match='gt'` 拿分，删掉 −10.8~−24.4（不是虚警） |
 | 池子假回归 + CV 空产物判据（§5.444）｜`--pool` 的 −0.66 全来自 `0050` 一条 `MemoryError` 空壳（重跑 −0.002，剔除后 29 案 +0.042）；`work/_cv.py` 现在把「Pred 空壳」单独打印并直接判 FAIL，池子/自检必须在机器空闲时跑、同刻只跑一条管线 |
 | 并集跨度闸门（§5.451）｜`EDGE_OVERLAP_GROW` 14→**16**（§5.450 后最优区右移到 16~20，22 起塌）：line 0.463→0.469，**78.56 local / 77.33 official** |
+| 识别器分辨率 / 真实语料留出（§5.454）｜`Recognizer.load` 改为按每份权重的 `config` 建网（`TEXTREC_IMG_H`/`TEXTREC_WR` 只作实验覆盖）；新增 `TEXTREC_REAL_HOLDOUT` 把真实 32 case 分成 holdout/seen。诚实读数：64px holdout exact 0.7070→**0.8214**、wr4 0.7390 ⇒ 识别器增益是真的，管线 −0.69 全在绑定层（rowbind / 引脚号归属） |
 | 冻结面回归（§5.452）｜池子 30 案 mean **27.99（Δ −0.02）PASS**、契约 6 族 **30/30**；同批判否 `EDGE_EXT`/`EDGE_CORNER`/`EDGE_TRIM`/`EDGE_EXT_ANY`/`PIN_SNAP` 与 `_mergejn`（−1.14） |
 | 识别器分辨率（§5.453）｜`TEXTREC_IMG_H` / `TEXTREC_WR` 可配（默认逐位不变）；**只跑合成会毁真实泛化**（0.7224 → 0.3907）⇒ 重训必须 `--include-real` |
 | 无源件脚点跨度（§5.450）｜`PIN_STAMP_DEFAULT_SPAN` 20→**40**（GT 量的常数半跨 39.5px）：netH 0.848→0.852、line 0.430→0.463，**78.56 local / 77.33 official**（case5 −0.39） |
