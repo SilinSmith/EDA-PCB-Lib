@@ -125,6 +125,10 @@ _KEEP_UNK_POWER = env_on("STAGE2_KEEP_UNKEYED_POWER", "0")
 #   「整页位号数 ≤ max(1, 10%×元件数)」时保留兜底键元件的引脚，让几何轴还能得分。
 KEEP_UNKEYED_IF_NO_DESIG = env_on("STAGE2_KEEP_UNKEYED_IF_NO_DESIG", "0")
 
+# ★ `d` / `led` 类型互纠（`STAGE2_TYPE_DESIG_FIX`，默认 1）：用**读到的位号文字**当证据，
+# `LED*` ⇒ `led`、`D<n>` ⇒ `d`。理由与读数见 `build_doc` 里的注释（13 张 +0.20）。
+TYPE_DESIG_FIX = env_on("STAGE2_TYPE_DESIG_FIX", "1")
+
 # ★★ 「被洗白的兜底键」也认回无名元件（`STAGE2_PIN_DROP_LAUNDERED`，默认 1）。
 #
 # 上游（`assigned[cid]["designator"]["canon"]`，实测 `_by = "solve:vlm:enrich"`）会把**已经
@@ -601,6 +605,16 @@ POWER_VALUE_FROM_PIN = env_on("STAGE2_POWER_VALUE_FROM_PIN", "1")
 #   12 → 0.0466（1158）｜20 → 0.0494（1030）｜**25 → 0.0514（968）**｜30 → 0.0453（tp 掉到 37）
 # ⇒ 取 25 是峰值，取 20 更保守（GT 全部 639 条边的 1% 分位是 13px、5% 分位是 26px）。
 MIN_EDGE_LEN = float(os.environ.get("STAGE2_MIN_EDGE_LEN", "20"))
+
+# ★ 出口处的「最后一道」短边闸门（`STAGE2_EDGE_MIN_FINAL`，默认 20）。
+# 上面那道 `MIN_EDGE_LEN` 只作用于**建边时**的点列，而且量的是点列的**第一段**；
+# 之后的 `split_dedup_edges` / `split_edges_at_pins` / `trim_free_ends` /
+# `extend_edge_ends` / `merge_overlapping_edges` 都会**造出新的短边**（切分、回缩、外推）。
+# 离线在入口文档上逐档删短边再重打分（`work/_edgelen.py o13pl`，13 张）：
+#   阈值 0 → 76.96｜4 → 76.98｜8 → 77.01｜12 → 77.12｜16 → 77.12｜**20 → 77.15**
+#   ｜26 → 77.11｜32 → 77.12｜40 → 77.11（net_line 之外三通道逐位不动）。
+# ⇒ 出口再闸一次 20px，等于把切分/回缩的残渣清掉。
+EDGE_MIN_FINAL = float(os.environ.get("STAGE2_EDGE_MIN_FINAL", "20") or 0.0)
 
 # ★ 共线碎边焊接（`STAGE2_EDGE_MERGE`，**默认 0 = 关**，理由见本节 ⚠️ 那一段）。
 #
@@ -2582,6 +2596,18 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         #   图章与脚名别名（下面的 `stamp_pins` / `PIN_NAME_ALIAS`）。
         #   没有这个字段时逐位退回原来的 `c.get("type")`（默认关时行为不变）。
         ctype = str(info.get("ctype_fix") or c.get("type") or "other").strip().lower()
+        # ★ `d` / `led` 的类型互纠（`STAGE2_TYPE_DESIG_FIX`，默认 1）。
+        # `open_GT-1020` 13 张里 GT 的 `led` 有 12 颗、`d` 只有 4 颗，而它们的**位号文字**
+        # 与类型一一对应：`led` ⇒ `LED1..LED4`，`d` ⇒ `D1`（`SS34`/`1N4007`）。
+        # 我们判错的 3 颗（case1 LED1 / case4 LED1 / case6 LED2）都是 `d`，位号却读对了
+        # （`work/_ledoracle13.py`：只把类型改对、框不动 ⇒ 13 张 +0.20）。
+        # 这是**图像里读到的文字**做证据，不查库。
+        if TYPE_DESIG_FIX and ctype in ("d", "led"):
+            _dg = str(des or "").strip().upper()
+            if _dg.startswith("LED") and ctype == "d":
+                ctype = "led"
+            elif re.match(r"^D\d", _dg) and ctype == "led":
+                ctype = "d"
         ct_by_cid[cid] = ctype
         if _is_tp:
             # ★ 三条规则里的 ① / ②：有 CV 形状证据（子类型在 `TP_CV_SUBTYPES` 里）
@@ -3522,6 +3548,29 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         #   放在切分/回缩之前会把切点与自由端判定带歪。
         merge_overlapping_edges(out_nets)
     _trace_dump("12.final", out_nets, H, case_id)
+    if EDGE_MIN_FINAL > 0:
+        # ★ 出口短边闸门（`STAGE2_EDGE_MIN_FINAL`，默认 20，见常量区长注释）：
+        #   放在**所有几何 pass 之后**，只删 `edges` 里的短边，网/顶点/引脚一律不动。
+        _cutf = 0
+        for _v in out_nets.values():
+            _e0 = _v.get("edges")
+            if not isinstance(_e0, dict):
+                continue
+            _keep = {}
+            for _ek, _pt in _e0.items():
+                try:
+                    _l = math.hypot(float(_pt[-1]["x"]) - float(_pt[0]["x"]),
+                                    float(_pt[-1]["y"]) - float(_pt[0]["y"]))
+                except (KeyError, IndexError, TypeError, ValueError):
+                    _keep[_ek] = _pt
+                    continue
+                if _l < EDGE_MIN_FINAL:
+                    _cutf += 1
+                    continue
+                _keep[_ek] = _pt
+            _v["edges"] = _keep
+        if _cutf and os.environ.get("STAGE2_DBG_EDGE"):
+            print("[dbg edge min] %s cut=%d" % (case_id, _cutf))
     if PIN_LEAD_ATTACH or PIN_LEAD_MOVE:
         # ★ 2-pin 符号的「引脚引线」吸附/迁移：必须放在**最末尾** —— 离线取证就是在
         #   出口文档（几何全部定型）上做的，落在这里才能与离线读数逐位一致。

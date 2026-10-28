@@ -31192,3 +31192,91 @@ python -X utf8 work\_lednear.py o13pl 12        # LED1 框太小 + 类型判错
 python -X utf8 work\_griddrop.py o13pl --tol=0.35   # 假槽节距假设（dropped=0）
 python -X utf8 work\_contractchk.py o13pl       # E4/E5 契约复检（0 违例）
 ```
+
+## 5.437 出口短边闸门（76.96 → **77.07** local / 75.84 official）
+
+### 5.437.1 病：长度闸门只作用于「建边时」，之后的几何 pass 会再造新短边
+
+`stage2/assemble.py:603` 早有 `MIN_EDGE_LEN = float(os.environ.get("STAGE2_MIN_EDGE_LEN", "20"))`，
+但它的调用点在 `:3087`（建边循环里），而且量的是 `seg_pts` 点列的**第一段**
+（`math.hypot(pt[1] - pt[0])`），不是整条边。之后的六个 pass ——
+`split_dedup_edges`、`split_edges_at_pins`、`trim_free_ends`、`extend_edge_ends`、
+`snap_ends_to_pins`、`merge_overlapping_edges` —— 每一个都会切分、回缩或外推，
+**必然再造出几像素到十几像素的碎边**，而它们全都在出口文档里。
+
+官方 `net_line_f1`（`schematic_parser/metrics.py:522-562`）对配对网内的一对一 `_assign`
+只认「两个端点都在 `line_tol=5` 内」的边，碎边拿不到 `tp`，只贡献 `fp`。
+
+### 5.437.2 离线扫：删短边、不删网（`work/_edgelen.py`）
+
+在**出口文档**上逐档删掉长度 `< L` 的边（`edges` 是 `{edge_N: [pt, pt]}` 的 dict，
+删空的网保留 —— 网本身还带着 `hyperGraph`，删网会改 netH），13 张重打分：
+
+| L | 0 | 4 | 8 | 12 | 16 | **20** | 26 | 32 | 40 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| mean | 76.96 | 76.98 | 77.01 | 77.12 | 77.12 | **77.15** | 77.11 | 77.12 | 77.11 |
+
+峰值在 20（与建边闸门同一个数，不是巧合：GT 全部边的 1% 分位就是 13px、5% 分位 26px）。
+
+### 5.437.3 真管线 A/B：`STAGE2_EDGE_MIN_FINAL`
+
+实现：常量区新增 `EDGE_MIN_FINAL = float(os.environ.get("STAGE2_EDGE_MIN_FINAL", "20") or 0.0)`，
+在 `build_doc` 末尾（`_trace_dump("12.final", …)` 之后、`attach_stamped_leads` 之前）
+遍历 `out_nets[*]["edges"]`，用 `第一点 ↔ 最后一点` 的欧氏长度过闸，只改 `edges`。
+
+| 臂 | 阈值 | local | 产物 |
+|---|---:|---:|---|
+| 基线（`26fa9ab` + §5.436） | — | 76.96 | `work/_o13pl` |
+| `_o13ef12` | 12 | 76.97 | `work/_o13ef12` |
+| **`_o13ef`（现默认）** | **20** | **77.07** | `work/_o13ef` |
+| `_o13ef26` | 26 | 77.05 | `work/_o13ef26` |
+
+轴变化（同口径 `M.EvalConfig`）：`line 0.3616 → 0.3761`（+0.0145）、`netH 0.8411 → 0.8401`
+（−0.001，`attach_stamped_leads` 与 `STAGE2_PHANTOM_NET` 都读边，边一少它们会换判断）、
+comp / pin 逐位不动。official **75.73 → 75.84**、strict 76.40 → **76.51**。
+
+> 离线扫给 +0.19、真管线只给 +0.11：离线是在**发布面**删边，真管线是在 `build_doc` 出口删，
+> 中间还隔着 fusion 的 claim 解与 `rowbind.rename` —— 后者不改边，但 `_assemble` 会用
+> `assigned` 重新跑一遍 `build_doc`（同一函数，闸门生效），差别来自两次之间 `pins` 的细微不同。
+
+### 5.437.4 `d` / `led` 用「读到的位号文字」互纠（`STAGE2_TYPE_DESIG_FIX`，默认 1，Δ0）
+
+`open_GT` 13 张的 GT 里 `led` 12 颗、`d` 只有 4 颗，位号与类型严格对应
+（`led ⇒ LED1..LED4`、`d ⇒ D1`，型号 `SS34`/`1N4007`）。我们判错的 3 颗
+（`case1 LED1`、`case4 LED1`、`case6 LED2`）都是 `d`，位号却读对了。
+
+规则（`build_doc` 里 `ctype` 算出来之后）：位号文字以 `LED` 开头而 `ctype == "d"` ⇒ `led`；
+位号形如 `D<n>` 而 `ctype == "led"` ⇒ `d`。这是**图像里读到的文字**做证据，不查库。
+
+读数：13 张 **77.07 → 77.07（Δ0）**，三颗的类型在交付文档里确实改对了
+（`case4 LED1 led`、`case6 LED2 led`、`case1 LED1 led`），但分数不动 —— 因为它们的框仍偏
+>20px，`metric` 的元件配对在 bbox 那一关就没过，类型对不对不影响配对结果。
+保留它（零代价、字段更正确），别指望它加分。
+
+### 5.437.5 三条判否
+
+| 臂 | 机制 | 读数 | 结论 |
+|---|---|---:|---|
+| `work/_edgeiso.py`「孤立边剪枝」 | 两端各 `tol` 内既无别的边端点、也无引脚点 ⇒ 删 | tol 3 → **73.90**、6 → 74.82、12 → 74.84 | 判否（−2.2~−3.2）。导线本来就有大量「一端悬空」的合法形态 |
+| `STAGE1_SYM_BOX_EXTRA=led`（LED 框也长到整颗） | `symbox.grow` 的类型白名单加 `led` | 77.07 → **77.08**（case6 +0.37，case1 −0.14、case10 −0.11） | 判否（净 0.01，与 §5.432 的结论一致） |
+| `work/_ledoracle13.py` 分解 | 只改已配对 led/d 元件的框 / 框+类型 | 框 **+0.10**｜框+类型 **+0.30** | 上界可望不可及：类型单独 0、框要靠实例检测（HANDOFF §8 第 2 条） |
+
+### 5.437.6 复现
+
+```
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+       -output work\_o13td -offline -device cpu -cases "1,2,3,4,5,6,7,8,9,10,11,12,13"   # 120.5 s
+New-Item -ItemType Directory -Force work\_fast_out_o13td\final_results
+Copy-Item work\_o13td\final_results\*_Pred.json work\_fast_out_o13td\final_results\ -Force
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_percase.py o13td 1 2 3 4 5 6 7 8 9 10 11 12 13    # local，末行 mean
+python -X utf8 work\_strictpow.py o13td 1 2 3 4 5 6 7 8 9 10 11 12 13  # official + strict
+python -X utf8 work\_edgelen.py o13pl                                   # 离线短边扫
+python -X utf8 work\_edgeiso.py o13td                                   # 离线孤立边扫
+```
+
+> 现默认 = `EDGE_MIN_FINAL=20` + `TYPE_DESIG_FIX=1`，主尺 **77.07 local / 76.51 strict /
+> 75.84 official**（产物 `work/_o13td`，与 `work/_o13ef` 同分）；`work/_contractchk.py o13td`
+> 13 份交付 Pred 零违例。
+
