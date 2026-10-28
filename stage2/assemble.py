@@ -232,6 +232,13 @@ PINNUM_SIDE = env_on("STAGE2_PINNUM_SIDE", "1")
 # ★ `STAGE2_PIN_DUPNUM`（默认 **1**，§5.430）：同一颗元件上两个槽读到同一个引脚号时，
 #   保留「名字也读到了」的那个槽（原来按 stage1 候选顺序，跟谁是那根脚无关）。
 PIN_DUPNUM = env_on("STAGE2_PIN_DUPNUM", "1")
+# ★ `STAGE2_PINNUM_ALNUM_NAMED`（默认 **0**，§5.441 判否）：连接器类元件（`USB1` 这种）的引脚号是
+#   字母数字混排（`A12` / `B5`）。§5.429 试过「所有字母数字号一律放行」⇒ 13 张 −0.22（「号对、名错」
+#   在官方 `pin_f1` 里是 fp+fn 双罚，比不发更差）。§5.441 又加了「名也读到了」这道闸重测：
+#   **76.88（−0.21）**，`case11` pin 0.357→0.312、`case1` 0.514→0.500 ⇒ 那些槽的**名**本身也不对
+#   （`case11 USB1` 读到 `A8`，GT 里没有这个号），所以这条路封口，默认关。
+PINNUM_ALNUM_NAMED = env_on("STAGE2_PINNUM_ALNUM_NAMED", "0")
+_ALNUM_NUM_RE = re.compile(r"^[A-Za-z]{1,2}\d{1,3}$")
 # ★ `STAGE2_PINNUM_SEQ`（默认 **1**）：同侧号码补全的加强版 —— 一侧的号是**一段连续整数、
 #   且沿该侧槽位顺序单调**（`open_GT` 普查：28 条多脚侧里 21 条严格单调连号，12 递减 / 9 递增）。
 #   所以「窗口 + 方向」只要和已读到的号一致，两格以上的缺号也能定位（原版只处理恰好缺一格）。
@@ -2868,11 +2875,17 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 if PIN_DUPNUM:
                     _ord.sort(key=lambda _i: (not bool(raw[_i]["nm"]),
                                               -len(raw[_i]["nm"]), _i))
+                _used_s = set()
                 for i in _ord:
                     n = tmp[i]
                     v = int(n) if (n and n.isdigit()) else 0
                     if 1 <= v <= 999 and v not in used:
                         used.add(v)
+                        kept[i] = True
+                    elif (PINNUM_ALNUM_NAMED and n and _ALNUM_NUM_RE.match(n)
+                          and str(raw[i].get("nm") or "") and n.upper() not in _used_s):
+                        # 字母数字号（连接器）：号与名都读到了才采信，见常量区长注释。
+                        _used_s.add(n.upper())
                         kept[i] = True
                     else:
                         tmp[i] = ""

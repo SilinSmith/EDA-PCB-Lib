@@ -31509,3 +31509,70 @@ python -X utf8 work\_cv.py o13kl --run --baseline o13td
 python -X utf8 work\_cv.py c12g0 --run --cases 12 --env STAGE2_EDGE_MIN_FINAL=0   # 单页归因
 ```
 
+
+## 5.441 引脚轴两条判否 + 一次「并发跑管线」的事故口径
+
+起点：`work/_cv.py` 报 **77.10 local / 75.87 official（PASS，`work/_o13kl`）**，
+轴损 comp 4.55 / pin 6.54 / netH 5.56 / line 6.25 = 22.90。
+
+### 5.441.1 连接器字母数字号「号名双证」——判否
+
+§5.429 试过「字母数字号一律放行」⇒ 13 张 −0.22：官方 `pin_f1` 里「号对、名错」记 fp+fn
+（双罚），比不发（只 fn）更差。于是加一道**名也读到了**的闸重测：
+`eda-pcb/stage2/assemble.py` 的 `PINNUM_ALNUM_NAMED`（`_ALNUM_NUM_RE = ^[A-Za-z]{1,2}\d{1,3}$`），
+在 partial 分支里「字母数字号 + 该槽 `raw[i]["nm"]` 非空 + 不与他人撞」才 `kept=True`。
+
+| 臂 | local | official | case11 pin | case1 pin |
+|---|---:|---:|---:|---:|
+| `o13kl`（基线） | **77.10** | 75.87 | 0.357 | 0.514 |
+| `o13an`（号名双证） | **76.88（−0.21）** | 75.65 | **0.312** | **0.500** |
+
+⇒ 判否，默认置 **0**。原因不是闸太松，而是那些槽的**名本身也不对**：
+`case11 USB1` 的字母数字号读到 `A12 / A8 / A5 / B5 / B12`，其中 `A8` 在 GT 里根本不存在，
+而配对上的名的置信度也不足以保证是 `GND`/`VBUS`。这条路要开，前提是**连接器的号与名都识别准**，
+即回到识别器本身（GPU 侧）。
+
+### 5.441.2 建边期的闸门也做 keep-last ——判否
+
+§5.440 只给**出口闸门**加了 keep-last。这次把同样的规则加到建边期的 `MIN_EDGE_LEN`
+（`stage2/assemble.py` 的 `seg_pts` 遍历：网内全是短边时保留最长那条）：
+
+| 臂 | local | 逐页 |
+|---|---:|---|
+| `o13kl` | **77.10** | — |
+| `o13kl2` | **77.09（−0.01）** | `case4 +0.50`、`case1 −0.62`，其余逐位不变 |
+
+⇒ 判否并回退。含义：建边期那道闸门**就是该把碎边切干净**（后面的几何 pass 依赖「网里只剩长边」），
+出口闸门才是「补一条回来无害」的位置。
+
+### 5.441.3 事故：并发跑管线会 OOM，而 OOM 长得像「代码崩了」
+
+`_cv.py o13an0 --run` 那次读出 **mean 0.00 / FAIL（−77.10）**，13 页全空。
+现场：我同时让 `work/_smoke.py`（6 族、4 lane 并发）在跑，两条管线抢内存，
+`pwsh` 的 lane 日志里是
+
+```
+5  FAIL  ? s
+!! error: MemoryError: Unable to allocate 2.15 MiB for an array with shape (1096, 2057) and data type bool
+!!   File "eda-pcb/stage1/wires.py", line 712, in extract_wires
+!!   File "eda-pcb/pipeline/pskel.py", line 1269, in extract → zhang_suen(...)
+```
+
+**判据**（三步，与 §5.435 的 `_gap(None)` 事故同一套）：
+
+1. 先看 Pred 的 `components` 条数 —— 全 0 就是「没产出」，不是「分数低」；
+2. 再看 `work/_cv_run_<tag>/_lanes/lane*/stdout.log` 的尾部有没有 `FAIL` 与 `MemoryError`；
+3. 单独重跑一次（本机 24 核 / 63.7 GB，但一条 13 张管线自身就要 ~4 lane）。
+
+单独重跑后 ⇒ **77.10 / 75.87（Δ0，PASS）**，确认代码没问题。**纪律：同刻只跑一条管线**；
+`schematic_parser` 的打分是纯读，可以并发，`submission/run.py` 不行。
+
+### 5.441.4 复现
+
+```
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_cv.py o13an --run --baseline o13kl --env STAGE2_PINNUM_ALNUM_NAMED=1
+python -X utf8 work\_cv.py o13kl2 --run --baseline o13kl   # 建边期 keep-last（已回退）
+python -X utf8 work\_cv.py o13an1 --run --baseline o13kl   # OOM 后的单独重跑，Δ0
+```
+
