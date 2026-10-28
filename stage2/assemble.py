@@ -615,6 +615,9 @@ MIN_EDGE_LEN = float(os.environ.get("STAGE2_MIN_EDGE_LEN", "20"))
 #   ｜26 → 77.11｜32 → 77.12｜40 → 77.11（net_line 之外三通道逐位不动）。
 # ⇒ 出口再闸一次 20px，等于把切分/回缩的残渣清掉。
 EDGE_MIN_FINAL = float(os.environ.get("STAGE2_EDGE_MIN_FINAL", "20") or 0.0)
+# ★ 闸门不许把一张网删空：网若只剩短边，保留最长的那条。空网的顶点会在下游被清掉，
+#   于是「删掉一条假边」变成「连整个网的成员一起丢」（open_GT case12 实测 netH 0.622→0.609）。
+EDGE_MIN_KEEP_LAST = env_on("STAGE2_EDGE_MIN_KEEP_LAST", "1")
 
 # ★ 共线碎边焊接（`STAGE2_EDGE_MERGE`，**默认 0 = 关**，理由见本节 ⚠️ 那一段）。
 #
@@ -3557,6 +3560,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             if not isinstance(_e0, dict):
                 continue
             _keep = {}
+            _best = (None, -1.0)
             for _ek, _pt in _e0.items():
                 try:
                     _l = math.hypot(float(_pt[-1]["x"]) - float(_pt[0]["x"]),
@@ -3564,10 +3568,15 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 except (KeyError, IndexError, TypeError, ValueError):
                     _keep[_ek] = _pt
                     continue
+                if _l > _best[1]:
+                    _best = (_ek, _l)
                 if _l < EDGE_MIN_FINAL:
                     _cutf += 1
                     continue
                 _keep[_ek] = _pt
+            if EDGE_MIN_KEEP_LAST and not _keep and _best[0] is not None:
+                _keep[_best[0]] = _e0[_best[0]]
+                _cutf -= 1
             _v["edges"] = _keep
         if _cutf and os.environ.get("STAGE2_DBG_EDGE"):
             print("[dbg edge min] %s cut=%d" % (case_id, _cutf))
