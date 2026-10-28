@@ -907,6 +907,13 @@ EDGE_EXT_HIT = float(os.environ.get("STAGE2_EDGE_EXT_HIT", "3.0"))  # 外推点�
 EDGE_OVERLAP = float(os.environ.get("STAGE2_EDGE_OVERLAP", "10"))         # 近共线夹角容差(度)，0 = 关
 EDGE_OVERLAP_OFF = float(os.environ.get("STAGE2_EDGE_OVERLAP_OFF", "4.0"))  # 端点到对方直线容差 px
 EDGE_OVERLAP_MIN = float(os.environ.get("STAGE2_EDGE_OVERLAP_MIN", "0.35"))  # 投影重叠比例下限
+# ★ `STAGE2_EDGE_OVERLAP_UNION`（默认 **0**）：近重复边合并时是否把跨度取并集。
+#   取并集会让边比原始任一条更长，而官方 `_seg_distance` 取「两端点距离的最大值」⇒ 谁都不命中；
+#   只去重（保留较长的那条）既能减 fp，又不破坏命中（§5.447 实测）。
+EDGE_OVERLAP_UNION = env_on("STAGE2_EDGE_OVERLAP_UNION", "1")
+# ★ `STAGE2_EDGE_OVERLAP_GROW`（默认 **0** = 不限）：取并集后**跨度增长超过这么多 px** 时，
+#   宁可不合并（两条都留）—— 增长大的合并会把一条边拉得比 GT 那条长出一大截。
+EDGE_OVERLAP_GROW = float(os.environ.get("STAGE2_EDGE_OVERLAP_GROW", "14"))
 
 # ★★ 自由端外推（`STAGE2_EDGE_EXT_FREE`，默认 8 px，0 = 关）。
 #
@@ -1325,6 +1332,7 @@ def merge_overlapping_edges(nets: Dict[str, dict], ang: float = None, off: float
                     continue
                 if abs((ux * vx + uy * vy) / (Li * Lj)) < cos_lim:
                     continue
+                _cos0 = min(1.0, abs((ux * vx + uy * vy) / (Li * Lj)))
                 ux, uy = ux / Li, uy / Li
                 ts, offs = [], []
                 for (px, py) in ((cx, cy), (dx_, dy_)):
@@ -1336,7 +1344,27 @@ def merge_overlapping_edges(nets: Dict[str, dict], ang: float = None, off: float
                 ov = min(hi, 1.0) - max(lo, 0.0)
                 if ov <= 0 or ov / max(1e-9, min(1.0, Lj / Li)) < min_ov:
                     continue
+                if not EDGE_OVERLAP_UNION:
+                    # 只去重、**不并跨度**：两条近重复边的并集会比任一原始边更长，
+                    # 官方 `_seg_distance` 取两端点距离的最大值 ⇒ 变长的那条反而谁都不命中。
+                    if Lj > Li:
+                        edges.pop(ki, None)
+                        del live[ki]
+                        dropped += 1
+                        break
+                    edges.pop(kj, None)
+                    del live[kj]
+                    dropped += 1
+                    continue
                 a0, b0 = min(0.0, lo), max(1.0, hi)
+                if os.environ.get("STAGE2_DBG_OVERLAP"):
+                    print("[dbg ovl] Li=%.1f Lj=%.1f ov=%.2f grow=%.1f ang=%.1f drop=%s"
+                          % (Li, Lj, ov, (abs(a0) + abs(b0 - 1.0)) * Li,
+                             math.degrees(math.acos(_cos0)),
+                             "union" if (EDGE_OVERLAP_GROW <= 0 or (abs(a0) + abs(b0 - 1.0)) * Li
+                                         <= EDGE_OVERLAP_GROW) else "keep"))
+                if EDGE_OVERLAP_GROW > 0 and (abs(a0) + abs(b0 - 1.0)) * Li > EDGE_OVERLAP_GROW:
+                    continue
                 edges[ki][0]["x"] = round(ax + a0 * Li * ux, 2)
                 edges[ki][0]["y"] = round(ay + a0 * Li * uy, 2)
                 edges[ki][-1]["x"] = round(ax + b0 * Li * ux, 2)
