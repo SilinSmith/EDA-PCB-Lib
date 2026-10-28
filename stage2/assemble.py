@@ -2016,7 +2016,9 @@ PIN_STAMP_PERP = frozenset({"crystal_2pin"})     # 这一类引脚轴与 bbox �
 # 但做成「按轴选符号」后 220 张端到端 14.7496，比统一取 + 的 14.7568 略低（差 3 个
 # net 引脚，纯噪声）—— 所以保留这条更简单的规则。
 PIN_STAMP_SPAN = {"fuse": 21.0}
-PIN_STAMP_DEFAULT_SPAN = 20.0
+# 40 = GT 量的：13 张里 168 个两脚无源件的「框心到脚点」中位 39.5px（q10~q75 全在 39.5~40.0，见 RESULTS §5.450）。
+# 旧值 20 只有真值的一半，无源件脚点因此全部落在导线半途。
+PIN_STAMP_DEFAULT_SPAN = float(os.environ.get("STAGE2_PIN_STAMP_SPAN", "40"))
 # 关掉就退回「用 stage1 的附着点当引脚点位」（旧行为）
 PIN_STAMP_ON = env_on("STAGE2_PIN_STAMP", "1")
 # ★ 竖放 d/led 的 pin_1 在 −SPAN 一侧（默认 0 = 旧行为，见 `stamp_pins` 里的长注释）
