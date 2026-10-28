@@ -235,7 +235,27 @@ def _assemble(s1_doc: dict, assigned: dict, case: str, vlm_doc: Optional[dict],
     # 不靠底稿 —— 它是 `pool` 里的 claim，`priors.write_back` 已经把它写进 `assigned`，
     # 而 `build_doc(s1_doc, assigned, case)` 正是从 `assigned` 取元件键的。
     # ⇒ 底稿永远用我们自己的 `build_doc`，VLM 的结论走 claim 通道进来。
+    if os.environ.get("FUSION_DBG_NET"):
+        try:
+            _sn = s1_doc.get("nets") or {}
+            _nref = sum(len((n or {}).get("seg_index") or []) for n in _sn.values())
+            _msg = "input s1nets=%d segrefs=%d assigned_keys=%s" % (
+                len(_sn), _nref,
+                sorted(list(assigned))[:6] if isinstance(assigned, dict) else type(assigned).__name__)
+        except Exception as _e:                        # 只诊断，不许改动管线行为
+            _msg = "input dump failed: %r" % (_e,)
+        try:
+            with open(os.environ["FUSION_DBG_NET"], "a", encoding="utf-8") as _fh:
+                _fh.write("[dbg net] %s %s\n" % (case, _msg))
+        except Exception:
+            pass
     base = build_doc(s1_doc, assigned, case)
+    if os.environ.get("FUSION_DBG_NET"):
+        _nm = base.get("nets") or {}
+        with open(os.environ["FUSION_DBG_NET"], "a", encoding="utf-8") as _fh:
+            _fh.write("[dbg net] %s base nets=%d edges=%d\n"
+                      % (case, len(_nm),
+                         sum(len((n or {}).get("edges") or {}) for n in _nm.values())))
     _mode = os.environ.get("FUSION_BASE", "ours").strip().lower()
     if vlm_doc and _mode == "vlm":
         base = vlm_doc
@@ -243,6 +263,12 @@ def _assemble(s1_doc: dict, assigned: dict, case: str, vlm_doc: Optional[dict],
         base = _merge_vlm(base, vlm_doc)
     out, _rep = DC.apply(base, s1_doc, assigned0 or assigned, sol,
                          pin_index=pin_index)
+    if os.environ.get("FUSION_DBG_NET"):
+        _nm = out.get("nets") or {}
+        with open(os.environ["FUSION_DBG_NET"], "a", encoding="utf-8") as _fh:
+            _fh.write("[dbg net] %s applied nets=%d edges=%d\n"
+                      % (case, len(_nm),
+                         sum(len((n or {}).get("edges") or {}) for n in _nm.values())))
     return out
 
 

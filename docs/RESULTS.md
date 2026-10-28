@@ -32684,3 +32684,194 @@ python -X utf8 work\_cv.py vote1 --run --baseline o13d451 --device cuda
 
 `rowbind` 这一条到此为止：真要让行内重绑免疫读数，缺的是「从图上判断哪颗符号没有位号文字」这一级证据
 （整页投票在 case1 是 13 : 7，够不到阈值），不是配对算法本身。
+
+### 5.457.1 问题：GT 一根斜线都没有，我们 42 根
+
+`work/_ortho13.py <tag> [case…] [--tol=3]`：把每条边按「两端点 x/y 差都 > tol」判成斜边。
+
+| | 斜边条数 |
+|---|---:|
+| GT（13 张） | **0** |
+| 我们（交付 Pred） | **42**（case1 13 / case6 7 / case10 6 / case5 5 / case11 5） |
+
+即 GT 的导线全是横平竖直的（原理图画法约定），我们的中心线拟合带一点点倾角。
+
+两条思路的离线预演：
+
+- **拆成两段 L**（`--mode=lh|lv`）：均值 **−0.028**。因为差 ≤5px 时 `_seg_distance` 本来就能配上，拆开反而把一条边变成两条，多一条 fp。
+- **吸附成横/竖**（较短方向 ≤ N 就把两个端点对齐到同一 x/y）：`--snap=6` ⇒ **+0.035**（case11 **+0.68**、case1 +0.08、case6 −0.10、case9 −0.21）。
+
+⇒ 只能吸，不能拆。
+
+### 5.457.2 落地的代码（`eda-pcb/stage2/assemble.py`）
+
+常量区（`EDGE_MIN_KEEP_LAST` 之后）：
+
+```python
+EDGE_ORTHO = float(os.environ.get("STAGE2_EDGE_ORTHO", "10") or 0.0)
+EDGE_TRIMIN = float(os.environ.get("STAGE2_EDGE_TRIMIN", "-1") or -1.0)
+EDGE_TRIMPIN = float(os.environ.get("STAGE2_EDGE_TRIMPIN", "-1") or -1.0)
+EDGE_SNAPPIN = float(os.environ.get("STAGE2_EDGE_SNAPPIN", "-1") or -1.0)
+```
+
+新函数：`ortho_edges(nets, snap)`（把较短方向 ≤ `snap` 的边两端对齐到中点）、
+`trim_into_bodies(nets, components, lead)`（端点落在元件框内就沿边退到框外 lead px）、
+`trim_to_pins(...)`、`snap_pins_overshoot(...)`、`_has_twin(...)`。
+调用点在 `build_doc` 的出口短边闸门之后、`attach_stamped_leads` 之前（那里之后只有
+`hyperGraph` 写入，不再碰 `edges`）：
+
+```python
+_n_or = ortho_edges(out_nets, EDGE_ORTHO)
+_n_sp = snap_pins_overshoot(out_nets, pins, components, EDGE_SNAPPIN)
+_n_tp = trim_to_pins(out_nets, pins, components, EDGE_TRIMPIN)
+_n_tr = trim_into_bodies(out_nets, components, EDGE_TRIMIN, EDGE_TRIMIN_SHORT)
+```
+
+`STAGE2_DBG_EDGE=1` 时打印 `[dbg edge polish] <case> ortho=… snappin=… trimpin=… trim=…`。
+顺序不能反：吸附会挪端点（≤ snap px），收缩要基于吸附后的几何。
+
+### 5.457.3 13 张读数（`work/_cv.py <tag> --run --baseline o13d451 --device cuda --env …`）
+
+| 臂 | 设置 | local | official | 备注 |
+|---|---|---:|---:|---|
+| 基线 `o13d451` | — | 78.56 | 77.33 | — |
+| `polish1` | ORTHO=6 + TRIMIN=25 | 78.67 | 77.44 | line 0.469→0.480；case2 +0.92 / case3 +0.93 / case6 +0.50；WARN case8 −0.84 / case10 −0.34 |
+| `pA` | 只吸附 6px | 78.65 | 77.42 | PASS |
+| `pB` | 只收缩 25px | 78.57 | 77.34 | WARN 2 −0.38 / 8 −0.84 |
+| `pC`/`pD` | TRIMIN=19 / 22 | 78.56 / 78.58 | 77.33 / 77.35 | lead 太小反而变差 |
+| `pE`/`pF` | ORTHO=4 / 8 | 78.66 / 78.77 | 77.43 / 77.54 | — |
+| `pG` | ORTHO=8 + 不收缩 | 78.75 | 77.52 | PASS |
+| `pH`–`pK` | ORTHO=10 / 12 / 15 / 20 | **78.81** ×4 | **77.58** ×4 | 10 起进平台（剩余斜边两腿都 >20px），WARN 只 case8 −0.84 |
+| `pL` | **ORTHO=10（默认，其余全关）** | **78.79** | **77.56** | PASS，line 0.469→0.492 |
+| `pM`/`pN` | +TRIMPIN=25 / 60 | 78.79 / 78.79 | 77.56 / 77.56 | 无差别 ⇒ `trim_to_pins` 根本没触发 |
+| `pO`/`pP`/`pQ` | SNAPPIN=22 / 30 / 14 | 78.40 / 78.64 / 78.31 | 77.17 / 77.41 / 77.08 | 全部 FAIL/WARN |
+| `pR`/`pS` | SNAPPIN=22 / 30 + `EDGE_SNAPPIN_DUP=1` | 78.37 / 78.41 | 77.14 / 77.18 | 仍 FAIL ⇒ 「冲过端子的边」本身常常还能配上 GT 的端子外侧 |
+
+转正配置 = **`STAGE2_EDGE_ORTHO=10`，其余开关默认关**（`78.79 local / 77.56 official`，比定案 **+0.23**）。
+
+### 5.457.4 三条导线收缩判据判否（都是离线仿真，读完即弃）
+
+- `work/_linepolish.py`「A 完全落在 B 跨度内且偏移 ≤3 ⇒ 丢 A」⇒ **−0.511**
+  （case3 −0.90 / case4 −0.82 / case6 −0.91 / case7 −1.14 / case9 −1.14 / case10 −1.07，只有 case2 +0.71）
+  ⇒ 盲目剪重的方向经常剪反。
+- `work/_trintin.py`「端点钻进元件框就沿边退到框外 lead px」⇒ lead 0/10/19/25 分别
+  +0.021 / +0.013 / +0.020 / **+0.092**（fixed=42）⇒ 有点赚但和吸附重叠，未转正。
+- `work/_tailink.py`「尾巴上的深红墨迹比例 <0.2 才剪」（图像证据）⇒ **−0.141**
+  （case1 剪 1189px −0.08 / case10 剪 752px −0.62 / case12 剪 1341px Δ0）
+  ⇒ 多画的尾巴常常正好配上 GT 端子的外侧，墨迹判据也救不了。
+
+### 5.457.5 用户提的第二个问题：case6 C2 旁那段「折返」
+
+GT：`C2 bbox=[329,269,362,311]`（`type=c`），C2 旁**只有一条**竖边
+`(345.0,250.0)->(345.0,179.0) L=71`。
+
+我们 `net_1` 里有**两条**：
+
+```
+(345.0,178.1)->(345.9,252.6)  L=74.5   ← 与 GT 对得上
+(346.0,273.6)->(347.0,177.9)  L=95.7   ← 尾巴 21px 钻进 C2 本体
+```
+
+两条从 `STAGE2_TRACE_DUMP` 的 `00.pre` 起就都在（**stage1 把同一根粗线检出两次**），
+`11.overlap` 没合并是因为并集比短的那条长 **21.2px > `STAGE2_EDGE_OVERLAP_GROW=16`**。
+
+吸附之后两条变成 `(345.4,178.1)-(345.4,252.6)` 与 `(346.5,273.6)-(346.5,177.9)`：
+**横平竖直做到了，但「一长一短并行 + 尾巴穿进符号」的折返还在。**
+
+### 5.457.6 复现
+
+```
+cd Y:\workspace\EDA
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_cv.py pL --run --baseline o13d451 --device cuda
+python -X utf8 work\_ortho13.py o13d451            # 斜边普查
+python -X utf8 work\_linepolish.py o13d451 --snap=6 --contain=1
+```
+
+### 5.458.1 结论先行
+
+case6 的「折返」= **同一根线被 stage1 检出两条**（74.5px + 95.7px，偏移 1.1px）。
+把**长的那条丢掉、保留短的**，主尺从 **78.79 → 79.48 local / 77.56 → 78.25 official**
+（+0.69 local / +0.69 official），case6 单页 **87.77 → 89.20**（line 0.573→0.716），
+而且 C2 旁只剩一条竖边 `(345.4,178.1)-(345.4,252.6)` —— **折返消失**。
+
+13 张逐页（`work/_cv.py o13d458 --baseline o13d451`，`o13d458` 臂 = 本节默认）：
+
+| case | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| score | 58.33 | 86.57 | 97.92 | 88.36 | 84.47 | **89.20** | 89.51 | 85.45 | 88.65 | 92.72 | 49.66 | 56.63 | 65.80 |
+
+轴：comp 0.853 / pin 0.738 / netH 0.852 / **line 0.561**（`o13d451` 是 0.469）⇒ 收益全部落在导线轴。
+契约 E4/E5 **13/13 clean**，`_cv.py` 判决 **PASS**。
+
+### 5.458.2 为什么方向是「丢长的」
+
+早先 `work/_edgedup2.py`（`--tol` 3/6/10）试的是「近重合对只留**最长**」⇒ 77.06/77.08/77.08，
+比当时基线还差，于是这条线一直被记成「去重没收益」。方向其实反了：
+
+- GT 的边 `(345,250)-(345,179)` 端点离**短的**那条只有 0~2px；
+- 长的那条多出的 21px 尾巴落在元件本体内部，与 GT 端点差 **23.6px > `line_tol=5`** ⇒ 配不上；
+- 两条都留着时，1-1 配对里短的能配上、长的记 fp；把长的删掉，fp 直接少一条；
+- 反过来「留最长」会把唯一能配对的那条删掉 ⇒ 净亏。
+
+### 5.458.3 实现（`eda-pcb/stage2/assemble.py`）
+
+常量区：
+
+```python
+EDGE_DUPKEEP = (os.environ.get("STAGE2_EDGE_DUPKEEP", "short") or "").strip().lower()
+```
+
+新函数 `drop_twin_longer(nets, off=3.0, cosmin=0.985, ovmin=0.6)`：把全文档的边摊平后两两比较，
+判「同一条线的两次检出」= 方向 |cos| ≥ 0.985、两端到对方直线的垂距 ≤ 3px、投影重叠
+≥ min(la,lb) 的 60%；命中就丢掉**较长**的那条。**跨网也比较** —— 一对重复边常常分别落在两张
+「待焊接」的网上（case6 正是：`C2.1` 那张网与 `p025.*` 电源网在后续 `weld_nets` 里才合并，
+只在单网内比会漏掉）。调用点在出口短边闸门之后、导线整形之前（先删重复，再吸附/收缩）：
+
+```python
+if EDGE_DUPKEEP == "short":
+    _n_dk = drop_twin_longer(out_nets)
+```
+
+### 5.458.4 两个踩到的坑（都已修）
+
+1. **重叠量归一化搞错**：`t0/t1` 是「以 a 的长度为单位」的投影参数，我第一版写成
+   `max(0, min(la, hi) - max(0, lo)) / min(la, lb)` —— `min(la, hi)` 里 `hi≈1.28` 被当成像素，
+   重叠量恒等于 0、函数返回 0、全轮 Δ0（`pV`/`pW` 两臂都是 78.79）。
+   正确写法是 `max(0, min(1.0, hi) - max(0, lo)) * la / min(la, lb)`。
+   教训：**几何判据先离线单测**（把 case6 那两条边喂进去，函数应当返回 1），再上整轮。
+2. **`work/_cv.py` 的档案会被子集跑覆盖**：我之前用 `_cv.py o13d451 --cases 6` 查单页，
+   它把 `work/_cv/o13d451.json` 重写成了「只有 case6、mean=87.37」的记录 ⇒ 之后所有
+   `--baseline o13d451` 都报 `Δ -8.34` / 假 FAIL。现在只跑子集时档案写到
+   `work/_cv/<tag>.partial.json`，并打印「只跑了 N/13 页，档案写到 …（不覆盖全量）」。
+   `o13d451` 的全量档案已用 `_cv.py o13d451`（不带 `--run`，直接对既有交付 Pred 重算）恢复成
+   `78.56 / 77.33`。
+
+### 5.458.5 与 §5.457 的关系
+
+两条改动都在同一段出口整形里，顺序是 **去重（本节）→ 吸附横竖（§5.457）→ 收缩（默认关）**：
+
+| 配置 | local | official |
+|---|---:|---:|
+| `o13d451`（§5.452 定案） | 78.56 | 77.33 |
+| + 横竖吸附（§5.457） | 78.79 | 77.56 |
+| + 丢长留短（本节） | **79.48** | **78.25** |
+
+### 5.458.6 复现
+
+```
+cd Y:\workspace\EDA
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_cv.py o13d458 --run --baseline o13d451 --device cuda
+python -X utf8 work\_cv.py o13d458 --baseline o13d451        # 只重算，不跑管线
+python -X utf8 work\_ortho13.py o13d458                      # 斜边应仍为 0
+```
+
+单测 `drop_twin_longer`（离线，无需跑管线）：
+
+```
+$env:PYTHONPATH='Y:\workspace\EDA\eda-pcb'
+python -X utf8 -c "import importlib;A=importlib.import_module('stage2.assemble');\
+nets={'net_1':{'edges':{'e1':[{'x':345.4,'y':178.1},{'x':345.4,'y':252.6}],\
+'e2':[{'x':346.5,'y':273.6},{'x':346.5,'y':177.9}]}}};print(A.drop_twin_longer(nets))"
+```

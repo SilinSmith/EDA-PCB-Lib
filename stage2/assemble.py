@@ -634,6 +634,35 @@ EDGE_MIN_FINAL = float(os.environ.get("STAGE2_EDGE_MIN_FINAL", "20") or 0.0)
 # ★ 闸门不许把一张网删空：网若只剩短边，保留最长的那条。空网的顶点会在下游被清掉，
 #   于是「删掉一条假边」变成「连整个网的成员一起丢」（open_GT case12 实测 netH 0.622→0.609）。
 EDGE_MIN_KEEP_LAST = env_on("STAGE2_EDGE_MIN_KEEP_LAST", "1")
+# ★ 导线整形两遍（`STAGE2_EDGE_ORTHO` / `STAGE2_EDGE_TRIMIN`，见 §5.457）：
+#   GT 的导线是**严格曼哈顿**、并且一律停在端子外侧、**不进入符号体**；我们两个都做不到：
+#   · `work/_ortho13.py`：GT 13 张斜边 **0** 条，我们 **42** 条（case1 13 / case6 7 / case10 6）。
+#     离线「近轴吸附（较短方向 ≤ 6px 就吸成横/竖）」⇒ 主尺 **+0.035**（case11 +0.68 / case1 +0.08）；
+#     而把**真斜边拆成两段 L** 是 −0.03（5px 容差本来就能配上）⇒ 只吸附近轴的，别拆。
+#   · `work/_trintin.py`：端点落在某元件 bbox 内就沿边退到框外 `lead` px
+#     ⇒ lead 0/10/19/25 分别 +0.021/+0.013/+0.020/**+0.092**（case6 C2 旁那段折返正好被修掉：
+#     `(346.0,273.6)` → `(345.0,250.6)`，与 GT 的 `(345.0,250.0)` 逐位重合）。
+#   两遍都只改 `edges` 的点列，不动网/顶点/引脚。
+EDGE_ORTHO = float(os.environ.get("STAGE2_EDGE_ORTHO", "10") or 0.0)
+EDGE_TRIMIN = float(os.environ.get("STAGE2_EDGE_TRIMIN", "-1") or -1.0)
+EDGE_TRIMIN_SHORT = 5.0
+# ★ 钻进元件体的端点，改成**吸附到该元件最近的引脚点**（`STAGE2_EDGE_TRIMPIN`，默认 45）。
+#   比「退到框外 lead px」讲理：GT 的导线端点就是**端子**，而端子坐标我们本来就有（引脚表）。
+#   case6 的 C2：`(346.0,273.6)` 落在 bbox `[329,269,362,311]` 里，最近的引脚点正是
+#   `(345.9,250.6)` —— 与 GT 的 `(345.0,250.0)` 对上了。lead 那版只能靠一个全局常数去猜。
+EDGE_TRIMPIN = float(os.environ.get("STAGE2_EDGE_TRIMPIN", "-1") or -1.0)
+# ★ 导线「冲过头」收回端子（`STAGE2_EDGE_SNAPPIN`，默认 22）。
+#   判据：边的一端 e 比该元件的引脚点 p **更靠本体中心**、且 `|e-p| ≤ 22px`、另一端在 p 之外
+#   ⇒ 说明这根线从外面画进来、**越过了端子钻进符号里**，把 e 收到 p 上。
+#   正是 case6 的 C2：我们 `(345.4,273.6)`（本体边 280.6、端子 250.6）⇒ 收到 `250.6`，
+#   与 GT 的 `(345.0,250.0)` 逐位重合；而本来就停在端子上的线（`|e-中心| == |p-中心|`）不动。
+EDGE_SNAPPIN = float(os.environ.get("STAGE2_EDGE_SNAPPIN", "-1") or -1.0)
+# ★ 只在「这条边还有一条几乎重合的兄弟边」时才收回（`STAGE2_EDGE_SNAPPIN_DUP`，默认 1）。
+#   不加这条限制时（pO 臂）主尺 78.79→78.40 —— 冲过头的边本身常常还能配上 GT 的端子外侧；
+#   而 C2 那种「同一根线被检出两条」才是真的要收回。
+EDGE_SNAPPIN_DUP = env_on("STAGE2_EDGE_SNAPPIN_DUP", "1")
+# ★ 同一条线被检出两次时丢掉更长的那条（`STAGE2_EDGE_DUPKEEP=short` 打开）。
+EDGE_DUPKEEP = (os.environ.get("STAGE2_EDGE_DUPKEEP", "short") or "").strip().lower()
 
 # ★ 共线碎边焊接（`STAGE2_EDGE_MERGE`，**默认 0 = 关**，理由见本节 ⚠️ 那一段）。
 #
@@ -3648,6 +3677,21 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             _v["edges"] = _keep
         if _cutf and os.environ.get("STAGE2_DBG_EDGE"):
             print("[dbg edge min] %s cut=%d" % (case_id, _cutf))
+    if EDGE_DUPKEEP == "short":
+        _n_dk = drop_twin_longer(out_nets)
+        if _n_dk and os.environ.get("STAGE2_DBG_EDGE"):
+            print("[dbg edge polish] %s dupkeep=%d" % (case_id, _n_dk))
+
+    if EDGE_ORTHO > 0 or EDGE_TRIMIN >= 0 or EDGE_TRIMPIN > 0 or EDGE_SNAPPIN > 0:
+        # ★ 导线整形（§5.457）：先吸附成横/竖，再把「冲过端子钻进符号」的端点收回去，
+        #   最后按需把钻进框内的端点吸到引脚点/框外。顺序不能反 —— 吸附会挪端点（≤ snap px）。
+        _n_or = ortho_edges(out_nets, EDGE_ORTHO)
+        _n_sp = snap_pins_overshoot(out_nets, pins, components, EDGE_SNAPPIN)
+        _n_tp = trim_to_pins(out_nets, pins, components, EDGE_TRIMPIN)
+        _n_tr = trim_into_bodies(out_nets, components, EDGE_TRIMIN, EDGE_TRIMIN_SHORT)
+        if (_n_or or _n_sp or _n_tp or _n_tr) and os.environ.get("STAGE2_DBG_EDGE"):
+            print("[dbg edge polish] %s ortho=%d snappin=%d trimpin=%d trim=%d"
+                  % (case_id, _n_or, _n_sp, _n_tp, _n_tr))
     if PIN_LEAD_ATTACH or PIN_LEAD_MOVE:
         # ★ 2-pin 符号的「引脚引线」吸附/迁移：必须放在**最末尾** —— 离线取证就是在
         #   出口文档（几何全部定型）上做的，落在这里才能与离线读数逐位一致。
@@ -4333,6 +4377,375 @@ def _lead_axis_deg(ox: float, oy: float, on: float,
         return -1.0
     cos = (ox * (qx - px) + oy * (qy - py)) / (on * wn)
     return math.degrees(math.acos(max(-1.0, min(1.0, cos))))
+
+
+def ortho_edges(nets: Dict[str, dict], snap: float) -> int:
+    """近轴吸附：较短方向 ≤ `snap` 的边改成横/竖（真斜边不动）。只改 `edges` 点列。
+
+    依据见常量区 `EDGE_ORTHO`。返回改动条数。
+    """
+    if not nets or snap <= 0:
+        return 0
+    n = 0
+    for rec in nets.values():
+        e = (rec or {}).get("edges")
+        if not isinstance(e, dict):
+            continue
+        for _k, pt in e.items():
+            try:
+                x0, y0 = float(pt[0]["x"]), float(pt[0]["y"])
+                x1, y1 = float(pt[-1]["x"]), float(pt[-1]["y"])
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+            dx, dy = abs(x1 - x0), abs(y1 - y0)
+            if dx <= snap and dy > snap:
+                xm = (x0 + x1) / 2.0
+                pt[0]["x"] = pt[-1]["x"] = xm
+                n += 1
+            elif dy <= snap and dx > snap:
+                ym = (y0 + y1) / 2.0
+                pt[0]["y"] = pt[-1]["y"] = ym
+                n += 1
+    return n
+
+
+def _doc_bbox(c) -> Optional[List[float]]:
+    """元件在**文档帧**（y 向上）的 bbox。`bbox_json`/`bbox_img` 是图像帧，不能用。"""
+    if not isinstance(c, dict):
+        return None
+    b = c.get("bbox")
+    if not b or len(b) < 4:
+        return None
+    try:
+        return [float(b[0]), float(b[1]), float(b[2]), float(b[3])]
+    except (TypeError, ValueError):
+        return None
+
+
+def _pt_in(p, b, m: float = 1.0) -> bool:
+    return b[0] - m < p[0] < b[2] + m and b[1] - m < p[1] < b[3] + m
+
+
+def _back_out(p, q, b, lead: float):
+    """把落在框 `b` 内的端点 `p` 沿 `p→q` 方向退到框外 `lead` px；整条边都在框里则返回 None。"""
+    vx, vy = q[0] - p[0], q[1] - p[1]
+    L = math.hypot(vx, vy)
+    if L < 1e-6:
+        return None
+    ux, uy = vx / L, vy / L
+    t, hit = 0.0, None
+    while t <= L:
+        if not _pt_in((p[0] + ux * t, p[1] + uy * t), b, 0.0):
+            hit = t
+            break
+        t += 0.5
+    if hit is None:
+        return None
+    t2 = min(L - 1e-6, hit + lead)
+    return (p[0] + ux * t2, p[1] + uy * t2)
+
+
+def trim_into_bodies(nets: Dict[str, dict], components: Dict[str, dict],
+                     lead: float, short: float = 5.0) -> int:
+    """导线端点钻进元件体 ⇒ 沿边退到框外 `lead` px；退完短于 `short` 的整条丢掉。
+
+    依据见常量区 `EDGE_TRIMIN`（GT 的导线一律停在端子外侧）。只改 `edges` 点列。
+    返回改动的边数。
+    """
+    if not nets or lead < 0 or not components:
+        return 0
+    boxes = [b for b in (_doc_bbox(c) for c in components.values()) if b]
+    if not boxes:
+        return 0
+    n = 0
+    for rec in nets.values():
+        e = (rec or {}).get("edges")
+        if not isinstance(e, dict):
+            continue
+        keep = {}
+        for ek, pt in e.items():
+            try:
+                p = (float(pt[0]["x"]), float(pt[0]["y"]))
+                q = (float(pt[-1]["x"]), float(pt[-1]["y"]))
+            except (KeyError, IndexError, TypeError, ValueError):
+                keep[ek] = pt
+                continue
+            p0, q0 = p, q
+            for _b in boxes:
+                if _pt_in(p, _b):
+                    np_ = _back_out(p, q, _b, lead)
+                    if np_ is not None:
+                        p = np_
+                if _pt_in(q, _b):
+                    nq = _back_out(q, p, _b, lead)
+                    if nq is not None:
+                        q = nq
+            if (p, q) == (p0, q0):
+                keep[ek] = pt
+                continue
+            n += 1
+            if math.hypot(q[0] - p[0], q[1] - p[1]) < short:
+                continue                               # 修完太短：整条丢
+            pt[0]["x"], pt[0]["y"] = p[0], p[1]
+            pt[-1]["x"], pt[-1]["y"] = q[0], q[1]
+            keep[ek] = pt
+        rec["edges"] = keep
+    return n
+
+
+def trim_to_pins(nets: Dict[str, dict], pins: Dict[str, dict],
+                 components: Dict[str, dict], maxd: float,
+                 short: float = 5.0) -> int:
+    """端点钻进元件体 ⇒ 吸到该元件**最近的引脚点**（`maxd` 内）；吸完短于 `short` 的整条丢。
+
+    依据见常量区 `EDGE_TRIMPIN`。只改 `edges` 点列。返回改动的边数。
+    """
+    if not nets or maxd <= 0 or not pins or not components:
+        return 0
+    boxes = {}
+    for k, c in components.items():
+        b = _doc_bbox(c)
+        if b:
+            boxes[str(k)] = b
+    if not boxes:
+        return 0
+    ppts = {}
+    for k, row in pins.items():
+        pts = []
+        for _pk, ent in (row or {}).items():
+            try:
+                pt = ent.get("point") or {}
+                pts.append((float(pt["x"]), float(pt["y"])))
+            except (AttributeError, KeyError, TypeError, ValueError):
+                continue
+        if pts:
+            ppts[str(k)] = pts
+    if not ppts:
+        return 0
+    n = 0
+    for rec in nets.values():
+        e = (rec or {}).get("edges")
+        if not isinstance(e, dict):
+            continue
+        keep = {}
+        for ek, pt in e.items():
+            try:
+                p = (float(pt[0]["x"]), float(pt[0]["y"]))
+                q = (float(pt[-1]["x"]), float(pt[-1]["y"]))
+            except (KeyError, IndexError, TypeError, ValueError):
+                keep[ek] = pt
+                continue
+            p0, q0 = p, q
+            for end in (0, 1):
+                cur = p if end == 0 else q
+                for ck, b in boxes.items():
+                    if not _pt_in(cur, b, 0.0):
+                        continue
+                    cand = ppts.get(ck) or []
+                    if not cand:
+                        continue
+                    best = min(cand, key=lambda t: math.hypot(t[0] - cur[0], t[1] - cur[1]))
+                    if math.hypot(best[0] - cur[0], best[1] - cur[1]) > maxd:
+                        continue
+                    if end == 0:
+                        p = best
+                    else:
+                        q = best
+                    break
+            if (p, q) == (p0, q0):
+                keep[ek] = pt
+                continue
+            n += 1
+            if math.hypot(q[0] - p[0], q[1] - p[1]) < short:
+                continue
+            pt[0]["x"], pt[0]["y"] = p[0], p[1]
+            pt[-1]["x"], pt[-1]["y"] = q[0], q[1]
+            keep[ek] = pt
+        rec["edges"] = keep
+    return n
+
+
+def _has_twin(segs, i, off: float = 3.0, cosmin: float = 0.985,
+              ovmin: float = 0.6) -> bool:
+    """`segs[i]` 在同一张网里是否有一条「几乎重合」的兄弟边（同一条线被检出两次）。"""
+    if i is None or i >= len(segs):
+        return False
+    a = segs[i]
+    if a is None:
+        return False
+    la = math.hypot(a[2] - a[0], a[3] - a[1])
+    if la < 1e-6:
+        return False
+    for j, b in enumerate(segs):
+        if j == i or b is None:
+            continue
+        lb = math.hypot(b[2] - b[0], b[3] - b[1])
+        if lb < 1e-6:
+            continue
+        if abs(((a[2] - a[0]) * (b[2] - b[0]) + (a[3] - a[1]) * (b[3] - b[1])) / (la * lb)) < cosmin:
+            continue
+        # 垂直偏移：b 的两个端点到 a 所在直线的距离
+        vx, vy = (a[2] - a[0]) / la, (a[3] - a[1]) / la
+        d0 = abs((b[0] - a[0]) * vy - (b[1] - a[1]) * vx)
+        d1 = abs((b[2] - a[0]) * vy - (b[3] - a[1]) * vx)
+        if max(d0, d1) > off:
+            continue
+        # 投影重叠 ≥ ovmin
+        t0 = ((b[0] - a[0]) * vx + (b[1] - a[1]) * vy) / la
+        t1 = ((b[2] - a[0]) * vx + (b[3] - a[1]) * vy) / la
+        lo, hi = min(t0, t1), max(t0, t1)
+        ov = max(0.0, min(1.0, hi) - max(0.0, lo))
+        if ov >= ovmin:
+            return True
+    return False
+
+
+def snap_pins_overshoot(nets: Dict[str, dict], pins: Dict[str, dict],
+                        components: Dict[str, dict], maxd: float,
+                        short: float = 5.0) -> int:
+    """导线从外面画进来、越过端子钻进符号 ⇒ 把越界的那端收回到端子点上。
+
+    判据见常量区 `EDGE_SNAPPIN`。只改 `edges` 点列。返回改动的边数。
+    """
+    if not nets or maxd <= 0 or not pins or not components:
+        return 0
+    ctr, ppts = {}, {}
+    for k, c in components.items():
+        b = _doc_bbox(c)
+        if b:
+            ctr[str(k)] = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)
+    for k, row in pins.items():
+        pts = []
+        for _pk, ent in (row or {}).items():
+            try:
+                pt = ent.get("point") or {}
+                pts.append((float(pt["x"]), float(pt["y"])))
+            except (AttributeError, KeyError, TypeError, ValueError):
+                continue
+        if pts and str(k) in ctr:
+            ppts[str(k)] = pts
+    if not ppts:
+        return 0
+    n = 0
+    for rec in nets.values():
+        e = (rec or {}).get("edges")
+        if not isinstance(e, dict):
+            continue
+        segs = []
+        for _ek, _pt in e.items():
+            try:
+                segs.append((float(_pt[0]["x"]), float(_pt[0]["y"]),
+                             float(_pt[-1]["x"]), float(_pt[-1]["y"])))
+            except (KeyError, IndexError, TypeError, ValueError):
+                segs.append(None)
+        keep = {}
+        for idx, (ek, pt) in enumerate(e.items()):
+            if EDGE_SNAPPIN_DUP and not _has_twin(segs, idx):
+                keep[ek] = pt
+                continue
+            try:
+                p = (float(pt[0]["x"]), float(pt[0]["y"]))
+                q = (float(pt[-1]["x"]), float(pt[-1]["y"]))
+            except (KeyError, IndexError, TypeError, ValueError):
+                keep[ek] = pt
+                continue
+            p0, q0 = p, q
+            for end in (0, 1):
+                cur, other = (p, q) if end == 0 else (q, p)
+                for ck, plist in ppts.items():
+                    c = ctr[ck]
+                    pin = min(plist, key=lambda t: math.hypot(t[0] - cur[0], t[1] - cur[1]))
+                    de = math.hypot(cur[0] - c[0], cur[1] - c[1])
+                    dp = math.hypot(pin[0] - c[0], pin[1] - c[1])
+                    do = math.hypot(other[0] - c[0], other[1] - c[1])
+                    if not (de + 1.0 < dp and do > dp + 1.0):
+                        continue
+                    if math.hypot(pin[0] - cur[0], pin[1] - cur[1]) > maxd:
+                        continue
+                    if end == 0:
+                        p = pin
+                    else:
+                        q = pin
+                    break
+            if (p, q) == (p0, q0):
+                keep[ek] = pt
+                continue
+            n += 1
+            if math.hypot(q[0] - p[0], q[1] - p[1]) < short:
+                continue
+            pt[0]["x"], pt[0]["y"] = p[0], p[1]
+            pt[-1]["x"], pt[-1]["y"] = q[0], q[1]
+            keep[ek] = pt
+        rec["edges"] = keep
+    return n
+
+
+def drop_twin_longer(nets: Dict[str, dict], off: float = 3.0, cosmin: float = 0.985,
+                     ovmin: float = 0.6) -> int:
+    """同一条线被检出两次（近共线、近乎重合）：**丢掉更长的那条**，保留短的。
+
+    §5.458：`11.overlap` 的并集合并因为「并集增长超过 `EDGE_OVERLAP_GROW`」而拒绝合并
+    时，两条会一起留下（case6 C2 旁 74.5px + 95.7px 一对）。长的那条尾巴伸进元件本体，
+    与 GT 端子对不上（端点差 23.6px > 5px），而短的那条正好对上 ⇒ 应当丢长的。
+    早先 `_edgedup2.py` 试过「只留最长」⇒ 77.06（更差），方向正好相反。
+    """
+    if not nets:
+        return 0
+    # 跨网也比较 —— 一对重复边常常分别落在两张「待焊接」的网上（case6 的 C2 那样）。
+    ent = []
+    for rec in nets.values():
+        e = (rec or {}).get("edges")
+        if not isinstance(e, dict):
+            continue
+        for k, pt in e.items():
+            try:
+                seg = (float(pt[0]["x"]), float(pt[0]["y"]),
+                       float(pt[-1]["x"]), float(pt[-1]["y"]))
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+            la = math.hypot(seg[2] - seg[0], seg[3] - seg[1])
+            if la >= 1e-6:
+                ent.append((rec, k, seg, la))
+    if len(ent) < 2:
+        return 0
+    dead = set()
+    for i in range(len(ent)):
+        if i in dead:
+            continue
+        ri, ki, a, la = ent[i]
+        for j in range(i + 1, len(ent)):
+            if j in dead:
+                continue
+            rj, kj, b, lb = ent[j]
+            if ri is rj and ki == kj:
+                continue
+            if abs(((a[2] - a[0]) * (b[2] - b[0]) + (a[3] - a[1]) * (b[3] - b[1]))
+                   / (la * lb)) < cosmin:
+                continue
+            vx, vy = (a[2] - a[0]) / la, (a[3] - a[1]) / la
+            d0 = abs((b[0] - a[0]) * vy - (b[1] - a[1]) * vx)
+            d1 = abs((b[2] - a[0]) * vy - (b[3] - a[1]) * vx)
+            if max(d0, d1) > off:
+                continue
+            t0 = ((b[0] - a[0]) * vx + (b[1] - a[1]) * vy) / la
+            t1 = ((b[2] - a[0]) * vx + (b[3] - a[1]) * vy) / la
+            lo, hi = min(t0, t1), max(t0, t1)
+            # t 已归一到 a 的长度 ⇒ 重叠量按 0..1 夹，再乘回 la
+            if max(0.0, min(1.0, hi) - max(0.0, lo)) * la / min(la, lb) < ovmin:
+                continue
+            keep_i = lb >= la            # 保留短的那条
+            dead.add(j if keep_i else i)
+            if not keep_i:
+                break
+    if not dead:
+        return 0
+    n = 0
+    for idx in dead:
+        rec, k, _s, _l = ent[idx]
+        e = rec.get("edges")
+        if isinstance(e, dict) and e.pop(k, None) is not None:
+            n += 1
+    return n
 
 
 def attach_stamped_leads(nets: Dict[str, dict], pins: Dict[str, dict],
