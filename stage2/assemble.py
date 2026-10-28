@@ -590,6 +590,15 @@ POWER_VALUE = env_on("STAGE2_POWER_VALUE", "1")
 #   `Name=p031` 的端口永远配不上 GT 的 `BAT`（每颗贡献 1 fn + 1 fp）。
 PORT_NAME = env_on("STAGE2_PORT_NAME", "1")
 PORT_TYPES = frozenset(("net_input", "net_output", "net_short", "net_bidirection"))
+# ★ `STAGE2_PORT_KEY`（默认 **1**，§5.442 更正后放开）：端口符号的**键**也用它的标签。
+#   官方附录一/二对 `components.<key>` **没有形态要求**（`docs/COMPETITION_RULES.md:90`），
+#   GT 自己 346 颗里 143 颗是 `∅NNN` / `BAT` / `LED+` / `BAT_2` 这种键 ⇒ 之前把「键必须是
+#   `[A-Z]{1,3}\d{1,4}` / `pNNN`」当契约是**自设的过严规则**（`work/_smoke.py` 的 E4），
+#   它把这条白丢的收益挡住了（`work/_portoracle13.py` 量到 +0.18 上界）。
+#   真正不能有的只有 `hyperGraph` 的分隔符：`(` `)` `,` 与 `.`（见 `_PORT_KEY_SEP`）。
+PORT_KEY = env_on("STAGE2_PORT_KEY", "1")
+_PORT_KEY_SEP = ".,()"
+
 GND_TYPES = frozenset((
     "gnd", "gnda", "gndd", "agnd", "dgnd", "pgnd", "gnd_ref", "earth",
     "vss", "vssa"))
@@ -2426,6 +2435,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     keymap: Dict[str, str] = {}
     _port_lab: Dict[str, str] = {}
     _port_keys: set = set()
+    _port_cnt: Dict[str, int] = {}
     num_of: Dict[Tuple[str, int], str] = {}
     # ★ 引脚**索引 → 交付文档里的那个键**（`pin_<num>`，撞名时带 `_N` 后缀）。
     # 融合层要改引脚就必须知道这个映射：`num` 会被下面的「结构期望」重写过
@@ -2569,14 +2579,22 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                             break
                 if _lab:
                     # ★★ 端口符号的 `Name` 就是它印的标签（`STAGE2_PORT_NAME`，默认 1）：
-                    #   `net_input`/`net_output` 在官方 GT 里 `Name` 是标签文字
-                    #   （`open_GT` case1 `BAT`/`LED+`/`LED-`，case12 `VIN`/`VOUT`）。
-                    #   **键仍是 `pNNN`**：契约自检（`work/_smoke.py`）E4 要求
-                    #   `[A-Z]{1,3}\d{1,4}` / `pNNN` 形态，标签键（`PNVN_3`、`58me-10N2`）
-                    #   会被判异常；E5 还会抓到「网顶点引用了加后缀前的旧键」（`N2` 无实体）。
-                    #   把键也换成标签曾拿到 +0.01（`work/_o13pk` 76.24 vs 77.01 的
-                    #   `work/_o13sb*`），不值得破契约。
+                    #   `net_input`/`net_output` 在官方 GT 里 `Name` 与**键**都是标签文字
+                    #   （`open_GT` case1 `BAT`/`BAT_2`/`LED+`/`LED-`，case12 `VIN`/`VIN_2..4`/`VOUT`）。
+                    #   官方配对只认字典键（`metrics.py:335` 的 `set(gc) & set(pc)`），
+                    #   所以键不改就每颗端口亏 1 fn + 1 fp（§5.442 更正了 E4 这条自设规则）。
                     key = "p%03d" % i
+                    if PORT_KEY:
+                        _clean = "".join(ch for ch in _lab if ch not in _PORT_KEY_SEP)
+                        if _clean:
+                            _n0 = _port_cnt.get(_clean, 0) + 1
+                            _port_cnt[_clean] = _n0
+                            _cand = _clean if _n0 == 1 else "%s_%d" % (_clean, _n0)
+                            while _cand in components or _cand in _port_lab:
+                                _n0 += 1
+                                _port_cnt[_clean] = _n0
+                                _cand = "%s_%d" % (_clean, _n0)
+                            key = _cand
                     _port_keys.add(key)
                     _port_lab[key] = _lab
                     _unkeyed = True
