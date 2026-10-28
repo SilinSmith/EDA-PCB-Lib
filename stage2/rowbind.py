@@ -34,9 +34,9 @@ ROW_GAP_MAX = 70.0      # 一颗符号到它该认领的文字框之间的允许
 #     A(32px) 读到 5 个位号 ⇒ cost 选 `side=+1`（对，与 GT `R20@1796/R19@1845/R16@1893` 一致）；
 #     B(64px) 读到 4 个位号 ⇒ cost 选 `side=-1`（错，整排右移一格、`R19` 丢失）。
 #   两边的 cost 是 127.7 与 96.0，而**正确解**在少一个位号时 cost 必然更大 ⇒ cost 不可用。
-ROW_SIDE_VOTE = env_on("STAGE2_ROW_BIND_SIDE_VOTE", "1")
+ROW_SIDE_VOTE = env_on("STAGE2_ROW_BIND_SIDE_VOTE", "0")
 ROW_VOTE_MIN = 8        # 至少这么多「有位号的件」才信投票
-ROW_VOTE_FRAC = 0.8     # 多数票得占这么大比例才动手
+ROW_VOTE_FRAC = float(os.environ.get("STAGE2_ROW_BIND_VOTE_FRAC", "0.8"))  # 多数票占比阈值
 
 
 def rename(doc: dict, mapping: Dict[str, str]) -> dict:

@@ -32656,3 +32656,31 @@ python -X utf8 work\_boxsnap13.py o13d451 --tan=0
 python -X utf8 work\_cv.py rbdB --run --cases 1 --device cuda --env STAGE2_CKPT=eda-pcb/textrec/runs/ft64full/best.pt --env STAGE2_ROW_BIND_DUMP=work/_rbd_B.json
 python -X utf8 work\_cv.py vote1 --run --baseline o13d451 --device cuda
 ```
+
+### 5.456.10 补记：整页投票的跨族读数（默认置 0）
+
+13 张主尺对投票不敏感（`vote1` 与 `vote0` 都是 **78.56 / 77.33 逐位不变**、契约 13/13 clean、PASS），
+但在池子 30 案上它**会动手**：
+
+| 臂 | 阈值 | 池子 mean（对 `work/_fast_base/ef20.json`） | 备注 |
+|---|---|---:|---|
+| 投票关（`STAGE2_ROW_BIND_SIDE_VOTE=0`） | — | **27.99** | §5.452 的读数 |
+| 投票开 | `STAGE2_ROW_BIND_VOTE_FRAC=0.8` | **28.23（+0.24）** | 最差 `0148 −2.73` |
+| 投票开 | `STAGE2_ROW_BIND_VOTE_FRAC=0.95` | 与「关」相同 | 阈值收紧后不再触发 |
+
+逐案隔离（`fast.py --cases 0148`，单案 ≈1.5 min）：
+
+| 臂 | `0148` |
+|---|---:|
+| `ef20`（§5.452 参考臂） | 36.77 |
+| 投票 0.8（`cvpool_vote1`） | **34.04（−2.73）** ⇒ 投票把那一排翻反了（nets 25→20） |
+| 投票 0.95 | 35.27（−1.50） |
+| 投票关 | **35.27（−1.50）** ⇒ 与 0.95 逐位相同 |
+
+⇒ ① 投票只在多数极强时才动，阈值 0.8 会踩到 `0148`（净 −1.23 单页）；② `0148` 相对 `ef20` 的 −1.50
+**不是投票造成的**（关掉也一样），是 §5.446/§5.450/§5.451 的累积漂移；
+③ 结论：投票机制**默认置 0**（`STAGE2_ROW_BIND_SIDE_VOTE` 默认 `0`），代码与落盘钩子留下备用，
+阈值可配（`STAGE2_ROW_BIND_VOTE_FRAC`）。主尺与池子都回到 §5.452 的状态。
+
+`rowbind` 这一条到此为止：真要让行内重绑免疫读数，缺的是「从图上判断哪颗符号没有位号文字」这一级证据
+（整页投票在 case1 是 13 : 7，够不到阈值），不是配对算法本身。
