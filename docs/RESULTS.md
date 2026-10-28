@@ -32527,3 +32527,132 @@ python -X utf8 work\_valnorm.py work\_cv_run_o13d451 1 2 3 4 5 6 7 8 9 10 11 12 
 重训 / 换权重 / 置信度投票三条路在绑定层变得「对读数不敏感」之前**一律不划算**，本节把这条线封口。
 下一步的落点是 `stage2/rowbind.py::_pair`（`moved` 3→1）与引脚槽裁决（`case13` 的 `pin_1..3`），
 判据用 §5.455.2 的复核口径：换任何读数来源后，`row_bind.moved` 与各页 pin F1 都不该跟着漂。
+
+## 5.456 绑定层收尾（1）：`pin_f1` 口径核实、GT「边框 ± 40」约定、`rowbind` 选边判据的失效
+
+> 触发：用户 m20103「都做」——`stage2/rowbind.py::_pair` 与引脚槽裁决两处一起做。
+> 结论先说：**两处都没有拿到分数**（13 张逐位不变），但拿到了三条可复用的口径事实与三个判否的量化读数，
+> 其中「`pin_f1` 只算 box 件」「GT 的 box 脚点在边框外 40px」「`_pair` 的 cost 不是选边判据」都会直接
+> 影响下一步该往哪打。
+
+### 5.456.1 `pin_f1` 只统计 box（IC）元件
+
+`eda-pcb/schematic_parser/metrics.py:454-492`：
+
+```python
+box_comps = {k for k, v in gt['components'].items()
+             if canon_type((v or {}).get('type')) in IC_TYPES}   # pin_box_only 默认 True
+...
+for key in set(gf) | set(pf):        # key = (comp, pin_key_to_number(pk))
+    if p.get('pinname') != g.get('pinname'):  fp += 1; fn += 1     # 名不符
+    if hypot(...) > cfg.pin_tol:              fp += 1; fn += 1     # 点距 > 5px
+```
+
+⇒ ① 电容/电阻/电感的引脚点位漂移**不进入** pin 轴；② 名与号都在键里（`pin_key_to_number` 把
+`pin_7` → `7`）；③ 名对但点位 >5px 也算 fp+fn。
+
+这条口径直接否掉了「把无源件脚点从 ±40 再往外挪」的想法（§5.450 的收益来自 netH/line，不是 pin 轴），
+也让 case13 那种「八颗电容脚点整体内缩 18px」的现象**与分数无关**——它只是噪声，不要再动。
+
+### 5.456.2 GT 里 box 元件的脚点在「边框 ± 40」上（测量）
+
+`work/_boxpinexp.py`（13 张 GT，只读）：
+
+- 191 个 box 引脚里，**没有一个**落在自身 bbox 边框 5px 以内（`on-edge<=1px 0 | <=5px 0 | farther 191`）。
+- 大量脚点正好在边框外 **40px**：`case5 U2 bbox=[1510,517,1628,655]` ⇒ `pin_6 (1470,596)`（= x0−40）、
+  `pin_7 (1668,557)`（= x1+40）；`case5 U1 bbox=[524,746,642,885]` ⇒ `pin_3 (484,786)` / `pin_6 (682,825)`。
+- 切向坐标落在框内、排成行：`case9 U2 bbox=[840,561,958,640]` ⇒ 行 `581(=y0+20) / 600(中点) / 620(=y1−20)`。
+
+⇒ GT 的 bbox 是**含引脚占地的符号框**，脚点 = 边框外 40px（与无源件的 39.5px 半跨同源）；
+**我们 stage1 的 bbox 是符号本体**（case13 电容我们 16×20 vs GT 47×58），两者不是同一条线。
+这条差异是 5.456.5② 判否的直接原因。
+
+### 5.456.3 case13 的 pin 0.700 拆解（`work/_pinbox5.py`）
+
+13 张里 case13 的 GT box 件只有两颗：
+
+| 件 | GT 脚 | 我们 | 差别 |
+|---|---:|---:|---|
+| `H1`（box，`bbox [1288,386,1346,502]`） | 3 | **0** | 整件没检出（stage1 漏检，3 脚全丢） |
+| `U1` | 9 | 8 | `pin_7 GT RLIM` 我们读 `RLM`（掉 `I`）；`pin_9 GT EPAD` 我们无此脚 |
+
+⇒ case13 的 pin 损失 = 1 颗漏检件 + 2 个「读数/脚表」缺口，都是检测与读数层的事，不是几何。
+（顺带：`C1~C8` 的脚点「上下对调且内缩 18px」与分数无关，见 5.456.1。）
+
+### 5.456.4 case5 / case9 的 pin 损失来源
+
+- **case5（pin 0.606，损失 9.85）**：`U1 pin_2 VOUT` 缺、`U2 pin_7 PP` 缺；`U3` 三个名读错
+  （`ADJ(GND)→ADIGN`、`VOUT(TAB)→VIN`、`pin_3 VIN` 缺）⇒ 名不符占多数。
+- **case9（pin 0.667，损失 8.33）**：`U2` 六脚**名全对**，坏在两个**点位逃逸**——
+
+  | 脚 | GT | 我们 |
+  |---|---|---|
+  | `pin_1 BS` | (800, 620) | (820.2, 646.9) |
+  | `pin_6 SW` | (998, 620) | (1018.9, 621.9) |
+
+  其余四脚都在 1~2px。两个坏脚都是「引线吸附/盖章之后被拉到导线上」的结果（各 +20 / +27px）。
+
+### 5.456.5 两条脚点规整判否（都离线仿真，不动管线）
+
+① **行列聚类吸附** `work/_pinsnap13.py`（同列/同行内间距 ≤6 成簇、只吸 6~30px 的离群点、≥4 脚才做）：
+**78.556 → 77.553（−1.002）**；case4 −4.17、case10 −2.17、case11 −1.79、case6 −1.72、case8 −1.67、case5 −1.52，
+case9 Δ0（想救的两脚没救到）⇒ 判否：IC 的脚并不总在「行列网格」上，硬吸会把对的吸坏。
+
+② **边框 ± 40 吸附** `work/_boxsnap13.py`（`--span=40 --cap=30`，另有切向簇吸附 `--tan=0/1`，两档逐位相同）：
+**78.556 → 63.211（−15.345）**；case12 pin 0.824→**0.000**、case13 0.700→**0.000** ⇒ 判否，理由见 5.456.2：
+**我们自己的 bbox 不是 GT 那条边框**（GT 含引脚占地、我们只有本体），拿我们框当基准整片打飞。
+
+### 5.456.6 `rowbind._pair` 选边判据失效（新 dump 钩子取证）
+
+`print` 进不了 lane 的 stdout（`_lanes/lane*/stdout.log` 里 grep `[rb]`/`[rowbind]` 全空），
+所以给 `eda-pcb/stage2/rowbind.py` 加了 `STAGE2_ROW_BIND_DUMP=<path>`：每行落
+`{type, n, leb(位号框心), beb(符号框心), side, cost, drop, pairs}`，并在 `stat` 里加 `vote/vpos/vneg`。
+
+case1 唯一触发的那一行（`r`，6 颗，间距 49——位号文字正好压在相邻符号的接缝上）：
+
+| 臂 | 读到的位号框心 | 选中的 side | cost | `moved` | 与 GT |
+|---|---|---|---:|---:|---|
+| A（32px，基线） | `[1822.5, 1874.0, 1923.5, 1975.0, 2081.5]`（5 个） | **+1** | 127.7 | 3 | 与 `R20@1796/R19@1845/R16@1893/R17@1943/R18@1994` 逐颗一致 |
+| B（64px 权重） | `[1822.5, 1874.0, 1923.5, 1975.0]`（**少一个**） | **−1** | 96.0 | 1 | 整排右移一格，`R19` 丢失（`R16@1796`） |
+
+符号框心两臂相同：`[1799.7, 1848.6, 1897.1, 1947.4, 1997.9, 2056.0]`。
+
+⇒ **`cost` 不是可用的选边判据**：少读出一个位号时，正确解的 cost 必然更大（127.7 > 96.0），
+于是「少一个文字框」这一个读数差就把整排方向翻过来。这就是 §5.454 里 64px 臂 case1 comp 0.602→0.518 的机制。
+
+### 5.456.7 改了什么（保行为）
+
+`eda-pcb/stage2/rowbind.py`：
+
+- `ROW_SIDE_VOTE = env_on("STAGE2_ROW_BIND_SIDE_VOTE", "1")`、`ROW_VOTE_MIN = 8`、`ROW_VOTE_FRAC = 0.8`：
+  `fix` 先按整页「有位号的 `r/c/l` 件的 `lx` 与 `bx` 大小关系」投票，达到阈值就把 side 钉死，
+  否则退回旧的两边 cost 搜索（旧行为）。
+- `STAGE2_ROW_BIND_DUMP` 落盘钩子（见 5.456.6）；`stat` 多 `vote/vpos/vneg` 三个键。
+
+读数：`work/_cv.py vote1 --run --baseline o13d451 --device cuda` ⇒ **78.56 / 77.33 逐位不变**，
+逐页 Δ +0.00、契约 13/13 clean、VERDICT PASS。case1 的票数是 `vpos 13 / vneg 7`（65%，未达 0.8）
+⇒ 该页不触发投票、仍走 cost —— 也就是**这一页的问题没解**。
+
+### 5.456.8 下一步候选（按性价比）
+
+1. **逃逸脚回收**（case9 那种 +20/+27）：只在「脚点的切向投影落在框外」且同侧其它脚的切向值能给出确定的一行时回收。
+   前置是先解决 5.456.2 的框口径问题（我们框 ≠ GT 框），否则会重演 5.456.5②。
+2. **3 脚 `box` 件检出**（case13 `H1`）：一件 +3 脚，属检测模型档。
+3. **叠画实例切分**（case11，§5.448 上界 +0.52）：仍是最大单块。
+4. `rowbind` 若要真正免疫读数，需要「从图上判断哪颗符号没有位号文字」这一级证据（投票不行：case1 是 65/35）。
+
+### 5.456.9 复现
+
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+# GT 脚点与边框的关系
+$env:PYTHONPATH='Y:\workspace\EDA\eda-pcb'; python -X utf8 work\_boxpinexp.py
+# box 件引脚逐件对比（名/号/点）
+python -X utf8 work\_pinbox5.py work\_cv_run_o13d451 13
+# 两条判否的离线仿真
+python -X utf8 work\_pinsnap13.py o13d451
+python -X utf8 work\_boxsnap13.py o13d451 --tan=0
+# rowbind 行内输入落盘 + 保行为验证
+python -X utf8 work\_cv.py rbdB --run --cases 1 --device cuda --env STAGE2_CKPT=eda-pcb/textrec/runs/ft64full/best.pt --env STAGE2_ROW_BIND_DUMP=work/_rbd_B.json
+python -X utf8 work\_cv.py vote1 --run --baseline o13d451 --device cuda
+```
