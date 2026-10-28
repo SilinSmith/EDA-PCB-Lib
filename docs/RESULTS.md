@@ -31344,3 +31344,91 @@ python -X utf8 eda-pcb\tools\eval\fast.py --cases <30 案> --engine protocol4 --
 # 每臂墙钟 ≈ 36 min（30 案，200 案池的单案 ~1.2 min）
 ```
 
+
+## 5.439 统一交叉验证管线 `work/_cv.py`（四级判决 + 两个可选阶段）
+
+### 5.439.1 病：验证证据分散在四条各自为政的管线里
+
+`work/` 下已经有 **1648** 个 `_*.py` 探针，其中 **557** 个 import 了 `schematic_parser`
+（即都会自己算一次分）。而「每次改动都必须看」的判决证据，一直分散在这四个脚本里，
+每个都手写自己的 `EvalConfig`、自己的路径、自己的输出格式：
+
+| 旧脚本 | 它负责的判决 | 输出 |
+|---|---|---|
+| `work/_percase.py` | 13 张主尺的四轴加权分 | 逐页一行 + `mean` |
+| `work/_strictpow.py` | `评测要求.pdf` 名/值口径（三种模式） | 四行汇总 |
+| `work/_contractchk.py` | E4 键形态 / E5 网成员实体 | `files with issues: N` |
+| `work/_lossattr3.py` | 每轴丢分（权重 .30/.25/.35/.10） | 表格 |
+
+代价是具体的：一次 A/B 要跑 3~4 条命令、自己把数字抄到一处再心算差值；而「有没有倒退」
+从来没有人替你判 —— §5.437 的闸门就是这样带着 **case12 −0.44** 上线的，直到本轮把四个
+脚本并起来，那条负值才第一次出现在一行 `VERDICT: WARN` 里。
+
+### 5.439.2 做法：一条命令、四级串行、一个判决码
+
+新文件 `work/_cv.py`（无第三方依赖，纯 CPU）：
+
+```
+python -X utf8 work\_cv.py <tag> [--baseline TAG] [--run] [--pool] [--cases 1,2,3]
+                            [--env K=V ...] [--md out.md] [--json out.json]
+```
+
+四级**总是**执行的检查：
+
+| 级 | 名称 | 内容 |
+|---|---|---|
+| L1 | `local` | 13 张 `open_GT-1020` 四轴加权分，逐页 + 均值（CFG 与 `_percase.py` 逐字一致） |
+| L2 | `official` | 把 `M.component_text_ok` 临时换成 `评测要求.pdf` 口径（自动编号件仍严格比 `value`，`∅NNN` 只豁免 Name）再评一次 |
+| L3 | `contract` | 对**交付 Pred 本身**查 E4（键须 `^([A-Z]{1,3}\d{1,4}|p\d{3})$`）与 E5（`hyperGraph` 顶点 `<key>.<pin>` 的 key 必须在 `components` 里） |
+| L4 | `axis` | 每轴丢分 `(1-F1)*w*100` 的均值 + 与基线的逐页差 |
+
+两个可选阶段：`--run`（先跑 `submission/run.py` 产出 Pred 再验证，`--env` 透传旋钮，
+`--cases` 选页）与 `--pool`（跨来源回归：200 案池 6 族 30 案 `tools/eval/fast.py`，
+与 `work/_fast_base/<pool-ref>.json` 对比）。
+
+判决码：`PASS` / `WARN` / `FAIL`，并返回退出码 0 / 0 / 1：
+**FAIL** = 契约有违规、或均值低于基线、或池子 Δ ≤ −0.30；**WARN** = 单页掉 ≥ 0.30。
+每次运行把完整记录写 `work/_cv/<tag>.json`，该文件同时就是下一次的基线。
+
+### 5.439.3 自校验：用已知的两个臂回归它自己
+
+| tag | local | official | axis loss | contract | verdict |
+|---|---:|---:|---|---:|---|
+| `o13pl`（§5.436 基线） | **76.96** | 75.73 | comp 4.55 / pin 6.54 / netH 5.56 / line 6.38 = 23.04 | 13/13 clean | PASS |
+| `o13td`（§5.437 定案，带 `--baseline o13pl`） | **77.07** | 75.84 | comp 4.55 / pin 6.54 / netH **5.59** / line **6.24** = 22.93 | 13/13 clean | **WARN**（`cases 12 -0.44`） |
+
+两个数字与 §5.436 / §5.437 的历史记录**逐位一致**（76.96 / 75.73、77.07 / 75.84），
+说明合并没有改口径；而 case12 的 −0.44 是新信息：闸门在 12/13 页上是正的
+（`2 +0.40`、`4 +0.29`、`6 +0.23`、`5 +0.19`、`8 +0.16`…），只有 case12 掉 ——
+那页 `line` 本来就是 0.000，删边只能伤 `netH`（0.622 → 0.609），所以是「网内仅剩的
+几条边被删」而不是「配对变差」。
+
+### 5.439.4 `--run` 在环：A/B 变成一条命令
+
+```
+python -X utf8 work\_cv.py cvrun --run --cases 12
+```
+→ 管线 13.6 s 出 Pred，紧接着打分 `54.76`（与主尺同页同值）、契约 1/1 clean、PASS。
+以后验证一个旋钮只要：
+
+```
+python -X utf8 work\_cv.py <臂名> --run --baseline o13td --env STAGE2_EDGE_MIN_FINAL=0
+```
+
+### 5.439.5 有意**不**合并的部分
+
+- **一次性考古探针**（`_compdiff4` / `_absent43` / `_slochoracle` / `_ledoracle13` / `_line13` …）：
+  每个都对应一节文档里的一条负结果，合进来只会把「判决」和「考古」耦合成一个不敢改的大文件。
+- **文档拼装族**（`_gen*` 154 / `_append*` 52 / `_sec*` 27）：那是写 `RESULTS.md` 的流程，
+  与评分无关；真要做可以另起一条「单一 section 写入器」，但不该塞进 CV。
+- `--pool` 一轮 36 min，因此默认**关**：日常改动用 L1~L4（≈4 s），送评前或动到几何规则时再开。
+
+### 5.439.6 复现
+
+```
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+python -X utf8 work\_cv.py o13pl                      # 建基线 work/_cv/o13pl.json
+python -X utf8 work\_cv.py o13td --baseline o13pl     # L1~L4 + 逐页 Δ + 判决
+python -X utf8 work\_cv.py o13td --pool --pool-ref ef20   # 追加跨来源回归（≈36 min）
+```
+
