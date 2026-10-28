@@ -32165,3 +32165,55 @@ python -X utf8 work\_cv.py o13d451 --run --baseline o13sp40      # 78.56 / 77.33
 python -X utf8 work\_cv.py o13rg16 --run --baseline o13sp40 --env STAGE2_EDGE_OVERLAP_GROW=16   # 同一读数（默认即 16）
 python -X utf8 work\_cv.py o13rg22 --run --baseline o13sp40 --env STAGE2_EDGE_OVERLAP_GROW=22   # 78.16（塌）
 ```
+
+# §5.452 冻结面回归（78.56）：池子中性 + 契约 30/30
+
+## 5.452.1 冻结的代码面
+
+`d9b3f9e`（§5.451 定案）。主尺读数 `work/_cv.py o13d451`：**local 78.56 / official 77.33**，
+comp 0.853 / pin 0.738 / netH 0.852 / line 0.469，契约 13/13 clean，VERDICT PASS。
+
+## 5.452.2 跨族池子（30 案，6 族，`protocol4 --no-vlm`）
+
+```
+python -X utf8 work\_cv.py o13d451 --pool --pool-ref ef20
+pool: mean 27.99  (Δ -0.02, worst 0148 -1.33)
+VERDICT: PASS
+```
+
+⇒ 相对 `ef20`（§5.437 期基线）跨族**中性**（−0.02 在噪声带内）。§5.450 的脚点跨度与
+§5.451 的并集闸门都只动几何约定，不改变元素检出/识别，因此池子上看不到系统性偏移，
+这与「分数涨在 open_GT 的导线轴（line 0.430→0.469）」一致。
+
+## 5.452.3 契约自检（6 族 30 案，`work/_smoke.py`）
+
+| 族 | 结果 |
+|---|---|
+| Altium Designer | 6/6 PASS |
+| Datasheet | 6/6 PASS |
+| KiCad | 4/4 PASS |
+| jlc | 6/6 PASS |
+| kicad | 2/2 PASS |
+| other | 6/6 PASS |
+| **结论** | **全通过**（exit 0） |
+
+## 5.452.4 本轮同批的判否（保留记录，避免重复尝试）
+
+| 尝试 | 读数 | 结论 |
+|---|---:|---|
+| `STAGE2_EDGE_EXT=0` / `30` / `40` | 78.38 / 78.56 / 78.56 | 端点外推有用；20 已够 |
+| `STAGE2_EDGE_CORNER=0` / `16` / `20` | 78.44 / 78.51 / 78.32 | 12 最优 |
+| `STAGE2_EDGE_TRIM=0` | 78.52（line +0.002、netH −0.002） | 3 最优 |
+| `STAGE2_EDGE_EXT_ANY=0` / `35` / `45` | 78.13 / 78.54 / 78.53 | 25 最优 |
+| `STAGE2_PIN_SNAP=1` | 78.54 | 关着对 |
+| `work/_mergejn.py`（无结点处合并共线碎边） | 77.42 / 77.43（−1.14 / −1.13，256 次合并） | GT 的切点位置是它自己的画法，全局规则两全不了 |
+| `work/_keyoracle.py`（把 `pNNN` 按坐标改名到 GT 位号） | 78.56（Δ0，13 张共 4 件） | 元件配对**已**发生；卡在 `value`（如 case12 `R2` 的 `4.7K` 没读到），改名只动 `Name` 拿不到分 |
+
+## 5.452.5 复现
+
+```
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_cv.py o13d451                                  # 78.56 / 77.33
+python -X utf8 work\_cv.py o13d451 --pool --pool-ref ef20           # 27.99 (Δ -0.02) PASS
+python -X utf8 work\_smoke.py                                       # 6 族 30/30
+```
