@@ -722,9 +722,16 @@ EDGE_ANG = float(os.environ.get("STAGE2_EDGE_ANG", "6.0"))        # 共线夹角
 #      引用重建一次。两个坑合起来让管线只拿到 **+0.39**（76.20 → 76.59，而离线是
 #      +1.49/张 = 77.69）—— 诊断见 `work/_weldcmp.py` 与 `work/_weldx2.py`
 #      （同一份文档上「探针合并」与「A.weld_nets」逐位对比）。
-NET_WELD = float(os.environ.get("STAGE2_NET_WELD", "16"))         # 0 = 关；>0 时当「最大间距」用
+NET_WELD = float(os.environ.get("STAGE2_NET_WELD", "19"))         # 0 = 关；>0 时当「最大间距」用
 NET_WELD_MIN = float(os.environ.get("STAGE2_NET_WELD_MIN", "6.0"))
 NET_WELD_COS = float(os.environ.get("STAGE2_NET_WELD_COS", "0.5"))
+# ★ 长距焊接受更严的方向约束（`STAGE2_NET_WELD_BAND` / `STAGE2_NET_WELD_COS_LONG`）：
+#   间距超过 BAND（默认 16 = 原 NET_WELD 上限）时，两段必须**近乎共线反向**（cos <= -0.9）。
+#   依据（§5.445）：把 NET_WELD 抬到 24 后 case13 +2.81（两条 gap 17/18 的 cos 都是 -1.00）、
+#   case10 -1.46（唯一那条 gap 19 的 cos 只有 -0.01，是垂直搭接）。
+NET_WELD_COS_LONG = float(os.environ.get("STAGE2_NET_WELD_COS_LONG", "-0.9"))
+NET_WELD_BAND = float(os.environ.get("STAGE2_NET_WELD_BAND", "16.0"))
+
 NET_WELD_TPAD = float(os.environ.get("STAGE2_NET_WELD_TPAD", "3.0"))
 
 # ★ 端点吸附（T 型结解算）—— `net_line` 唯一真正有效的杠杆，2026-10 新增。
@@ -4126,6 +4133,8 @@ def weld_nets(nets: Dict[str, dict], components: Dict[str, dict],
             cos = (da[0] * db[0] + da[1] * db[1]) / (na * nb)
             if cos > NET_WELD_COS:
                 continue
+            if bd > NET_WELD_BAND and cos > NET_WELD_COS_LONG:
+                continue
             # ★ 地模式守卫（`STAGE2_RAIL_SPLIT`，默认开）：两条网各自的「地模式集合」都非空、
             # 且**不相交** ⇒ 它们是本质不同的地（`{}`↔`{a}` 的 GND vs AGND、`{a}`↔`{d}` 的
             # AGND vs DGND），**拒绝焊接**。集合相交（如 `{a,d}` 与 `{a}`）或有一侧无地家族
@@ -4152,6 +4161,8 @@ def weld_nets(nets: Dict[str, dict], components: Dict[str, dict],
                 continue
             ra, rb = find(ka), find(kb)
             if ra != rb:
+                if env_on("STAGE2_DBG_WELD", "0"):
+                    print("[dbg weld] %s+%s gap=%.1f cos=%.2f" % (ka, kb, bd, cos))
                 parent[rb] = ra
                 n_join += 1
     if _N_RAIL_BLOCK[0] > _nblock0:

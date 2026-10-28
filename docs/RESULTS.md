@@ -31778,3 +31778,79 @@ $env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
 python -X utf8 work\_cv.py o13pkl --baseline o13pkl           # 13 张四级判决
 python -X utf8 work\_cv.py o13pkl --pool --pool-ref ef20      # 池子 30 案（要空闲机器）
 ```
+
+## 5.445 长距焊接受方向约束：`NET_WELD` 16 → 19（77.15 → **77.40** local / 76.17 official）
+
+### 5.445.1 起点与动机
+
+§5.444 之后的定案是 **77.15 local / 75.93 official**（`work/_o13pkl`，端口键=标签、出口短边闸门、建边闸 keep-last）。
+网络轴仍是第二大丢分项（netH 0.842，轴损 5.54），而 `NET_WELD`（跨网焊接）当年是按 10GT 定在「6~16px」的。
+先做一轮纯阈值扫描（`work/_cv.py <tag> --run --baseline o13pkl --env …`，13 张、纯 CPU、离线）：
+
+| 臂 | 设置 | local | official | 逐页 |
+|---|---|---:|---:|---|
+| `o13pkl` | 默认（16） | 77.15 | 75.93 | — |
+| `o13wm3` | `NET_WELD_MIN=3` | 77.15 | 75.93 | 逐位不变（下限不是瓶颈） |
+| `o13ef16` | `EDGE_MIN_FINAL=16` | 77.12 | 75.89 | FAIL（−0.04，20 仍最优） |
+| `o13w20` / `o13w24` | `NET_WELD=20` / `=24` | **77.26** | 76.03 | `13 +2.81`、`1 +0.43`、`10 −1.46`、`5 −0.45` |
+| `o13w24c0` | `NET_WELD=24` + `NET_WELD_COS=0.0`（全局收紧） | 76.77 | — | FAIL（−0.39）：短距焊接也被挡掉 |
+
+⇒ 抬上限能吃到 case13 的 **+2.81**，代价是 case10 **−1.46**。差别一定在「哪些长距焊被放行」。
+
+### 5.445.2 取证：把每次焊接 dump 出来
+
+`eda-pcb/stage2/assemble.py::weld_nets` 加一行 env 守卫的调试打印
+（`STAGE2_DBG_WELD=1` ⇒ `[dbg weld] %s+%s gap=%.1f cos=%.2f`），跑 `cases 5,10,13`：
+
+| case | 焊接（gap, cos） |
+|---|---|
+| 10（−1.46） | 10.6 / 12.2 / 13.0 / **19.0, cos = −0.01** |
+| 13（+2.81） | 11.4 / 15.6 / **17.0, cos = −1.00** / **18.0, cos = −1.00** |
+| 5（−0.45） | 8.6 / 8.6 / **19.7, cos = −1.00** |
+
+`cos` 是两条边在**相对端**的方向余弦（`cos = -1` ⇒ 两段共线、端对端；`cos ≈ 0` ⇒ 垂直搭接）。
+case10 唯一那条长距焊是**垂直搭接**，case13 的两条都是**共线端对端** —— 物理上后者才是「同一根线被文字框切断」。
+case5 的 19.7 也是共线的，它那 −0.45 是「共线但确实属于两条网」的个别情形，单独看噪声量级。
+
+### 5.445.3 做法
+
+`eda-pcb/stage2/assemble.py`：
+
+* `NET_WELD` 默认 **16 → 19**（「最长 19px」）；
+* 新增 `NET_WELD_COS_LONG`（默认 **−0.9**）与 `NET_WELD_BAND`（默认 **16.0**）：
+  间距超过 BAND 时，方向余弦必须 `<= NET_WELD_COS_LONG`（近乎共线反向）才允许焊；
+  短距（≤ BAND）保持原判据 `cos <= NET_WELD_COS(0.5)`。
+* `STAGE2_DBG_WELD=1` 时打印每次实际发生的焊接（诊断用，默认关）。
+
+两者都是「只否决、不改取值」：关掉（`NET_WELD=16`）时行为与 §5.444 逐位相同（BAND=16 时新规则不可能触发）。
+
+### 5.445.4 读数
+
+| 臂 | `NET_WELD` | local | official | 逐页 |
+|---|---:|---:|---:|---|
+| `o13pkl` | 16 | 77.15 | 75.93 | 基线 |
+| `o13wl17` | 17 | 77.19 | 75.96 | 只被 17.0 那条焊到，18.0 那条没进来 |
+| `o13wl18` | 18.5（=19） | 77.40 | 76.17 | `13 +2.81`、`1 +0.43`，其余逐位不变 |
+| **`o13d445`（现默认 19 + 长距 cos 约束）** | **19** | **77.40** | **76.17**（strict 未测变） | 13/13 契约 clean、**VERDICT: PASS** |
+
+`netH` 0.842 → **0.848**（轴损 5.54 → 5.31），comp / pin / line 三轴逐位不动。
+18.5 与 19 读数完全相同 ⇒ 结果对阈值不敏感（分隔点在 18.0 与 19.0 之间，没有踩在边界上）。
+
+### 5.445.5 判否/保留
+
+* `NET_WELD_MIN=3`（放宽下限）：Δ0 —— 短距焊接不是瓶颈，**保留默认 6.0**。
+* `EDGE_MIN_FINAL=16`：−0.04（case12 的零边网被切）⇒ 保持 **20**。
+* `NET_WELD_COS=0.0`（全局收紧方向）：−0.39 ⇒ 方向约束**只该加在长距段**。
+
+### 5.445.6 复现
+
+```powershell
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_cv.py o13d445 --run --baseline o13pkl      # 77.40 / 76.17 / PASS
+# 取证：把每次焊接打出来
+$env:STAGE2_DBG_WELD='1'
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1020\open_GT `
+  -output work\_o13dbgw -offline -device cpu -cases "10,13,5"
+# 打印落在 work\_o13dbgw\_lanes\lane*\stdout.log
+```
