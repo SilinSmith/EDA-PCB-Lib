@@ -32217,3 +32217,80 @@ python -X utf8 work\_cv.py o13d451                                  # 78.56 / 77
 python -X utf8 work\_cv.py o13d451 --pool --pool-ref ef20           # 27.99 (Δ -0.02) PASS
 python -X utf8 work\_smoke.py                                       # 6 族 30/30
 ```
+
+# 5.453 GPU 开放后的第一件事：识别器分辨率 / 帧预算的实验与结论
+
+## 5.453.1 为什么先动识别器
+
+`User said (m18671): "现在可以用GPU了"` 之后，`eda-pcb/docs/COMPETITION_RULES.md:299-301` 明确评测机是
+**NVIDIA A800-80GB × 8**，显存不再受限、允许把 Stage2/CRNN 搬上 GPU、也允许针对 GPU 写算法。
+在这之前主尺一直是 CPU 口径（`HANDOFF.md:15`），交付也就没敢用显卡。
+
+名字轴的天花板由「帧预算」决定（§5.428 已取证）：`textrec/dataset.py::crop_gray` 把裁片等高缩到
+`IMG_H=32`，模型时步 = `W // WIDTH_REDUCTION(8)`；`TIM` 那根 3px 宽的细竖条只占 **0.34 个时步**，
+7 个权重（`textrec_best` / `ft3` / `ft5` / `mine1..3` / `official_pool`）一致读成 `TM`，补白与放大都救不回。
+所以唯一的路是**提高时间步数 / 提高裁剪分辨率并重训**。
+
+## 5.453.2 改动（默认行为逐位不变，旧权重可直读）
+
+| 文件 | 改动 |
+|---|---|
+| `eda-pcb/textrec/config.py` | `IMG_H = int(os.environ.get("TEXTREC_IMG_H","32"))`、`WIDTH_REDUCTION = int(os.environ.get("TEXTREC_WR","8"))`（原来是写死的 32 / 8） |
+| `eda-pcb/textrec/model.py` | 新增 `_CONV_STAGES` / `_POOL_SLOTS=(0,1,3,4,5)` / `_pool_plan(img_h, wr)` / `_cnn_layers()`：池化因子按两个 config 值生成，高度因子连乘 = `IMG_H`、宽度因子连乘 = `WIDTH_REDUCTION`；高度池化槽位不够时在末尾补一层 |
+| `eda-pcb/textrec/infer.py` | `Recognizer.load` 的裁剪高度改用**当前 config** 的 `C.IMG_H`（老 checkpoint 里存的是训练时的 32，直接用它会让裁剪高度和网络池化层数对不上：`IMG_H=64 + ckpt 的 32` ⇒ `MaxPool2d` 报 `Given input size: (512x1x5)`）；不一致时打一行 `[textrec] 用当前 config 的 IMG_H=64 覆盖 ckpt 里的 32` |
+
+默认 `32/8` 时 `_pool_plan` 得到 `stage0 (2,2) / stage1 (2,2) / stage3 (2,2) / stage4 (2,1) / stage5 (2,1)`
+（第 3 段 128→256 不池化，与旧结构一致），模块索引与 `weights/textrec_best.pt` 逐层对齐。
+
+**回归证据**：case12 `U1` 的 `TIM` 框 `[679,273,710,287]`（pin_name）在新代码下读回
+`('TM', 0.9936)`，与 §5.428 记录的 `0.994` 一致 ⇒ 重构没有改变默认推理行为。
+
+时步数：`IMG_H=64` 时同一裁片 T 从 7 变 15（`torch.zeros(2,1,64,124)` 前向得 `(15,2,C)`）。
+
+## 5.453.3 吞吐：真正卡住重训的不是显卡，是 batch 太满
+
+第一次按「满量 + 大 batch」提交（`--batch 512 --workers 12`，`IMG_H=64`）：显存 15.9/16.4 GB，
+**约 11 秒 / 步**（45 分钟连 467 步的一轮都跑不完），日志里连第一个 `best.pt` 都没出现。
+
+改 `--batch 96 --workers 12` + `TEXTREC_BUCKET=1`（同宽分桶，少补白）后：
+**415 步 / 112 秒 ≈ 0.27 秒 / 步**，显存只占 262 MiB。同一张卡，差 **40 倍**。
+⇒ 满量一轮（38.6 万条）≈ 17 分钟，重训在预算内是可行的；之前那 45 分钟纯粹是 batch 撑满显存导致的重分配抖动。
+
+## 5.453.4 一小时的实验读数（有结论，但结论是「这条路不能只跑合成」）
+
+臂：`--resume weights/textrec_best.pt --epochs 73 --limit 40000 --val-limit 800 --batch 96 --lr 1.5e-4`，
+`IMG_H=64`，纯**合成**清单（未加 `--include-real`）。
+
+| 口径 | 基线 `weights/textrec_best.pt`（32px, e72） | `textrec/runs/ft64c/best.pt`（64px, 1 轮 4 万条） |
+|---|---:|---:|
+| 合成 holdout CER / exact（800 条） | 0.0329 / 0.9253（1898 条） | **0.0063 / 0.9799** |
+| 真实 32 案 ALL CER / exact | 0.2147 / **0.7224** | 0.3979 / **0.3907** |
+| 真实 designator exact | 0.9132 | 0.6302 |
+| 真实 pin_name exact | 0.7732 | 0.2811 |
+| 真实 pin_number exact | 0.8341 | 0.5650 |
+| 真实 value exact | 0.6462 | 0.3345 |
+
+**结论（反直觉但重要）**：64px 让合成 holdout 从 0.9253 提到 **0.9799**，而真实语料从 0.7224 掉到 **0.3907**。
+合成的渲染细笔画与真实抗锯齿/线宽分布不同，只在合成上微调 1 轮就会把「真实泛化」换掉
+—— 这与 `textrec/eval_real.py` 开头那句「这是唯一诚实的泛化检查」完全吻合。
+
+⇒ 下一步（未执行）：同一分辨率下必须 `--include-real`（`manifest_ftreal.jsonl` 38.6 万条里含真实裁剪），
+并跑满量多轮；判据只看 `eval_real` 的 ALL / 分角色 exact，不看合成 holdout。
+
+## 5.453.5 顺带落地
+
+`work/_cv.py`：新增 `--device {cpu,cuda}`（默认 cpu），`stage_run` 里按它设置 `CUDA_VISIBLE_DEVICES`，
+其余确定性开关（`FUSION_LLM=0`、`FUSION_ITERATE=0`）照旧。GPU 开放后 13 张一轮可以更快。
+
+## 5.453.6 复现
+
+```powershell
+cd Y:\workspace\EDA\eda-pcb
+$env:PYTHONPATH='Y:\workspace\EDA\eda-pcb'; $env:TEXTREC_IMG_H='64'; $env:TEXTREC_BUCKET='1'
+$env:CUDA_VISIBLE_DEVICES='0'
+python -u -X utf8 -m textrec.train --resume weights\textrec_best.pt --epochs 73 `
+    --limit 40000 --val-limit 800 --batch 96 --lr 1.5e-4 --workers 12 --device cuda `
+    --out textrec\runs\ft64c
+python -X utf8 -m textrec.eval_real --ckpt textrec\runs\ft64c\best.pt --device cuda
+python -X utf8 work\_recA.py "eda-pcb\weights\textrec_best.pt" 12 679 273 710 287 pin_name work\_cv_run_o13g14
+```

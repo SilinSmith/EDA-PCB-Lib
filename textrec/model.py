@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import math
 import os
 
 import torch
@@ -27,6 +28,48 @@ from . import config as C
 # 见 CRNN.forward 里的说明：默认不用 cuDNN 跑 RNN。
 _RNN_CUDNN_OK = os.environ.get("TEXTREC_CUDNN_RNN") == "1"
 
+_CONV_STAGES = ((1, 64), (64, 128), (128, 256), (256, 256), (256, 512), (512, 512))
+# 池化落在哪些卷积段之后。第 3 段（128→256）不池化，与 2026-10 之前写死的结构一致
+# （那一段是「两个卷积 + 一次池化」）。多余的高度池化接在末尾。
+_POOL_SLOTS = (0, 1, 3, 4, 5)
+
+
+def _pool_plan(img_h: int, width_reduction: int):
+    """返回 (每个卷积段之后的 (高, 宽) 池化因子, 末尾追加的 (高, 宽))。
+
+    高度因子连乘 = img_h，宽度因子连乘 = width_reduction。
+    默认 `IMG_H=32 / WIDTH_REDUCTION=8` 得到
+    stage0 (2,2) / stage1 (2,2) / stage3 (2,2) / stage4 (2,1) / stage5 (2,1)，
+    与旧结构逐层一致 ⇒ `weights/textrec_best.pt` 可直读。
+    """
+    n_h = int(round(math.log2(img_h)))
+    n_w = int(round(math.log2(width_reduction)))
+    if 2 ** n_h != img_h or 2 ** n_w != width_reduction:
+        raise ValueError("IMG_H / WIDTH_REDUCTION 必须是 2 的幂：%r / %r"
+                         % (img_h, width_reduction))
+    per_stage = [(1, 1)] * len(_CONV_STAGES)
+    for j, si in enumerate(_POOL_SLOTS):
+        per_stage[si] = (2 if j < n_h else 1, 2 if j < n_w else 1)
+    tail = [1, 1]
+    for extra in range(n_h - len(_POOL_SLOTS)):
+        if extra == 0:
+            tail = [2, 1]
+        else:
+            raise ValueError("池化槽位不足：IMG_H=%d 需要更多高度池化" % img_h)
+    return per_stage, tuple(tail)
+
+
+def _cnn_layers():
+    per_stage, tail = _pool_plan(C.IMG_H, C.WIDTH_REDUCTION)
+    layers = []
+    for (cin, cout), (hf, wf) in zip(_CONV_STAGES, per_stage):
+        layers += [nn.Conv2d(cin, cout, 3, padding=1), nn.BatchNorm2d(cout), nn.ReLU(True)]
+        if hf > 1 or wf > 1:
+            layers.append(nn.MaxPool2d((hf, wf), (hf, wf)))
+    if tail[0] > 1 or tail[1] > 1:
+        layers.append(nn.MaxPool2d(tail, tail))
+    return layers
+
 
 class CRNN(nn.Module):
     def __init__(self, num_classes: int, n_roles: int = C.N_ROLES,
@@ -35,20 +78,9 @@ class CRNN(nn.Module):
         self.num_classes = num_classes
         self.n_roles = n_roles
 
-        self.cnn = nn.Sequential(
-            nn.Conv2d(1, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(True),
-            nn.MaxPool2d(2, 2),                                    # H/2,  W/2
-            nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(True),
-            nn.MaxPool2d(2, 2),                                    # H/4,  W/4
-            nn.Conv2d(128, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(True),
-            nn.Conv2d(256, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(True),
-            nn.MaxPool2d(2, 2),                                    # H/8,  W/8
-            nn.Conv2d(256, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),
-            nn.MaxPool2d((2, 1), (2, 1)),                          # H/16, W/8
-            nn.Conv2d(512, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),
-            nn.MaxPool2d((2, 1), (2, 1)),                          # H/32, W/8
-        )
-        # 到这里高度已经被压成 1（要求 IMG_H 是 32 的倍数）。
+        self.cnn = nn.Sequential(*_cnn_layers())
+        # 到这里高度已经被压成 1（IMG_H 与 WIDTH_REDUCTION 都是 2 的幂，
+        # 池化层数由 `_pool_plan` 按 config 生成；默认 32/8 与旧结构逐层一致）。
 
         self.role_emb = nn.Embedding(n_roles, role_dim)
         self.rnn = nn.LSTM(512 + role_dim, rnn_hidden, num_layers=2,

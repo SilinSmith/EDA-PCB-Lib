@@ -125,8 +125,15 @@ class Recognizer:
         cfg = ck.get("config", {}) or {}
         model = CRNN(charset.num_classes)
         model.load_state_dict(ck["model"])
-        r = cls(model, charset, dev,
-                img_h=cfg.get("img_h", C.IMG_H), max_w=cfg.get("max_w", C.MAX_W))
+        # 裁剪高度必须与 `CRNN` 的池化层数一致，而模型是按**当前 config** 建的：
+        # 老 checkpoint 的 `config["img_h"]` 是训练时的值，用它会让裁剪高度和网络
+        # 结构对不上（实测 IMG_H=64 + ckpt 里的 32 ⇒ `MaxPool2d` 把高度压成 0）。
+        img_h = C.IMG_H
+        ck_h = cfg.get("img_h")
+        if ck_h and int(ck_h) != int(C.IMG_H):
+            print("[textrec] 用当前 config 的 IMG_H=%d 覆盖 ckpt 里的 %s"
+                  % (C.IMG_H, ck_h))
+        r = cls(model, charset, dev, img_h=img_h, max_w=cfg.get("max_w", C.MAX_W))
         r.ckpt_meta = {k: v for k, v in ck.items()
                        if k not in ("model", "opt", "charset")}
         return r

@@ -46,14 +46,20 @@ ROLE_ID = {r: i for i, r in enumerate(ROLES)}
 N_ROLES = len(ROLES)
 
 # ---------------- 图像超参 ----------------
-IMG_H = 32            # 所有裁剪统一缩放到这个高度
+IMG_H = int(os.environ.get("TEXTREC_IMG_H", "32") or 32)   # 裁剪统一缩放到这个高度（2 的幂）
 MAX_W = 384           # 宽度上限（超过就压缩）
 MIN_W = 8
 # CNN 对宽度的总下采样倍数。必须与 model.py 的池化配置一致。
 # 它决定了 CTC 的时间步数：T = W // WIDTH_REDUCTION。
 # 语料里最长的文本是 16 字符（value，如 "crystal_2pin"），其宽高比约 7.2，
 # 缩到高 32 后宽约 230，T≈28，够 CTC 编码 16 个字符。
-WIDTH_REDUCTION = 8
+#
+# ★ 2026-10-27 帧预算：RESULTS §5.428 量到 `TIM` 的细竖条只占 0.34 个时步
+#   （3px 宽 ÷ 降采样 8），7 个权重一致读成 `TM`。两个旋钮：
+#     TEXTREC_IMG_H  32 → 64：字形像素翻倍（细笔画变粗），T 同时翻倍；
+#     TEXTREC_WR     8 → 4 ：只翻 T。
+#   model.py 的池化按这两个值生成；默认 32/8 与旧结构逐层一致（旧权重可直读）。
+WIDTH_REDUCTION = int(os.environ.get("TEXTREC_WR", "8") or 8)
 
 # 文本长度上限。真实语料里有 58 字符的整段说明文字（note/value），
 # 它们既不是位号也不是参数，缩到固定高度后宽高比会严重失真，直接丢掉。
