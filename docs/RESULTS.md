@@ -32400,3 +32400,92 @@ python -X utf8 -m textrec.eval_real --ckpt textrec\runs\ft64full\best.pt --devic
 python -X utf8 work\_cv.py d454   --run --baseline o13d451 --device cuda
 python -X utf8 work\_cv.py o13v64c --run --baseline o13d451 --device cuda --env STAGE2_CKPT=eda-pcb/textrec/runs/ft64full/best.pt
 ```
+
+## 5.455 64px 识别器为什么进不了管线：绑定层的文本桥 + 值大小写不可归一
+
+### 5.455.1 问题
+
+§5.454 的结论是「识别器增益是真的（真实留出 exact `0.7070 → 0.8214`），但管线仍 −0.69」。
+本节要把这 0.69 变成可行动的机制，并判定是否存在「部分角色改用 64px」的可行臂。
+
+### 5.455.2 四条臂（13 张 `open_GT`，`work/_cv.py --run --baseline o13d451 --device cuda`）
+
+| 臂 | 设置 | local | official | 判决 |
+|---|---|---:|---:|---|
+| `o13d451` | 默认（32px） | **78.56** | **77.33** | 基线 |
+| `o13v64c` | 全部角色用 64px（`STAGE2_CKPT=textrec/runs/ft64full/best.pt`） | 77.87 | 76.70 | FAIL −0.69 |
+| **`mixdes`**（本节新测） | 64px 权重 + `STAGE2_CKPT_ROLES_CKPT=eda-pcb/weights/textrec_best.pt` + `STAGE2_CKPT_ROLES=designator,pin_number`（位号、引脚号冻回 32px） | **77.73** | 76.64 | FAIL −0.82 |
+| `o13ctrl`（对照） | 32px 权重 + `TEXTREC_BUCKET=1` | 75.56 | — | 桶改变读数，不是 bug |
+
+`mixdes` 逐页（对基线）：`1 −3.86 / 4 −3.78 / 5 −3.90 / 13 −2.12 / 8 −0.65`，`7 +3.33 / 12 +0.29`。
+关键反证：把位号与引脚号冻回 32px 后 **comp 仍是 0.518**（与纯 64px 的 0.518 逐位相同）⇒
+case1 的元件掉分**不是位号读错**，而是别的东西把整排键打乱了。
+
+### 5.455.3 机制一：`rename` 的映射拿「解出来的位号文本」当桥，一读之差整行不修
+
+- `fusion/run.py:526-556`：`rowbind.fix(doc, deepcopy(assigned0))` 算出修正后的位号，然后用
+  **`assigned`（claim 解之后）的 designator canon** 与它逐 cid 比较，把 `old → new` 塞进 `_mp`，
+  最后 `rowbind.rename(pred, _mp)` 改交付键、并把值一起搬。
+- 实测 `row_bind` 统计（`runs/fusion/_fusion_report.json` 的 `cases[i].row_bind`）：**13 页里只有 case1 真正动手**
+
+  | 臂 | moved | renamed |
+  |---|---:|---:|
+  | `o13d451`（32px） | 3 | **8** |
+  | `o13v64c`（纯 64px） | 1 | 8 |
+  | `mixdes`（位号+脚号冻回 32px） | 3 | **5** |
+
+- 逐件核对（新探针 `work/_rowasg.py` 按位号文字框的 y 带列 `_assigned`）：两臂那一排
+  「文字框 → cid」的绑定**完全相同**（`R15→c0037 / R16→c0042 / R17→c0038 / R19→c0036 / R20→c0043`），
+  差别只在最后的键。`work/_rowdump.py` 并列两臂交付件：
+  - 基线：`R16@x1893 / R17@1943 / R18@1994 / R19@1845 / R20@1796`（与 GT 位置逐颗对上）；
+  - `mixdes`：`R16@1796 / R17@1943 / R18@1994 / R20@1845`，`R19` 整个丢失。
+- ⇒ 病因是 `_mp` 以**文本相等**当桥：`value`/`pin` 等角色的读数一变，claim 解给出的 designator canon
+  就变（解本身用值/名参与候选打分），文本桥断开 ⇒ 该行不修，键留在错误旋转上。
+- 建议（尚未实现，下一刀）：`_mp` 改用 `sol["assign"]["comp.<cid>.key"]` 做桥
+  （`fusion/solve.py:460` 已证明这个键存在，形如 `comp.C0123.key → (交付键, …)`），
+  即 cid → 交付键 → 行内修正位号，与文本无关。
+
+### 5.455.4 机制二：值的大小写不可归一（三种全局规则全崩）
+
+- `work/_valcase3.py`（只差大小写的失配计数）：基线 282 对里 21 失配 / **2** 条 case-only；
+  两条 64px 臂都是 **11** 条 case-only ⇒ 64px 的单位字母**偏大写**（GT `47k` 读成 `47K`）。
+- `work/_valnorm.py`（同一份 Pred 把 `value` 改写成小写/大写/按页多数，再整页重评）：
+
+  | 写法 | `o13d451` local | `o13v64c` local | comp |
+  |---|---:|---:|---:|
+  | 原样 | **78.56** | **77.87** | 0.853 / 0.841 |
+  | 全小写 | 68.33 | 68.31 | 0.512 / 0.522 |
+  | 全大写 | 71.04 | 70.95 | 0.603 / 0.610 |
+  | 按页多数（字母大写多则该页全大写） | 71.04 | 70.95 | 0.603 / 0.610 |
+
+- ⇒ GT 的值是**逐串混合**大小写（同一页既有 `100nF` 又有 `22uf`），任何全局规则都会毁掉本来正确的串。
+  64px 的偏大写因此**无法在输出端补救**，只能靠读得更准；而它读「更准」的部分（`1ED+→LED+`、
+  `P5306-435V→P5306-4.35V`）恰好不在元件/网络的评分支点上。
+
+### 5.455.5 结论
+
+- 默认保持 32px（`eda-pcb/weights/textrec_best.pt`）：**78.56 local / 77.33 official**（`work/_o13d451`），
+  本轮**没有默认改动**，工作树只有本节文档与新探针。
+- 64px 权重（`eda-pcb/textrec/runs/ft64full/best.pt`）保留，等绑定层的文本桥改成 cid→key 之后再上；
+  §5.454 的两个 bug 修复不受影响（混装能力正是靠它才测得出这条臂）。
+- 下一刀的落点是 §5.455.3 的 `_mp` 文本桥——这是本轮唯一**量到机制**（moved 3/renamed 8→5）的地方。
+
+### 5.455.6 新增探针与复现
+
+- `work/_rowdump.py <run1> [<run2>] <case> <y0> <y1>`：按 y 带并列两臂交付 Pred 的元件（键/名/值/框）。
+- `work/_rowasg.py <run> <case> <y0> <y1>`：按位号文字框的 y 带列 `runs/stage2/_assigned` 的
+  「文字框 → cid → 文本」，用来证明两臂的绑定是否同源。
+- `work/_valnorm.py <run> [case…]`：值大小写归一化的离线评测（原样/小写/大写/按页多数）。
+- `work/_valcase3.py <run> [case…]`：只差大小写的失配计数。
+
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_cv.py mixdes --run --baseline o13d451 --device cuda `
+  --env STAGE2_CKPT=eda-pcb/textrec/runs/ft64full/best.pt `
+  --env STAGE2_CKPT_ROLES_CKPT=eda-pcb/weights/textrec_best.pt `
+  --env "STAGE2_CKPT_ROLES=designator,pin_number"
+python -X utf8 work\_rowdump.py work\_cv_run_o13d451 work\_cv_run_mixdes 1 255 325
+python -X utf8 work\_rowasg.py work\_cv_run_mixdes 1 258 320
+python -X utf8 work\_valnorm.py work\_cv_run_o13d451 1 2 3 4 5 6 7 8 9 10 11 12 13
+```
+
