@@ -177,6 +177,7 @@ t 值（§5.347.5：官方 10 的 ±0.3 可能只是单案翻转），池上 |t|
 | 并集跨度闸门（§5.451）｜`EDGE_OVERLAP_GROW` 14→**16**（§5.450 后最优区右移到 16~20，22 起塌）：line 0.463→0.469，**78.56 local / 77.33 official** |
 | 识别器分辨率 / 真实语料留出（§5.454）｜`Recognizer.load` 改为按每份权重的 `config` 建网（`TEXTREC_IMG_H`/`TEXTREC_WR` 只作实验覆盖）；新增 `TEXTREC_REAL_HOLDOUT` 把真实 32 case 分成 holdout/seen。诚实读数：64px holdout exact 0.7070→**0.8214**、wr4 0.7390 ⇒ 识别器增益是真的，管线 −0.69 全在绑定层（rowbind / 引脚号归属） |
 | 64px 识别器为何不划算（§5.455）｜四条臂：64px 77.87 / 混合（位号+脚号冻回 32px）77.73 / 桶对照 75.56 vs 基线 **78.56**。机制已量到：`_mp` 的文本桥（case1 `moved 3 renamed 8 → 5`）；值大小写三种全局规则全崩（68.33 / 71.04 / 71.04）⇒ 默认保持 32px 权重，下一刀改 `_mp` 用 `sol["assign"]["comp.<cid>.key"]` 做桥 |
+| 识别器路线封口（§5.455.7）｜`_mp` 改成 cid→key 后 13 张逐位不变（78.56 / 77.33）⇒ 只是保行为重构；`wr4only` 77.92、`ens1` 78.24、`ens2` 77.50 全 FAIL（读数一变，引脚槽/行内绑定就重排）⇒ **默认保持 32px 权重**，下一刀切 `stage2/rowbind.py::_pair`（`moved` 3→1）与引脚槽裁决 |
 | 冻结面回归（§5.452）｜池子 30 案 mean **27.99（Δ −0.02）PASS**、契约 6 族 **30/30**；同批判否 `EDGE_EXT`/`EDGE_CORNER`/`EDGE_TRIM`/`EDGE_EXT_ANY`/`PIN_SNAP` 与 `_mergejn`（−1.14） |
 | 识别器分辨率（§5.453）｜`TEXTREC_IMG_H` / `TEXTREC_WR` 可配（默认逐位不变）；**只跑合成会毁真实泛化**（0.7224 → 0.3907）⇒ 重训必须 `--include-real` |
 | 无源件脚点跨度（§5.450）｜`PIN_STAMP_DEFAULT_SPAN` 20→**40**（GT 量的常数半跨 39.5px）：netH 0.848→0.852、line 0.430→0.463，**78.56 local / 77.33 official**（case5 −0.39） |

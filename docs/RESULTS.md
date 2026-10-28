@@ -32489,3 +32489,41 @@ python -X utf8 work\_rowasg.py work\_cv_run_mixdes 1 258 320
 python -X utf8 work\_valnorm.py work\_cv_run_o13d451 1 2 3 4 5 6 7 8 9 10 11 12 13
 ```
 
+
+### 5.455.7 补测：`_mp` 改成 cid→key 是**保行为重构**，识别器路线就此封口
+
+§5.455.3 建议的改法已实现（`eda-pcb/fusion/run.py:533-545`）：`_mp` 的「交付键」改从
+`sol["assign"]["comp.<cid>.key"]` 取，取不到才回退到 `assigned[cid].designator` 的文本。
+
+读数（13 张 `open_GT`，`work/_cv.py --run --baseline o13d451 --device cuda`）：
+
+| 臂 | local | official | 说明 |
+|---|---:|---:|---|
+| `rowkey`（改后，默认 32px） | **78.56** | **77.33** | 与 `o13d451` **逐位相同**、契约 13/13 clean、PASS |
+| `v64k`（改后，64px，只跑 case1） | 57.23 | — | 与改前逐位相同；`row_bind = {moved: 1, renamed: 8}` 也没变 |
+
+⇒ 这是一次**保行为**重构（去掉对位号文本的依赖），**不是增益**；保留它是因为它更稳，但不要指望它涨分。
+
+同时必须修正 §5.455.3 的因果判断：
+
+- `renamed 8 → 5` 只出现在 `mixdes` 那条臂；**纯 64px 臂（`o13v64c` / `v64k`）一直是 `renamed 8`**。
+- case1 真正的差别在 `row_bind.moved`：基线 **3**、64px **1**。`moved` 数的是「配对后换了宿主的位号数」，
+  它由 `stage2/rowbind.py::_pair` 按 x 序配对的结果决定，取决于**每个位号文字框当时归哪个 cid**
+  （`_assigned` 的最近框认领），而不取决于 `_mp` 的键来源。64px 下配对更接近恒等 ⇒ 原来那圈错误旋转没被修掉，
+  于是 `R16/R17/R18` 落在错误的符号上（`work/_compok4.py work\_cv_run_o13v64c 1` 里 d=53.4/54.9/203.3）。
+
+### 5.455.8 识别器侧的三条替代臂（全 FAIL）⇒ 这条线封口
+
+| 臂 | 设置 | local | official | 主要丢分 |
+|---|---|---:|---:|---|
+| `wr4only` | 用 32px/WR=4 的权重（`textrec/runs/wr4/best.pt`，真实留出 exact 0.7390 > 基线 0.7070）做主 | 77.92 | 76.99 | `4 −6.37`（pin 0.750→0.636）、`6 −4.23`、`10 −2.49` |
+| `ens1` | 基线权重 + `STAGE2_CKPT_ENS=wr4`（全角色置信度投票） | 78.24 | 77.21 | `6 −4.23`、`1 −2.33`、`12 −2.19`；`7 +3.33`、`13 +1.52` |
+| `ens2` | `ens1` 且 `STAGE2_ENS_ROLES=designator,value,pin_name`（把 `pin_number` 排除出投票） | 77.50 | 76.48 | `13 −6.03`、`6 −5.01` |
+
+`ens2` 是最有说服力的一条反证：只把 `pin_name` 放进投票，`pin_number` 完全不动，case13 的 pin 仍从
+0.762 掉到 0.500 —— **读数一变，引脚槽就被重新裁决**，与「这个角色本身准不准」无关。
+
+⇒ 结论：默认继续用 `eda-pcb/weights/textrec_best.pt`（**78.56 local / 77.33 official**）；
+重训 / 换权重 / 置信度投票三条路在绑定层变得「对读数不敏感」之前**一律不划算**，本节把这条线封口。
+下一步的落点是 `stage2/rowbind.py::_pair`（`moved` 3→1）与引脚槽裁决（`case13` 的 `pin_1..3`），
+判据用 §5.455.2 的复核口径：换任何读数来源后，`row_bind.moved` 与各页 pin F1 都不该跟着漂。

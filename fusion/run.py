@@ -531,9 +531,21 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
             a2 = _copy.deepcopy(assigned0 or assigned)
             rep_rb = _rb.fix(doc, a2)
             _mp, _vals = {}, {}
+            # 交付键的来源改成 `claim` 解自己记的 `comp.<cid>.key`（§5.455）：旧写法拿
+            # `assigned[cid].designator` 的**文本**当键，`value`/引脚读数一改就可能让候选
+            # 打分变、解出来的位号文本跟着变，文本桥一断整行就不修（实测 case1 的
+            # `renamed` 从 8 掉到 5）。用解里的键只依赖「哪个 cid 拿到哪个 key」。
+            _sel = (sol or {}).get("assign") or {}
+
+            def _solkey(_c):
+                _v = _sel.get("comp.%s.key" % _c)
+                if isinstance(_v, (list, tuple)) and _v:
+                    return str(_v[0])
+                return _v if isinstance(_v, str) else ""
+
             for _cid, _rec in (assigned.get("comps") or {}).items():
-                _o = str(((_rec.get("designator") or {}).get("canon")
-                          or (_rec.get("designator") or {}).get("text") or ""))
+                _o = _solkey(_cid) or str(((_rec.get("designator") or {}).get("canon")
+                                           or (_rec.get("designator") or {}).get("text") or ""))
                 _r0 = ((a2.get("comps") or {}).get(_cid) or {})
                 _n = str((_r0.get("designator") or {}).get("canon")
                          or (_r0.get("designator") or {}).get("text") or "")
