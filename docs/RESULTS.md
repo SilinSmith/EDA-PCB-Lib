@@ -31280,3 +31280,67 @@ python -X utf8 work\_edgeiso.py o13td                                   # 离线
 > 75.84 official**（产物 `work/_o13td`，与 `work/_o13ef` 同分）；`work/_contractchk.py o13td`
 > 13 份交付 Pred 零违例。
 
+
+## 5.438 跨来源回归：出口短边闸门在 200 案池上中性（28.03 → 28.01）
+
+### 5.438.1 为什么要做
+
+§5.437 的 +0.11 只量在 `open_GT-1020` 的 13 张上。**送评跑的是全池**，所以任何一条
+「删东西」的规则都必须先证明它不在别的来源族上倒扣。
+
+### 5.438.2 口径
+
+池子是 `eda-pcb/yolo_part/Dataset(waitforpreprocess)/200_train_cases`（200 案，6 个来源族：
+Altium Designer 21 / Datasheet 62 / KiCad 4 / jlc 99 / kicad 2 / other 12）。
+按 `work/_smoke.py` 同一套抽样（每族按 ID 等距取 6，KiCad 4 与 kicad 2 全取）得 30 案：
+
+```
+0001,0002,0003,0004,0005,0006,0011,0013,0018,0022,0024,0025,0030,0042,0046,0050,
+0058,0063,0072,0084,0087,0091,0093,0097,0114,0123,0132,0148,0165,0181
+```
+
+两臂只差一个环境变量：
+
+```
+python -X utf8 eda-pcb\tools\eval\fast.py --cases <30 案> --engine protocol4 --no-vlm `
+       --out ef0  --save ef0       # $env:STAGE2_EDGE_MIN_FINAL='0'
+python -X utf8 eda-pcb\tools\eval\fast.py --cases <30 案> --engine protocol4 --no-vlm `
+       --out ef20 --save ef20      # 默认（=20）
+```
+
+### 5.438.3 读数
+
+| 臂 | mean | component | netH | net_line | tp 元件 / 网络 / 导线 |
+|---|---:|---:|---:|---:|---|
+| `ef0`（闸门关） | **28.03** | 0.9960（696 tp） | — | — | 696 / 369 / 273 |
+| `ef20`（现默认） | **28.01** | 0.9960（696 tp） | — | — | 696 / 368 / 262 |
+
+逐案：最大负 3 张 `0093 −0.45`、`0087 −0.39`、`0025 −0.20`；最大正 3 张 `0046 +0.24`、
+`0002 +0.24`、`0097 +0.20`；其余 24 张 |Δ| ≤ 0.2。净 **−0.02**。
+
+### 5.438.4 结论
+
+**保留**。这道闸门在跨来源样本上是中性的（−0.02 属噪声量级），在 `open_GT-1020` 上是 +0.11，
+且它只删 20px 以下的碎边、不动网与引脚，可随时用 `STAGE2_EDGE_MIN_FINAL=0` 关掉。
+
+### 5.438.5 用这批数字时必须知道的两件事
+
+1. **池子的引脚 F1 在 27/30 张上是 0**（`0001 0002 0003 … 0181`），导线 F1 有 6~7 张是 0。
+   池子的 GT 与 `open_GT-1020` 不是同一套引脚约定（键名/坐标口径都不同），所以池子只能当
+   **「不回归」的证据**用，**不能当分数尺**。真正的主尺仍然是 `open_GT-1020` 13 张。
+2. 两臂的元件 tp 都是 696 ⇒ 闸门确实只碰导线，元件/引脚网络两个通道逐位不动，与 §5.437 的
+   轴分解一致（`comp 0.8482 / pin 0.7383` 不变）。
+
+### 5.438.6 复现
+
+```
+$env:CUDA_VISIBLE_DEVICES=''; $env:FUSION_LLM='0'; $env:FUSION_ITERATE='0'
+# 臂 1（闸门关）
+$env:STAGE2_EDGE_MIN_FINAL='0'
+python -X utf8 eda-pcb\tools\eval\fast.py --cases <30 案> --engine protocol4 --no-vlm --out ef0 --save ef0
+# 臂 2（默认）
+Remove-Item Env:\STAGE2_EDGE_MIN_FINAL
+python -X utf8 eda-pcb\tools\eval\fast.py --cases <30 案> --engine protocol4 --no-vlm --out ef20 --save ef20
+# 每臂墙钟 ≈ 36 min（30 案，200 案池的单案 ~1.2 min）
+```
+
