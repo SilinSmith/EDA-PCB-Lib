@@ -337,6 +337,14 @@ PIN_KEEP_LEAD_R = float(os.environ.get("STAGE2_PIN_KEEP_LEAD", "8") or 0.0)
 #   换成 fp：`case3` 保留全部 ⇒ `pin` 1.000 → 0.750 正是这一族；而 `case11 USB2` 那种
 #   13 个槽只读到 2 个假号（`8`/`2`）的件才有机会被救。
 PIN_KEEP_FRAC = float(os.environ.get("STAGE2_PIN_KEEP_FRAC", "0.5") or 0.0)
+# ★ `STAGE2_PIN_FILL_ELIM`（默认 0 = 关，§5.476.9）：**用「缺哪个号」补一根无名桩**。
+#   与上面那条 `PIN_KEEP_NAMED` 的区别：那条按遍历序整批发、不动已读号的槽也猜；
+#   这条只在「这颗 IC 的 `1..N` 里**正好缺一个号**」且该桩**有名字、有引线**时补那一个。
+#   `case12 U1` 的 `GND`（框右外 lead=0.0、名字全对）就是这么丢的：别的槽读出 1..8，
+#   补 `9` 正好是 GT 的 `pin_9 GND`。
+PIN_FILL_ELIM = env_on("STAGE2_PIN_FILL_ELIM", "0")
+# 上面这条的引线半径：只认「名字就贴在导线端点上」的桩（`case12 U1 GND` 是 0.0px）。
+PIN_FILL_ELIM_R = float(os.environ.get("STAGE2_PIN_FILL_ELIM_R", "3.0") or 0.0)
 
 
 def _named_slot_ok(nm, ctx=None) -> bool:
@@ -3161,16 +3169,58 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         _emit_ord = list(range(len(pts)))
         if BOX_PIN_KEEP_NAMED:
             _emit_ord.sort(key=lambda _i: (not raw[_i].get("kept", True), _i))
+        # ★ `STAGE2_PIN_FILL_ELIM`（默认 0 = 关）：**用「缺哪个号」给无名桩补号**。
+        #   动机（§5.476.9）：`case12 U1` 的 `GND` 槽（画在框右外、lead=0.0，名字读得
+        #   完全正确）因为「号没读到」被当成位置桩丢掉；而同一颗 IC 上别的槽已读出
+        #   `1..8` ⇒ 剩下的号只能是 `9`，而 GT 的 `pin_9` 正是 `GND`。
+        #   只在**补号唯一**（`1..len(raw)` 里正好缺一个）且该桩有名字、有引线时才补；
+        #   与 §5.463 的「整批按位置发」不同：这里不动任何已读到号的槽。
+        _elim = -1
+        _elim_ok: set = set()
+        if PIN_FILL_ELIM and ctype == "box":
+            _seen = set()
+            for _q in raw:
+                _qn = str(_q.get("num") or "")
+                if _q.get("kept") and _qn.isdigit():
+                    _seen.add(int(_qn))
+            # 只认**读号序列内部的空洞**（`1..max(seen)` 之间缺一个），不认「比最大号
+            # 再往后一位」——后者等于凭空多发一根脚（`case12 U1` 读到 1..9、GT 只有 9 根）。
+            _miss = [i for i in range(1, max(_seen) + 1) if i not in _seen] if _seen else []
+            # ★ 只在**候选唯一**时补：同一颗 IC 上「没读到号、但有名字、且名字贴在引线端点」
+            #   的桩若不止一个，它们必须**同名**（`case12 U1` 的 `GND` 被检了两遍）。
+            #   否则说明我们对这颗 IC 的理解还不对，宁可照旧丢掉。
+            _cand = []
+            for _i2 in range(len(pts)):
+                if raw[_i2].get("kept", True):
+                    continue
+                _nm2 = str(raw[_i2].get("nm") or "")
+                if len(_nm2) < 2 or not any(ch.isalpha() for ch in _nm2):
+                    continue
+                if not _near_lead((float(pts[_i2][0]), float(pts[_i2][1])),
+                                  _WLEAD, PIN_FILL_ELIM_R):
+                    continue
+                _cand.append((_i2, _nm2.upper()))
+            if _seen and len(_miss) == 1 and _cand and len({c[1] for c in _cand}) == 1:
+                _elim = _miss[0]
+                _elim_ok = {c[0] for c in _cand}
         for k in _emit_ord:
             p = pts[k]
             r = raw[k]
             num = r["num"] or str(k + 1)
+            _elim_used = False
+            if _elim > 0 and k in _elim_ok:
+                num = str(_elim)
+                _elim_used = True
+                if os.environ.get("STAGE2_DBG_ELIM"):
+                    print("[dbg elim] cid=%s k=%d nm=%r num=%s seen=%r"
+                          % (cid, k, r.get("nm"), num, sorted(_seen)))
+                _elim = -1
             # ★ `STAGE2_BOX_PIN_DROP_UNREAD`：把「没读出号、靠位置补出来的」引脚桩
             # **既不写进引脚表、也不进网络**。它只可能变成 `pin.extra`（纯 fp），
             # 而且会把假引脚塞进网络（10GT 实测 netH 0.4746 → 0.4971）。
             # 取值 `1`/`all` = 一律丢；`mixed` = **只在「这颗 IC 至少读懂了一个号」
             # 时才丢**（一个都没读懂的那些，位置号 1..N 本身是个有用的先验）。
-            if (not r.get("kept", True)) and BOX_PIN_DROP_UNREAD \
+            if (not r.get("kept", True)) and not _elim_used and BOX_PIN_DROP_UNREAD \
                     and (not BOX_PIN_DROP_MIXED_ONLY or _anykept):
                 # ★ `STAGE2_BOX_PIN_KEEP_NAMED`（默认关，见常量区长注释）：这条闸原本
                 #   连「这根桩读到了真名字」都不看就丢。开了以后：

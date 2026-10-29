@@ -832,9 +832,45 @@ CONFORM_MIN_CONF = float(os.environ.get("STAGE2_CONFORM_CONF", "0.50"))
 # 削掉开头胶连字符（`7LED1` -> `LED1`）的保真度折扣、翻类型（`d` -> `led`）的折扣。
 CONFORM_GLUE_PEN = float(os.environ.get("STAGE2_CONFORM_GLUE_PEN", "0.85"))
 CONFORM_TYPE_PEN = float(os.environ.get("STAGE2_CONFORM_TYPE_PEN", "0.85"))
+# 翻类型时，**单字母前缀**的位号数字最多几位（默认 2；`-1` = 不设限）。
+# 合法短位号（`S1`/`D2`/`SW3`）数字 ≤2 位；`S1306` 这种是型号串被读成了位号，
+# 放它过去会把 `box` 翻成 `switch S1306`（§5.476.6 的实测反例）。
+CONFORM_FLIP_ONE_MAX = int(os.environ.get("STAGE2_CONFORM_FLIP_ONE_MAX", "2"))
 # 允许互相纠正的类型。**必须是显式小表**：只登记「图形符号本身几乎无法区分、
 # 只能靠印字前缀区分」的对子（`d` 与 `led` 的差别只是两条出射箭头）。
 CONFORM_SIBLINGS: Dict[str, Tuple[str, ...]] = {"d": ("led",), "led": ("d",)}
+# ★ `STAGE2_CONFORM_SIBLINGS`（默认空 = 行为不变）：在上面这张表之外**追加**对子，
+#   写法 `box:switch,box:pin`（`源:可翻到的类型`）。动机（§5.476）：`case1 SW2`
+#   （GT `type=switch`，16 个数字脚名）被 stage1 判成 `box`（bbox 差 2.7px），
+#   而 `box` 不在这张表里 ⇒ 印字 `SW2` 认不出来、整件退化成 `p0xx`，GT 侧记
+#   FN(switch)/我方记 FP(box)，16 个脚名一起消失。兄弟表刻意留窄，是因为
+#   `box`/`switch`/`pin` 在实际图上确实互相混淆，只有印字前缀能分开。
+#   13 张 open_GT 实测（§5.476）：`box:switch` 让 `case1` 58.68 -> 60.53（`SW2`
+#   整件 16 脚回位），均值 79.89 -> 80.03 / 官方 78.66 -> 78.80，其余 12 页逐位
+#   不变；再补 `box:pin,box:testpoint` 一个字节都不动 ⇒ 默认只开 `box:switch`。
+def _parse_siblings(spec: str) -> Dict[str, Tuple[str, ...]]:
+    out: Dict[str, List[str]] = {}
+    for part in (spec or "").split(","):
+        if ":" not in part:
+            continue
+        src, dst = part.split(":", 1)
+        src, dst = src.strip().lower(), dst.strip().lower()
+        if src and dst and dst != src:
+            out.setdefault(src, []).append(dst)
+    return {k: tuple(v) for k, v in out.items()}
+
+
+_SIB_SPEC = os.environ.get("STAGE2_CONFORM_SIBLINGS", "box:switch")
+_SIB_EXTRA = _parse_siblings(_SIB_SPEC)
+for _sk, _sv in _SIB_EXTRA.items():
+    _old = tuple(CONFORM_SIBLINGS.get(_sk, ()))
+    CONFORM_SIBLINGS[_sk] = _old + tuple(t for t in _sv if t not in _old)
+# 只对**这条 env 追加出来的对子**生效的第三条闸：翻过去的前缀至少要几位字母
+# （`STAGE2_CONFORM_FLIP_PREFIX_MIN`，默认 2）。动机：`switch` 的前缀表里有单字母
+# `S`，而 `S` 与「型号串开头」几乎不可分（`SX1308`→`S1306`、`SG90`…）。池子 30 案
+# 实测（§5.476.10）：只放宽数字位（`FLIP_ONE_MAX`）不够，`0022` 一页 −9.34。
+CONFORM_FLIP_PREFIX_MIN = int(os.environ.get("STAGE2_CONFORM_FLIP_PREFIX_MIN", "2"))
+_SIB_EXTRA_DST = {_d for _ds in _SIB_EXTRA.values() for _d in _ds}
 # ★ **恒开的「遗漏检测」（`STAGE2_CONFORM_AUDIT`，默认 1）**：不管回收开关开不开，
 #   都把「本该挂上、却因为判型/取证不对而没挂上」的元件记进 `LAST_CONFORM`，
 #   由 `stage2/run.py` 写进 `_assigned/<case>.json` 的 `no_delete.conform_audit`。
@@ -1093,6 +1129,17 @@ def canon_designator_meaning(text: str, ctype: str,
             m = re.match(r"^([A-Z]{1,3})", can)
             ow = prefix_owners(m.group(1) if m else "")
             if len(ow) != 1 or ow[0] != ty:
+                continue
+            # ★ 单字母前缀 + 4 位以上数字 ⇒ 不是位号，是型号串被读成了位号
+            #   （`case1` 的 `SX1308` 读成 `S1306` ⇒ 单字母前缀 `S` 只在 `switch`
+            #   名下，于是整颗 `box` 被翻成 `switch S1306`，真件记 FN、还多一颗 FP）。
+            #   合法短位号（`S1`/`D2`/`SW3`）数字都 ≤2 位，故只拦 ≥4 位。
+            _dig = re.sub(r"^[A-Z]+", "", can)
+            if CONFORM_FLIP_ONE_MAX >= 0 and len(m.group(1) if m else "") <= 1:
+                if not _dig.isdigit() or len(_dig) > CONFORM_FLIP_ONE_MAX:
+                    continue
+            if (ty in _SIB_EXTRA_DST
+                    and len(m.group(1) if m else "") < CONFORM_FLIP_PREFIX_MIN):
                 continue
             return can, fid * CONFORM_TYPE_PEN, ty, "type"
     return "", 0.0, None, ""

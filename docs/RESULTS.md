@@ -34275,3 +34275,187 @@ python -X utf8 work\_pinnum_grid.py cv_run_d473 --mode=gridn    # -10.38
    要提升必须**给分配器更多证据**（例如「这一行的 y 与哪个脚点同高」「这一列离哪条边多远」），而不是提高识字率。
 4. 与 §5.463 的库反查上限（型号名全对时库能给出 **92** 个对的脚号）合起来看，
    引脚轴的提升路径是：**先修型号名 → 库给号 → 名靠行/列几何挂到号上**。
+
+## 5.476 用户问「是不是读取有缺陷」→ 62% 是记账、38% 才是读检；`box` 翻 `switch` 把 `SW2` 整件救回（79.89 → **80.03** local / 78.66 → **78.80** official）
+
+### 5.476.1 问题与上一节的落点
+
+`User said (m24706): "是否因为读取有缺陷所以出问题？"` —— §5.475 已把「几何吸附 / 重编号 /
+盒内全扫 / 库选名」四条判否，剩下的 60 个缺失脚名到底是「读不出来」还是「读出来没挂上」？
+先把这 60 个逐条归因。
+
+### 5.476.2 归因分布（`work/_missingwhy.py`，基线 `work/_cv_run_d473`）
+
+先踩一个**坐标系坑**：GT 的 `pins[...]["point"]` 是 **json y 向上**，而 stage1 的
+`texts[].bbox_img` 是**图像 y 向下** ⇒ 必须 `py_img = H - py_json`（`H = img.shape[0]`）。
+不做这一步，「脚点附近 30px 有没有文字框」会全判成没有（首版 `no-box 36`，假象）。
+
+修正后（`python -X utf8 work\_missingwhy.py --r=60`）：
+
+| 桶 | 数量 | 含义 |
+|---|---:|---|
+| `comp-key` | 20 | 交付里根本没有这个位号的元件（`case1 SW2` 一件占 16 个） |
+| `no-box` | 16 | 元件体内/附近没有文字框 |
+| `unattached` | 13 | 读出来就是这个名字，只是没挂到任何脚上 |
+| `misread` | 7 | 有框但读成别的 |
+| `stolen` | 4 | 读到的是同元件另一个脚的名字 |
+
+⇒ **37/60（62%）是记账/绑定问题，只有 23/60（38%）是真读/真检的缺陷**。回答用户：
+不是主要的读取缺陷，主要是「读到了但没记上去」。
+
+### 5.476.3 `case1 SW2` 的真因：类型判错 ⇒ 整件失键
+
+`GT SW2 {'Name':'SW2', 'type':'switch', 'bbox':[1196,173,1354,292]}`，stage1 **检到了**：
+
+```
+c0005  box  score=0.873  bbox_json=[1195.8,169.6,1355.6,290.2]   # 离 GT 中心 2.7px
+```
+
+但类型是 `box`，而 `TYPE_PREFIX["box"] = ("U","USB","u")`（§5.473 之后另加 `H`）里没有 `SW`
+⇒ 印字 `SW2` 认不出 ⇒ 整件退化成 `p0xx`，GT 侧记 FN(switch)、我方记 FP(box)，
+**它那 16 个脚名一起消失**（`case1` 的 `_assigned` 脚名 49 个、交付只出现 32 个）。
+
+### 5.476.4 代码（`eda-pcb/stage2/assign.py`）
+
+内涵互校验（`canon_designator_meaning`）本来就有「前缀唯一归属另一种类型 ⇒ 翻类型」这条路径
+（`how="type"`，`type_fix` 由 `assemble.py:2606/2714/2788` 的 `info.get("ctype_fix")` 生效），
+但候选类型只来自**显式小表** `CONFORM_SIBLINGS = {"d": ("led",), "led": ("d",)}` —— `box` 永远
+翻不到 `switch`。本轮把这张表做成可追加：
+
+```python
+def _parse_siblings(spec: str) -> Dict[str, Tuple[str, ...]]:   # "box:switch,box:pin"
+    ...
+for _sk, _sv in _parse_siblings(os.environ.get("STAGE2_CONFORM_SIBLINGS", "box:switch")).items():
+    _old = tuple(CONFORM_SIBLINGS.get(_sk, ()))
+    CONFORM_SIBLINGS[_sk] = _old + tuple(t for t in _sv if t not in _old)
+```
+
+默认 `box:switch`（= 开）。兄弟表仍刻意留窄：`box`/`switch`/`pin` 在实际图上确实互相混淆，
+只有印字前缀能分开，而 `prefix_owners()` 要求该前缀**只被一种类型拥有**（`SW` 只属于 `switch`）。
+
+### 5.476.5 读数
+
+| 臂 | 设置 | mean | official | 逐页 |
+|---|---|---:|---:|---|
+| `d473` 基线 | — | 79.89 | 78.66 | — |
+| `sib1` | `box:switch`，只跑 case1 | 60.53 | — | `case1 58.68 → 60.53（+1.85）` |
+| `sib13` | `box:switch`，13 张 | 80.03 | 78.80（+0.14） | 只 `case1` 变，其余 12 页**逐位不变** |
+| `sib2` | `box:switch,box:pin,box:testpoint` | 80.03 | 78.80 | 与 `sib13` 逐位相同 ⇒ 多列无用 |
+| **`g476`** | `sib13` + 单字母前缀守卫（§5.476.6） | **80.16** | **78.93（+0.27）** | `case1 58.68 → 62.21（+3.54）`，其余 12 页逐位不变 |
+| `d476` | 默认路径（两条都已置默认） | = `g476` | | comp 0.860 / pin 0.747 / netH 0.859 / line 0.561，契约 13/13 clean，PASS |
+
+`case1` 逐轴（`g476`）：`comp 0.619 → 0.637`、`netH 0.656 → 0.739`、`line 0.429 → 0.439`、`pin` 保持 0.514。
+
+### 5.476.6 单字母前缀守卫：`S1306` 不是位号
+
+只放开 `box:switch` 时 `case1` 冒出 `FP S1306 type=switch`、真件 `box` 记 FN ——
+`TYPE_PREFIX["switch"] = ("SW","S")` 且 `S` 只被 `switch` 拥有，于是型号串 `SX1308`
+读成 `S1306` 后被翻成 `switch S1306`。合法短位号（`S1`/`D2`/`SW3`）数字都 ≤2 位：
+
+```python
+CONFORM_FLIP_ONE_MAX = int(os.environ.get("STAGE2_CONFORM_FLIP_ONE_MAX", "2"))   # -1 = 不设限
+# 翻类型时：单字母前缀的位号，数字部分必须 ≤ CONFORM_FLIP_ONE_MAX 位
+```
+
+加上这条：`case1 60.53 → 62.21`、`pin 0.486 → 0.514`（不再被抢）、`netH 0.739`。
+
+### 5.476.7 剩下的 53 个（`d476` 重跑）
+
+`缺名总数 53 {'no-box': 19, 'comp-key': 10, 'unattached': 13, 'misread': 7, 'stolen': 4}`，
+按件：`case1 U2 comp-key 6`（型号/键错位）、`case1 SW2 no-box 5`、`case11 USB1/USB2` 各 4、
+`case11 SW1 comp-key 4`（检测层，stage1 里根本没有）、`case13 H1 unattached 2`。
+⇒ 下一轮优先级：`comp-key`（10，整件失键）> `unattached`（13，读到了没挂上）> `no-box`（19，真检出）。
+
+### 5.476.8 判否：用「缺哪个号」补那根无名桩（`STAGE2_PIN_FILL_ELIM`，默认 0）
+
+动机：`case12 U1` 的 `GND` 槽画在框右外、`lead=0.0`、名字读得完全正确，只因「号没读到」
+被当位置桩丢掉；而同一颗 IC 别的槽已读出 `1..9`。规则（只在 `keep` 之外的桩上生效，
+不动任何已读到号的槽）：`1..max(seen)` 之间**正好缺一个号** + 该桩有名字（≥2 字符含字母）
++ 名字贴在引线端点（`PIN_FILL_ELIM_R=3.0`）+ 候选桩**同名**（`GND` 被检了两遍）。
+
+- 放宽到「比最大号再往后一位」时 `case12 U1` 真的补出 `pin_10 GND`（GT 只有 9 根）⇒
+  `pin 0.824 → 0.778`、该页 `57.08 → 55.72` ⇒ 收紧成「只认内部空洞」。
+- 收紧后 13 张：**80.15（−0.01）**，只 `case5 84.47 → 84.32（pin 0.606 → 0.588）`。
+- ⇒ **默认 0**，代码留下并记读数（这类「补一根脚」的动作在这个判据下几乎总是 fp 大于 tp）。
+
+### 5.476.9 复现
+
+
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'; $env:CUDA_VISIBLE_DEVICES=''
+python -X utf8 work\_cv.py d476 --run --baseline d473 --device cpu
+# 只跑一页看 SW2
+python -X utf8 work\_cv.py sib1 --run --cases 1 --baseline d473 --device cpu --env STAGE2_CONFORM_SIBLINGS=box:switch
+$env:RUN_DIR='work\_cv_run_d476'; python -X utf8 work\_missingwhy.py --r=60
+```
+
+## 5.476.10 池子回归：单字母前缀 `S` 必须整体禁入翻类型
+
+**第一版（`box:switch`，只挡「单字母 + 数字位 > 2」）在池子上是负收益。**
+`python -u -X utf8 work\_cv.py d476 --pool --pool-ref ef20 --device cpu`（30 案，≈36 min）：
+
+| 构建 | pool mean | 相对 `cvpool_dh1` | worst |
+|---|---:|---:|---|
+| `cvpool_dh1`（= `d473` 的池子档案） | 28.222 | — | — |
+| `cvpool_d476`（`box:switch` + `FLIP_ONE_MAX`） | **27.745** | **−0.477** | `0022 −9.34` |
+| `cvpool_d476b`（+ `FLIP_PREFIX_MIN=2`） | **28.041** | **−0.181** | `0072 −5.58` |
+
+逐案（`d476 − dh1`）：`0022 −9.34`、`0072 −5.58`、`0148 −2.64`、`0087 −2.27`、`0091 −1.48`、`0050 −1.45`；
+正向 `0042 +5.27`、`0018 +2.37`、`0011 +1.38`、`0114 +0.50`。
+
+**单案隔离（`0022`）**：`python -X utf8 eda-pcb\tools\eval\fast.py --cases 0022 --engine protocol4 --no-vlm --out <tag> --save <tag>`
+
+| 代码状态 | 分数 | comp tp | pred_pins |
+|---|---:|---:|---:|
+| `git stash`（= `d473`） | 37.42 | 12 | 35 |
+| 本轮改动，`STAGE2_CONFORM_SIBLINGS=none:none` | **37.42** | 12 | 35 |
+| 本轮改动，默认（`box:switch`） | **28.08** | 9 | 44 |
+
+⇒ 单一变量：翻类型本身把 `0022` 的 3 颗真元件改成 switch 键、并多发 9 根假脚。
+翻出来的假键长这样：`SX1308` → `S1306`（`switch` 的前缀表是 `("SW","S")`，`S` 只属 switch）。
+
+> **踩坑**：PowerShell 里 `$env:STAGE2_CONFORM_SIBLINGS=''` 是**删掉**这个变量，`os.environ.get(name, "box:switch")`
+> 于是回落到默认值 —— 第一次「关掉翻类型」的实验因此无效，必须显式写 `none:none`。
+
+**修法**：只对「env 追加出来的对子」加第三条闸，前缀至少 `STAGE2_CONFORM_FLIP_PREFIX_MIN`（默认 2）个字母：
+
+```python
+_SIB_EXTRA = _parse_siblings(_SIB_SPEC)          # {"box": ("switch",)}
+_SIB_EXTRA_DST = {_d for _ds in _SIB_EXTRA.values() for _d in _ds}
+CONFORM_FLIP_PREFIX_MIN = int(os.environ.get("STAGE2_CONFORM_FLIP_PREFIX_MIN", "2"))
+# canon_designator_meaning 的 (b) 分支里：
+if (ty in _SIB_EXTRA_DST and len(m.group(1) if m else "") < CONFORM_FLIP_PREFIX_MIN):
+    continue
+```
+
+理由：`switch` 的 `S` 与「型号串开头」在图上几乎不可分（`SX1308`/`SG90`/`SN65HVD232`），
+而 `SW` 是明确的两字母位号族。`box:switch` 里真正要救的正是 `SW…`。
+
+**验证**：`0022` 回到 37.42（`work/_fast_base/pf22pm.json`）、`case1` 仍是 **62.21**（`work/_cv.py pm1 --run --cases 1 --baseline d473`）⇒ 主尺分文不动。
+重跑池子得到 `28.041（−0.181，PASS）`，`box:switch` 的净效应从 −0.48 收窄到 −0.18。
+
+**一条方法论注意**：单案跑与池子跑的分不是同一把尺子 —— `0072` 单案 on/off 都是 **17.91**（
+`work/_fast_base/pf72on.json` / `pf72off.json`），说明 `0072 −5.58` 与本次改动无关，是运行模式（lanes）差异；
+凡是要判「这页变了没」，必须在同一模式内比。
+
+## 5.476.11 定案与回归
+
+默认臂（`STAGE2_CONFORM_SIBLINGS=box:switch` + `STAGE2_CONFORM_FLIP_PREFIX_MIN=2`）：
+
+```
+python -X utf8 work\_cv.py d476 --run --baseline d473 --device cpu
+```
+
+| 项 | 值 |
+|---|---|
+| mean（13 张 open_GT-1020） | **80.16**（Δ **+0.27** vs `d473` 79.89） |
+| official mean | **78.93**（Δ **+0.27**） |
+| 轴 | comp 0.860 / pin 0.747 / netH **0.859** / line 0.561 |
+| 轴损/100 | comp 4.20 / pin 6.32 / netH **4.93**（基线 5.16）/ line 4.39 = **19.84**（基线 20.11） |
+| 契约 | 13/13 files clean |
+| 判决 | **PASS** |
+
+池子（`work/_cv.py d476 --pool --pool-ref ef20`）= **28.041**（Δ +0.03 vs `ef20`；相对 `d473` 构建的
+`cvpool_dh1` 28.222 是 **−0.18**，落在自设止损门 −0.30 之内），`VERDICT PASS`。
+
+同时保留的判否旋钮：`STAGE2_PIN_FILL_ELIM`（默认 0，13 张 −0.01，`case12 U1` 会补出 GT 没有的 `pin_10`）。
