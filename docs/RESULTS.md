@@ -33083,3 +33083,87 @@ python -X utf8 work\_lossattr3.py pwr13 1 ; python -X utf8 work\_compdiff4.py pw
 python -X utf8 work\_pinbox5.py 'work\_cv_run_pwr13' 1                        # 逐件脚名对照
 python -X utf8 work\_cv.py pad20 --run --baseline pwr13 --device cpu --env STAGE2_PAD_FRAC=0.20
 ```
+
+## 5.462 case1 专项：脚名 / 脚槽两条 oracle 与「号码从哪来」的封口
+
+### 5.462.1 为什么盯 case1
+`case1` 是 13 张里的最低分页（58.42，全局均分 79.52）：`component 11.95 / pin 12.16 /
+net_hypergraph 11.95 / net_line 5.53` 四轴全线丢分，且 `gt=58 pred=55 fn=11 fp=8`。
+它不是某一轴的孤例，而是「元件键 → 脚槽 → 网」一串都差一口气的样板页，所以拿它当突破点。
+
+### 5.462.2 两条 oracle：脚名 +1.01、脚槽 +2.60
+两条探针都只改**交付 Pred**、不碰生产代码，用来量「如果这一项做到位，值多少分」。
+
+| oracle | 做法 | 13 张均值 | 分布 |
+|---|---|---:|---|
+| `work\_pinnameoracle.py` | 只把 `(键, pin_N)` 对得上的脚的 `pinname` 换成 GT 的（号与坐标不动） | 79.52 → **80.54（+1.01）** | case1 +1.35 / case5 +3.03 / case7 +3.33 / case12 +2.94 / case13 +2.50，其余 8 张 Δ0；只改写 **15** 个脚 |
+| `work\_pinslot_oracle.py` | 把 GT 有、我们没有的 box 件引脚**补进** Pred（带 GT 的号/名/坐标） | 79.52 → **82.12（+2.60）** | case11 **+13.69（补 14 脚）**、case1 +3.63（8）、case5 +2.90、case6 +2.75、case8 +2.73、case7 +1.88、case2 +1.88、case12 +1.63、case13 +1.55、case10 +1.18；case3/4/9 Δ0 |
+
+两条都是**上界**：它们用 GT 的号与名，我们只能靠 OCR 与库先验逼近。
+注意 `pin_f1` 的计价方式是 `(comp, pin_key_to_number(pk))` 逐键比，
+**名错一个就是 fp+fn 双罚**（脚名 oracle 只改 15 个脚就值 1.01 分，正是这个原因）。
+
+### 5.462.3 脚槽能不能「扫出来」：引线在，87%
+`work\_leadscan.py <run> [case…] [--near=6]`：把 GT 的 box 件脚点与
+`runs/stage1/<case>.stage1.json` 的 `wire_detail['segments']` 端点比重合度
+（`segments` 是**图像坐标 y 向下**、元素是 `[[x0,y0],[x1,y1]]`，GT 是 y 向上，须 `y_img = H - y`）。
+
+```
+case1  40 脚 → 31 (78%)   case2 16/16   case5 18/18   case6 16/16
+case8  16 → 12 (75%)      case11 16/20 (80%)  case12 9/9   case13 10/12 (83%)
+TOTAL 128 / 147 = 0.871
+```
+
+结论：**几何上够用** —— GT 的 IC 脚点旁边基本都躺着我们自己的引线端点，
+所以「沿元件框各边向外扫引线 → 合成脚槽」是可行的；难点不在找脚，在**给脚起名和编号**。
+
+### 5.462.4 号码从哪来：三条路都堵死
+1. **号码常常根本没印**：`case11 USB2`（GT `AF 90° WJDG`，5 脚 `VCC/D-/D+/GND/SHLD`）
+   的符号上**只有引脚名、一个数字都没有**（`work\_cmpcrop.py 11 570 315 760 430`，5× 放大目视）。
+   GT 的 `pin_1..pin_5` 是符号库内部的编号，图上无墨可读。
+2. **槽序不能外推号**：13 张 **407** 个读到号的槽里，`号 == 该槽序号+1` 只有 **82 个（21.7%）**。
+3. **几何约定也不能外推**：穷举「四边顺序 × 边内排序」共 96 种规则去拟合 GT 的编号，
+   最好的只有 **12/30（40%）**（`sides=T,L,B,R` + 边内 `left→right`）；其余都 ≤ 0.33。
+   ⇒ 编号是**符号库私有的**，任何全局规则都会把「缺一根脚（纯 fn）」变成「错一根脚（fp+fn）」。
+
+### 5.462.5 真正的上游：IC 型号名只对了 71%
+库先验（`stage2/libpins.py`，`BoxICLibrary_200cases.json` 360 键）本来就能做
+「`(型号, 引脚名) → 引脚号`」与「`(型号, 引脚号) → 引脚名`」，但它要**型号名**当键。
+13 张 31 个 box 件里，我们的 `Name` 与 GT 逐字节相同的有 **22 个（0.71）**，错的 9 个是：
+
+| case | 键 | GT | 我们 |
+|---|---|---|---|
+| 1 | U1 | `IP5306-4.35V` | `IP5306` |
+| 1 | U2 | `SX1308` | `4.7uH`（拿了隔壁电感的值） |
+| 1 | U3 | `XB7608A` | `XH-8A` |
+| 1 | USB1 | `5V2A in` | `FAN` |
+| 1 | USB2 | `5V2A out` | `5V2A0uT` |
+| 7 | U1 | `MP2236CGJ-Z` | `MP2C12` |
+| 11 | USB1 | `TYPE-C 6P(073)` | `TPE-C-SPIOT3` |
+| 11 | USB2 | `AF 90° WJDG` | `SG90` |
+| 13 | H1 | `H1` | （空） |
+
+⇒ 顺序应该是 **先把 box 件的型号名读对 → 库先验补号补名 → 脚槽召回**，
+而不是直接合成号码。这条链上「型号名读对」是 `case11` 那 **+13.69** 能否吃到的前提。
+
+### 5.462.6 本轮判否与它们的证据（避免重复走）
+| 路线 | 读数 | 结论 |
+|---|---|---|
+| 全局 `STAGE2_PAD_FRAC=0.20` | 78.59（−0.93）：case1 +2.38 / case7 +3.33 / case11 +2.31，但 case13 **−13.85**、case12 −3.15、case8 −2.46 | 判否：整页收益被单页塌陷吃掉 |
+| 同上 + `pad_box_keepout()`（外扩夹到邻居间距−1） | 79.04（−0.48）：case13 −7.50 | 判否 |
+| keepout 单独（`PAD_FRAC=0`） | 78.76（−0.76） | 判否：会夹掉必要的 `PAD_MIN=2` |
+| `STAGE2_PINNAME_PAD=0.10/0.20/0.30`（只加宽 tight 脚的 `pin_name`） | 79.52 / 78.90 / 78.96 | 0.10 完全 Δ0（该分支对 tight 角色不生效），0.20/0.30 让 case13 −6.03/−5.04 |
+| `STAGE2_CKPT_ROLES=pin_name` + 64px 权重（只有脚名换识别器） | 79.26（−0.26）：pin 轴 0.738→0.743，case13 +2.50、case7 +3.33，但 case1 −2.31、case5 −3.91、case12 −2.45 | 判否 |
+| 脚名序列重排（按 y / 按 x / 逆时针 取代现有编号序） | 现有 97/183=0.530；改 y 0.404、x 0.235、逆时针 0.481 | 判否：序不是病因，缺脚才是 |
+
+### 5.462.7 复现
+```
+set GT_ROOT=work\_new2026\open_GT-1020\open_GT
+set PYTHONPATH=Y:\workspace\EDA\eda-pcb
+python -X utf8 work\_pinnameoracle.py   pwr13 1 2 3 4 5 6 7 8 9 10 11 12 13
+python -X utf8 work\_pinslot_oracle.py  pwr13 1 2 3 4 5 6 7 8 9 10 11 12 13
+python -X utf8 work\_leadscan.py  work\_cv_run_pwr13 1 2 5 6 8 11 12 13 --near=6
+python -X utf8 work\_cmpcrop.py   work\_cv_run_pwr13 11 570 315 760 430 out.png --scale=5
+```
+（`_leadscan.py` 的两个坑：`segments` 元素是**两点 list** 而不是 4 个标量；
+`stage1.texts` 的框在 `bbox_img` 字段里、且是图像坐标。）
