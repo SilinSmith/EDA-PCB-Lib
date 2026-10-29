@@ -2421,6 +2421,58 @@ def merge_by_label(nets: Dict[str, dict]) -> Dict[str, dict]:
 
 
 # ---------------------------------------------------------------------------
+# 电源/地符号的「单脚约定」（`STAGE2_POWER_ONE_PIN`，默认 1，§5.460）。
+#
+# GT 普查（`work/_pwrpins.py`，open_GT 13 张）：无名电源/地符号 **143 颗 / 143 个脚**，
+# 颗颗都**只有一个脚** `pin_1`、`pinname` = `1`（少数 `Pin1`），脚点落在**框边朝向导线**的那侧
+# （`rel=(0.5,0.97)` / `(0.03,0.5)` 这类）。我们这边这些符号是 `pNNN` 兜底键，`_release_unkeyed=False`
+# 时一个脚都不发 ⇒ 成员全是电源符号的网被删、edges 一起消失（§5.459 的 case1 两条轨）。
+# 这里按 GT 同一套约定补出那一个脚：位置 = 最近导线端点投影到框边。关掉（=0）退回旧行为。
+PWR_ONE_PIN = env_on("STAGE2_POWER_ONE_PIN", "1")
+PWR_ONE_PIN_NAME = os.environ.get("STAGE2_POWER_ONE_PIN_NAME", "1") or "1"
+
+
+def _wire_pts_yup(stage1: dict, H: float):
+    """stage1 导线端点，转成**官方坐标（y 向上）**。
+
+    `wire_detail['segments']` 是图像坐标（y 向下），而 `components[*]['bbox']` 与
+    `pins[*]['point']` 是官方坐标（`y_img = H - y_json`）—— 两者混用会把符号翻到页面另一头。
+    """
+    out = []
+    for s in ((stage1.get("wire_detail") or {}).get("segments") or []):
+        try:
+            out.append((float(s[0][0]), H - float(s[0][1])))
+            out.append((float(s[1][0]), H - float(s[1][1])))
+        except (TypeError, ValueError, IndexError):
+            continue
+    return out
+
+
+def _edge_toward(bb, pts, ring: float = 30.0):
+    """在 bbox 边框上取「离最近导线端点最近」的那个点（官方坐标）；没有 `ring` 内的端点返回 None。"""
+    if not bb or len(bb) < 4 or not pts:
+        return None
+    x0, y0, x1, y1 = [float(v) for v in bb[:4]]
+    best = None
+    for px, py in pts:
+        cx = min(max(px, x0), x1)
+        cy = min(max(py, y0), y1)
+        d = ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
+        if d > ring:
+            continue
+        if d > 0.5:
+            if best is None or d < best[0]:
+                best = (d, cx, cy)
+            continue
+        # 端点落在框内：投影到最近的一条边（GT 的脚点都在边框上，不在框内）
+        cand = ((abs(px - x0), (x0, py)), (abs(px - x1), (x1, py)),
+                (abs(py - y0), (px, y0)), (abs(py - y1), (px, y1)))
+        _, q = min(cand)
+        if best is None or 0.0 < best[0]:
+            best = (0.0, q[0], q[1])
+    return None if best is None else (best[1], best[2])
+
+
 def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     img = stage1.get("image") or {}
     H = float(img.get("h") or 0.0)
@@ -2793,6 +2845,23 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                            "bbox": [round(float(x), 2) for x in bbox]}
 
         pts = st1_pins.get(cid) or []
+        # ★★ 电源/地符号的「单脚约定」（`STAGE2_POWER_ONE_PIN`，默认 1，§5.460）：
+        #   GT 13 张里 **143 颗**无名电源/地符号（`∅NNN` / 少数 `BAT`/`LED+` 这类端口）
+        #   一律**只有一个脚** `pin_1`、`pinname` = `1`（少数 `Pin1`）、脚点落在**框边朝向导线**
+        #   的那一侧（`rel=(0.5,0.97)` / `(0.03,0.5)` 这种，见 `work/_pwrpins.py`）。
+        #   我们这边这些符号是 `pNNN` 兜底键：`_release_unkeyed=False`（或 `PIN_DROP_UNKEYED=1`）
+        #   时**一个脚都不发** ⇒ 成员全是电源符号的整张网被删（case1 两条电源轨 553/613px
+        #   整片消失，§5.459）。这里按 GT 的约定补出那一个脚，位置取「离符号最近的导线端点
+        #   投影到框边」，于是 ① 网保住成员 ② 脚名/脚点与 GT 同一套约定 ⇒ 有机会配对上。
+        if PWR_ONE_PIN and _unkeyed and ctype in POWER_TYPES:
+            _wpts = _wire_pts_yup(stage1, H)
+            _xy = _edge_toward(bbox, _wpts)
+            if _xy is not None:
+                pins[key] = {"pin_1": {"pinname": PWR_ONE_PIN_NAME,
+                                       "point": {"x": round(_xy[0], 2), "y": round(_xy[1], 2)}}}
+                num_of[(cid, 0)] = "1"
+                pin_pk[(cid, 0)] = "pin_1"
+                continue
         if _unkeyed and not _KEEP_UNKEYED and not (
                 _KEEP_UNK_POWER and ctype in POWER_TYPES) and (
                 PIN_DROP_UNKEYED or not _release_unkeyed
