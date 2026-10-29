@@ -33744,3 +33744,48 @@ IoU 0.818）、`0175`（2 对 led+gnd）、`0078`（1 对）。一件有 ≥80% 
 
 - 默认路径：`work/_cv.py chk469 --run --baseline d467 --device cpu` ⇒ **79.76 / 78.53**、契约 13/13 clean、**PASS**（两个新机制都默认关，不扰基线）。
 - `work/_smoke.py`：Altium 6/6 · Datasheet 6/6 · KiCad 4/4 · jlc 6/6 · kicad 2/2 · other 6/6 ⇒ **30/30 全通过**，exit 0。
+
+### 5.470 微调遗忘的对照实验：把正常数据灌回去也救不回来（用户 m23809 的假设，已证否）
+
+问题：叠画微调把叠画召回从 0.441 拉到 0.542，但主尺掉 2.26~3.45。用户提出「微调会遗忘，能不能再灌正常数据集训练」。
+
+#### 5.470.1 事实：正常数据本来就在里面，且占一半页
+
+`eda-pcb/yolo_part/aug_overlap.py` 的产物是「原数据集整体复制 + 每页追加 N 个叠画副本」，所以
+
+| 数据集 | `images/train` | 组成 |
+|---|---:|---|
+| `training_data`（原） | 180 | 180 原图 |
+| `training_data_ovl`（`--per 3`，582 次贴） | 358 | 178 原图 + 180 叠画页 |
+| `training_data_ovl5`（`--per 5`，979 次贴） | 358 | 同上 |
+| `training_data_ovl2`（`--per 2 --seed 11`，390 次贴） | 358 | 同上 |
+
+⇒ 正常数据并没有被挤掉。`--per` 只改变**每页叠几次**，即叠画实例与正常实例的比例：`per 5` 约 1:1，`per 2` 约 1:2.3。
+
+#### 5.470.2 对照实验：只用正常数据、同一配方
+
+`python -u -X utf8 yolo_part/train_ovl.py --data yolo_part/training_data/data.yaml --epochs 60 --imgsz 1024 --batch 8 --workers 4 --device 0 --lr0 5e-5 --patience 60 --name ctrl_plain`
+（从 `weights/pcb43_v2_from_best.pt` 继续训，跟叠画臂**完全同一配方**）
+
+| 臂 | 训练数据 | 叠画次数 | 叠画框召回 | 普通框召回 | **主尺 13 张** | Δ |
+|---|---|---:|---:|---:|---:|---:|
+| 现役 `pcb43_v2_from_best.pt` | —（不训） | — | 0.441 | 0.923 | **79.76** | — |
+| `ctrl_plain`（**只用正常数据**） | 180 原图 | 0 | 0.441 | 0.922 | **78.74** | **−1.02** |
+| `ovl2low`（正常数据 + 低剂量叠画） | 358 页 | 390 | 0.466 | 0.936 | **75.99** | **−3.76** |
+| `ovl6/last`（正常数据 + 高剂量叠画） | 358 页 | 979 | **0.542** | 0.934 | **76.31** | **−3.45** |
+
+（叠画召回口径 `work/_detovl.py <w> --set=ovlplus --imgsz=1280 --device=cpu`；主尺口径 `work/_cv.py <tag> --run --baseline d467 --device cuda --env YOLO_WEIGHTS=<绝对路径>`）
+
+#### 5.470.3 结论
+
+1. **有一份与叠画无关的固定代价**：只用正常数据、同一配方续训 60 轮，主尺就掉 **1.02**，而叠画召回一点没涨（0.441，与不训完全一样）。⇒ 掉分的主因不是「忘了正常分布」，而是**任何权重变动都会让预测框形态漂移**，于是 `schematic_parser/stamp.py` 的图章换框（角点差 ≤20px 才认）认不上，`comp` 与 `pin` 两个轴一起掉。
+2. **灌更多正常数据不能抵消它**：低剂量臂（叠画实例只有高剂量臂的 40%）主尺掉得**更多**（−3.76），因为能力收益腰斩而固定代价照付；高剂量臂能力最高（0.542）但代价 −3.45。
+3. 三条臂的普通框召回都在 0.922~0.936，与现役 0.923 无法区分 ⇒ 不是「普通框被忘掉」。
+4. 叠画在主尺上的价值上限只有 **+0.52**（§5.448，case11 一处），固定代价 ≥1.00 ⇒ **经济上不可能回本**。叠画能力只能走「后处理实例切分」（把一块墨迹按模板切成两个实例），不能靠整网微调。
+
+#### 5.470.4 复现
+
+1. 造低剂量数据：`python -X utf8 yolo_part/aug_overlap.py --src yolo_part/training_data --out yolo_part/training_data_ovl2 --per 2 --seed 11`（390 次贴），配 `yolo_part/data_ovl2.yaml`。
+2. 训对照臂：把 `--data` 换成 `yolo_part/training_data/data.yaml`，其余参数与叠画臂一致（60 轮、1024、lr 5e-5）。
+3. 能力：`python -X utf8 work/_detovl.py eda-pcb/yolo_part/runs_ovl/<name>/weights/last.pt --set=ovlplus --imgsz=1280 --device=cpu`。
+4. 主尺：`$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'; python -X utf8 work/_cv.py <tag> --run --baseline d467 --device cuda --env "YOLO_WEIGHTS=<绝对路径>"`。
