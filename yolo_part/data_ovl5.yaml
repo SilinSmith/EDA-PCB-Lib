@@ -1,0 +1,46 @@
+﻿path: Y:\workspace\EDA\eda-pcb\yolo_part\training_data_ovl5
+train: images/train
+val: images/val
+nc: 41
+names:
+  0: amp
+  1: amp_3pin
+  2: amp_5pin
+  3: ant
+  4: battary
+  5: bjt
+  6: bjt_pnp
+  7: block
+  8: box
+  9: buzzer
+  10: c
+  11: circle_header
+  12: crystal
+  13: crystal_2pin
+  14: crystal_3pin
+  15: crystal_4pin
+  16: d
+  17: dc
+  18: esd
+  19: fuse
+  20: gnd
+  21: jumper
+  22: l
+  23: led
+  24: m3螺丝
+  25: mosfet
+  26: mosfet_pnp
+  27: motor
+  28: net_bidirection
+  29: net_input
+  30: net_output
+  31: net_short
+  32: opt
+  33: other
+  34: pin
+  35: r
+  36: seg
+  37: switch
+  38: testpoint
+  39: transfomer
+  40: v

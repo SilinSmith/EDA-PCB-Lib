@@ -33580,3 +33580,162 @@ python -X utf8 work\_cv.py d467 --run --baseline d464
 python -X utf8 work\_cv.py rr3 --run --baseline d464 --env STAGE2_PINNAME_REREAD_MAXGAP=9 --env STAGE2_PINNAME_REREAD_MINLEN=1
 python -X utf8 work\_pnretrydiff.py 13 work\_cv_run_v466 work\_cv_run_d467
 ```
+
+## 5.469 叠画能力专线（合成增广微调）+ 本轮 CPU 侧四条判否
+
+### 5.469.1 先定性：叠画丢的是 **YOLO 的单实例**，不是我们的后处理
+
+判据来自 `work/_yolooracle.py`（直接 `YOLO(weights).predict(..., conf, iou)`，打印区域内的**原始框**，
+绕开 `stage1/detect.py` 之后的一切后处理）：
+
+    python -X utf8 work\_yolooracle.py 11 1050 320 1210 470 --imgsz=1600 --device=0
+
+主尺 `case11`（图像 1469×770）的那对 LED：
+
+| conf | iou | 区域内 led 框 | 说明 |
+|---|---|---|---|
+| 0.25 | 0.70 | **1 个** `[1117.6,371.4,1141.1,386.9]` 0.39 | 默认档 |
+| 0.10 | 0.70 | 2 个，第二个 0.17 | 同一实例的重复框 |
+| 0.03 | 0.90 / 0.99 | 55 / 97 个总框 | led 全是同一簇的重复框（IoU≈0.9） |
+
+GT 是 `LED1 [1104,374,1145,425]` / `LED2 [1104,354,1145,406]`，两框 **IoU≈0.45** —— 远低于
+ultralytics 默认 NMS 的 `iou=0.7`。所以「把 NMS 放宽」救不了：**模型自己只认出一个实例**。
+这是本轮最关键的一条定性，它把「要不要动检测器」从猜测变成了结论。
+
+### 5.469.2 ROI：叠画在池子里只有 2.5% 的页
+
+`work/_overlaproi.py`（扫 200 案 GT 的 `components` bbox 两两 IoU）：
+
+    [pairs] 相交对 100 ；其中 IoU>0.30 的页 5 / 200
+    buckets {0.0-0.1:53, 0.1-0.3:25, 0.3-0.5:20, 0.5-0.7:0, 0.7-1.0:2}
+
+5 页分别是 `0087`（15 对，全是 `TP43/TP44` 这种 pin）、`0103`（2 对 gnd）、`0135`（2 对 net_input，
+IoU 0.818）、`0175`（2 对 led+gnd）、`0078`（1 对）。一件有 ≥80% 面积埋在另一件里只有 **2 对**。
+
+⇒ 真实叠画**几乎只发生在小符号上**，大件叠画基本不存在；主尺上只有 `case11` 一处（§5.448 估的上界 +0.52）。
+这条决定了训练的目标函数：**盯「不退化」比盯「主尺 +分」更重要**。
+
+### 5.469.3 增广数据（真图 copy-paste，只叠墨不遮墨）
+
+`eda-pcb/yolo_part/aug_overlap.py`（新增）：
+
+    python -X utf8 yolo_part\aug_overlap.py --src yolo_part\training_data \
+        --out yolo_part\training_data_ovl5 --per 5 --seed 7
+
+- GT 从池子 json 取，`bbox` 按 `y_img = H - y_json` 转到图像帧；
+- 入选类 `DONOR_TYPES`（`led/r/c/d/gnd/net_input/net_output/pin/v/testpoint/switch/buzzer/crystal/opt/mosfet/bjt/dc`），
+  边长 `MIN_SIDE=9 / MAX_SIDE=130`；
+- 贴法：偏移 `frac∈[0.20,0.45]`，要求新框与 victim 的 **IoU∈[0.20,0.60]**、与其它 GT 框 IoU≤0.55、且落在图内；
+  粘贴只写暗笔画（`g<128`）的像素 ⇒ 两套轮廓都还在；
+- 标签 = 原行 + 新行（`cls cx cy w h` 归一化）；`val` 只产出能力集 `images/ovlplus`。
+- 实跑：`--per 3` ⇒ **198 页 / 582 次叠画**；`--per 5` ⇒ **198 页 / 979 次叠画**。
+
+### 5.469.4 训练与能力读数（`work/_detovl.py`）
+
+口径：GT 框里「与同图**任意类**另一个 GT 框 IoU≥0.2」的算叠画框；预测框需同类且 IoU≥0.3，贪心一对一。
+
+| arm | 权重 | imgsz | 叠画召回 | 普通召回 |
+|---|---|---:|---:|---:|
+| baseline | `weights/pcb43_v2_from_best.pt` | 1280 | 52/118 = **0.441** | 783/848 = 0.923 |
+| `ovl2` | 20 ep / 1024 / lr 3e-4 / `--per 3` | 1280 | 55/118 = **0.466** | 784/848 = 0.925 |
+| `ovl5` best | 100 ep / 1024 / lr 3e-4 / `--per 5` | 1280 | 54/118 = **0.458** | 783/848 = 0.923 |
+| `ovl5` last | 同上（末轮） | 1280 | 62/118 = **0.525** | 793/848 = **0.935** |
+| `ovl6` best | 再 60 ep / lr **5e-5**（从 `ovl5/last` 续） | 1280 | 63/118 = **0.534** | 783/848 = 0.923 |
+| `ovl6` last | 同上（末轮） | 1280 | 64/118 = **0.542** | 792/848 = **0.934** |
+
+- `ovl5` 的 `mAP50` **第 1 轮最高（0.861）之后一路下滑到 0.79**，而叠画召回反过来是 `last > best`
+  ⇒ 100 轮在学「叠画」的同时在**遗忘**别的目标；`best.pt` 是按 mAP50 挑的，所以它不含叠画能力。
+- 把 lr 降到 **5e-5** 再续 60 轮（`ovl6`）就能**同时**拿到 `mAP50 0.872`（末轮）与叠画 0.542
+  ⇒ **低 lr 是这条线的关键**，之前的 −0.51 之类下滑是 lr 太高而不是数据不够。
+
+### 5.469.10 主尺 A/B：**判否**，不换权重
+
+`work/_cv.py <tag> --run --baseline d467 --device cuda --env YOLO_WEIGHTS=<绝对路径>`
+（13 张 open_GT，基线 `work/_d467` = 79.76 local / 78.53 official）：
+
+| 权重 | mean | official | Δ | 说明 |
+|---|---:|---:|---:|---|
+| `pcb43_v2_from_best.pt`（现役） | **79.76** | 78.53 | — | comp 0.855 / pin 0.746 / netH 0.853 / line 0.562 |
+| `ovl6/last.pt`（叠画 0.542） | 76.31 | 75.21 | **−3.45** | comp 0.829 / pin 0.694 |
+| `ovl6/best.pt`（叠画 0.534） | 77.49 | 76.39 | **−2.26** | comp 0.837 / pin 0.706 |
+
+⇒ **叠画能力 +10pp 的代价是主尺 −2.3~−3.5 分**，而叠画在主尺上的上界只有 +0.52（§5.448）。
+止损门 ②（非叠画页 comp 轴不下降）与 ①（池子 Δ ≥ −0.3）都过不了，**现役权重不动**，
+`runs_ovl/` 里的权重留在工作目录当证据、不入库。
+
+**为什么会掉这么多**：`普通框召回` 只掉 0.1pp（0.923→0.923 / 0.934），说明不是「漏检更多」，
+而是**框的形态/分类变了** —— 管线在 YOLO 之后还要过 `schematic_parser/stamp.py` 的图章替换
+（角点差 ≤20px 才认），框轻微漂移就会让「图章没贴上 ⇒ 按原框当自由尺寸件」，
+下游 `comp`/`pin` 两个轴一起掉（`pin 0.746→0.694`）。要治这条线，得让微调**只改叠画那一类情形**，
+或者干脆换「叠画后处理切分」（把一块墨迹按模板切成两个实例），而不是整网微调。
+
+
+### 5.469.5 两处工程坑
+
+1. **训练卡死**：第一轮 `--imgsz 1280 --workers 8` 在 epoch 3 卡住（GPU 100%、15.6 GB，
+   但 `results.csv` 只到 epoch 2、`last.pt` 22 分钟没更新，10 个 worker 各只用了 6 s CPU）。
+   改 `--workers 4 --imgsz 1024` 后稳定，**45 it/epoch、2.9 it/s ⇒ 12.9 s/epoch**。
+2. **探针目录**：探针都在工作区根的 `Y:\workspace\EDA\work\`，**不在 git 仓库 `eda-pcb/` 里**；
+   把探针写进 `eda-pcb\work\` 会得到「`work/_cv.py` 不存在 / `open_GT` 不存在」的假象。
+
+### 5.469.6 本轮 CPU 侧四条判否（全部未入库或默认关）
+
+| 开关 | 设置 | mean | 结论 |
+|---|---|---:|---|
+| `STAGE2_EDGE_SNAP_JUNC=1` | 同网其它边端点也当吸附锚点 | 79.76（Δ0.00） | line 0.562→0.568 但 netH 0.853→0.851、`case1 −1.04` ⇒ WARN，不入库 |
+| `STAGE2_EDGE_SNAP=5/16/22` | 吸附半径三档 | 79.34 / 79.34 / 78.80 | **默认 10 是局部最优**，三档全 FAIL |
+| `STAGE2_ORPHAN_EDGES=1` | 把「成员全悬空」的边并回最近的网 | 79.82（+0.06） | WARN（`case1 −0.35`、`case4 −0.35`）⇒ 默认 0 |
+| `STAGE2_LIB_NAMEID=1/2` | 型号名认不出/明显不对时用**引脚名集合**反查库键 | 79.76 / 79.67 | `=1` 从不触发（Δ0）；`=2` **−0.09 FAIL** ⇒ 默认 0 |
+
+`STAGE2_LIB_NAMEID` 的机制本身是有效的（`LibCtx.key_for_names` + `num_for_name_raw`：
+`VCC/D-/D+/GND` ⇒ 库键 `USB_A`/`AF 90° WJDG` 一致给出 `1/2/3/4`，`case11 USB2` 真的多出了
+`pin_1 VCC` 与 `pin_3 D+`）。**但它救不了分**：`_pinf1dbg.py 11` 显示 `tp 5→5`、`fp 3→5`
+（这两根脚被判成 `position_mismatch` + `extra`）。原因见 5.469.8：
+我们给 `USB2 pin_1` 的坐标是 `(654.0,441.1)`，GT 是 `(739,401)` —— **差 93px**。
+
+### 5.469.7 `case12` 为什么 `net_line` 恒为 0（不是边丢了，是网没配上）
+
+- `work/_linewho.py` ⇒ `netH f1=0.4909 tp=8.10 pairs=16 | line f1=0.0000 tp=0 fp=30 fn=28`：
+  **16 对网里每一对 tp 都是 0**；逐条 GT 边在整份 Pred 里找 ≤5px 的对应只有 **1/28**，
+  y 翻转假设也否掉（0/28）。
+- 装配完成时（`STAGE2_TRACE_DUMP` 的 `12.12.12.final`）一直是 **43~45 条边 / 3321~3406px**，
+  交付 `12_Pred.json` 只剩 **30 条 / 1320px** ⇒ 断点在出口清洗
+  `eda-pcb/submission/run.py:651-698 def _sanitize_pred(doc)`：成员全悬空的网被 `nets.pop(k, None)`（`:690`）
+  整条删掉、边随之消失；而成员悬空源于**位号绑定失败**（`case12` comp 只有 0.476）。
+- `net_line_f1` 只在**配对成功的网**里算边（`eda-pcb/schematic_parser/metrics.py:596-636`，`pairs` 来自
+  `net_hypergraph_f1`），所以「把边挂到别的网」拿不到 tp —— `ORPHAN_EDGES` 只 +0.06 就是这个原因。
+
+### 5.469.8 引脚几何：脚「在哪一边」才是病因，不是「往外推多远」
+
+- `work/_leadscan.py`：GT 的 box 引脚点落在 stage1 导线端点 ≤6px 内 **128/147 = 87%**
+  （`case1 31/40`、`case2 16/16`、`case5 18/18`、`case6 16/16`、`case12 9/9`）⇒ 「脚在哪」导线上已经写着。
+- `work/_bindcheck.py`（新）：我们 box 件的框与 GT 的框**几乎逐像素重合** —— `case11 USB2`
+  我们 `[622,321,700,420]` vs GT `[620,322,700,421]`（中心差 1.2px）、`U1` 差 1.0px、
+  `USB1` 差 1.3px；只有 r/c 类不同（`C1` GT `[797,335,839,368]` vs 我们 `[807,344,827,360]`，
+  我们的是符号本体）。⇒ **box 件的框不是问题**。
+- 但脚点的**方位**是错的：`case11 USB2` 我们 `pin_1 (654.0,441.1)`（在框**上边**外 20px），
+  GT `pin_1 (739,401)`（在框**右边**外 39px）—— 都是「推出去约 40」，但**边选错了**。
+  这与 §5.462 的普查一致：407 个读到号的槽里「号=槽序+1」只 82（21.7%），
+  穷举 96 种「四边顺序 × 边内排序」拟合 GT 最好只 12/30（40%）。
+- 两条离线仿真正因为上面这条而失败：
+  * `work/_pinleadsnap.py <run> --r=25`（**所有**脚吸到半径内最近且未占用的导线端点）
+    ⇒ **79.757 → 66.062（−13.70）**，`case3 pin 1.000→0.167`、`case2 0.800→0.000`：
+    我们大部分脚本来就在正确位置，盲吸会把它们推到相邻的导线端点上；
+  * `work/_pinboxlead.py <run>`（只对 box 件、只吸「落在框内」的脚）
+    ⇒ **Δ+0.00 且 `tried=0`**：交付的 box 脚点**全都已经落在框外**（就是上面那个「推出去 40」），
+    所以「往框外吸」这个动作在现管线里已经是恒等的，真正要改的是**每条脚该在哪一边**。
+- ⇒ 下一步（不是今天）：先给每条脚附上证据（引线端点在哪一侧 / 该侧读到的名或号），
+  再决定方位；「往外推」这件事已经没有余量。
+
+
+### 5.469.9 复现
+
+    $env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+    $env:PYTHONPATH='Y:\workspace\EDA\eda-pcb'
+    python -X utf8 work\_yolooracle.py 11 1050 320 1210 470 --imgsz=1600 --device=0
+    python -X utf8 work\_overlaproi.py
+    python -X utf8 yolo_part\aug_overlap.py --src yolo_part\training_data --out yolo_part\training_data_ovl5 --per 5 --seed 7
+    python -u -X utf8 yolo_part\train_ovl.py --data yolo_part\data_ovl5.yaml --epochs 100 --imgsz 1024 --batch 8 --workers 4 --device 0 --lr0 3e-4 --name pcb43_ovl5
+    python -X utf8 work\_detovl.py eda-pcb\yolo_part\runs_ovl\pcb43_ovl5\weights\last.pt --set=ovlplus --imgsz=1280 --device=cpu
+    python -X utf8 work\_linewho.py d467 12
+    python -X utf8 work\_pinleadsnap.py work\_cv_run_d467 --r=25

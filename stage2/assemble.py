@@ -721,6 +721,12 @@ EDGE_UNION = env_on("STAGE2_EDGE_UNION", "0")
 EDGE_SNAP = float(os.environ.get("STAGE2_EDGE_SNAP", "10.0"))
 EDGE_JOIN = float(os.environ.get("STAGE2_EDGE_JOIN", "40.0"))     # 端点相接容差（px）
 EDGE_ANG = float(os.environ.get("STAGE2_EDGE_ANG", "6.0"))        # 共线夹角容差（度）
+# ★ 「只救边不救网」（`STAGE2_ORPHAN_EDGES`，默认 **1 = 开**）：一个引脚都没连上的网
+#   仍然按 `:3410` 的结论整张丢掉（当顶点会抢轨引脚，实测更差），但它的**边**不再陪葬 ——
+#   这些边里包含 stage1 检出的整条长轨（case12 那条 900px 的电源轨就在无引脚的网里，
+#   丢掉后整页只剩 1320px 碎边，net_line 直接 0.000）。救法：端点落在某张**保留网**的
+#   边端点/边上 `EDGE_JOIN` 以内就并进去，谁也不挨着才丢。
+ORPHAN_EDGES = env_on("STAGE2_ORPHAN_EDGES", "0")
 
 # ★ 跨网焊接（`STAGE2_NET_WELD`，默认 **16 = 开**；`=0` 关）。
 #   （2026-10-14 转正：官方 10 张 **+1.49/张**、val 19 张 −0.003/张。）
@@ -3394,6 +3400,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
 
     nets = merge_by_label(merge_by_symbol(raw, syms))
     out_nets: Dict[str, dict] = {}
+    _orphan_edges: List[List[dict]] = []
     for v in nets.values():
         v.pop("_segs", None)
         refs = [r for r in v.pop("_refs", []) if not (len(r) == 2 and r[1] is None)]
@@ -3408,12 +3415,40 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         # 网络会去抢轨引脚，把本该挂到正确网上的轨引脚抢走 ⇒ netH 反而掉。
         # 结论：这些网确实该丢；要救它们的边只能另想办法（顺序、或只救边不救网）。
         if not refs:
+            if ORPHAN_EDGES and v.get("edges"):
+                _orphan_edges.extend(v["edges"].values())
             continue
         v["hyperGraph"] = "(" + ",".join("%s.%s" % t for t in refs) + ")"
         out_nets["net_%d" % (len(out_nets) + 1)] = v
     _trace_dump("00.pre", out_nets, H, case_id)
     out_nets = attach_orphan_rails(out_nets, pins)
     out_nets = merge_shared_pins(out_nets)
+    if ORPHAN_EDGES and _orphan_edges:
+        _oe_ledger = [0, 0]
+        for _e in _orphan_edges:
+            if not _e or len(_e) < 2:
+                continue
+            _ends = [(_e[0]["x"], _e[0]["y"]), (_e[-1]["x"], _e[-1]["y"])]
+            _best = None
+            for _vn, _vv in out_nets.items():
+                for _ve in (_vv.get("edges") or {}).values():
+                    if not _ve or len(_ve) < 2:
+                        continue
+                    _vp = [(_ve[0]["x"], _ve[0]["y"]), (_ve[-1]["x"], _ve[-1]["y"])]
+                    for _a in _ends:
+                        for _b in _vp:
+                            _dd = math.hypot(_a[0] - _b[0], _a[1] - _b[1])
+                            if _dd <= EDGE_JOIN and (_best is None or _dd < _best[0]):
+                                _best = (_dd, _vn)
+            if _best is None:
+                _oe_ledger[1] += 1
+                continue
+            _dst = out_nets[_best[1]].setdefault("edges", {})
+            _dst["edge_%d" % (len(_dst) + 1)] = _e
+            _oe_ledger[0] += 1
+        if os.environ.get("STAGE2_DBG_EDGE"):
+            print("[dbg edge polish] %s orphan edges attached=%d dropped=%d"
+                  % (case_id, _oe_ledger[0], _oe_ledger[1]))
     # ---- 电源/地符号挂为**纯顶点**（`STAGE2_SYM_VERTEX` = 半径，0=关） ----
     # §5.330：GT 的 124 个缺失网络顶点里 **113 个**是被折叠成 `∅NNN` 的电源/地符号；我们
     # 108/108 都检出了，但它们**没有引脚**，于是既不进并查集也不进 hyperGraph —— 而 GT 把

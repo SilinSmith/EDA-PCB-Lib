@@ -86,6 +86,13 @@ LIB_PINS = env_on("STAGE2_LIB_PINS", "1")
 LIB_PINS_NUMFILL = env_on("STAGE2_LIB_PINS_NUMFILL", "1")
 LIB_PINS_NAMEFILL = env_on("STAGE2_LIB_PINS_NAMEFILL", "1")
 
+# 规则 A 的**型号名兜底**：型号名认不出来时，用读到的引脚名集合反查库键
+# （`LibCtx.key_for_names`）。动机见该方法 docstring（主尺 case11 `USB2`：名读对、
+# 型号读成 `SG90` ⇒ 规则 A 整颗不发）。
+# 档位：`0`=关（默认，现行为逐位不变）；`1`=只在 `key_for()` 失败时兜底；
+#       `2`=`key_for()` 命中的库键覆盖不到一半读到名字时，也允许换成按名字反查的键。
+LIB_NAMEID = env_str("STAGE2_LIB_NAMEID", "0").strip()
+
 # 库文件路径。**2026-10-14 起默认是官方 box/IC 库 `BoxICLibrary_200cases.json`**
 # （用户 m42932「以新的这个为参考」）：官方 `pin_f1` 只考 box 元件，而这份库就是
 # box/IC 那一档（360 键），同口径实测比 `cpntLibrary`（337 键）好 —— 官方 9 张
@@ -343,6 +350,93 @@ class LibCtx:
         return (self._index or {})["by_norm"][hits[0]][0]
 
     # -- 两条规则 --------------------------------------------------------
+    def key_for_names(self, names: Sequence[str], min_hit: int = 3) -> Optional[str]:
+        """型号名认不出来时，用**读到的引脚名集合**反查库键（`STAGE2_LIB_NAMEID`）。
+
+        动机（主尺 case11）：`USB2` 四根脚的名读对了（`VCC/D-/D+/GND`），但型号名被
+        读成 `SG90` ⇒ `key_for()` 命中不了库 ⇒ 规则 A 整颗不发，交付只剩 1 个脚。
+        而库里 `AF 90° WJDG` 的 名→号 表正是 `VCC=1,D-=2,D+=3,GND=4,SHLD=5`。
+
+        判据要严：至少 `min_hit` 个名字命中、且命中数 ≥ 读到名字数的一半，
+        并且**最优唯一**（打平就放弃）—— 猜错库键 = 号整片错 = fp+fn 双罚。
+        """
+        if not self.load():
+            return None
+        # ★ 这里**不能用 `norm()`**：它把 `D-`/`D+` 都归成 `d`，于是 `VCC/D-/D+/GND`
+        #   在库里会命中 `SN65HVD232D` 这种八竿子打不着的芯片（实测打平 ⇒ 永远放弃）。
+        #   本函数要的是「名字就是那个名字」，所以只做「去空格、大写」。
+        def _c(s) -> str:
+            return "".join(str(s or "").split()).upper()
+
+        want = sorted({_c(n) for n in names if _c(n)})
+        if len(want) < min_hit:
+            return None
+        raw = self._raw or {}
+        hits: List[tuple] = []
+        sigs: Dict[str, tuple] = {}
+        for k, v in raw.items():
+            m: Dict[str, str] = {}
+            dup: set = set()
+            for p in (v.get("pins") or []):
+                nm, num = _c((p or {}).get("name")), str((p or {}).get("number") or "").strip()
+                if not nm or not num:
+                    continue
+                if nm in m and m[nm] != num:
+                    dup.add(nm)
+                m[nm] = num
+            for d in dup:
+                m.pop(d, None)
+            h = sum(1 for n in want if n in m)
+            if h >= min_hit and h * 2 >= len(want):
+                hits.append((h, k))
+                sigs[k] = tuple((n, m[n]) for n in want if n in m)
+        if not hits:
+            return None
+        hits.sort(reverse=True)
+        best = [k for h, k in hits if h == hits[0][0]]
+        # 打平时**看结论是否一致**：USB 家族的 `USB_A`/`TYPE-B`/`U217-041N-4BV81`/`AF 90° WJDG`
+        # 都把 `VCC/D-/D+/GND` 映射成 `1/2/3/4`，而 `CH340N`/`CH340C`（USB-串口芯片，
+        # 名字碰巧一样）给的是别的号。取**多数签名**、且多数要占打平者的一半以上：
+        # 这样「大家其实说的是同一件事」时仍能出手，真的各说各话时就放弃。
+        if len(best) == 1:
+            return best[0]
+        cnt: Dict[tuple, int] = {}
+        first: Dict[tuple, str] = {}
+        for k in best:
+            s = sigs[k]
+            cnt[s] = cnt.get(s, 0) + 1
+            first.setdefault(s, k)
+        top = max(cnt.values())
+        if top * 2 <= len(best):
+            return None
+        s = [sig for sig, c in cnt.items() if c == top][0]
+        return first[s]
+
+    def num_for_name_raw(self, key: str, pin_name: str) -> Optional[str]:
+        """`key_for_names` 配套的查表：**只去空格大写**，保留 `D-`/`D+` 的区别。
+
+        `num_for_name()` 走 `norm()`，会把 `D-`/`D+` 归成同一个键 `d`，
+        对连接器这类「名字只差一个符号」的脚是致命的（实测 `VCC/D-/D+/GND`
+        在 `AF 90° WJDG` 里 4 个名字只归一成 3 个）。
+        """
+        if not key or not pin_name:
+            return None
+        if not self.load():
+            return None
+        m: Dict[str, str] = {}
+        dup: set = set()
+        for p in ((self._raw or {}).get(key) or {}).get("pins") or []:
+            nm = "".join(str((p or {}).get("name") or "").split()).upper()
+            num = str((p or {}).get("number") or "").strip()
+            if not nm or not num:
+                continue
+            if nm in m and m[nm] != num:
+                dup.add(nm)
+            m[nm] = num
+        for d in dup:
+            m.pop(d, None)
+        return m.get("".join(str(pin_name).split()).upper())
+
     def num_for_name(self, key: str, pin_name: str) -> Optional[str]:
         """规则 A 的查表：`(库键, 引脚名) → 号`，**唯一映射**时才返回号。"""
         if not key or not pin_name:
@@ -460,6 +554,24 @@ def complete_pins(comp_name, stubs: Sequence[dict],
     ctx = ctx or LibCtx()
     n = 0
     key = ctx.key_for(comp_name)
+    _by_names = False
+    if LIB_NAMEID not in ("", "0", "off", "false", "no"):
+        # 型号名认不出来（`=1`）或**认得出来但明显不对**（`=2`：该库键覆盖不到一半的读到
+        # 名字，而按名字反查的键能覆盖 ≥3 个）时，用引脚名集合反查库键。
+        # `USB2` 就是 `=2` 的情形：`key_for('SG90')` 命中了库里的伺服 `SG90`（3 脚），
+        # 而我们的 4 个名字一个都不在里面 ⇒ 规则 A 一个号都补不出来。
+        _names = [str(r.get("nm") or "") for r in stubs]
+        _hit = 0
+        if key:
+            _hit = sum(1 for _n in _names if _n and ctx.num_for_name(key, _n))
+        _want = len([_n for _n in _names if _n])
+        if not key or (LIB_NAMEID >= "2" and _want and _hit * 2 < _want):
+            _k2 = ctx.key_for_names(_names)
+            if _k2 and _k2 != key:
+                _h2 = sum(1 for _n in _names if _n and ctx.num_for_name_raw(_k2, _n))
+                if _h2 > _hit:
+                    key, _by_names = _k2, True
+                    ctx.stats["nameid"] = ctx.stats.get("nameid", 0) + 1
     if not key:
         return 0
     used = used if used is not None else set()
@@ -486,7 +598,8 @@ def complete_pins(comp_name, stubs: Sequence[dict],
         nm = str(r.get("nm") or "").strip()
         if not nm:
             continue                       # 名也没读到 ⇒ 无从查表
-        num = ctx.num_for_name(key, nm)
+        num = (ctx.num_for_name_raw(key, nm) if _by_names
+               else ctx.num_for_name(key, nm))
         if not num or num in used:
             continue
         if gated:
