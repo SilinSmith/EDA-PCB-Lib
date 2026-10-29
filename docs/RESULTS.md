@@ -33789,3 +33789,82 @@ IoU 0.818）、`0175`（2 对 led+gnd）、`0078`（1 对）。一件有 ≥80% 
 2. 训对照臂：把 `--data` 换成 `yolo_part/training_data/data.yaml`，其余参数与叠画臂一致（60 轮、1024、lr 5e-5）。
 3. 能力：`python -X utf8 work/_detovl.py eda-pcb/yolo_part/runs_ovl/<name>/weights/last.pt --set=ovlplus --imgsz=1280 --device=cpu`。
 4. 主尺：`$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'; python -X utf8 work/_cv.py <tag> --run --baseline d467 --device cuda --env "YOLO_WEIGHTS=<绝对路径>"`。
+
+### 5.471 case12 线轴解剖：不是「边被删」，是「线本身没跟上 + 网配对失败」
+
+主尺（open_GT-1020 13 张）此时 = **79.76 local / 78.53 official**（`work/_d467`）。case12 是本批
+最低的一页（57.08：comp 15.71 / pin 4.41 / netH 12.80 / line 10.00 丢分），本节的目的是把它
+「为什么低」从猜测变成可复现的读数。
+
+#### 5.471.1 线轴的三个数字
+
+| 口径 | 读数 |
+|---|---|
+| GT 导线总量 | `16 网 / 28 边 / 4512px`，长度中位 118px、p90 342px |
+| 交付 Pred | `17 网 / 30 边 / 1167px`，中位 39px、p90 51px |
+| stage1（`wire_detail['segments']`） | `199~200 段 / 5704px`，**中位段长仅 12px**（其余 12 页 20~70px） |
+| 其余 12 页对照 | Pred 总量与 GT 差 ±10% 以内 |
+
+新探针 `work/_segdist.py <run> [case…]`：把 GT 边按 2px 采样后求「到最近 stage1 线段」的距离分布。
+`case1/3/6/13` 的中位 **0.0~0.5px**、`<=2px` 占 95%~99%；**case12 中位 17.1px、p90 52px、`<=2px` 仅 40%**。
+反方向（stage1 → GT 边）case12 中位 26px。
+
+⇒ case12 的 stage1 不是「偏移了几像素」，而是**大段导线根本没有对应的线段**，且找到的那些被打成一
+小截一小截（199 段 / 5704px ⇒ 每段 12px）。`work/_wiresum.py` 里这一页的形态与其余 12 页完全不同。
+
+#### 5.471.2 排掉的三个假设
+
+- **尺度/平移错**：`work/_inkfit.py` 判 `scale 1.0` 最优（落在墨上 0.808），`scale 0.5/2.0` 掉到
+  0.005/0.020，平移 `dx=dy=0` 最优 ⇒ 不是坐标系缩放问题；`y` 翻转假设也用整份 Pred 验过（0/28）。
+- **色相选错**（一度以为找到了）：GT 导线 13 页全绿；`work/_huecmp.py` 显示 case12 的 stage1 线段
+  0.60 落在**红**像素上。但把色相窗收窄到能排除红（新env `STAGE1_WIRE_HUE_TOL`，`pipeline/pskel.py`
+  的 `wire_colour_mask`；42 → 25 → 18，掩膜里 hue 15/25 的像素确实被剔掉）后，**case12 仍是 56.68**
+  ⇒ 红色像素不是线轴的病因，收窄色相窗在其余页面上只会掉分。
+- **出口削边**：`STAGE2_TRACE_DUMP` 显示 `build_doc` 内部（`12.01.00.pre → 12.12.12.final`）一直是
+  43~45 边 / 3300~3400px，交付只剩 30 边 / 1167px。`STAGE2_EDGE_MIN_FINAL=0`（13 张）⇒ **79.51（−0.25）**
+  ⇒ 20px 的终段闸不是病根，去掉它反而多 fp。
+
+#### 5.471.3 line 轴为什么必然是 0
+
+`net_line_f1` 只在**配对成功的网内**算边（`schematic_parser/metrics.py:596-636`）。`work/_linewho.py`
+对 case12 逐对打表：`netH f1=0.4909`、`pairs=16`，但 16 对里**每一对 tp=0**（连 `GT net_1 ↔ 我们 net_13`
+这种 1px 级重合的对也判不中，因为我们的边只是 GT 边的子段）。⇒ 想救 line，必须先救网级成员划分
+（位号绑定），而且救完还得让线本身跟上来（5.471.1 的 6% 覆盖率是硬前提）。
+
+#### 5.471.4 位号一侧的现场
+
+`work/_des12.py <run> 12` 并排打印 GT / 交付 / `_assigned`：GT 21 件，我方 21 件但**键错位**——
+`D4`(d) 落在 `LED1` 的框里、`p020` 落在 `R2` 上（值空）、`p014` 落在 `VIN_3` 上、`VIN_4` 整件没检出、
+六个 gnd 全成 `p005..p010/p018/p019`。`_assigned` 里 `c0004` 的位号被读成 `'4'`（值 `4.7K` 串了进去）。
+普查（新探针 `work/_desgate.py <run>`）：13 页的位号读里只有 **5 个不含字母**（case1 三个 `2/1/22`、
+case12 `4`、case13 `3`），其余 190 个都含字母 ⇒ 「位号缺字母」这个闸只可能影响 5 颗，
+**救不了 case12 的 15.71 丢分**（真因是检测漏件 + 名/键错配）。
+
+#### 5.471.5 stage1 的三个旋钮（都判否）
+
+| 臂（只跑 case12，基线 57.08） | 读数 |
+|---|---|
+| `STAGE1_WIRE_THIN_W=1.6 / 3.4 / 4.5` | 57.08 逐位不变（stage1 产物不同、交付相同） |
+| `STAGE1_WIRE_DILATE=1` | 56.68 |
+| `STAGE1_WIRE_CLOSE_THIN=1` | **54.81** |
+| `STAGE1_WIRE_BRIDGE_NEAR=14` | 57.08（不变） |
+
+⇒ 这一页的碎片化不是「墨太细/断口太宽」能解释的，属于检测层（与 case11 叠画、case13 漏 `H1` 同类）。
+
+#### 5.471.6 结论
+
+1. case12 的 10 分 line 丢分是**两个独立故障叠加**：线只跟住 6% + 网配对全错，任何一个不修都拿不到分。
+2. 色相窗（5.471.2）与终段闸（5.471.3）都已排除；`STAGE1_WIRE_HUE_TOL` 只留作诊断旋钮（默认行为不变）。
+3. 位号缺字母闸只影响 5 颗，不值得为它引入风险；case12 要涨得回到检测层（漏件 + 名/键错配）。
+
+#### 5.471.7 复现
+
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'; $env:CUDA_VISIBLE_DEVICES=''
+(Get-Process -Id $PID).ProcessorAffinity = [IntPtr]65535
+python -X utf8 work\_wiresum.py  work\_cv_run_d467            # 总量/段长
+python -X utf8 work\_segdist.py  work\_cv_run_d467 1 3 6 12 13 # 几何距离分布
+python -X utf8 work\_linewho.py  cv_run_d467 12                # 逐对网 tp/fp/fn
+python -X utf8 work\_des12.py    work\_cv_run_d467 12          # GT/Pred/assigned 三表
+python -X utf8 work\_cv.py ht25 --run --cases 12 --baseline d467 --device cpu --env STAGE1_WIRE_HUE_TOL=25
+```

@@ -443,6 +443,16 @@ def wire_colour_mask(bgr: np.ndarray, ink: np.ndarray, hue_tol: float = 42.0):
     # 必须在本图调色板（`pipeline/palette.py`）里被证实**，否则整条颜色证据作废、一个像素都不删。
     # 取证：官方 10 张 `confirm` 与旧默认 `hint` 逐字节相同（79.14），派生 val 19 上 30.96 vs 30.83。
     mode = os.environ.get("STAGE1_WIRE_COLOUR", "confirm").strip().lower()
+    # ★ `STAGE1_WIRE_HUE_TOL`（默认 42）：色相窗半宽。默认值很宽 —— 图上「导线色」与
+    #   「符号描边色」只差 40° 多一点时（open_GT case12：绿 ~55 / 暗红 ~7.5，落点的 h0=35），
+    #   ±42 会把符号色一起留下，于是 stage1 把电阻/IC 的红色轮廓当成导线（实测该页 stage1
+    #   线段 60% 落在红像素上、交付导线只有 5.8% 覆盖 GT 导线）。收窄可以把两类分开。
+    try:
+        _tol_env = os.environ.get("STAGE1_WIRE_HUE_TOL", "").strip()
+        if _tol_env:
+            hue_tol = float(_tol_env)
+    except Exception:                                  # noqa: BLE001
+        pass
     hint_want = None
     confirm = mode in ("confirm", "hint_confirm", "hint+confirm", "verify")
     if confirm:
