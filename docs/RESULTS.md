@@ -33251,3 +33251,67 @@ python -X utf8 work\_libident.py work\_cv_run_pwr13 1 2 5 6 7 11 12 13
 ```
 （`_libident.py` 的坑：stage1 元件框在 `bbox_json`/`bbox_img` 两个字段里，且
 `_assigned.comps` 里**没有 bbox**，配对必须经过 stage1 的 `id`。）
+
+## 5.464 型号名吸附把「已经读对的串」改歪：`FUSION_NAME_SNAP_TOL` 4 → 3（79.52 → **79.56**）
+
+### 5.464.1 病：`case1 U3` 的原文就是 GT 的 `Name`，却被吸附走了
+`work/_cv_run_pwr13` 的 `case1` 里把 `Name` 一路打出来（`_assigned` → `runs/stage2/1.json`
+→ `runs/fusion/1.json` → 交付 `Pred`）：
+
+| 元件 | `_assigned`（CRNN 原文） | stage2 | fusion / 交付 | GT |
+|---|---|---|---|---|
+| `U1` | `P5306-435V` | `BAT+` | **`IP5306`** | `IP5306-4.35V` |
+| `U2` | `4.7uH` | `4..4` | `4.7uH` | `SX1308` |
+| **`U3`** | **`XB7608A`** | `XB7608A` | **`XH-8A`** | **`XB7608A`** |
+| `USB1` | `5V2An` | `5V2An` | `FAN` | `5V2A in` |
+| `USB2` | `5V2A0uT` | `5V2A0uT` | `5V2A0uT` | `5V2A out` |
+
+`U3` 那一行是本轮的全部戏肉：**CRNN 读得一字不差**，是 `fusion/namefix.py`（库闭词表吸附）
+把它换成了别的库键。`namefix` 的守卫 ② 是「已经是库键就一个字符都不动」，可 `XB7608A`
+**不在** 360 键库里（`work/_libident.py` 已证库里没有 `TP4333/SX1308/XB7608A/SY6912/RT7272`）
+⇒ 守卫不生效，距离 4 的容差放它过去了。
+
+### 5.464.2 两步名字覆盖各自的净收益（关掉量一遍）
+`work/_cv.py <tag> --run --baseline pwr13`（13 张、纯 CPU）：
+
+| 臂 | 设置 | local | official | 说明 |
+|---|---|---:|---:|---|
+| `pwr13` | 默认（两步都开） | **79.52** | 78.29 | — |
+| `ms0` | `FUSION_MODEL_SET=0` | 79.43（−0.09） | 78.20 | 只有 `case1` 变：**−1.17**（`comp` 不变、pin/netH/line 掉）⇒ 库反推型号这一步是**净正** |
+| `ns0` | `FUSION_NAME_SNAP=0` | 76.89（**−2.64**） | 75.66 | `case9 −14.53`、`case2 −5.95`、`case6 −4.63`、`case4 −3.75`、`case5 −3.46`，只有 `case1 +0.21` ⇒ 吸附这一步**必须留** |
+| `msns0` | 两步都关 | 76.35（−3.18） | 75.12 | — |
+
+⇒ 不能整步关掉，只能**把容差收紧**——正好是 `case1` 那一颗需要的东西。
+
+### 5.464.3 扫容差：只有 `case1` 动，其余 12 页逐位不变
+| 臂 | `FUSION_NAME_SNAP_TOL` | local | official | 逐页 |
+|---|---|---:|---:|---|
+| `tol3` | 3 | **79.56** | 78.33 | `case1 58.42 → 58.95（+0.53）`，`comp 0.602 → 0.619`；其余 12 页 Δ0 |
+| `tol2` | 2 | 79.54 | 78.31 | `case1 → 58.62（+0.21）` |
+| `tol3m6` | 3 + `MINLEN=6` | 79.54 | 78.31 | 与 `tol2` 同读数 ⇒ 长度闸不是杠杆 |
+
+`TOL=3` 取上界：再松就没有 `case1` 的 +0.53，再紧会丢掉 +0.32（`case1` 在 3 与 2 之间还差
+一档，说明距离 3 的吸附里仍有一条在帮忙）。**默认改为 3**（`fusion/namefix.py:117`，注释里
+记了这次的来由）。
+
+### 5.464.4 顺带的两个同族判否
+`FUSION_MODEL_SET_MIN=3`、`FUSION_MODEL_SET_MARGIN=3` ⇒ 13 张 **逐位 Δ0**（这一步在这 13 张
+上的动手都已经是「名命中 ≥3 且严格占优 ≥3」），默认仍是 2/2，不必动。
+
+### 5.464.5 仍未解决的四颗（都是「选错或读歪」，不是吸附能救的）
+- `U1`：原文 `P5306-435V`（少了开头的 `I`、把 `4.35` 读成 `435`）——库里只有 `IP5306` 没有
+  `IP5306-4.35V`；
+- `U2`：原文 `4..4` 是**同一页电感的值文字**，被当成了这颗 IC 的型号 ⇒ 属于 `pwlabel` 的
+  候选选择错（§5.463.2 的 `XB7608A` 也是同一类，只是那颗已被 `TOL=3` 保住）；
+- `USB1` / `USB2`：`5V2An` / `5V2A0uT` vs GT `5V2A in` / `5V2A out` —— 空格与 `o→0` 是
+  检测/识别层的事，不是选择层。
+
+### 5.464.6 复现
+```
+set GT_ROOT=work\_new2026\open_GT-1020\open_GT
+set CUDA_VISIBLE_DEVICES=
+python -X utf8 work\_cv.py ms0  --run --baseline pwr13 --env FUSION_MODEL_SET=0
+python -X utf8 work\_cv.py ns0  --run --baseline pwr13 --env FUSION_NAME_SNAP=0
+python -X utf8 work\_cv.py tol3 --run --baseline pwr13 --env FUSION_NAME_SNAP_TOL=3
+python -X utf8 work\_cv.py d464 --run --baseline pwr13      # 新默认，应 79.56 / 78.33
+```

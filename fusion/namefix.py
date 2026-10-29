@@ -114,7 +114,11 @@ except ImportError:                              # pragma: no cover
 # `os.environ.get` 一律直写：`tools/dev/gen_knobs.py` 的正则只认它 / `envflag.*`，
 # 包一层就会让开关从 `docs/KNOBS.md` 里整条消失（同 `stage2/pinlib.py:93` 的记）。
 ON = env_on("FUSION_NAME_SNAP", "1")
-TOL = int(os.environ.get("FUSION_NAME_SNAP_TOL", "4") or "4")
+# `TOL` 由 4 收到 3（§5.464）：`open_GT-1020` 的 `case1 U3` 原文 **`XB7608A` 就是 GT 的
+# `Name`**，距离 4 的吸附把它换成了别的库键（`XH-8A`）⇒ 逐字节比必错。收到 3 之后它一个
+# 字符都不动（13 张只有这一页变：`case1 58.42 → 58.95`，其余 12 页逐位相同），而距离 ≤3 的
+# 近失串（`HSWL03W2C03`←`HS96L03W2C03`、`SY1813BADC`←`SY8113BADC`）照样修得住。
+TOL = int(os.environ.get("FUSION_NAME_SNAP_TOL", "3") or "3")
 MINLEN = int(os.environ.get("FUSION_NAME_SNAP_MINLEN", "4") or "4")
 BOX = {"box", "boxic", "ic"}
 
