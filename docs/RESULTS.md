@@ -32875,3 +32875,72 @@ python -X utf8 -c "import importlib;A=importlib.import_module('stage2.assemble')
 nets={'net_1':{'edges':{'e1':[{'x':345.4,'y':178.1},{'x':345.4,'y':252.6}],\
 'e2':[{'x':346.5,'y':273.6},{'x':346.5,'y':177.9}]}}};print(A.drop_twin_longer(nets))"
 ```
+
+
+## 5.459 case1 那两条电源轨：不是漏检，是计价权衡（判否，分数不变）
+
+### 5.459.1 症状与取证链
+用户在典型样例视频里看到 case1 有一族长导线整片没画（`loss_case1`「配上 55 / 116 段」）。
+`work/_miss13.py work\_cv_run_vote0 1` 给出最集中的一族：三条平行电源轨
+`(1443,778)→(2056,778) L=613`、`(1424,798)→(1977,798) L=553`、`(1799,818)→(1404,818) L=395`
+及其竖臂 `x=1404/1424/1443`，`ink=1.00`（原图确实有墨），最近的我方边距 96~261px。
+
+逐级排查（全部只读，`--device cpu`）：
+
+1. **stage1 检出了**：`runs/stage1/1.stage1.json` 的 `wire_detail['segments']` 272 条，
+   `seg88/89/52` @ 图像 y≈777.2、`seg32/31/26` @ y≈797.5、`seg53/54/37` @ y≈816.8，
+   跨度 1335→2056，都挂在某张网的 `seg_index` 里。
+   ⚠️ `wire_detail['segments']` 是 **y 向下（图像坐标）**，而 GT/Pred/`STAGE2_TRACE_DUMP` 是
+   **y 向上**（`y_img = H - y_json`，case1 H=1149）—— 第一版探针把两者混用，得出过「stage1 没有」的错误结论。
+2. **stage2 也画了**：`runs/stage2/1.json` = **42 网 / 167 边**，三条轨都在。
+3. **fusion 之后没了**：`runs/fusion/1.json` 与交付 `1_Pred.json` = **30 网 / 130 边**。
+4. `FUSION_DBG_NET` 显示 `_assemble` 只跑一次、`base nets=30 edges=130`；
+   同一进程里用**磁盘原样输入**重装配得 **42 网 / 153 边** ⇒ 掉点在 `assigned` 内容，不在 stage1。
+5. 逐字段注入（`build_doc(stage1, assigned, case)` 三次结果完全一致，可确定复现）：
+   只把 `designator` 换成融合层手里那份 ⇒ 42 网 → 29 网、两条轨整片消失；
+   只换 `pins`/`value`/`partname` ⇒ 不变。
+6. 差异只有两处：32 件多 `_by`、9 件多 `canon` —— 磁盘上这些件的 `designator` 是 `null`，
+   融合层补成 `{"canon": "U1", "_by": "solve:ocr:designator"}` 这种**只有 canon 的空壳**。
+
+### 5.459.2 机制（`stage2/assemble.py`）
+`_UNK_GATE` 数的是「`designator` **完全没有**」的件（`:2583`），空壳一多 `_n_np` 跌破
+`STAGE2_UNKEYED_GATE_N`（默认 2）⇒ `_release_unkeyed=False` ⇒ ① `pNNN` 件一个脚都不发（`:2813`）、
+② 网里的 `pNNN` 顶点被剪（`:3245`）⇒ **成员全是电源符号的整张网被删，连同 edges**。
+两条轨的成员正是电源符号，于是整片消失。
+
+### 5.459.3 三条臂的读数（case1，13 张里 line 最差的一页之一）
+| 臂 | 改法 | score | comp | pin | netH | line | 网/边 |
+|---|---|---:|---:|---:|---:|---:|---|
+| `o13d458` 定案 | — | **58.33** | 0.602 | 0.514 | 0.659 | **0.439** | 30 / 130 |
+| `unkey1` | 空壳位号**不打键**（当没读到） | 48.95 | 0.602 | **0.310** | 0.565 | 0.337 | 42 / 153 |
+| `shell1` | 空壳**不算「读到位号」**（只改 `_n_np` 计数） | 56.68 | 0.602 | 0.514 | 0.633 | 0.362 | 42 / 153 |
+| `shell2` | `shell1` + `STAGE2_PIN_DROP_UNKEYED=1` + `FUSION_REF_PRUNE_DESIG=0` | 58.33 | 0.602 | 0.514 | 0.659 | 0.439 | 42 / 153 |
+
+三条结论：
+
+* **空壳位号对打键是有用的**（`unkey1` 掉 9.4：pin 0.514→0.310）—— 那些空壳恰好把真 IC 的键贴对了，
+  不能「当没读到」。
+* **把两条轨救回来是负收益**（`shell1` −1.65）：`pNNN` 件的合成脚号一放开，netH 0.659→0.633、
+  line 0.439→0.362 —— GT 那两条轨的成员是 `∅NNN`（坐标配对），我们的 `pNNN` 脚号对不上，
+  多出来的成员在 fp/fn 上比「整张网不发」更贵。
+* `shell2` 与定案**逐位相同**（58.33 / 0.602 / 0.514 / 0.659 / 0.439）⇒ 定案的行为恰好等价于
+  「闸放开 + 不合成脚号 + 不剪悬空引用」，也就是说 **现在的取舍已经是对的**。
+
+### 5.459.4 结论
+case1 那两条电源轨不是漏检，是 `_UNK_GATE` 的计价权衡：救回来要付 −1.65（单页）。
+本轮改动 `STAGE2_SHELL_UNKEYED` 已 `git checkout` 回退（不留代码），13 张复测
+**79.48 / 78.25、逐页 Δ+0.00、VERDICT PASS**（`work/_d459`）。
+
+真要同时拿回「轨」和「分」，得让电源符号**有一个能与 GT 配上的键**（`∅NNN` 走坐标配对，
+但脚号必须也对），这属于检测/绑定层的新机制，不是闸门参数能解决的。
+
+### 5.459.5 复现
+```bat
+set GT_ROOT=work\_new2026\open_GT-1020\open_GT
+set CUDA_VISIBLE_DEVICES=
+python -X utf8 work\_miss13.py work\_cv_run_vote0 1
+python -X utf8 work\_cv.py shell1 --run --cases 1 --device cpu            :: 闸放开（−1.65）
+python -X utf8 work\_cv.py shell2 --run --cases 1 --device cpu --env STAGE2_PIN_DROP_UNKEYED=1 --env FUSION_REF_PRUNE_DESIG=0
+python -X utf8 work\_cv.py d459 --run --baseline o13d458 --device cpu    :: 定案复测，应逐页 Δ+0.00
+```
+（`shell1` 需要当时的 `STAGE2_SHELL_UNKEYED` 改动，现已回退；读数留在 `work/_cv/` 记录里。）

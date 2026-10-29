@@ -238,10 +238,15 @@ def _assemble(s1_doc: dict, assigned: dict, case: str, vlm_doc: Optional[dict],
     if os.environ.get("FUSION_DBG_NET"):
         try:
             _sn = s1_doc.get("nets") or {}
-            _nref = sum(len((n or {}).get("seg_index") or []) for n in _sn.values())
-            _msg = "input s1nets=%d segrefs=%d assigned_keys=%s" % (
-                len(_sn), _nref,
-                sorted(list(assigned))[:6] if isinstance(assigned, dict) else type(assigned).__name__)
+            _items = _sn.values() if isinstance(_sn, dict) else list(_sn)
+            _nref = sum(len((n or {}).get("seg_index") or []) for n in _items)
+            _wd = (s1_doc.get("wire_detail") or {})
+            _seg = _wd.get("segments") if isinstance(_wd, dict) else None
+            _ac = (assigned or {}).get("comps") if isinstance(assigned, dict) else None
+            _msg = "input s1nets=%d segrefs=%d wire_segs=%s assigned_comps=%s" % (
+                len(_items), _nref,
+                len(_seg) if isinstance(_seg, (list, dict)) else _seg,
+                len(_ac) if isinstance(_ac, (list, dict)) else _ac)
         except Exception as _e:                        # 只诊断，不许改动管线行为
             _msg = "input dump failed: %r" % (_e,)
         try:
@@ -250,6 +255,38 @@ def _assemble(s1_doc: dict, assigned: dict, case: str, vlm_doc: Optional[dict],
         except Exception:
             pass
     base = build_doc(s1_doc, assigned, case)
+    if os.environ.get("FUSION_DBG_DUMP"):
+        # ★ 只诊断：把 `_assemble` 手里的输入原样落盘，和磁盘上那份对比，
+        #   用来判断「哪一步在装配前改了 s1_doc / assigned」（§5.459）。
+        try:
+            import json as _js
+            from pathlib import Path as _P
+            _d = _P(os.environ["FUSION_DBG_DUMP"])
+            _d.mkdir(parents=True, exist_ok=True)
+            (_d / ("%s.mem.s1.json" % case)).write_text(
+                _js.dumps(s1_doc, ensure_ascii=False), encoding="utf-8")
+            (_d / ("%s.mem.as.json" % case)).write_text(
+                _js.dumps(assigned, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+    if os.environ.get("FUSION_DBG_NET"):
+        try:
+            import json as _js
+            from pathlib import Path as _P
+            _rd = _P(os.environ["FUSION_RUN_DIR"])
+            _f1 = _rd / "stage1" / ("%s.stage1.json" % case)
+            _f2 = _rd / "stage2" / "_assigned" / ("%s.json" % case)
+            _b2 = build_doc(_js.loads(_f1.read_text(encoding="utf-8")),
+                            _js.loads(_f2.read_text(encoding="utf-8")), case)
+            _n2 = _b2.get("nets") or {}
+            _it2 = _n2.values() if isinstance(_n2, dict) else list(_n2)
+            with open(os.environ["FUSION_DBG_NET"], "a", encoding="utf-8") as _fh:
+                _fh.write("[dbg net] %s rebuild-from-disk nets=%d edges=%d\n"
+                          % (case, len(_it2),
+                             sum(len((x or {}).get("edges") or {}) for x in _it2)))
+        except Exception as _e:
+            with open(os.environ["FUSION_DBG_NET"], "a", encoding="utf-8") as _fh:
+                _fh.write("[dbg net] %s rebuild-from-disk failed: %r\n" % (case, _e))
     if os.environ.get("FUSION_DBG_NET"):
         _nm = base.get("nets") or {}
         with open(os.environ["FUSION_DBG_NET"], "a", encoding="utf-8") as _fh:
