@@ -32944,3 +32944,62 @@ python -X utf8 work\_cv.py shell2 --run --cases 1 --device cpu --env STAGE2_PIN_
 python -X utf8 work\_cv.py d459 --run --baseline o13d458 --device cpu    :: 定案复测，应逐页 Δ+0.00
 ```
 （`shell1` 需要当时的 `STAGE2_SHELL_UNKEYED` 改动，现已回退；读数留在 `work/_cv/` 记录里。）
+
+# §5.460 电源/地符号的「单脚约定」：给无键符号补出 GT 约定的那一个脚（79.48 → 79.52）
+
+## 5.460.1 起因与 GT 普查
+§5.459 定案：case1 那两条电源轨（`(1443,778)→(2056,778) L=613` 一族）救回来是负收益，
+因为「`∅NNN` 成员按坐标配对、我们的 `pNNN` 脚号对不上」，多出的 fp/fn 比整网不发更贵。
+那条结论的前提是「`pNNN` 件没有可用的脚」——本轮先把这个前提查清。
+
+新探针 `work/_pwrpins.py`（纯读 GT，`$env:PYTHONPATH=<repo>\eda-pcb`）：
+
+* GT 13 张里「无名电源/地符号」= **143 颗 / 143 个脚** —— **颗颗只有一个脚**；
+* 脚键一律 `pin_1`；`pinname` 分布 **`Pin1` 121 / `1` 13**；
+* 脚点**落在框边上**，朝向导线那一侧：`gnd` 中位 `rel=(0.5, 0.97)` 或 `(0.03, 0.5)`、
+  `v` 中位 `(0.5, 0.05)`、`net_input` 中位 `(0.02, 0.5)`（`rel` = 相对 bbox 的归一化位置）；
+* bbox 中位尺寸：`gnd` 41×20、`v` 22×12、`net_input` 42×25。
+
+即：GT 对这类符号有一套**固定约定**（一个脚、贴边、朝线）。我们这边它们全是 `pNNN` 兜底键，
+`_release_unkeyed=False` 时一个脚都不发 —— 于是「网保住成员」这条根本无从谈起。
+
+## 5.460.2 机制
+`eda-pcb/stage2/assemble.py`：
+
+* 新增常量 `PWR_ONE_PIN = env_on("STAGE2_POWER_ONE_PIN", "1")`、`PWR_ONE_PIN_NAME`
+  （默认 `"1"`；`pinname` 对非 IC 件不参与 pin 轴打分，选哪个都只影响观感）；
+* 新增两个模块级助手（放在 `build_doc` 之前）：
+  * `_wire_pts_yup(stage1, H)` —— 把 `wire_detail['segments']`（**图像坐标 y 向下**）转成
+    官方坐标（`y_img = H - y_json`）。⚠️ 两个坐标系混用会把符号翻到页面另一头，这坑 §5.459 踩过；
+  * `_edge_toward(bb, pts, ring=30.0)` —— 在 bbox 四条边上取「离最近导线端点最近」的点；
+    端点落在框内时投影到最近的一条边（GT 的脚点都在边上，不在框内）。
+* `build_doc` 的元件循环里，在「无键件不发脚」那道闸**之前**插入分支：无键且 `ctype in POWER_TYPES`
+  ⇒ 合成 `{"pin_1": {"pinname": "1", "point": <_edge_toward>}}`，同时登记
+  `num_of[(cid, 0)] = "1"` / `pin_pk[(cid, 0)] = "pin_1"`（网顶点是用 `num_of` 拼的，必须一起写），
+  然后 `continue`。
+
+## 5.460.3 读数（13 张 open_GT，`--device cpu`，同刻只跑一条管线）
+| 臂 | local | official | 逐页 |
+|---|---:|---:|---|
+| `o13d458` 定案 | 79.48 | 78.25 | — |
+| **`pwr13`（本改动）** | **79.52** | **78.29** | case1 **+0.08**（line 0.439→0.447）、case12 **+0.45**（netH 0.622→0.634）、其余 11 张 **Δ+0.00** |
+- 轴：comp 0.853 / pin 0.738 / netH 0.852→**0.853** / line 0.561→**0.562**；
+  轴损 20.52 → **20.48**；契约 13/13 clean、VERDICT **PASS**。
+
+## 5.460.4 它做到了什么、没做到什么
+- 做到了：无键电源符号现在有脚、有网成员，两页的 netH/line 各涨一点，且**没有 fp 代价**
+  （comp/pin 两轴逐位不动 —— 因为电源符号不是 box 件，本来就不进 pin 轴）。
+- 没做到：case1 的两条轨**仍然没进交付**。`STAGE2_TRACE_DUMP` 逐阶段计数（`work/_tracewho.py`）显示
+  第三次 `build_doc` 的输入里 `y=351` 就已经 0 条、而 `y=371` 一路 3 条到最后；也就是说掉点仍在
+  `build_doc` **之后**的融合后处理（`dedup` / `FUSION_REF_PRUNE_DESIG` 那条链），不在装配本身。
+  下一步该验的就是这条链（`FUSION_REF_PRUNE_DESIG=0` 与 `dedup` 的 `_drop_verts`）。
+
+## 5.460.5 复现
+```bat
+set GT_ROOT=work\_new2026\open_GT-1020\open_GT
+set CUDA_VISIBLE_DEVICES=
+python -X utf8 work\_pwrpins.py                 :: GT 普查
+python -X utf8 work\_cv.py pwr13 --run --baseline o13d458 --device cpu
+python -X utf8 work\_cv.py tr2 --run --cases 1 --device cpu --env "STAGE2_TRACE_DUMP=work/_tr2"
+python -X utf8 work\_tracewho.py work\_tr2 1 --at=351,371 --axis=y
+```
