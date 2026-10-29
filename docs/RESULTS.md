@@ -33475,3 +33475,77 @@ python -X utf8 work\_cv.py pr3 --run --baseline d464 --env STAGE2_PINNAME_RETRY=
 python -X utf8 work\_pnretrydiff.py 8 work\_cv_run_c8base work\_cv_run_pr3
 python -X utf8 work\_pinf1dbg.py 8 work\_cv_run_c8base work\_cv_run_pr3
 ```
+
+## 5.467 把「脚名补读」挪到装配之后（`STAGE2_PINNAME_REREAD`，默认开）：79.56 → **79.76**
+
+### 5.467.1 病：读数一变，绑定就重排
+
+§5.466 把补读塞在 `TextEngine.read()` 里，读数一变 `stage2/assign.py` 给裁片分的角色就跟着变
+（case8 `slot1` 的号 `11`→`15`、`slot5` 的 `1`→`11`），`pin_f1` 的键
+`(元件, pin_key_to_number(pk))` 整片位移 —— 名字更对了反而掉 2.46 分。
+同一个坑在 §5.454 的 `rowbind` 上也出现过（“位号读错一个 ⇒ 整排转一格”）。
+
+### 5.467.2 做法：拿「已经定好角色的裁片」事后重读
+
+新模块 `eda-pcb/stage2/pinnamereread.py`，在 `stage2/run.py` 里 `assign()`（以及
+`pinname.rescue` / `pinrot.fix`）**之后**、`pwlabel.fill` 之前调用：
+
+- 只从 `a["comps"][cid]["pins"][slot]["name"]["box"]` 这些**已定角色**的裁片里取候选，
+  只写回 `name["text"]`；**不碰 `number`、不碰 `name["conf"]`、不增删槽**。
+- 触发判据（关键，见 5.467.4）：`_nglyph(bgr, box)` 用与 `_length_fix` 同一条统计量
+  （列投影连通段数，`_text._glyph_runs`）数「图上有几个字」，只有当
+  **字形数 > 串长**（吞字形态）、**串长 ≥ `STAGE2_PINNAME_REREAD_MINLEN`（默认 2）**、
+  **差 ≤ `STAGE2_PINNAME_REREAD_MAXGAP`（默认 1）** 时才送重读。
+- 接受条件：重读结果字数**正好等于字形数**（`len(t) == n`），否则不写。
+- 权重：`weights/textrec_h64.pt`（64px、宽降采样 8；由 `textrec/runs/ft64full/best.pt`
+  复制进仓，31 MB，与 `textrec_best.pt` 同源重训）—— 可用 `STAGE2_PINNAME_REREAD_CKPT` 覆盖。
+
+### 5.467.3 读数（13 张 open_GT，CPU 离线，基线 `work/_d464` = 79.56 / 78.33）
+
+| 臂 | 变化 | local | official | 逐页 |
+|---|---|---:|---:|---|
+| `rr1` | 事后重读，触发=「空/≤3 字/纯数字」 | 79.40（−0.17） | 78.17 | `13 +2.50` / `7 −3.33`、`1 −0.68`、`8 −0.65` |
+| `rr2` | `rr1` 去掉写 `conf` | 79.40（与 `rr1` 逐位相同） | 78.17 | 说明掉分不是 conf 过闸引起 |
+| `rr3` | 触发改成「字形数 > 串长」 | 79.46（−0.11） | 78.23 | `13 +2.50` / **`5 −3.91`**（`P`→`PP` 单字名乱补） |
+| **`rr4`** | 再要求「串长 ≥ 2 且差 ≤ 1」 | **79.76（+0.20）** | **78.53（+0.19）** | **只有 `13 +2.50`**（`pin 0.700→0.800`），其余 12 页逐位不变 |
+| `rr5` | `MAXGAP=2` | 79.76（逐位同 `rr4`） | 78.53 | 宽一档也不再新增命中 |
+| **`d467`** | 默认开（`STAGE2_PINNAME_REREAD=1` + `weights/textrec_h64.pt`） | **79.76** | **78.53** | 与 `rr4` 逐位相同，VERDICT PASS、契约 13/13 clean |
+
+轴：comp 0.855 / pin **0.746**（原 0.738）/ netH 0.853 / line 0.562。
+
+### 5.467.4 三次失败的教训（同一条）
+
+| 触发条件 | 命中的坏格子 |
+|---|---|
+| 「短名 / 空 / 纯数字」 | `BST`→`BSTI`（case7，`BST` 本来就对）、`'5'`→`'A'`、`'c'`→`'8'`、`SHE`→`SHELL` |
+| 改成「字形数 > 串长」 | `P`→`PP`（case5，单字名，字形统计把两个字母分开数成 2） |
+| 再加「串长 ≥ 2、差 ≤ 1」 | 只剩 `RLM`→`RLIM`（case13，正是 `_pinnameoracle` 点名的那格） |
+
+⇒ **「名字短」不是病因，「图上有几个字」才是**；而且**单字名不能碰**（字形段数在 2~3px 抗锯齿上不稳）。
+这条判据和 `_length_fix` 用的是同一个信号，只是用在「事后重读」而不是「解码约束」上。
+
+### 5.467.5 还没吃到的
+
+`work/_pinnameoracle.py` 的上界是 +1.01，现在只吃到 +0.20（1 格）。剩下 4 格没被触发：
+`case12 U1 pin_1` `TM`→`TIM`（该裁片字形数被数成 3，差 ≥ 2 或统计失败）、
+`case13 U1 pin_7` 已修、`case7 U1 pin_2` `2B`→`IN`（改字不是插字）、
+以及两格名与 GT 完全不同（不是吞字）。⇒ 下一步要的是「改字型」证据（形近字表 / 字宽剖面），
+不是再加分辨率。
+
+### 5.467.6 坑
+
+- `name["conf"]` 不能写：`assemble.py` 有按 conf 过闸的规则（`NEED_NAME`）。虽然 `rr2` 证明这次
+  不是它，但写 conf 属于「把绑定拖下水」，一律不写。
+- 单字名（`P`/`5`/`c`/`1`）在列投影上会被数成 2~3 段 ⇒ 必须 `MINLEN=2` 挡掉。
+- 新权重随仓库提交（`weights/textrec_h64.pt`），默认路径用 `Path(__file__).parents[1]` 拼，
+  不要写死 `Y:\workspace\...`（进容器会炸，`text.py:30` 的老教训）。
+
+### 5.467.7 复现
+
+```
+set CUDA_VISIBLE_DEVICES=
+set GT_ROOT=work\_new2026\open_GT-1020\open_GT
+python -X utf8 work\_cv.py d467 --run --baseline d464
+python -X utf8 work\_cv.py rr3 --run --baseline d464 --env STAGE2_PINNAME_REREAD_MAXGAP=9 --env STAGE2_PINNAME_REREAD_MINLEN=1
+python -X utf8 work\_pnretrydiff.py 13 work\_cv_run_v466 work\_cv_run_d467
+```

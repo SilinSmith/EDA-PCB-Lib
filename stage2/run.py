@@ -780,6 +780,15 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         _pr = _pinrot.fix(bgr, doc, a, engine)
     except Exception as _e:                      # noqa: BLE001
         _pr = {"on": True, "error": "%s: %s" % (type(_e).__name__, _e)}
+    # ★ 脚名「事后」重读（`stage2/pinnamereread.py`，`STAGE2_PINNAME_REREAD` 默认关；§5.467）：
+    #   §5.466 把补读塞在 `TextEngine.read()` 里，读数一变 `assign` 的角色就重排
+    #   （case8 `slot1` 的号 11→15），名字更对了反而掉 2.46。这里等 `assign` 把角色与号
+    #   都定死之后再重读，只覆盖 `name.text`，**不碰 number、不增删槽**。
+    try:
+        from . import pinnamereread as _pnnr
+        _nrr = _pnnr.fix(bgr, doc, a, engine)
+    except Exception as _e:                      # noqa: BLE001
+        _nrr = {"on": True, "error": "%s: %s" % (type(_e).__name__, _e)}
     # ★ 竖排网名补读（`stage2/pwlabel.py`，`STAGE2_POWER_LABEL_ROT` 默认**开**）：
     #   电源符号的网名（`+5V`/`VCC`/`3.3V`）在这一版图里是**旋转 90° 竖排**印的，
     #   横排 CRNN 只读得出 `'R'` 这类碎片（open_GT case2 实测 0.47 → 转帧 0.95）。
