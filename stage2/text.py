@@ -154,6 +154,16 @@ TEXT_INK_DARK = float(os.environ.get("STAGE2_TEXT_INK_DARK", "160"))
 # （说明不是凭空塞进来的）且簇内分差 ≥ `MARGIN` 时才改写该框的读数。
 # 这条「自己在候选里」的守卫是为了不把 `0/O`、`1/l` 这类真同形字互相污染。
 GLYPH_VOTE = int(os.environ.get("STAGE2_GLYPH_VOTE", "0") or 0)
+# ★★ 「读歪的脚名」用高分辨率权重补读一次（`STAGE2_PINNAME_RETRY`，默认 **0**；§5.466）。
+#   病：32px 权重在细竖笔上丢字 —— `open_GT` case12 `U1 pin_1` GT `TIM` 读成 `16`/`TM`、
+#   case13 `U1 pin_7` GT `RLIM` 读成 `RLM`、case7 `U1 pin_2` GT `IN` 读成 `2B`。
+#   这几格单颗就值 2.5~3.3 分（`work/_pinnameoracle.py`），但**全局**换 64px 是 −0.26
+#   （§5.454 `nm64`：`case13 +2.50`/`case7 +3.33` 抵不过 `case1 −2.31`/`case5 −3.91`）。
+#   ⇒ 只把「弱读数」那几格拿去用 `STAGE2_PINNAME_RETRY_CKPT` 重读一次，其余一个字不动。
+PINNAME_RETRY = int(os.environ.get("STAGE2_PINNAME_RETRY", "0") or 0)
+PINNAME_RETRY_LEN = int(os.environ.get("STAGE2_PINNAME_RETRY_LEN", "3") or 3)
+PINNAME_RETRY_CONF = float(os.environ.get("STAGE2_PINNAME_RETRY_CONF", "0.60") or 0.60)
+_PN_RETRY: List[Tuple[str, str, float, float]] = []
 ENS_MARGIN = float(os.environ.get("STAGE2_ENS_MARGIN", "0.05") or 0.0)
 ENS_MODE = (os.environ.get("STAGE2_ENS_MODE") or "conf").strip().lower()
 ENS_ROLES = tuple(r.strip() for r in
@@ -754,6 +764,8 @@ class TextEngine:
         self._tried2 = False
         self._rec3 = None
         self._tried3 = False
+        self._recr = None
+        self._triedr = False
         self.note = ""
 
     # ------------------------------------------------------------------
@@ -815,6 +827,77 @@ class TextEngine:
         except Exception:                                        # noqa: BLE001
             self._rec3 = None
         return self._rec3
+
+    def recognizer_retry(self):
+        """`STAGE2_PINNAME_RETRY_CKPT` 的「补读」权重（默认空 = 不补读）·§5.466。
+
+        为什么要是**独立的第三份权重**：`STAGE2_CKPT_ROLES` 是「整类角色换权重」（§5.454 实测
+        全局换 64px 是 −0.26），而这里要的是「**只把读歪的那几格**拿去重读一次」——
+        32px 权重在细竖笔上会丢字（`TIM`→`TM`、`RLIM`→`RLM`），64px 能读对，但全局换过来
+        会连带把读得好的格子弄坏（`case1 −2.31`/`case5 −3.91`/`case12 −2.45`）。
+        """
+        if self._triedr:
+            return self._recr
+        self._triedr = True
+        p = (os.environ.get("STAGE2_PINNAME_RETRY_CKPT") or "").strip()
+        if not p or not Path(p).is_file():
+            return None
+        try:
+            from textrec.infer import Recognizer
+            self._recr = Recognizer.load(Path(p), device=self.device)
+        except Exception:                                        # noqa: BLE001
+            self._recr = None
+        return self._recr
+
+    @staticmethod
+    def _pn_bad(txt: str) -> bool:
+        """结构性「读歪」（不含置信度）：空 / 太短 / 纯数字。"""
+        t = (txt or "").strip()
+        if not t:
+            return True
+        if len(t) <= PINNAME_RETRY_LEN:
+            return True
+        return t.isdigit()
+
+    @classmethod
+    def _pn_weak(cls, txt: str, conf: float) -> bool:
+        """「这格脚名读歪了」的判据（§5.466）：结构性坏，或置信度低。"""
+        return cls._pn_bad(txt) or float(conf) < PINNAME_RETRY_CONF
+
+    def _pinname_retry(self, gray, items, keys, reads) -> None:
+        """只把弱读数的 `pin_name` 格子用高分辨率权重补读一次（就地改写 `reads`）。"""
+        rrec = self.recognizer_retry()
+        if rrec is None:
+            return
+        sel = []
+        for k, (i, r) in enumerate(keys):
+            if r != "pin_name":
+                continue
+            cur = reads[i].get(r)
+            if cur is None or not self._pn_weak(cur[0], cur[1]):
+                continue
+            sel.append(k)
+        if not sel:
+            return
+        for s in range(0, len(sel), self.chunk):
+            ks = sel[s:s + self.chunk]
+            got = rrec.read_many(gray, [items[k] for k in ks])
+            for k, (txt, conf) in zip(ks, got):
+                i, r = keys[k]
+                cur = reads[i].get(r) or ("", 0.0)
+                t = (txt or "").strip()
+                if not t:
+                    continue
+                # 只有「确实更好」才换（§5.466 第一版就栽在这）：要么原来结构性地坏、新的不坏，
+                # 要么置信度明显更高。否则 64px 会把 32px 读得短但正确的格子换坏
+                # （实测 case5 pin 0.606→0.529、case8 0.800→0.710）。
+                _better = ((self._pn_bad(cur[0]) and not self._pn_bad(t))
+                           or float(conf) > float(cur[1]) + 0.10)
+                if not _better:
+                    continue
+                if t != cur[0]:
+                    _PN_RETRY.append((cur[0], t, float(cur[1]), float(conf)))
+                reads[i][r] = (t, float(conf))
 
     # ------------------------------------------------------------------
     def read(self, bgr: np.ndarray, boxes: Sequence[Box],
@@ -903,6 +986,10 @@ class TextEngine:
             self._length_fix(gray, boxes, roles, rec, reads)
         if VALUE_MU or VALUE_NU:
             self._fix_units(bgr, boxes, roles, reads)
+        # 放在**最后**：补读只允许改脚名，不能让后续 `_length_fix`/`_fix_units` 看到不同的
+        # `gray`/状态而把**脚号**也换了（§5.466 第一版就在 case8 把 slot1 的号 11 变 15）。
+        if PINNAME_RETRY > 0:
+            self._pinname_retry(gray, items, keys, reads)
         return [{"bbox": boxes[i], "reads": reads[i],
                  **({"cfrac": colored_frac(bgr, boxes[i])} if TEXT_INK else {})}
                 for i in range(len(boxes))]

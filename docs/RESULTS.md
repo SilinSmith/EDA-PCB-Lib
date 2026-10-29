@@ -33383,3 +33383,95 @@ python -X utf8 work\_cv.py nmr1 --run --baseline d464
 python -X utf8 work\_pinnamesnap.py d464 1 2 3 4 5 6 7 8 9 10 11 12 13 --tol=1
 python -X utf8 work\_cv.py tie1 --run --baseline d464 --env FUSION_MODEL_SET_TIE=1
 ```
+
+## 5.466 选择性 64px 脚名补读（`STAGE2_PINNAME_RETRY`）：均值 +0.04，但 case8 −2.46，默认关
+
+### 5.466.1 病
+
+`work/_pinnameoracle.py` 把交付 Pred 里对得上的脚名换成 GT 的，13 张能从 **79.56 → 80.54（+1.01）**，
+只改写 15 个脚（名错一个 = fp + fn 双罚）。其中最扎眼的三格都是**32px 权重丢细竖笔**：
+
+| case | 元件·脚 | GT | 我们 |
+|---|---|---|---|
+| 12 | `U1 pin_1` | `TIM` | `16` / `TM` |
+| 13 | `U1 pin_7` | `RLIM` | `RLM` |
+| 7 | `U1 pin_2` | `IN` | `2B` |
+
+但**整类**角色换 64px 是 −0.26（§5.454 `nm64`：`case13 +2.50`/`case7 +3.33` 抵不过
+`case1 −2.31`/`case5 −3.91`）。⇒ 目标变成「只把读歪的那几格拿去重读一次」。
+
+### 5.466.2 做法（`eda-pcb/stage2/text.py`，默认关）
+
+- 常量：`PINNAME_RETRY = int(os.environ.get("STAGE2_PINNAME_RETRY","0") or 0)`、
+  `PINNAME_RETRY_LEN`（默认 3，多短算「结构性坏」）、`PINNAME_RETRY_CONF`（默认 0.60，多低算「弱」）、
+  `_PN_RETRY` 记录改写。
+- `TextEngine.recognizer_retry()`：读 `STAGE2_PINNAME_RETRY_CKPT`，**第三份权重**独立加载
+  （不复用 `STAGE2_CKPT_ROLES`，那份是「按角色替换整类」）。
+- `_pn_bad(txt)`：空 / 长度 ≤ `RETRY_LEN` / 纯数字（**不含置信度**）；`_pn_weak(txt, conf)`：`_pn_bad` 或 conf 低于阈值。
+- `_pinname_retry(gray, items, keys, reads)`：挑 `r == "pin_name"` 且 `_pn_weak` 的格子，用重读结果，
+  接受条件 `_better = (原来结构性坏 且 新的不坏) or (新 conf > 原 conf + 0.10)`。
+- 调用点在 `read()` 的**最末尾**（`_length_fix`/`_fix_units` 之后）。
+
+### 5.466.3 读数（13 张 open_GT，CPU，基线 `work/_d464` = 79.56 / 78.33）
+
+| 臂 | 设置 | local | official | 逐页 |
+|---|---|---:|---:|---|
+| `chk466` | 不设 env（`--cases 3`） | 97.92 | — | 与基线逐位相同 ⇒ 默认路径零影响 |
+| `pr1` | RETRY=1 + 64px 权重，`CONF=0.60`（旧接受判据） | 79.52（−0.05） | 78.20 | `12 +2.98`、`13 +1.51`、`1 +1.27` / `5 −3.91`、`8 −2.46` |
+| `pr2` | 同上 + `CONF=0`（旧接受判据） | 79.34（−0.22） | 78.03 | 更差 |
+| **`pr3`** | 分层接受判据 + `CONF=0.60` | **79.60（+0.04）** | 78.29 | `13 +1.51`、`12 +0.71`、`1 +0.68` / **`8 −2.46`** |
+| `pr4` | 分层接受判据 + `CONF=0` | 79.60（逐位同 pr3） | 78.29 | 触发阈值已不影响结果 |
+| `pr5` | 同 `pr3`，`--cases 8`，钩子移到 `read()` 末尾 | 82.99 | — | 与 `pr3` 的 case8 完全相同 ⇒ 钩子位置不是病因 |
+
+`pr3` 轴：comp 0.855 / pin 0.738 / netH 0.854 / line 0.560；`case8` 轴：pin 0.800→**0.710**、line 0.606→0.586。
+
+### 5.466.4 为什么会掉：改的是「名字」，赔的是「绑定」
+
+`work/_pinf1dbg.py 8` 直接算 `pin_f1` 明细：
+
+- A（基线）：`f1=0.8000 tp=12 fp=2 fn=4`，`{pin.missing 3, pin.position_mismatch 1, pin.extra 1}`
+- B（`pr3`）：`f1=0.7097 tp=11 fp=4 fn=5`，`{pin.missing 2, pin.position_mismatch 3, pin.extra 1}`
+
+`work/_pnretrydiff.py 8` 显示被改的三格**名字更对了**（GT 就是 `pin_7 VDDIO`、`pin_11 MOSI`）：
+
+```
+c0000 18  name 'VDIG' -> 'VDDIO'   num '7'  -> '7'
+c0000 8   name 'CPC'  -> '/NC'     num '18' -> '18'
+c0000 9   name 'MOS'  -> 'MOSI'    num ''   -> ''
+```
+
+但同时 **槽位上的号也换了**（`slot1` num `11`→`15`、`slot5` num `1`→`11`）——`stage2/assign.py`
+本来就是「按读数给裁片分配角色」，脚名一变，哪些裁片算名字 / 哪些算号就会重排，号一变，
+`pin_f1` 的键 `(元件, pin_key_to_number(pk))` 整片位移，`position_mismatch` 从 1 涨到 3。
+
+> 顺带记一条口径事实（这次才看清）：`open_GT` 的**引脚不在 `components` 里**，而是 json 顶层的
+> `pins` 段（`{"components":…, "pins":…, "nets":…}`，`pins["U1"]["pin_7"] = {"pinname":"VDDIO",…}`）。
+> 所以「GT 这页没有脚」这种结论一律要先看 `data["pins"]`。
+
+### 5.466.5 结论
+
+- 默认 **0**（不改交付）。+0.04 的均值收益抵不上「绑定随读数漂移」这个系统性风险，
+  且它会在看不见的页上放大（case8 就是先例）。
+- 要吃这 +0.04，需要的不是更好的识别器，而是**「改读数不改绑定」**：让补读结果写进一个
+  附加字段、只在打分/输出时按需取用，不参与 `assign.py` 的角色分配。那是 §5.454 之后
+  同一个坑的第三次出现（`rowbind` 也是「读数一变就整排转一格」）。
+
+### 5.466.6 坑
+
+- 第一版接受判据与触发判据共用同一个 `RETRY_CONF` ⇒ `CONF=0` 时「新读永远不算弱」，
+  64px 无脑覆盖 32px（`pr2`）。必须把「结构性坏」与「置信度低」拆成两个函数。
+- 钩子放在 `GLYPH_VOTE` 之前/之后对 case8 没有影响（`pr3` == `pr5`），但放在最末尾更安全：
+  后面的 `_length_fix`/`_fix_units` 不该看到被改写过的 `reads`。
+- PowerShell here-string 里的 `python -c @'… r"…" …'@` 会把 `r"` 的引号吞掉
+  （`SyntaxError: unexpected character after line continuation character`）⇒ 一律先 `write` 落盘脚本再跑。
+
+### 5.466.7 复现
+
+```
+set CUDA_VISIBLE_DEVICES=
+set GT_ROOT=work\_new2026\open_GT-1020\open_GT
+python -X utf8 work\_cv.py pr3 --run --baseline d464 --env STAGE2_PINNAME_RETRY=1 ^
+    --env STAGE2_PINNAME_RETRY_CKPT=eda-pcb/textrec/runs/ft64full/best.pt
+python -X utf8 work\_pnretrydiff.py 8 work\_cv_run_c8base work\_cv_run_pr3
+python -X utf8 work\_pinf1dbg.py 8 work\_cv_run_c8base work\_cv_run_pr3
+```
