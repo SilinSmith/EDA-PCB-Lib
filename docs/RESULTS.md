@@ -33540,6 +33540,37 @@ python -X utf8 work\_pinf1dbg.py 8 work\_cv_run_c8base work\_cv_run_pr3
 - 新权重随仓库提交（`weights/textrec_h64.pt`），默认路径用 `Path(__file__).parents[1]` 拼，
   不要写死 `Y:\workspace\...`（进容器会炸，`text.py:30` 的老教训）。
 
+### 5.467.8 为什么只吃到 1 格：`TIM` 那格的框本身就错了
+
+`work/_rrwhy.py d467 12`（逐槽打印 `cur` 文本 / 字形段数 `n` / 是否触发）：
+
+```
+U1 slot 15 num '8'  cur 'IN'  n=2  gt='IN'
+U1 slot 16 num '7'  cur 'LX'  n=2  gt='LX'
+U1 slot 8  num '2'  cur 'RS'  n=2  gt='RS'
+U1 slot 9  num '1'  cur '16'  n=2  gt='TIM'     ← 没有触发（n == len(cur)）
+```
+
+`n=2` 说明**这个裁片里本来就只数出两个字形**，所以「字形数 > 串长」这条闸门正确地不动它。
+把框向右扩也救不回来（`work/_slotread.py d467 12 9 --grow=0,4,8,12,16`）：
+
+| grow | 32px | 64px |
+|---:|---|---|
+| 0 | `'16'` 0.999 | `'19'` 0.861 |
+| 4 / 8 / 12 | `'1'` 0.999 | `'1 9'` 0.835 |
+
+⇒ 那格装的根本不是 `TIM` 这三个字（多半是相邻的号列），病在**名/号两列被绑错**，
+不在解码分辨率。这条与 §5.466 的结论一致：剩下的 +0.8 分要的是**更好的框定位**
+（或让绑定层不依赖单框），不是再加一颗识别器。
+
+### 5.467.9 冻结面回归（commit `6b1ae3a` + `e5e8cff` 之后的代码）
+
+- 契约自检 `work/_smoke.py`（6 族 30 案）：**Altium Designer 6/6 · Datasheet 6/6 · KiCad 4/4 ·
+  jlc 6/6 · kicad 2/2 · other 6/6 = 30/30 全通过**，exit 0。
+- 跨来源池子（`work/_cv.py d467 --pool --pool-ref ef20`，30 案、`protocol4 --no-vlm`、CPU）：
+  **mean 28.22（Δ +0.21，worst `0072` −2.04）VERDICT PASS**。
+- 13 张主尺：**79.76 local / 78.53 official**（`work/_d467`），契约 13/13 clean。
+
 ### 5.467.7 复现
 
 ```
