@@ -33315,3 +33315,71 @@ python -X utf8 work\_cv.py ns0  --run --baseline pwr13 --env FUSION_NAME_SNAP=0
 python -X utf8 work\_cv.py tol3 --run --baseline pwr13 --env FUSION_NAME_SNAP_TOL=3
 python -X utf8 work\_cv.py d464 --run --baseline pwr13      # 新默认，应 79.56 / 78.33
 ```
+
+## 5.465 器件名/引脚名的三条形态规则：两条中性、一条可修的仍是「读歪」
+
+本轮把「型号名其实是被改歪/选歪」这条线继续往下推，做三件独立的事，全部留了 env 开关。
+
+### 5.465.1 器件名候选的形态否决（`STAGE2_PARTNAME_REQ_ALPHA` / `STAGE2_PARTNAME_NO_UNIT`）
+`stage2/assign.py:682` 的 `PARTNAME_RE = ^(?=.*\d)[A-Za-z0-9][A-Za-z0-9_\-\./+]{3,30}$`
+把「纯数字 + 标点」也认成型号：`open_GT` case1 的 `U2` 因此拿到 `4..4`（同页电感的**值**文字），
+另有两页拿到 `1.5V` / `100uF`。两条形态否决加在 `fit_partname()` 开头：
+
+```python
+if PARTNAME_REQ_ALPHA and not _ALPHA_RE.search(text):
+    return 0.0                      # 纯数字/标点不可能是型号
+if PARTNAME_NO_UNIT and _UNIT_ONLY_RE.match(text.strip()):
+    return 0.0                      # 「数字 + 单位」是值文字
+```
+
+读数（13 张，`work/_cv.py nmr1 --run --baseline d464`）：**79.56 / 78.33，逐页 Δ+0.00**；
+但 `_assigned` 里确实有 4 颗被否掉（`case1 c0003 '4.7uH'`、`case1 c0005 '4..4'`、
+`case8 c0018 '1.5V'`、`case12 d0000 '100uF'`），交付 Pred 上对应变成 key 兜底（`U2` / `p005`）。
+⇒ 「更诚实但同分」：那 4 颗无论留错名还是回落 key 都配不上 GT，**保留**（False naming 更少）。
+池子 30 案（`work/_cv.py nmr1 --pool --pool-ref ef20`）**mean 28.23（Δ +0.22，worst `0072` −2.04）
+→ PASS**，与主尺档 `d464` 的 28.20（Δ +0.20）同档 ⇒ 形态否决跨族中性、略正。
+
+### 5.465.2 引脚名的闭词表吸附：库给不出那几个词（判否）
+新探针 `work/_pinnamesnap.py <tag> [case…] [--tol=1]`：把交付 Pred 的 `pinname` 吸附到
+`data/BoxICLibrary_200cases.json` 的引脚名闭词表（2779 个词；唯一最优、距离 ≤ tol、当前串
+不是词表成员才换）。13 张 **79.56 → 79.56（Δ+0.00）**，只有 1 次动作且是错的
+（`case13 U1 pin_7 'RLM' → 'ILM'`）。
+
+原因查证（词表成员判定）：
+| 串 | 在 2779 词里 | 说明 |
+|---|---|---|
+| `RLIM` / `TIM` | **不在** | GT 那两颗芯片不在 360 键库里（同 §5.463.3） |
+| `ADJ(GND)` / `VOUT(TAB)` / `IN` / `VIN` | 在 | 库里有，但要先知道型号（`case5 U3` = AMS1117） |
+| `RLM` / `ADIGN` | 不在 | 我们要修的原串本身也不是词 → 吸附只在「词表内的近邻」可行 |
+
+⇒ 结论：**闭词表吸附救不了这 5 个脚**，因为要救的目标词（`RLIM`/`TIM`）不在库里，
+而库里有的（`ADJ(GND)`/`VOUT(TAB)`）必须先靠型号识别定位到具体那张引脚表。
+
+### 5.465.3 型号反推的「打平」档：实测为负（`FUSION_MODEL_SET_TIE`，默认仍 0）
+`fusion/modelset.py` 的守卫是「名命中 ≥2 且**严格**优于次优 ≥2」，`case5 U3` 正是
+`AMS1117-3.3` 与 `AMS1117-5.0` 打平（各 2 个名）⇒ 不动，于是 `Name` 留着 `VOUTAD`、
+脚名留着 `ADIGN`/`VIN`。加了一档 `FUSION_MODEL_SET_TIE`：**打平也允许出手，但要求两个
+候选键就我们读到的那些号给出的名完全一致**（新增 `index()` 的 `bynum` 字段支持这条判据）。
+
+读数 `work/_cv.py tie1 --run --baseline d464 --env FUSION_MODEL_SET_TIE=1` ⇒
+**79.05（−0.51）**，且 **只有 `case4` 变：81.69（−6.67，comp 0.958→0.875、pin 0.833→0.667）**。
+⇒ 打平档在这 13 张上一次都没帮到 `case5`，却在 `case4` 上赌输了一颗大件。默认保持 **0**，
+代码留着（有注释与读数），`MARGIN` 守卫的必要性再次被实测确认。
+
+### 5.465.4 现状与下一步
+- 主尺 **79.56 local / 78.33 official**（`work/_d464`），契约 13/13 clean、PASS；
+- 本轮的 `nmr1` 在形态否决后与主尺**逐页同分** ⇒ 交付行为等价、错误名更少；
+- 剩下能涨的脚名（`case5` 2 个、`case7` 1、`case12` 1、`case13` 1，oracle 合计 +11.8 分/4 页
+  ≈ **+0.9 均值**）全部卡在「型号不在库」或「32px 丢细竖笔（`TIM`/`RLIM` 掉 `I`）」两件事上：
+  前者要扩库（我们无权改官方库），后者要 **64px 只用于脚名**（§5.454 的 `nm64` 臂：
+  pin 轴 0.738→0.743、`case13 +2.50`、`case7 +3.33`，但 `case1 −2.31`/`case5 −3.91`/`case12 −2.45`
+  净 −0.26）⇒ 需要「按读数质量决定用哪个权重」的选择机制，不是全局换权重。
+
+### 5.465.5 复现
+```
+set GT_ROOT=work\_new2026\open_GT-1020\open_GT
+set CUDA_VISIBLE_DEVICES=
+python -X utf8 work\_cv.py nmr1 --run --baseline d464
+python -X utf8 work\_pinnamesnap.py d464 1 2 3 4 5 6 7 8 9 10 11 12 13 --tol=1
+python -X utf8 work\_cv.py tie1 --run --baseline d464 --env FUSION_MODEL_SET_TIE=1
+```

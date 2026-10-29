@@ -680,6 +680,17 @@ PINNUM_RE = re.compile(r"^[A-Za-z]{0,2}\d{1,3}[A-Za-z]?$")
 VALUE_RE = re.compile(r"^[+-]?(\d+(\.\d+)?|\.\d+)\s*[pnu\u00b5\u03bcmkKMGR]?[FHV\u03a9AWRJ]?$")
 NETNAME_RE = re.compile(r"^[+\-]?[A-Za-z_][A-Za-z0-9_+\-\.]{0,14}$")
 PARTNAME_RE = re.compile(r"^(?=.*\d)[A-Za-z0-9][A-Za-z0-9_\-\./+]{3,30}$")
+# ★★ 器件名候选的**形态否决**（§5.465）：
+#   ① `STAGE2_PARTNAME_REQ_ALPHA`（默认 1）：型号名至少含一个字母 —— `open_GT` case1 `U2`
+#      的原文是 `4..4`（同页电感的值文字被选中），`PARTNAME_RE` 认它（`.`/数字都在字符类里），
+#      但「纯数字 + 标点」不可能是型号；GT 13 张 31 个 box 件里没有一个这样的 `Name`。
+#   ② `STAGE2_PARTNAME_NO_UNIT`（默认 1）：带单位后缀的值文字（`4.7uH` / `100nF` / `10k`）
+#      不是型号 —— case1 `U2` 的另一半错法就是把 `4.7uH` 当成了 `Name`（GT `SX1308`）。
+PARTNAME_REQ_ALPHA = env_on("STAGE2_PARTNAME_REQ_ALPHA", "1")
+PARTNAME_NO_UNIT = env_on("STAGE2_PARTNAME_NO_UNIT", "1")
+_ALPHA_RE = re.compile(r"[A-Za-z]")
+_UNIT_ONLY_RE = re.compile(
+    r"^[0-9]+(\.[0-9]+)?\s*(pF|nF|uF|\u00b5F|mF|F|nH|uH|mH|H|Hz|ohm|\u03a9|R|k|K|M|V|A|W)$")
 # ★★ `STAGE2_PARTNAME_MODEL_LIKE`（默认 **1**，§5.427）：型号名也可能是「字母前缀 + 数字」，
 #   不能一律按位号形状否掉。病（`open_GT` case11 `U1`）：真实型号 `TP4333` 命中
 #   `DESIGNATOR_RE`（`TP`+`4333`）⇒ `fit_partname` 直接给 0 ⇒ 型号框只能用借读的
@@ -1214,6 +1225,10 @@ def fit_partname(text: str) -> float:
     """
     if len(text) < 4:
         return 0.0
+    if PARTNAME_REQ_ALPHA and not _ALPHA_RE.search(text):
+        return 0.0                      # 纯数字/标点不可能是型号（§5.465）
+    if PARTNAME_NO_UNIT and _UNIT_ONLY_RE.match(text.strip()):
+        return 0.0                      # 「数字 + 单位」是值文字，不是型号（§5.465）
     lo, _hi, kind = expect_kind(text)
     if (kind == "designator" and DESIGNATOR_RE.match(text)
             and not (PARTNAME_MODEL_LIKE and MODEL_LIKE_RE.match(text))):

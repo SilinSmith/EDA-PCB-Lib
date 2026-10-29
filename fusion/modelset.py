@@ -85,6 +85,13 @@ except ImportError:                              # pragma: no cover
 ON = env_on("FUSION_MODEL_SET", "1")
 MIN = int(os.environ.get("FUSION_MODEL_SET_MIN", "2") or "2")
 MARGIN = int(os.environ.get("FUSION_MODEL_SET_MARGIN", "2") or "2")
+# `FUSION_MODEL_SET_TIE`（默认 **0**，A/B 用；§5.465）：名命中**打平**时允许出手，但只允许
+# 在「打平的那两个库键，就我们读到的那些**号**给出的**名**完全一致」时。病（`open_GT` case5
+# `U3`）：`AMS1117-3.3` 与 `AMS1117-5.0` 各命中 2 个名 ⇒ 按 MARGIN 的守卫不出手，于是
+# `Name` 留着错的 `VOUTAD`、脚名留着 `ADIGN`/`VIN`（GT `ADJ(GND)`/`VOUT(TAB)`）—— 这两个
+# 变体的**引脚表在图上完全一样**，取哪个键对「名/号」没有任何区别，唯一不确定的只是 `Name`
+# 那串后缀，所以可以按名排序取第一个（确定性），而不是一律不动。
+TIE = env_on("FUSION_MODEL_SET_TIE", "0")
 BOX = {"box", "boxic", "ic"}
 
 _IDX: Optional[Dict[str, dict]] = None
@@ -108,6 +115,7 @@ def index() -> Dict[str, dict]:
         for k, v in (raw or {}).items():
             names: Set[str] = set()
             nums: Set[str] = set()
+            bynum: Dict[str, str] = {}
             for pin in ((v or {}).get("pins") or []):
                 nm = LB.norm((pin or {}).get("name"))
                 nu = str((pin or {}).get("number") or "").strip()
@@ -115,7 +123,9 @@ def index() -> Dict[str, dict]:
                     names.add(nm)
                 if nu:
                     nums.add(nu)
-            idx[str(k)] = {"names": names, "nums": nums}
+                    if nm:
+                        bynum.setdefault(nu, nm)
+            idx[str(k)] = {"names": names, "nums": nums, "bynum": bynum}
             nk.setdefault(LB.norm(k), str(k))
         _IDX = idx
         _NORMK = nk
@@ -170,6 +180,14 @@ def infer_one(comp: dict, idx: Optional[Dict[str, dict]] = None
     key2 = cands[1][2] if len(cands) > 1 else None
     if sn >= max(MIN, 1) and (sn - sn2) >= max(MARGIN, 1):
         return key, sn, su, key2, sn2
+    # 打平档（`FUSION_MODEL_SET_TIE`，默认 0）：只在「两个候选键就我们读到的号给出的名
+    # 完全一致」时出手（见常量区的注释）。
+    if TIE and key2 and sn >= max(MIN, 1) and sn == sn2:
+        e1, e2 = idx.get(key) or {}, idx.get(key2) or {}
+        b1, b2 = e1.get("bynum") or {}, e2.get("bynum") or {}
+        seen = [u for u in ru if u in b1 and u in b2]
+        if seen and all(b1[u] == b2[u] for u in seen):
+            return key, sn, su, key2, sn2
     return None, sn, su, key2, sn2
 
 
