@@ -324,6 +324,20 @@ _KEEP_NAMED_MODE = os.environ.get("STAGE2_BOX_PIN_KEEP_NAMED", "0").strip().lowe
 BOX_PIN_KEEP_NAMED = _KEEP_NAMED_MODE not in ("", "0", "false", "off", "none")
 BOX_PIN_KEEP_NAMED_KNOWN = _KEEP_NAMED_MODE in ("2", "known", "vocab")
 
+# ★ `STAGE2_PIN_KEEP_LEAD`（默认 **8**px，§5.463）：`BOX_PIN_KEEP_NAMED` 放行的
+#   「名字读到了、号没读到」的桩，**还要在图上找到一根引线端点**才发。
+#   依据：GT 的 box 件脚点旁边 87% 有我们自己的导线端点（`work\_leadscan.py` 13 张
+#   128/147，case1 78% / case11 80% / case2·5·6·12 100%）—— 真脚必有引线；
+#   而「号没读到」的槽里有大量**检测噪声**（§5.463 实测：保留全部 ⇒ `case3` 的
+#   `pin` 1.000 → 0.750、全 13 张 pin 轴 0.738 → 0.615，均值 −4.17）。
+#   引线是第二证据：名字（OCR）+ 引线（几何）双证才发，号仍按遍历序补。
+PIN_KEEP_LEAD_R = float(os.environ.get("STAGE2_PIN_KEEP_LEAD", "8") or 0.0)
+# ★ `STAGE2_PIN_KEEP_FRAC`（默认 0.5，§5.463）：上面那条放行**只对「这颗 IC 读到的号
+#   不到一半槽位」的件生效**。有号可读的件（我们已发对了几根）一旦混进假槽，就是把 tp
+#   换成 fp：`case3` 保留全部 ⇒ `pin` 1.000 → 0.750 正是这一族；而 `case11 USB2` 那种
+#   13 个槽只读到 2 个假号（`8`/`2`）的件才有机会被救。
+PIN_KEEP_FRAC = float(os.environ.get("STAGE2_PIN_KEEP_FRAC", "0.5") or 0.0)
+
 
 def _named_slot_ok(nm, ctx=None) -> bool:
     """`BOX_PIN_KEEP_NAMED` 的判据：这个「读到的名字」算不算真名字（见上方长注释）。
@@ -2473,6 +2487,20 @@ def _edge_toward(bb, pts, ring: float = 30.0):
     return None if best is None else (best[1], best[2])
 
 
+def _near_lead(pt, leads, r: float) -> bool:
+    """`pt` 的 `r` 像素内有没有引线端点（两者都必须是**图像坐标**）。"""
+    if not leads or r <= 0:
+        return True
+    x, y = float(pt[0]), float(pt[1])
+    rr = r * r
+    for lx, ly in leads:
+        dx = lx - x
+        dy = ly - y
+        if dx * dx + dy * dy <= rr:
+            return True
+    return False
+
+
 def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     img = stage1.get("image") or {}
     H = float(img.get("h") or 0.0)
@@ -2597,6 +2625,16 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     if LIB_PINS:
         from stage2 import libpins as _libpins
         _LIB_CTX = _libpins.new_ctx()
+
+    # ★ `STAGE2_PIN_KEEP_LEAD` 用的引线端点表（**图像坐标**，与 `pts` 同一套）。
+    _WLEAD = []
+    if PIN_KEEP_LEAD_R:
+        for _s in ((stage1.get("wire_detail") or {}).get("segments") or []):
+            try:
+                _WLEAD.append((float(_s[0][0]), float(_s[0][1])))
+                _WLEAD.append((float(_s[1][0]), float(_s[1][1])))
+            except (TypeError, ValueError, IndexError):
+                continue
 
     _KEEP_UNKEYED = False
     if KEEP_UNKEYED_IF_NO_DESIG and len(comps) >= 3:
@@ -3111,7 +3149,14 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             if _pairs0 and not any(_libpins.has_letter(_r0) for _c0, _r0 in _pairs0) \
                     and not any(not _libpins.has_letter(_c0) for _c0, _r0 in _pairs0):
                 _shape_block = True
-        for k, p in enumerate(pts):
+        # ★ 「号读到了的槽先发」（§5.463）：开着 `BOX_PIN_KEEP_NAMED` 时，假号桩若排在真脚
+        #   前面，会先占掉 `pin_<号>` 键，真脚随后被 `PIN_DUPNUM` 判为撞号而不发 ——
+        #   等于用假脚换掉真脚（kpl8 全 13 张 pin 轴 0.738 → 0.630 的主因之一）。
+        _emit_ord = list(range(len(pts)))
+        if BOX_PIN_KEEP_NAMED:
+            _emit_ord.sort(key=lambda _i: (not raw[_i].get("kept", True), _i))
+        for k in _emit_ord:
+            p = pts[k]
             r = raw[k]
             num = r["num"] or str(k + 1)
             # ★ `STAGE2_BOX_PIN_DROP_UNREAD`：把「没读出号、靠位置补出来的」引脚桩
@@ -3127,7 +3172,11 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 #   `known` 档 = 再加一道「全局引脚名词表认识这个名字」的闸（挡 `D`/`O`/`N` 残读）。
                 #   猜中号 ⇒ `pin.<号>` 名对 = tp；猜不中 ⇒ `name_mismatch`(fp+fn)，
                 #   但网络通道白赚一个成员 ⇒ 收益只能由 A/B 定（同类旧档都判负）。
-                if not (BOX_PIN_KEEP_NAMED and _named_slot_ok(r.get("nm"), _LIB_CTX)):
+                if not (BOX_PIN_KEEP_NAMED and _named_slot_ok(r.get("nm"), _LIB_CTX)
+                        and sum(1 for _q in raw if _q.get("kept"))
+                        <= PIN_KEEP_FRAC * max(1, len(raw))
+                        and (not PIN_KEEP_LEAD_R
+                             or _near_lead((float(p[0]), float(p[1])), _WLEAD, PIN_KEEP_LEAD_R))):
                     continue
             # ★★★ 「迟到闸门」：`BOX_PIN_NEED_NAME_LATE` 时**不在**这里丢，挪到规则 B 之后
             #     （见下方同名判断）—— 让库的 `(型号, 号) → 名` 先有机会把这个桩救活。

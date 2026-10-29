@@ -33167,3 +33167,87 @@ python -X utf8 work\_cmpcrop.py   work\_cv_run_pwr13 11 570 315 760 430 out.png 
 ```
 （`_leadscan.py` 的两个坑：`segments` 元素是**两点 list** 而不是 4 个标量；
 `stage1.texts` 的框在 `bbox_img` 字段里、且是图像坐标。）
+
+## 5.463 按遍历序补脚号：实测判否（−3.14）；型号名的问题其实是「选错」不是「读不到」
+
+### 5.463.1 被否的那条：给「有名字、没号」的桩按遍历序补号
+用户指出「符号库内部编号也可以按遍历序赋一个」，这条值得量。生产代码里原本就有一个
+默认关的开关 `STAGE2_BOX_PIN_KEEP_NAMED`（`named`/`known` 两档，见 `assemble.py:291`
+的长注释），本轮把它打开、并补两道新闸门一起扫：
+
+| 臂 | 设置 | 13 张均值 | pin 轴 |
+|---|---|---:|---:|
+| `pwr13` 基线 | — | **79.52** | 0.738 |
+| `kpn1` | `KEEP_NAMED=named`（有名字就发，号按位置序） | 75.35（**−4.17**） | 0.615 |
+| `kpl8` | 同上 + **引线证据**（`STAGE2_PIN_KEEP_LEAD=8`：桩旁边 8px 内要有 stage1 导线端点） | 75.92（−3.60） | 0.630 |
+| `kpf5` / `kpo` | 再 + **读号比例闸**（`STAGE2_PIN_KEEP_FRAC=0.5`：这颗 IC 读到的号不足一半槽位才放行）+ 真号槽先发 | 76.38（−3.14） | 0.642 |
+
+**逐页没有一页变好**：`case3` 的 `pin` 1.000 → 0.800、`case11` 0.357 → 0.278、
+`case2` 0.800 → 0.649 …… 连 `case8` 都只是 +0.00。
+
+原因（全是量出来的，不是推的）：
+1. `pin_f1` 的键是 `(元件, pin_key_to_number(pk))`：**号猜错 ≠ 少一根脚** ——
+   真脚仍是 fn，我们多发的那根是 fp ⇒ F1 一定掉；
+2. 「号 = 该槽序号 + 1」在 13 张 407 个**读到了号**的槽里只成立 **82 个（21.7%）**；
+3. 穷举 96 种「四边顺序 × 边内排序」去拟合 GT 编号，最好的规则只有 **12/30（40%）**；
+4. 引线证据把 `−4.17` 救到 `−3.14`，说明「假槽」确实是一部分原因，但**号本身错**才是主因。
+
+⇒ 结论：**号必须读出来（或由库按正确型号给出），不能按顺序猜**。
+
+### 5.463.2 真问题在「型号名选错」，不在「读不到」
+把 `case1` 的 **318 个文字框全读一遍**（`stage2.text.TextEngine.read`，role=`value`）后检索型号串：
+
+```
+'XB7608A'   box=[1384, 506, 1443, 516]     ← GT 里 U3 的 Name 就是 XB7608A
+'5V2An'     box=[131, 450, 178, 460]       ← GT 里 USB1 的 Name 是 '5V2A in'（我们少吃一个空格）
+```
+
+而我们交出去的 `U3.Name` 是 **`XH-8A`**（另一处文字被选中）、`USB1.Name` 是 `FAN`。
+⇒ 型号名的瓶颈是**选择规则**（哪一坨文字算这颗 box 件的型号名），不是识别器。
+这一条比补脚号便宜得多，且 `Name` 对 IC 是**逐字节**比（`component_text_ok` 只比 Name）。
+
+### 5.463.3 库反查（脚名集合 → 型号）的天花板
+新探针 `work\_libident.py`（GT box → stage1 同位置元件 → `_assigned` 的脚名集合 →
+在 360 键官方库里按 `∩ 脚名` 排序）：
+
+| 结果 | 数值 |
+|---|---|
+| 可反查的 box 件 | 23 |
+| top-1 就是 GT 名 | **6**（`case2` ×4 = `HS96L03W2C03`、`case5` ×2 = `TPS61240DRVR`）—— 但这 6 件本来 `Name` 就对 |
+| top-1 是 GT 名的前缀 | 8（`IP5306` vs `IP5306-4.35V`、`MP2236` vs `MP2236CGJ-Z`） |
+| 反错 | `case1 U2` → `LN3608AR-G`（GT `SX1308`）、`case11 U1` → `IP5306`（GT `TP4333`）、`case12 U1` → `CS5090EA`（GT `SY6912AFCC`） |
+
+根因：库里 **根本没有** `TP4333 / SX1308 / XB7608A / SY6912 / RT7272`，`IP5306`/`MP2236`
+也只有基型没有变体后缀 ⇒ 即使型号识别对了，库也给不出 GT 那串**逐字节相同**的 `Name`。
+⇒ 库先验只能帮「引脚号/引脚名」，型号名还得靠 OCR 选对。
+
+### 5.463.4 本轮代码（默认全关，基线逐位不变）
+`eda-pcb/stage2/assemble.py`：
+- `PIN_KEEP_LEAD_R = float(os.environ.get("STAGE2_PIN_KEEP_LEAD","8") or 0.0)`；
+- `PIN_KEEP_FRAC  = float(os.environ.get("STAGE2_PIN_KEEP_FRAC","0.5") or 0.0)`；
+- 模块级 `def _near_lead(pt, leads, r)`（两点距离，图像坐标）；
+- `build_doc` 里按需缓存 stage1 导线端点表 `_WLEAD`（只在 `PIN_KEEP_LEAD_R > 0` 时建）；
+- `BOX_PIN_KEEP_NAMED` 的放行条件加上「引线证据 + 读号比例」两道闸；
+- 发脚循环在 `BOX_PIN_KEEP_NAMED` 时把 `kept=True`（真号）的槽排在前面。
+
+默认 `STAGE2_BOX_PIN_KEEP_NAMED=0` ⇒ 上面全部不生效。实测 `case3` 单页 `97.92`（与基线逐位相同）。
+
+### 5.463.5 下一步（按证据排序）
+1. **box 件型号名的选择规则**：候选来自已读出的文字（`XB7608A` 就在里面），判据用
+   「含字母+数字 / 长度 5~16 / 不与本件脚名重复 / 在框的下方或右下方 / 距离最近」，
+   target = `case1 U3·U1`、`case7 U1`、`case11 USB1` 这四颗；
+2. 型号名对了以后，库的「引脚名 → 号」才有意义（`_leadscan.py` 已证 87% 的脚有引线），
+   这时补脚槽才是**补真脚**，不是发假脚；
+3. 脚名读数本身还有 +1.01 的 oracle（`work/_pinnameoracle.py`）。
+
+### 5.463.6 复现
+```
+set GT_ROOT=work\_new2026\open_GT-1020\open_GT
+set CUDA_VISIBLE_DEVICES=
+python -X utf8 work\_cv.py kpn1 --run --baseline pwr13 --env STAGE2_BOX_PIN_KEEP_NAMED=named
+python -X utf8 work\_cv.py kpl8 --run --baseline pwr13 --env STAGE2_BOX_PIN_KEEP_NAMED=named --env STAGE2_PIN_KEEP_LEAD=8
+python -X utf8 work\_cv.py kpf5 --run --baseline pwr13 --env STAGE2_BOX_PIN_KEEP_NAMED=named --env STAGE2_PIN_KEEP_LEAD=8 --env STAGE2_PIN_KEEP_FRAC=0.5
+python -X utf8 work\_libident.py work\_cv_run_pwr13 1 2 5 6 7 11 12 13
+```
+（`_libident.py` 的坑：stage1 元件框在 `bbox_json`/`bbox_img` 两个字段里，且
+`_assigned.comps` 里**没有 bbox**，配对必须经过 stage1 的 `id`。）
