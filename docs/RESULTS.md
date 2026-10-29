@@ -34534,3 +34534,16 @@ python -X utf8 work\_missingwhy.py --r=60      # 49 个缺名的分桶
 python -X utf8 work\_unatt2.py                 # 47 条 unattached 的几何前提（0 条满足）
 python -X utf8 work\_inktext.py                # 墨迹自提框（4/47 命中）
 ```
+
+### 5.477.7 收尾前又判否两条（同轮）
+
+- **「同名重复槽」折叠**：新探针 `work/_dupname.py <tag> [--r=0] [--dropnum=0]`（同一元件里两个槽挂同一个
+  脚名时，只保留**有号**的那一个、丢掉其余；`--r` 是两点距离上限）⇒ 13 页一共丢 13 个槽，
+  **79.76 档 → 79.41（−0.75）**、pin 0.747 → 0.717，`case10 92.72 → 90.03（−2.69）`。
+  原因：`open_GT` 本身就有多根同名脚（`GND`/`NC` 各带不同的号），我们那两个"重复"槽往往各自对上一个
+  ⇒ 丢掉就是丢掉 tp。**不折叠**。
+- **引脚名半径旋钮**：`assign.py` 里 `_dlim = (PINNUM_NEAR if slot == "number" else NEAR) * _spx` 这一行，
+  因为 `:2425` 的守卫是 `if (not want_inside) and t["d"] > _dlim:`，而名轮的 `want_inside=True`
+  ⇒ **名轮根本不受 `_dlim` 约束**（给 `PINNAME_NEAR` 开旋钮后 `NEAR=24` 在 1/3/5/11 四页
+  逐位 Δ+0.00）。名轮真正的门是「文字框中心在元件框内」+ 归属（ownership），不是距离。旋钮已回退，
+  不留死代码。
