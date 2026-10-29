@@ -776,6 +776,24 @@ TYPE_PREFIX: Dict[str, Tuple[str, ...]] = {
 NO_DESIGNATOR = frozenset({"gnd", "v", "net_input", "net_short", "net_output",
                            "other", "net_bidirection", "m3\u87ba\u4e1d"})
 
+# ★ 孔/连接器位号族（`STAGE2_DESIG_H`，默认 **0**）：`TYPE_PREFIX` 里 `box` 只有
+#   `("U","USB","u")`、`pin` 只有 `("TP",)`，于是纸上印 `H1`/`H2`（安装孔、3 脚排针）
+#   的件**结构上无法命名** —— `canon_designator("H1","box")` 在 `PREFIX_MODE="strict"`
+#   下返回 `("",0.0)`。13 张 open_GT 普查（`work/_prefixgap.py`，346 个 GT 元件）：
+#   位号键前缀不被承认的只有 3 颗 —— `case1 H1/H2`（type `pin`）、`case13 H1`（type `box`）。
+#   `case13` 的后果最重（§5.472.4）：`H1` 这三个字被当成 0 号脚的**脚号**用掉，位号槽
+#   退化去拿旁边的纯数字 `3`、拼成 `U3` 与本页真 `U3` 撞键 ⇒ 两件一起消失（comp+pin 双罚）。
+DESIG_H = env_on("STAGE2_DESIG_H", "1")
+_DESIG_H_TYPES = ("box", "pin")
+
+
+def _desig_allow(ctype: str) -> List[str]:
+    """该 type 允许的位号前缀（`TYPE_PREFIX` + 可选的 `H` 族）。"""
+    allow = [a.upper() for a in TYPE_PREFIX.get(ctype, ())]
+    if DESIG_H and ctype in _DESIG_H_TYPES and "H" not in allow:
+        allow = allow + ["H"]
+    return allow
+
 # ---------------------------------------------------------------------------
 # ★ 内涵键回收（`STAGE2_CONFORM_KEY`）：位号前缀是元件类型的**内涵**，两者必须互证。
 #
@@ -975,7 +993,7 @@ def canon_designator(text: str, ctype: str):
     u = re.sub(r"[^0-9A-Za-z]", "", text or "").upper()
     if not u:
         return "", 0.0
-    allow = [a.upper() for a in TYPE_PREFIX.get(ctype, ())]
+    allow = _desig_allow(ctype)
     if not allow or PREFIX_MODE == "off":
         m = re.match(r"^([A-Z]{1,3})(\d{1,4})$", u)
         return (m.group(1) + m.group(2), 0.5) if m else ("", 0.0)

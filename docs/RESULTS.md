@@ -33961,3 +33961,94 @@ python -X utf8 work\_ovlzone.py  work\_cv_run_d467 11 1050 320 1210 470   # stag
 python -X utf8 work\_ovlzone.py  work\_cv_run_d467 13 1250 360 1390 530
 python -X utf8 work\_desgate.py  work\_cv_run_d467              # 位号里有没有字母
 ```
+
+### 5.473 位号前缀族补齐：`H1` 这类安装孔/排针终于能命名（79.76 → 79.89）
+
+#### 5.473.1 触发：角色仲裁的第一个现场
+
+`§5.472.4` 已定位 case13 的 `H1` **不是漏检** —— stage1 的 `c0001 box bbox=[1288,296,1347,411]`
+与 GT 的 `H1 bbox_img=[1288,295,1346,411]` 逐像素重合，但它丢了自己的名字：
+
+```
+designator = {"text": "3", "canon": "U3", "digit_only": true, "box": [1276,366,1287,381]}
+pins["0"]["number"] = {"text": "H1", "conf": 0.997, "box": [1290,276,1311,291]}
+```
+
+`H1` 这三个字被 0 号脚的**脚号**角色用掉了，位号槽退化成旁边的纯数字 `3`，
+拼成 `U3` 与本页真 `U3` 撞键 ⇒ 两件一起消失。当时记的下一步是「角色仲裁」。
+
+#### 5.473.2 先查清「为什么 `H1` 天生当不了位号」
+
+新探针 `work/_prefixgap.py [case…]`：把 GT **位号键**的前缀与 `stage2/assign.py` 的
+`TYPE_PREFIX[type]` 对齐（`NO_DESIGNATOR` 的 `gnd`/`net_*`/`v` 跳过）：
+
+```
+GT 元件 346 个
+  type=pin allow=TP                          2  1:H1 1:H2
+  type=box allow=U/USB/U                     1  13:H1
+合计前缀不被承认的位号: 3
+```
+
+⇒ **全线只有 3 颗**，而且正好是此前一直当「漏检」记账的三颗（case1 的 `H1/H2`、case13 的 `H1`）。
+`canon_designator("H1","box")` 在 `PREFIX_MODE="strict"` 下前缀不在 `allow` 里 ⇒ 直接返回
+`("", 0.0)` ⇒ `H1` 根本进不了位号候选池，才会被脚号轮捡走。**这是前缀族缺失，不是几何问题。**
+
+#### 5.473.3 代码（`eda-pcb/stage2/assign.py`）
+
+- `NO_DESIGNATOR` 之后新增常量与助手（默认 **1 = 开**）：
+
+```python
+DESIG_H = env_on("STAGE2_DESIG_H", "1")
+_DESIG_H_TYPES = ("box", "pin")
+
+
+def _desig_allow(ctype: str) -> List[str]:
+    allow = [a.upper() for a in TYPE_PREFIX.get(ctype, ())]
+    if DESIG_H and ctype in _DESIG_H_TYPES and "H" not in allow:
+        allow = allow + ["H"]
+    return allow
+```
+
+- `canon_designator()` 里原来内联的 `allow = [a.upper() for a in TYPE_PREFIX.get(ctype, ())]`
+  改成 `allow = _desig_allow(ctype)`（**只给位号侧用**；`TYPE_PREFIX` 本身不动，
+  免得 `prefix_owners()` / `canon_designator_meaning()` 的类型互证也跟着变宽）。
+
+#### 5.473.4 读数（13 张 open_GT，基线 `work/_d467` = 79.76 / 78.53）
+
+| 臂 | 设置 | mean | official | 逐页要点 |
+|---|---|---:|---:|---|
+| `dh1` | `STAGE2_DESIG_H=1` | **79.89** | **78.66** | `case13 68.30 → 70.30（+1.99）`；`case1 58.95 → 58.68（−0.27）`；其余 11 页逐位不变 |
+| `dh1nd` | 同 `dh1` + `STAGE2_DESIG_DIGITS=0` | 79.69 | 78.46 | `case1 −0.95`、`case12 −1.87` ⇒ **纯数字补解是净正收益，别关** |
+
+- case13 现在只剩一个失配：`FN ∅899 (v, 'VIN')`，`fp=0`（此前 `fn=11`/`fp=8` 的那批里最刺眼的 `H1` 没了）。
+- case1 的 −0.27 是「键改名之后网配对重排」的副作用，元件轴本身变好：
+  `comp 0.602 → 0.619`、`FN 11 → 9`、`FP 8 → 6`（`H1/H2` 不再进 FN 名单）。
+- 轴：comp **4.24** / pin 6.32 / netH 5.16 / line 4.40（合计 20.11 < 20.24）。
+
+#### 5.473.5 池子与回归
+
+- 池子 30 案 × 6 族（`work/_cv.py dh1 --pool --pool-ref ef20 --device cuda --env STAGE2_DESIG_H=1`）：
+  **28.22（Δ +0.21，worst `0072` −2.04）PASS** ⇒ 与基线逐位相同（池子里没有 `H` 族件），**中性**。
+- 默认路径（`DESIG_H` 已置 1）：`work/_cv.py d473 --run --baseline d467 --device cpu`
+  ⇒ **79.89 / 78.66（Δ +0.13）**、comp 0.859 / pin 0.747 / netH 0.853 / line 0.560、契约 13/13 clean、**PASS**。
+- `work/_smoke.py` 6 族 30/30 全通过（见 5.473.6 记的作业号与退出码）。
+
+#### 5.473.6 复现
+
+```
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'
+python -X utf8 work\_prefixgap.py                       # 前缀族普查（346 个 GT 元件）
+python -X utf8 work\_cv.py dh1 --run --baseline d467 --device cpu --env STAGE2_DESIG_H=1
+python -X utf8 work\_cv.py dh1nd --run --baseline d467 --device cpu --env STAGE2_DESIG_H=1 --env STAGE2_DESIG_DIGITS=0
+python -X utf8 work\_cv.py dh1 --pool --pool-ref ef20 --device cuda --env STAGE2_DESIG_H=1
+python -X utf8 work\_cv.py d473 --run --baseline d467 --device cpu   # 默认路径（H 已开）
+python -X utf8 work\_compdiff4.py dh1 1 ; python -X utf8 work\_compdiff4.py dh1 13
+```
+
+#### 5.473.7 下一步（角色仲裁的剩余部分）
+
+这一节只解决了「文本**天生**进不了位号池」的那一半。另一半仍在原地：文本已经进了池子，
+却被**错误的角色**抢走 —— case11 `USB2` 的 `pin_8 GND`（GT 只有 1~5 号）、
+`USB1` 的 `pin_A5/B5/A9/B9/A12/B12` 读得到但号错位（§5.472 记录）。这类需要
+「同一块文字在多个角色间做全局最优分配」，判据候选：到符号本体的距离/朝向、
+是否与同排脚号等距成行、字母数字形态与类型前缀是否互证。
