@@ -33739,3 +33739,8 @@ IoU 0.818）、`0175`（2 对 led+gnd）、`0078`（1 对）。一件有 ≥80% 
     python -X utf8 work\_detovl.py eda-pcb\yolo_part\runs_ovl\pcb43_ovl5\weights\last.pt --set=ovlplus --imgsz=1280 --device=cpu
     python -X utf8 work\_linewho.py d467 12
     python -X utf8 work\_pinleadsnap.py work\_cv_run_d467 --r=25
+
+### 5.469.11 冻结面回归（commit `144d57d` 之后的代码）
+
+- 默认路径：`work/_cv.py chk469 --run --baseline d467 --device cpu` ⇒ **79.76 / 78.53**、契约 13/13 clean、**PASS**（两个新机制都默认关，不扰基线）。
+- `work/_smoke.py`：Altium 6/6 · Datasheet 6/6 · KiCad 4/4 · jlc 6/6 · kicad 2/2 · other 6/6 ⇒ **30/30 全通过**，exit 0。
