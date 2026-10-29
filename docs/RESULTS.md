@@ -33003,3 +33003,19 @@ python -X utf8 work\_cv.py pwr13 --run --baseline o13d458 --device cpu
 python -X utf8 work\_cv.py tr2 --run --cases 1 --device cpu --env "STAGE2_TRACE_DUMP=work/_tr2"
 python -X utf8 work\_tracewho.py work\_tr2 1 --at=351,371 --axis=y
 ```
+
+
+### 5.460.6 后续取证：轨在哪一层丢的（三条否证）
+1. **不是 `dedup`**：`FUSION_COMPDEDUP=0` 跑 case1，融合产物与开着一个样（`nets=30 edges=120 rails=0`），
+   分数也逐位相同（58.42 / 0.602 / 0.514 / 0.659 / 0.447）。
+2. **不是 `ref_prune`**：读 `work/_cv_run_pwr1/runs/fusion/1.json`（30 网 / 121 边）逐顶点核对 ——
+   **没有悬空引用、没有空 hyperGraph**（`pNNN` 件 19 颗里 16 颗有引脚表）。也就是说 `⑪ ref_prune`
+   这一层什么都没删。
+3. **不是「边被分到了错网」**：新探针 `work/_edge2net.py`（离线把每条边按几何重新归属到
+   「引脚点离该边最近」的网再重打分）在 case1/2/3/11/12/13 上只搬动了 **2 条边**（case1），
+   六页均值 **−0.01** ⇒ 边本来就在对的网里。
+⇒ 剩下的唯一入口是「第三次 `build_doc` 拿到的 `assigned` 让它自己的输入就少了 19 条边」
+（`1.25.00.pre` 151 条 vs 前两次 186 条）。这条链还没走完，留给下一轮。
+
+⚠️ 探针坑：`work/_edge2net.py` 自带的 `M.EvalConfig(...)` 复刻不完整（case1 读 49.32，
+`work/_cv.py` 同页 58.42），**只可用于同探针内部前后对比**，不能与主尺数字混读。
