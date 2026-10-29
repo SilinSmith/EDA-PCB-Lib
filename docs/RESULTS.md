@@ -33019,3 +33019,67 @@ python -X utf8 work\_tracewho.py work\_tr2 1 --at=351,371 --axis=y
 
 ⚠️ 探针坑：`work/_edge2net.py` 自带的 `M.EvalConfig(...)` 复刻不完整（case1 读 49.32，
 `work/_cv.py` 同页 58.42），**只可用于同探针内部前后对比**，不能与主尺数字混读。
+
+
+## 5.461 case1 专项：脚名 oracle +1.01，但四条「放宽裁剪 / 换权重」的路都判否
+
+### 5.461.1 为什么会去查 case1
+`work/_lossattr3.py pwr13 1` ⇒ case1 = **58.42**（comp 0.602 / pin 0.514 / netH 0.659 / line 0.447），
+是 13 张里的第二低（仅高于 case11 49.66）。元件差为 `gt=58 pred=55 fn=11 fp=8`：
+
+| 侧 | 明细 |
+|---|---|
+| FN | `led LED3/LED4`、`net_input LED+`、`l L2`、`gnd ∅323/∅458/∅193`、`switch SW2`、`r R13(5k1)`、`pin H1/H2` |
+| FP | `box p005('4..4')/p006/p007('BAT+')`、`d D22/D3`、`net_input 1ED+`、`r R5`、`led D03('LED4')` |
+
+两条结构性事实：① GT 有 `type=pin` 两颗（`H1 [1345,845,1384,865]`、`H2 [1497,667,1536,687]`），
+我们**检出了同样的框**（`p007 [1344.75,844.35,1382.85,864.68]`、`p006 [1498.22,666.23,1532.75,686.94]`，
+误差 ≤4px）却**判成 `box`、键是 `pNNN`**；② 5 个 box 件的 `Name` 全错
+（`U1 IP5306` vs `IP5306-4.35V`、`U2 4.7uH` vs `SX1308`、`U3 XH-8A` vs `XB7608A`、
+`USB1 FAN` vs `5V2A in`、`USB2 5V2A0uT` vs `5V2A out`）。`type=pin` 全 13 张只出现这一次。
+
+### 5.461.2 脚名 oracle：+1.01（当前最大的单点机会）
+新探针 `work/_pinnameoracle.py <tag> [case…]`：把交付 Pred 的 `pinname` 换成 GT 的（**只动名，不动号/坐标**，
+只对 `(键, pin_N)` 对得上的脚），重打分：
+
+| case | 1 | 5 | 7 | 12 | 13 | 其余 8 张 | mean |
+|---|---:|---:|---:|---:|---:|---|---:|
+| Δ | **+1.35** | +3.03 | +3.33 | +2.94 | +2.50 | +0.00 | **+1.01** |
+
+改写的脚只有 15 个 ⇒ **每错一个脚名 = fp+fn 双罚**，单价极高。case1 的 9 个错名来自「少检了脚」：
+`U2` GT 6 脚我们 4 脚、`U3` 5/4、`USB1` 14/12、`USB2` 6/5 —— 中间缺号后，`pin_N` 编号整体错位
+（`work/_pinbox5.py 'work\_cv_run_pwr13' 1`）。脚名序列的**排序规则**不是病因：
+`work/_pinorder.py pwr13 …` ⇒ 按现有编号 97/183 = **0.530**，改按 y / x / 逆时针重排分别只有 0.404 / 0.235 / 0.481。
+
+### 5.461.3 四条路全判否（都没留代码，`stage2/text.py` 已 `git checkout`）
+| 臂 | 设置 | local | official | 主要丢分 |
+|---|---|---:|---:|---|
+| `pwr13` 基线 | — | **79.52** | 78.29 | — |
+| `pad20` | `STAGE2_PAD_FRAC=0.20`（全局水平外扩） | 78.59 | 77.36 | case1 **+2.38**、case7 +3.33、case11 +2.31 / case13 **−13.85**、case12 −3.15、case8 −2.46、case6 −1.72 |
+| `padko20` | 同上 + 「外扩不许吃进同行邻居」（新增 `pad_box_keepout`，`STAGE2_PAD_KEEPOUT`） | 79.04 | 77.81 | case13 −7.50、case12 −3.15 / case7 +3.33、case11 +2.64、case1 +1.60 |
+| `nm25`（KEEPOUT=1） | 只给 `pin_name` 加宽（`STAGE2_PINNAME_PAD=0.25`） | 78.76 | 77.53 | case13 −5.36、case12 −3.15 |
+| **keepout 单独** | `PAD_FRAC=0` + `KEEPOUT=1` | 78.76 | — | **−0.76** ⇒ keepout 自己就会夹掉必要的 `PAD_MIN` |
+| `tn010/020/030`（KEEPOUT=0） | tight 裁片上的 pin_name 加宽 0.10/0.20/0.30 | 79.52 / 78.90 / 78.96 | 78.29 / 77.67 / 77.73 | 0.10 完全 Δ0；0.20/0.30 让 case13 −6.03/−5.04、case12 −2.94 |
+| `nm64` | `STAGE2_CKPT_ROLES=pin_name` + `STAGE2_CKPT_ROLES_CKPT=…ft64full/best.pt` | 79.26 | 78.15 | pin 轴 0.738→**0.743**、case13 +2.50、case7 +3.33 / case1 −2.31、case5 −3.91、case12 −2.45 |
+
+结论：**放宽裁剪能救 case1（+2.38）但同时打坏竖排文字页（case13 −13.85）**，任何全局比例都两败；
+把 64px 权重只用在 `pin_name` 上确实让 pin 轴变好（+0.005）但被 case1/case5 的 comp/netH 反噬。
+
+### 5.461.4 下一步（按证据排序）
+1. **脚槽召回**：case1 的 pin 损（0.514）主要来自「少检了脚」（U2 4/6、U3 4/5、USB1 12/14、USB2 5/6），
+   而 GT 的 IC 脚点**恰好在框外 40px**（`work/_boxpinexp.py`），且我们连 `H1/H2` 这种 39×20 的小框都能检出。
+   ⇒ 在 box 件四面沿边扫描「伸出框外的引线」补槽，是唯一能动 pin 轴的结构性手段。
+2. **`type=pin` 与 box 的小件**：case1 的 `H1/H2` 已被检出但判成 `box`、键 `pNNN`
+   （`STAGE2_TYPE_DESIG_FIX` 只互纠 `d/led`）⇒ 框高 ≤ 25px、文字 `^H\d+$` 的 box 判 `pin` 并把文字当键。
+3. `net_input` 的 `1ED+`（OCR `L`→`1`）：属识别器档，别再造特例。
+
+### 5.461.5 复现
+```powershell
+$env:GT_ROOT='work\_new2026\open_GT-1020\open_GT'; $env:CUDA_VISIBLE_DEVICES=''
+(Get-Process -Id $PID).ProcessorAffinity = [IntPtr]65535
+python -X utf8 work\_pinnameoracle.py pwr13 1 2 3 4 5 6 7 8 9 10 11 12 13     # 脚名 oracle
+python -X utf8 work\_pinorder.py pwr13 1 2 3 4 5 6 7 8 9 10 11 12 13          # 脚名序列排序规则普查
+python -X utf8 work\_lossattr3.py pwr13 1 ; python -X utf8 work\_compdiff4.py pwr13 1
+python -X utf8 work\_pinbox5.py 'work\_cv_run_pwr13' 1                        # 逐件脚名对照
+python -X utf8 work\_cv.py pad20 --run --baseline pwr13 --device cpu --env STAGE2_PAD_FRAC=0.20
+```
