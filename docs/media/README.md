@@ -64,21 +64,26 @@ GT 的两段。这正好对上全局统计：GT 有 T 型结点 166 个，我们
 | `pin_leg_still.png` | `pin_leg.mp4` 的整页静帧（第一幕） |
 
 
-## 典型样例（主尺 `open_GT-1020`，当前交付 78.56 local / 77.33 official）
+## 典型样例（主尺 `open_GT-1020`，当前交付 **79.48 local / 78.25 official**）
 
 上面那几支片子出自官方 10 张（`10GT`，该口径已作废）。这一批改从**主尺**出片：底图与 GT 取
-`work/_new2026/open_GT-1020/open_GT`，我们的预测取 `work/_cv_run_vote0`（= 当前交付代码的跑批结果）。
+`work/_new2026/open_GT-1020/open_GT`，我们的预测取 `work/_fast_out_o13d458/final_results`
+（= §5.458 之后的当前交付代码跑批结果；`PICK13_PRED=<dir>` 可换快照）。
 
 先按「合并 / 真缺」把 13 张排了一遍（`work/_pick13.py`，判分口径同 `metrics._seg_distance`：无向两端点最大距离 ≤5px 才算配上）：
 
 | 案例 | GT 段 / 配上 | 被我们画长 | 切碎 | 真没画 | 我方元件 / GT |
 |---|---|---:|---:|---:|---|
-| **12** | 28 / **1** | 7 | 0 | **20** | 21 / 21 |
-| **11** | 24 / 13 | 3 | 1 | 7 | **11 / 15** |
-| **1** | 116 / 52 | 18 | 8 | 38 | 55 / 58 |
-| **13** | 49 / 16 | 22 | 6 | 5 | 19 / 20 |
-| 6 | 86 / 53 | 24 | 2 | 7 | 39 / 38 |
-| 2 | 40 / 15 | 17 | 8 | 0 | 28 / 28 |
+| **12** | 28 / **1** | 2 | 0 | **25** | 21 / 21 |
+| **11** | 24 / 16 | 3 | 1 | 4 | **11 / 15** |
+| **1** | 116 / 55 | 19 | 6 | 36 | 55 / 58 |
+| **13** | 49 / 16 | 21 | 6 | 6 | 19 / 20 |
+| 6 | 86 / 63 | 16 | 2 | 5 | 39 / 38 |
+| 2 | 40 / 17 | 11 | 12 | 0 | 28 / 28 |
+
+> 与上一版（`work/_cv_run_vote0`）对比：case6 的「画长」从 24 段降到 16 段、配上从 53 升到 63，
+> 就是 §5.458「同一条线检出两次时丢掉长的那条」的效果 —— 用户报的 **C2 旁折返导线**已经消失
+> （那两条 74.5px / 95.7px 的重复边）。
 
 出片（`docs/media/`，mp4 + gif 各一份）：
 
@@ -95,7 +100,7 @@ GT 的两段。这正好对上全局统计：GT 有 T 型结点 166 个，我们
 
 ```
 python -X utf8 work\_anim.py --case 12 --gt-root work\_new2026\open_GT-1020\open_GT ^
-       --pred work\_cv_run_vote0\final_results --prefix loss_case
+       --pred work\_fast_out_o13d458\final_results --prefix loss_case
 python -X utf8 work\_anim_bind.py --case 11 --dir work\_cv_run_vote0 ^
        --gt-root work\_new2026\open_GT-1020\open_GT
 python -X utf8 work\_grab.py eda-pcb\docs\media\loss_case12.mp4 150 work\_frame.png   :: 抽单帧核对叠加层
