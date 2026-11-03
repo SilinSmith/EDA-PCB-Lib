@@ -1,4 +1,4 @@
-# 值门控 A/B：STAGE2_VALUE_UNIT × STAGE2_VALUE_STEAL
+# 值门控 A/B： × 
 # 用法：python work\tools\diag\_val_ab.py
 import os
 import subprocess
@@ -20,8 +20,7 @@ ARMS = [
 
 for name, unit, steal in ARMS:
     out = Path(r"Y:\workspace\EDA\work") / ("_ab_" + name)
-    env = dict(os.environ, PYTHONIOENCODING="utf-8",
-               STAGE2_VALUE_UNIT=unit, STAGE2_VALUE_STEAL=steal)
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", STAGE2_VALUE_STEAL=steal)
     r = subprocess.run([PY, "-m", "stage2.run", "--stage1", S1, "--out", str(out)],
                        cwd=str(ROOT), env=env, capture_output=True, text=True,
                        encoding="utf-8", errors="replace")

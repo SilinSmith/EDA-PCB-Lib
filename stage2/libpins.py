@@ -9,10 +9,8 @@
   覆盖率（`tools/diag/_libcov.py`）：IC 名命中 官方 9 张 85.7% vs 71.4%、200 案例
   61.6% vs 30.9%；引脚名覆盖 99.2%/69.7% vs 99.0%/64.9%。官方 `pin_f1` 只考 box 元件。
 
-★ 默认**开**（`STAGE2_LIB_PINS=1`，2026-10-09 从「默认关」翻过来；依据见下）。关掉时本模块
-  * 不读库文件、不建索引、不 import 额外依赖（只有 `envflag`，那是仓内既有模块）；
-  * `complete_pins()` / `names_for()` 在入口第一行就返回，调用方拿到的东西与不挂接
-    这条通道时**逐字节一致**。
+★ 默认**开**（2026-10-09 从「默认关」翻过来；依据见下）。这里是**常开**通道，
+   没有总闸/细闸：`complete_pins()`（规则 A）与 `names_for()`（规则 B）总是生效。
 ⇒ 改默认的依据（220 张回归，`work\tools\diag\_libpins_cpu.py` + `_split220.py`，纯 CPU 32 s，
   输入 `work\_full220\runs\stage1` + `work\_f220_A\_assigned`）：官方 10GT 10 张
   **62.5743 → 65.1834（+2.6091，7 涨 0 跌**；pin tp 38→47 / fp 42→38 / fn 98→89）、另 10 张
@@ -70,21 +68,6 @@ except ImportError:                           # 直接跑脚本自检
     from envflag import env_on, env_raw, env_str
 
 # ── 开关 ──────────────────────────────────────────────────────────────────
-# `STAGE2_LIB_PINS`（默认 "1"=开，2026-10-09 翻）：本通道总闸。见模块 docstring。
-LIB_PINS = env_on("STAGE2_LIB_PINS", "1")
-
-# §5.150 (B) 的**细闸**：把本模块的两条规则分别关掉，用来给「库的整体贡献」做归属。
-# 两条都**默认 1**（与历史逐位相同），只在 A/B 臂里显式设 0。
-#   * `STAGE2_LIB_PINS_NUMFILL=0`  ⇒ 只关**规则 A**（`complete_pins`：按名字补号）
-#   * `STAGE2_LIB_PINS_NAMEFILL=0` ⇒ 只关**规则 B**（按号补名）——**生效处是
-#     `stage2/assemble.py:2467` 起的内联规则 B**（`_libpins.LIB_PINS_NAMEFILL` +
-#     `_LIB_CTX.name_for_num`），**不是**本模块的 `names_for()`：后者
-#     （`stage2/libpins.py:504`）全仓只有定义与自检两个引用、**没有管线调用点**
-#     （§5.150 §4(B) 实测：早年把开关挂在它上面时是空开关）。
-# 注意：`librefine` 走的是 `LibCtx.name_for_num` 方法，不走 `names_for`，
-# 所以 `NAMEFILL=0` **只**影响 assemble 的规则 B —— 这正是做归属需要的正交性。
-LIB_PINS_NUMFILL = env_on("STAGE2_LIB_PINS_NUMFILL", "1")
-LIB_PINS_NAMEFILL = env_on("STAGE2_LIB_PINS_NAMEFILL", "1")
 
 # 规则 A 的**型号名兜底**：型号名认不出来时，用读到的引脚名集合反查库键
 # （`LibCtx.key_for_names`）。动机见该方法 docstring（主尺 case11 `USB2`：名读对、
@@ -292,7 +275,7 @@ def key_uniq(ctx, comp_name: str) -> Optional[str]:
 
 
 class LibCtx:
-    """库的**惰性**句柄：`STAGE2_LIB_PINS=0` 时永远不会真的读文件。
+    """库的**惰性**句柄：第一次查表才真的读文件。
 
     为什么包成一个对象而不是模块级全局：`build_doc` 每次调用都可能被喂不同的
     `STAGE2_CPNT_LIB`（A/B 脚本会来回切），而库有 1.76 MB，每张图重读一次太浪费。
@@ -659,14 +642,14 @@ def complete_pins(comp_name, stubs: Sequence[dict],
         「有名字、号是位置号」的桩。`fill` 缺省时按 `kept is False` 认。
 
     只在下面四条**同时**成立时补：
-      1. `STAGE2_LIB_PINS=1`（总闸）；
+      1. 通道常开；
       2. 该桩读到了引脚名 `nm` 非空（「名读到」是规则 A 的前提，也是唯一能查表的键）；
       3. 元件型号名能命中库键（精确/归一化/模糊）；
       4. 该名字在库里**唯一映射**到一个号，且那个号没被这颗 IC 里**别处读出来的
          有效号**占用（`used`）。撞了就放弃，绝不改别的号 —— 补号的目的是把
          **假号**换成一个真号，不是把两个真脚挤到同一个 `pin_<号>` 键上。
     """
-    if not LIB_PINS or not LIB_PINS_NUMFILL or not stubs:
+    if not stubs:
         return 0
     ctx = ctx or LibCtx()
     n = 0
@@ -744,8 +727,6 @@ def names_for(comp_name, num, ctx: Optional[LibCtx] = None) -> Optional[str]:
     返回的是**库里的原始写法**（如 `VDD`、`PA00`），不是 `norm()` 后的串 —— 交付
     产物要拿它直接当 `pinname` 用。
     """
-    if not LIB_PINS or not LIB_PINS_NAMEFILL:
-        return None
     ctx = ctx or LibCtx()
     key = ctx.key_for(comp_name)
     if not key:
@@ -754,7 +735,7 @@ def names_for(comp_name, num, ctx: Optional[LibCtx] = None) -> Optional[str]:
 
 
 def new_ctx(path=None) -> LibCtx:
-    """建一个可复用的库句柄（总闸关时也安全：它一次文件都不会读）。"""
+    """建一个可复用的库句柄（惰性：第一次查表才读文件）。"""
     return LibCtx(path)
 
 
@@ -786,7 +767,6 @@ def _selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         f = Path(td) / "lib.json"
         f.write_text(json.dumps(fake, ensure_ascii=False), encoding="utf-8")
-        globals()["LIB_PINS"] = True
         ctx = LibCtx(f)
         if ctx.num_for_name("AA1", "vdd") != "1":
             bad.append("规则A VDD→1")
@@ -816,12 +796,6 @@ def _selftest() -> int:
         stubs3 = [{"num": "5", "nm": "PA00", "kept": True, "fill": False}]
         if complete_pins("AA1", stubs3, ctx, used=set()) != 0:
             bad.append("complete_pins 不该动读出来的有效号")
-        globals()["LIB_PINS"] = False
-        if complete_pins("AA1", [{"num": "", "nm": "VDD"}], ctx) != 0:
-            bad.append("总闸关时不该动手")
-        if names_for("AA1", "1", ctx) is not None:
-            bad.append("总闸关时不该改名")
-        globals()["LIB_PINS"] = True
         # ★ `known` 档用到的全局引脚名词表 + 档位读取
         for nm, want in (("vdd", True), ("pa00", True), ("nrst", True),
                          ("vw psto2", False), ("iow2t", False), ("", False)):
@@ -919,15 +893,6 @@ def _selftest() -> int:
         os.environ.pop("STAGE2_LIB_PINS_NUMGATE", None)
         if numgate_mode() != "0":
             bad.append("numgate_mode 收尾应回到默认 0")
-        # ★ 两个细闸确实挂在对应的对外接口上
-        globals()["LIB_PINS_NUMFILL"] = False
-        if complete_pins("AA1", [{"num": "", "nm": "VDD"}], LibCtx(f), used=set()) != 0:
-            bad.append("LIB_PINS_NUMFILL=0 时规则A不该动手")
-        globals()["LIB_PINS_NUMFILL"] = True
-        globals()["LIB_PINS_NAMEFILL"] = False
-        if names_for("AA1", "1", LibCtx(f)) is not None:
-            bad.append("LIB_PINS_NAMEFILL=0 时规则B不该动手")
-        globals()["LIB_PINS_NAMEFILL"] = True
     print("libpins 自检：%s" % ("全部通过" if not bad else "失败 " + " / ".join(bad)))
     return 1 if bad else 0
 

@@ -17,7 +17,7 @@
   换权重的判据与数字见 `docs/RESULTS.md` §5.211（全量 220 案配对 +0.47，升 103/降 74，p=0.035）。
 * **官方元器件库 `cpntLibrary`**（1,755,587 B / 337 键的 JSON，`stage2/libpins.py` 的引脚
   先验要靠它）：原本只放在本机的 `WORKSPACE\work\data\`（`work\` **不进仓库、不进镜像**）
-  ⇒ 容器里按旧默认路径去找必然不存在，`STAGE2_LIB_PINS` 虽然默认开，也只会印一行
+  ⇒ 容器里按旧默认路径去找必然不存在， 虽然默认开，也只会印一行
   「库不可用」然后**静默跳过** —— 白丢实测 +1.60（官方 9 张，交付链）/ +2.61（官方 10GT）。
   已复制一份到 `data/cpntLibrary.json` 随仓库提交，并把它并入本模块的候选链。
 * **官方 box/IC 库 `BoxICLibrary_200cases.json`**（1,826,150 B / 360 键，用户 m42932
@@ -180,3 +180,4 @@ if __name__ == "__main__":
     import sys
     sys.stdout.reconfigure(encoding="utf-8")
     print(json.dumps(describe(), ensure_ascii=False, indent=1))
+

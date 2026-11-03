@@ -44,10 +44,9 @@
 * **族级投票门**（`STAGE2_PINROT_MIN_NAME`，默认 2）：旋转帧至少读出 2 个「像引脚名」的串，
   且「名 + 号」总数**严格大于** 0° 帧，才允许整族换帧；否则整族不动（`no_rot_vote`）。
   这一条是防「把本来读对的脚改坏」的关键（首版逐字段版在 case 6 覆盖 15 处、多为垃圾）。
-* 已有值不是「不动」而是**覆盖**（默认 `STAGE2_PINROT_OVERWRITE=1`）：竖直脚的旧值本来就是
+* 已有值不是「不动」而是**覆盖**：竖直脚的旧值本来就是
   碎片，留着必错；覆盖会写一条 `LEDGER.record("overwrite", …)` 账本，可回溯 before/after。
-* `STAGE2_PINROT_NAME` / `STAGE2_PINROT_NUM` 可分别关掉写回（读仍然照读，投票要用）；
-  实测两者开关对分数**无差异**（56.06/66.69/61.56 与 59.67/69.71/66.79 两口径逐位相同）。
+* 名字与号都写回（读仍然照读，投票要用）。
 """
 from __future__ import annotations
 
@@ -80,13 +79,6 @@ NUM_DEPTH = float(os.environ.get("STAGE2_PINROT_NUM_DEPTH", "34.0"))
 HALF = float(os.environ.get("STAGE2_PINROT_HALF", "14.0"))
 #: 元件局部窗口外扩量（旋转只在这个窗口里做，见 `fix()` 里 `INK_YNORM` 的注释）
 WIN_PAD = float(os.environ.get("STAGE2_PINROT_WIN_PAD", "60.0"))
-#: 是否覆盖已有值（竖直脚的旧值本就是碎片）
-OVERWRITE = env_on("STAGE2_PINROT_OVERWRITE", "1")
-#: 两个字段各自是否**写回**（读仍然照读：投票要用）
-NAME_ON = env_on("STAGE2_PINROT_NAME", "1")
-NUM_ON = env_on("STAGE2_PINROT_NUM", "1")
-#: 是否把每个候选读串记进 `st["raw"]`（调参用）
-RAW = env_on("STAGE2_PINROT_RAW", "0")
 #: 元件分族的宽高取整粒度（同宽高 ⇒ 同一符号 ⇒ 文字朝向一致）
 SHAPE_ROUND = float(os.environ.get("STAGE2_PINROT_SHAPE_ROUND", "8.0"))
 #: 旋转帧要被选中，至少得读出几个「像引脚名」的串
@@ -280,11 +272,6 @@ def fix(bgr, doc, a, engine, dbg_cid=None) -> dict:
                 return st
             for ji, (txt, conf) in zip(keys, got):
                 out[(ji, which)] = ((txt or "").strip(), float(conf))
-                if RAW:
-                    _cid, _i, _pin, field, _b, _p, _n = jobs[ji]
-                    st["raw"].append({"cid": _cid, "pin": _i, "field": field,
-                                      "rot": which, "text": (txt or "").strip(),
-                                      "conf": round(float(conf), 3)})
 
     # ---- 元件族级投票选帧 ----
     # ★ 为什么不是「逐字段取 conf 最大」：竖着的碎片也常常 conf 很高，逐字段取胜出侧会把
@@ -349,18 +336,12 @@ def fix(bgr, doc, a, engine, dbg_cid=None) -> dict:
             continue
         txt, conf = out[(ji, which)]
         if field == "num":
-            if not NUM_ON:
-                _skip("num_off")
-                continue
             d = digits(txt)
             if not _num_like(txt):
                 _skip("bad_number")
                 continue
             val = d
         else:
-            if not NAME_ON:
-                _skip("name_off")
-                continue
             if not _name_like(txt):
                 _skip("bad_name")
                 continue
@@ -373,9 +354,6 @@ def fix(bgr, doc, a, engine, dbg_cid=None) -> dict:
             continue
         old = pin.get(field)
         old_txt = ((old or {}).get("text") if isinstance(old, dict) else old) or ""
-        if not OVERWRITE and old_txt:
-            _skip("has_" + field)
-            continue
         if str(old_txt).strip() == str(val).strip():
             _skip("same_" + field)
             continue

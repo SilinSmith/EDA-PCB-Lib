@@ -1,4 +1,4 @@
-"""电源符号网名补读（`STAGE2_POWER_LABEL_ROT`，默认 1 = 开）。
+"""电源符号网名补读（默认开）。
 
 ## 病
 
@@ -37,7 +37,6 @@ import cv2
 
 from envflag import env_on
 
-ON = env_on("STAGE2_POWER_LABEL_ROT", "1")
 CONF = float(os.environ.get("STAGE2_POWER_LABEL_CONF", "0.70"))
 NEAR = float(os.environ.get("STAGE2_POWER_LABEL_NEAR", "46.0"))
 NEAR_H = float(os.environ.get("STAGE2_POWER_LABEL_NEAR_H", "26.0"))
@@ -161,9 +160,7 @@ def _map_box(box, shape):
 
 def fill(bgr, doc, a, engine, reads=None) -> dict:
     """给缺网名的电源符号补 `partname`。返回统计（纯追加，不改任何既有读数）。"""
-    stat = {"on": bool(ON), "rot": 0, "flat": 0, "written": 0, "labels": []}
-    if not ON:
-        return stat
+    stat = {"on": True, "rot": 0, "flat": 0, "written": 0, "labels": []}
     comps = {str(c.get("id")): c for c in (doc.get("components") or [])}
     need = {}
     for cid, rec in (a.get("comps") or {}).items():

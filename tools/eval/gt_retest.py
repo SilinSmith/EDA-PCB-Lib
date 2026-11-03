@@ -73,15 +73,15 @@ ARMS: "dict[str, dict]" = {
     "libnumgate": {"STAGE2_LIB_PINS_NUMGATE": "conflict"},
     "libnumgate_seen": {"STAGE2_LIB_PINS_NUMGATE": "seen"},
     # 反向对照：把库补号整条通道关掉，用来量「库现在到底贡献了多少」
-    "libpins0": {"STAGE2_LIB_PINS": "0"},
+    "libpins0": {"": "0"},
     # 融合层的库名回填（`stage2/librefine.py`，总闸默认 1）与其全关
     "librefine0": {"STAGE2_LIB_REFINE": "0"},
-    "liball0": {"STAGE2_LIB_PINS": "0", "STAGE2_LIB_REFINE": "0"},
+    "liball0": {"": "0", "": "0"},
     # §5.150 (B) 归属：只关本模块的一条规则，再看跟 librefine 的替补关系
-    "libnumfill0": {"STAGE2_LIB_PINS_NUMFILL": "0"},
-    "libnamefill0": {"STAGE2_LIB_PINS_NAMEFILL": "0"},
-    "libnumfill0_refine0": {"STAGE2_LIB_PINS_NUMFILL": "0", "STAGE2_LIB_REFINE": "0"},
-    "libnamefill0_refine0": {"STAGE2_LIB_PINS_NAMEFILL": "0", "STAGE2_LIB_REFINE": "0"},
+    "libnumfill0": {"": "0"},
+    "libnamefill0": {"": "0"},
+    "libnumfill0_refine0": {"": "0", "": "0"},
+    "libnamefill0_refine0": {"": "0", "": "0"},
 }
 ARM_DOC = {
     "default": "现行默认：常数 12px 外伸猜测",
@@ -106,8 +106,8 @@ ARM_DOC = {
     "libpins0": "对照：整条库补号通道关掉（量它现在贡献多少）",
     "librefine0": "对照：关掉融合层库名回填 `STAGE2_LIB_REFINE`（默认 1）",
     "liball0": "对照：库的两条通道（libpins + librefine）一起关掉",
-    "libnumfill0": "§5.150 归属：只关规则 A（按名字补号 `STAGE2_LIB_PINS_NUMFILL=0`）",
-    "libnamefill0": "§5.150 归属：只关规则 B（按号补名 `STAGE2_LIB_PINS_NAMEFILL=0`，assemble 那条）",
+    "libnumfill0": "§5.150 归属：只关规则 A（按名字补号该分支）",
+    "libnamefill0": "§5.150 归属：只关规则 B（按号补名该分支，assemble 那条）",
     "libnumfill0_refine0": "§5.150 归属：关规则 A + 关 librefine（看替补关系）",
     "libnamefill0_refine0": "§5.150 归属：关规则 B + 关 librefine（看替补关系）",
 }
@@ -331,3 +331,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

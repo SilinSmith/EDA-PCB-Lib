@@ -212,7 +212,7 @@ LAST_RESIDUAL: List[dict] = []
 # 最近一次 `rebind` 的**降权**（被削弱而不是被删掉的候选）明细，只给调试与产物用。
 LAST_DEMOTED: List[dict] = []
 # 重扫队列的**消费者输入**：本趟被移出活动集、但证据仍在的候选（含降权后的分）。
-# `stage2/assign.py` 在 `STAGE2_PIN_RESIDUAL > 0` 时会把它们当作残差回填的候选源。
+# `stage2/assign.py` 的残差回填会把它们当作候选源。
 LAST_RESERVE: List[dict] = []
 # 一次 `assign`（= 一个 case）内跨多次 `rebind` 的**累计**降权/保留池，
 # 由 `assign` 开头调用 `clear_hist()` 清空，产物写进 `_assigned/<case>.json` 的
@@ -447,7 +447,7 @@ def rebind(bbox: Sequence[float], pins: Sequence[Sequence[float]],
                 #       「数值最大的离群候选」夹具就是反例，实测会配成 `0:0`）；
                 #     * 证据：降权分取**严格为正**的 `DEMOTE_HARD`/`demote`，
                 #       连同 `before/after/判据` 写进全局账本，候选本体进
-                #       `LAST_RESERVE`（重扫队列的消费者：`STAGE2_PIN_RESIDUAL`）。
+                #       `LAST_RESERVE`（重扫队列的消费者）。
                 #   所以「不删除」= 不在这一趟 DP 里用，而不是把它从世界上抹掉。
                 mult = (DEMOTE_HARD if hard else demote)
                 for i in range(n):

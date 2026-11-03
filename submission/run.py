@@ -655,7 +655,6 @@ def _scale_doc_xy(doc, s):
     return doc
 
 
-STAR_PIN_ON = os.environ.get("STAGE2_STAR_PIN", "0") not in ("0", "", "off")
 
 
 def _sanitize_pred(doc):
@@ -692,17 +691,8 @@ def _sanitize_pred(doc):
             #   默认 **False**（`metrics.py:131`，与官方产物标定一致），`_net_sets` 直接拿
             #   `net_pin_set()` 的 `(元件, 脚号)` 去配对 ⇒ `*` 永远对不上 GT 的 `1`。
             #   13 页主尺上 **133/231 张 GT 网含无名电源符号**，每张都被这一处扣成部分分。
-            #   `STAGE2_STAR_PIN=1` 把 `*` 换成该符号**唯一那颗脚**的脚号（`pin_1` → `1`）。
             if num == "*":
                 ok = c in comps
-                if ok and STAR_PIN_ON:
-                    _grp = pins.get(c) or {}
-                    if isinstance(_grp, dict) and len(_grp) == 1:
-                        _pk = next(iter(_grp))
-                        if isinstance(_pk, str) and _pk.startswith("pin_"):
-                            num = _pk[4:]
-                            ok = bool(num)
-                            _rw = _rw or ok
             else:
                 ok = c in comps and ("pin_" + num) in (pins.get(c) or {})
             (keep if ok else bad).append(c + "." + num)
@@ -2229,7 +2219,7 @@ def _write_decision(out_dir: Path, summary: dict, cases_log: list,
         "env": {k: os.environ.get(k, "") for k in
                 ("LLM_MODEL", "LLM_BASE_URL", "NVIDIA_VISIBLE_DEVICES",
                  "STAGE2_BOTH_TOL", "STAGE2_DROP_UNKEYED", "STAGE2_NET_DROP_UNKEYED",
-                 "STAGE2_PIN_DROP_UNKEYED", "STAGE2_PIN_DROP_LAUNDERED",
+                 "STAGE2_PIN_DROP_UNKEYED",
                  "FUSION_REF_PRUNE", "FUSION_MODEL_SET",
                  "FUSION_MODEL_SET_MIN", "FUSION_MODEL_SET_MARGIN",
                  "FUSION_NAME_SNAP",

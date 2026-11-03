@@ -42020,3 +42020,70 @@ python -X utf8 work\_cv.py swEdgeMerge --run --env STAGE2_EDGE_MERGE=1      # 83
 python -X utf8 work\_cv.py sweepShip --run                                  # 84.5427 / 83.4893 / 80.9083
 python -X utf8 work\_poolgate.py swCombo1 --pool-ref pnDef STAGE2_PARTNAME_OCR=1 STAGE2_PREFIX_SKEL=1  # 29.1158
 ```
+
+## 5.565 死开关清理：102 个默认关开关删除（行为逐字节不变）
+
+### 5.565.1 来源
+
+§5.564 的 161 个候选中，**106 个开关开启后 4 页交付物逐字节不变**（`work/_swsweep_results.jsonl` 的 `sha_changed` 全假）。
+这些开关背后的代码在当前数据上从未产生任何影响 —— 按「模块本质上啥也没干就换掉」的原则清掉。
+
+### 5.565.2 做法与边界
+
+- **A 类（整支删除）**：开关读取点 + 只被它控制的代码块 → `stage2/run.py` 12 个、`text.py` 4 个、
+  `libpins.py` 3 个、`rowbind.py` 3 个、`pinrot.py` 4 个、`pinname.py` 2 个、`keyform.py` 2 个、
+  `pwlabel.py` 1 个、`submission/run.py` 2 个、`stage1/detect.py` 1 个（`STAGE1_MERGE_TP`）。
+- **B 类（部分清理）**：读取点与点名注释删除、分支体按原默认值保留
+  （`assign.py` 78 行、`assemble.py` 部分、`fusion/run.py`、`assets.py`、`stage1/pins.py`、`tools/**` 12 个、`tests/**` 2 个）
+  —— 行为不变，但死代码未整块挖除；报告里如实标注，未夸大成整支删除。
+- **保留 4 个**（不在删除之列）：
+  - `STAGE2_PIN_NUMBER_REPAIR`（`docs/RESULTS.md:38150` §5.513.5 复现块，38153/38154 行有 `--env`）
+  - `STAGE2_LIB_NUMNAME`（`RESULTS.md:39110` §5.526.4，39115 行）
+  - `STAGE2_ENS_ROLES`（`RESULTS.md:40622` §5.547.8，40632 行）
+  - `STAGE2_DESIG_DIGITS`（代码默认就开：`assign.py:1074` `env_on(..., "1")`；`submission/run.py:316-317` 在 VLM 模式会主动置 `"0"` ⇒ 离线 13 页验收覆盖不到 VLM 口径，跳过）
+- 所有 `*_DBG` 开关（`POWER_LABEL_DBG`/`ROW_BIND_DBG`/`LIB_PINS_DBG`/`GLYPH_VOTE_DBG`）**未动**。
+
+### 5.565.3 交付物（与删除前逐字节相同）
+
+| 项 | 值 |
+|---|---|
+| `work/_cv.py deadsw2 --run` | VERDICT **PASS**（13/13），contract 空 |
+| mean / official / judge | **84.5427 / 83.4893 / 80.9083**（逐位同 `sweepShip`） |
+| 轴损 /100 | comp 3.0550 · pin 4.3868 · netH 3.7919 · line 4.2236 = 15.4574 |
+| 13 页 `_Pred.json` sha256 | **13/13 与 `sweepShip` 全等** |
+| `compileall stage2 submission stage1` | rc=0 |
+| 106 名残留 | 4 名 / 6 文件 / 22 处，全在保留清单 |
+
+### 5.565.4 代码量
+
+`git -C eda-pcb diff --stat`：**32 files changed, +297 / −810**。
+
+| 文件 | 行数 |
+|---|---|
+| `stage2/assemble.py` | 5790 → 5748 |
+| `stage2/assign.py` | 3514 → 3514（78 行原位替换） |
+| `stage2/run.py` | 1055 → 930 |
+| `stage2/text.py` | 1339 → 1174 |
+| `stage1/detect.py` | 444 → 366 |
+| `stage2/libpins.py` | 937 → 902 |
+| `stage2/rowbind.py` | 247 → 185 |
+| `submission/run.py` | 2257 → 2247 |
+| `pwlabel/keyform/pinrot/pinname` | −5 / −8 / −26 / −16 |
+
+### 5.565.5 两个过程事实
+
+1. 首次验收时 4 个 lane 全部 `rc=3221225477`（0xC0000005，stage1 起跑即崩，日志停在「阶段一」），
+   同命令重跑即 13/13 通过；单进程单 case 一直正常 ⇒ 判为 4 lane × torch 并发加载的环境抖动，非本次改动引入。
+   **教训**：见到 13 份 103 字节空壳 `_Pred.json` + 全轴 0 的 `_cv/<tag>.json`，先重跑再判断。
+2. `eda-pcb/tools/diag/_run_recovered.py:47` 有一个**先于本次改动**就存在的 `SyntaxError`，未触碰
+   （故 `compileall eda-pcb/tools` 必然失败，本节验收只覆盖 stage2/submission/stage1）。
+
+### 5.565.6 复现
+```
+python -X utf8 work\_cv.py deadsw2 --run                              # 84.5427 / 83.4893 / 80.9083
+python -X utf8 work\_cmp_sha.py                                       # 13/13 sha256 = sweepShip
+python -X utf8 work\_sites3.py                                        # 4 名 / 6 文件 / 22 处
+python -X utf8 -m compileall -q eda-pcb\stage2 eda-pcb\submission eda-pcb\stage1
+```
+报告：`work/_deadsw106_report.md`（逐开关 106 行表 + 分文件 numstat + 保留清单），
+逐名被删行原文：`work/_deadsw106_deleted_lines.json`。

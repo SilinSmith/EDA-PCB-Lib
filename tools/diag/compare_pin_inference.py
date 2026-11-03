@@ -16,9 +16,9 @@ p.add_argument('--mono', choices=('on', 'off', 'auto'), default='on')
 p.add_argument('--cases', default='1,2,3,4,5,6,7,8,9,10')
 args = p.parse_args()
 os.environ.update(OMP_NUM_THREADS='4', MKL_NUM_THREADS='4', EDA_GPU_CAP='0',
-                  STAGE2_PINNUM_CONSENSUS='1', STAGE2_BOX_PIN_DUPLICATE_BEST='1',
+                  STAGE2_BOX_PIN_DUPLICATE_BEST='1',
                   STAGE2_PIN_TRUST_BIND='1', STAGE2_PIN_NAME_EDGE_MIDPOINT='0',
-                  STAGE2_PIN_NAME_OCR='on', STAGE2_MONO_PIN_OCR=args.mono)
+                  STAGE2_PIN_NAME_OCR='on')
 sys.path.insert(0, str(args.source.resolve()))
 from stage2 import run
 from stage2.text import TextEngine

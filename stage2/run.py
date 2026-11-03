@@ -65,12 +65,10 @@ PINCOL_WIN_KEYS = tuple(k.strip() for k in
 #    ★ 默认值：这里先全部 **off**（队友分支里默认是 1/auto），因为并进来必须先做
 #      A/B（用户 m55811 的要求：改了识别逻辑的要 A/B）。逐个 A/B 有正收益的再翻默认。
 #      已翻默认的三个（§5.515，13 页 +0.149/+0.149/+0.032、池 28.4589→28.5735）：
-#      `STAGE2_PIN_NUMBER_REPAIR`=1、`STAGE2_PIN_NAME_OCR`=auto、`STAGE2_PIN_OCR_JOIN`=1；
+#      `STAGE2_PIN_NUMBER_REPAIR`=1、`STAGE2_PIN_NAME_OCR`=auto；
 #      缺 `rapidocr-onnxruntime` 时两条读取器都 `provider is None → return []`，
 #      实测逐字节退回旧默认（13/13 sha256 相同）。
-#      · `STAGE2_COLOR_NUMBER_CROP`  =1 彩色引脚外部脚号重裁（`stage2/color_crops.py`）
-#      · `STAGE2_PIN_TEXT_CROP`      =1 完整旋转引脚词（`stage2/pin_text_crops.py`）
-#      · `STAGE2_PIN_LANE_CROP`      =1 独立引脚车道窗口 + 选择性恢复（§5.59 起**默认 1**：
+#      · 独立引脚车道窗口 + 选择性恢复（§5.59 起**默认开**：
 #                                        离线 +1.11/张、派生 +0.1868、精简 +0.20、完整 +0.31）
 #                                        （`stage2/pin_lane_crops.py` / `pin_lane_reading.py`）
 #        `STAGE2_PIN_LANE_CLEANUP`   =light/heavy，车道裁片的去杂强度
@@ -78,18 +76,15 @@ PINCOL_WIN_KEYS = tuple(k.strip() for k in
 #                                        （`stage2/pin_number_crops.py` / `pin_number_reading.py`）
 #      · `STAGE2_PIN_NAME_OCR`       =auto/on/off 可选 PP-OCR 名称识别
 #                                        （`stage2/pin_name_reading.py`，需 `requirements.pin-name-ocr.txt`）
-#        `STAGE2_MONO_PIN_OCR`       继承它；黑白引脚通道（`stage2/mono_pin_reading.py`）
+#        黑白引脚通道继承它（`stage2/mono_pin_reading.py`）
 #    依赖：`stage2/isolated_ocr.py`（单样本独立识别，避免 CRNN 依赖最长裁片）。
 #    可选依赖：`rapidocr-onnxruntime`（本机未装 ⇒ auto 会告警回退，on 会报错）。
 # ---------------------------------------------------------------------------
-COLOR_NUMBER_CROP = env_on("STAGE2_COLOR_NUMBER_CROP", "0")
-PIN_TEXT_CROP = env_on("STAGE2_PIN_TEXT_CROP", "0")
-PIN_LANE_CROP = env_on("STAGE2_PIN_LANE_CROP", "1")
 PIN_LANE_CLEANUP = os.environ.get("STAGE2_PIN_LANE_CLEANUP", "light").strip().lower()
 PIN_NAME_OCR = os.environ.get("STAGE2_PIN_NAME_OCR", "auto").strip().lower()
-MONO_PIN_OCR = os.environ.get("STAGE2_MONO_PIN_OCR", PIN_NAME_OCR).strip().lower()
+MONO_PIN_OCR = PIN_NAME_OCR
 PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "1")
-# ★ 同槽双通道联合断言（`STAGE2_PIN_OCR_JOIN`，§5.515 起默认 **1**；`stage2/pin_ocr_join.py`）：
+# ★ 同槽双通道联合断言（§5.515 起默认**开**；`stage2/pin_ocr_join.py`）：
 #   `STAGE2_PIN_NUMBER_REPAIR`（号）与 `STAGE2_PIN_NAME_OCR`（名）是两条独立外部通道，
 #   但读数进 `assign` 后按**槽**分配：号与名落到相邻的两个槽上时，两个槽各自缺一半，
 #   缺名字的那个被 `assemble.py` 的迟到 need-name 闸门整条丢掉 ⇒ 两条通道都对同一根
@@ -99,7 +94,6 @@ PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "1")
 #   打开后只做一件事：两条通道**对同一 `(component_id, pin_index)` 都接受**的槽，
 #   用缺的那一半补齐（不覆盖已有值、不新增槽、不删任何读数、不引入任何阈值）。
 #   必须与上面两个开关同时开：任一通道关掉 ⇒ 该通道无读数 ⇒ 自然弃权。
-PIN_OCR_JOIN = env_on("STAGE2_PIN_OCR_JOIN", "1")
 # ★ 整颗元件「引脚号 ↔ 引脚名」抄表（`STAGE2_PIN_TABLE`，默认 **0=关**；
 #   `stage2/pin_table_vlm.py`）：上面那条联合断言要求**两条单脚通道对同一个槽都接受**
 #   才补缺的那一半；这里换一个证据源——把**整颗元件的符号裁片**（外扩
@@ -119,20 +113,6 @@ PIN_TABLE = env_on("STAGE2_PIN_TABLE", "0")
 #     `2` = 进取：`1` 之外再加「与现名相同」或「conf ≥ 0.90 且纯可打印 ASCII 且 ≥3 字符」
 PARTNAME_OCR = partname_ocr.level()
 
-# ★ 引脚「灰底证据」通道（`STAGE2_PIN_GREY_EVIDENCE`，§5.59 起默认 1）：
-#   队友的读音器（`pin_text_crops._observations`）只认「彩色端点」证据
-#   （`source ∈ COLOR_SOURCES`），而 `stage1/pin_evidence.py` 对我们的 220 个框
-#   引脚写的是**灰底**记录（没有 `source` 字段）⇒ 读数器长期是 no-op（§5.28/§5.29）。
-#   打开后：`trust == "trusted"` + `frame_confirmed` + 点与证据点一致 + 锚点贴框
-#   的灰底记录也能开出车道（几何判据一字未改，只放宽 source 门）。
-#   §5.30 量到 +1.98/张（`--no-vlm`，当时基线 71.65），但按纪律**留默认 0**
-#   等交付口径（VLM 开）同批 A/B；§5.59 补做后四档全为正（离线协议尺
-#   76.39→77.50、复刻尺 63.3417→63.7827、派生 14.5376→14.7244、
-#   精简 79.84→80.04、完整 79.66→79.97）⇒ 翻默认 1。
-#   ★ 只有与 `STAGE2_PIN_LANE_CROP=1` 同时开才有收益：单独开本闸实测
-#   与基线**逐位相同**（`tok_grey0` = `tok_g6def` = 76.39，其余三个读数器
-#   在本机仍是 no-op：号修复/彩色号要 PP-OCR，整词读数器净中性）。
-PIN_GREY_EVIDENCE = env_on("STAGE2_PIN_GREY_EVIDENCE", "1")
 
 # ★ 小字「放大重读」（`STAGE2_ZOOM_READ`，**默认 4 = 开**；0 表示关）。
 #   依据（`work/_tinydesig.py` + 直接取证，页 `0001` 的 `C6`）：位号字高只有 **8px**，
@@ -152,7 +132,6 @@ PIN_GREY_EVIDENCE = env_on("STAGE2_PIN_GREY_EVIDENCE", "1")
 ZOOM_READ = float(os.environ.get("STAGE2_ZOOM_READ", "4") or 0)
 ZOOM_READ_PAD = float(os.environ.get("STAGE2_ZOOM_READ_PAD", "40") or 40)
 ZOOM_READ_MINH = int(os.environ.get("STAGE2_ZOOM_READ_MINH", "2") or 2)
-ZOOM_READ_MAX = int(os.environ.get("STAGE2_ZOOM_READ_MAX", "0") or 0)
 ZOOM_READ_ROLES = tuple(x.strip() for x in os.environ.get(
     "STAGE2_ZOOM_READ_ROLES", "designator,value,pin_name,pin_number").split(",")
     if x.strip())
@@ -162,7 +141,6 @@ ZOOM_READ_ROLES = tuple(x.strip() for x in os.environ.get(
 # 这些盒子会抢走引脚名槽位。筛到位号形状后污染面才等于目标面。
 ZOOM_READ_KEEP = os.environ.get("STAGE2_ZOOM_READ_KEEP", "desig").strip().lower()
 ZOOM_READ_CONF = float(os.environ.get("STAGE2_ZOOM_READ_CONF", "0.6") or 0.6)
-ZOOM_READ_DUP = env_on("STAGE2_ZOOM_READ_DUP", "0")
 # `STAGE2_ZOOM_READ_MODE`：`add`=把放大读数当**新候选**并入（历史实现，实测会把
 #   槽位竞争搅乱：官方 case1 引脚 0.7308→0.5385）；`refine`=只**重读已存在的框**
 #   （低置信的），不变动候选数量 ⇒ 不会引入竞争者。默认 `refine`。
@@ -200,7 +178,6 @@ MS_TEXT_MINH = int(os.environ.get("STAGE2_MS_TEXT_MINH", "4") or 4)
 # `STAGE2_MS_TEXT=2` 85.54→**81.72**（netH 0.9633→0.8757，pin 0.7308→0.7037）。
 MS_TEXT_CONF = float(os.environ.get("STAGE2_MS_TEXT_CONF", "0.75") or 0.75)
 MS_TEXT_OUTSIDE = env_on("STAGE2_MS_TEXT_OUTSIDE", "1")   # 只收落在元件框外的框
-MS_TEXT_NOVEL = env_on("STAGE2_MS_TEXT_NOVEL", "1")       # 只收 1× 池里还没有的位号串
 MS_TEXT_KEEP_RE = re.compile(r"^[A-Z]{1,3}\d{1,4}[A-Z]?$") if env_on(
     "STAGE2_MS_TEXT_KEYS", "1") else None
 
@@ -211,33 +188,20 @@ MS_TEXT_KEEP_RE = re.compile(r"^[A-Z]{1,3}\d{1,4}[A-Z]?$") if env_on(
 #   把 pin 打崩（1.4× 集 59.53 → 33.43）⇒ 这族半径不是瓶颈，开关默认关。
 PAGE_SCALE_AUTO = env_on("STAGE2_PAGE_SCALE_AUTO", "0")
 PAGE_SCALE_DBG = env_on("STAGE2_PAGE_SCALE_DBG", "0")
-# ★ 引脚「信任闸门」：用队友 `stage1/pin_evidence.py` 的逐脚图像证据决定哪些脚
-#   不可信（`""`=关；`rejected` / `rejected+uncertain` / `uncertain`）。
-#   这是我们**缺的那条信息**（官方 10 张实测：trusted 的几何未命中率 23.2%，
-#   uncertain / rejected 都是 **100%**，见 `work\_evidpow.py`）。
-#   默认关：闸门会放下 26~78 个脚，网络成员引用可能悬空 ⇒ 必须 A/B 定去留。
-PIN_TRUST_DROP = os.environ.get("STAGE2_PIN_TRUST_DROP", "").strip().lower()
-_TRUST_LEVELS = {"rejected": ("rejected",),
-                 "uncertain": ("uncertain",),
-                 "rejected+uncertain": ("rejected", "uncertain")}
 # ★ 队友 13 个模块里的「读数器」注册表（`origin/codex/improve-pin-network-parsing`）。
 #   契约见各模块 docstring 顶部的【接口】块，也见 `process()` 里的用法注释。
 #   每项 = (名字, 开关, 模块, 函数, 需要的角色, 额外 kwargs)；
 #   kwargs 的值可以是 `roles -> value` 的函数（按角色决定要不要读名字/号）。
 PIN_READERS = [
-    ("color_number", COLOR_NUMBER_CROP, "color_crops", "read_color_numbers",
-     ("pin_number",), {}),
-    ("pin_text", PIN_TEXT_CROP, "pin_text_crops", "read_pin_texts",
-     ("pin_name", "pin_number"), {"grey_evidence": PIN_GREY_EVIDENCE}),
-    ("pin_lane", PIN_LANE_CROP, "pin_lane_reading", "read_pin_lanes",
+    ("pin_lane", True, "pin_lane_reading", "read_pin_lanes",
      ("pin_name", "pin_number"),
      {"include_names": lambda roles: roles is None or "pin_name" in roles,
       "include_numbers": lambda roles: roles is None or "pin_number" in roles,
-      "cleanup": PIN_LANE_CLEANUP, "grey_evidence": PIN_GREY_EVIDENCE}),
+     "cleanup": PIN_LANE_CLEANUP, "grey_evidence": True}),
     ("pin_number_repair", PIN_NUMBER_REPAIR, "pin_number_reading", "read_pin_numbers",
-     ("pin_number",), {"grey_evidence": PIN_GREY_EVIDENCE}),
+     ("pin_number",), {"grey_evidence": True}),
     ("pin_name_ocr", PIN_NAME_OCR != "off", "pin_name_reading", "read_pin_names",
-     ("pin_name",), {"mode": PIN_NAME_OCR, "grey_evidence": PIN_GREY_EVIDENCE}),
+     ("pin_name",), {"mode": PIN_NAME_OCR, "grey_evidence": True}),
     ("mono_pin_ocr", MONO_PIN_OCR != "off", "mono_pin_reading", "read_mono_pin_texts",
      ("pin_name", "pin_number"),
      {"mode": MONO_PIN_OCR,
@@ -367,76 +331,9 @@ def grow_candidates(doc, reads, engine, bgr, max_new: int = 600):
     return out
 
 
-def _trust_drop(doc: dict, mode: str):
-    """★ 引脚「信任闸门」：按队友的逐脚图像证据放下不可信的脚（我们自己的胶水）。
-
-    输入：`doc["pins"]`（stage1 合并后的框引脚，图像帧）与 `doc["pin_evidence"]`
-    （同键、**逐位对齐**的记录：`trust ∈ {trusted, uncertain, rejected}`、
-    `frame_confirmed`、`reason`、`source`、`point_img` …）。
-
-    语义（owner 规矩 ①：**不允许静默消失**）：
-      · 每一枚被放下的脚都写一条 `no_delete` 账本（`kind="drop"`，带原坐标、trust、
-        理由与 by=`stage2.run._trust_drop`），下游/审计仍能看见它曾经存在；
-      · 同时从 `doc["pins"][cid]` 与 `doc["pin_evidence"][cid]` 删**同一批下标**
-        （从后往前删），保证剩下两条列表仍逐位对齐 —— 下游所有按下标取证据的
-        读取器/绑定代码不需要知道闸门的存在。
-
-    为什么只在 stage2 动手：stage1 的网络（`nets` / `hyperGraph` 的成员引用）不重建
-    ⇒ 收益（引脚通道少 fp+fn）与代价（成员引用可能悬空）被隔离成一个可 A/B 的量。
-
-    实测依据（`work\\_evidpow.py`，官方 10 张 220 个框引脚，几何命中判据 ≤5px）：
-      trust=trusted   n=142  未命中 23.2% ｜ uncertain n=52 未命中 100% ｜
-      rejected        n=26   未命中 100%
-    """
-    levels = _TRUST_LEVELS.get(mode)
-    if not levels:
-        return doc, 0
-    pins = doc.get("pins") or {}
-    ev = doc.get("pin_evidence") or {}
-    try:
-        from cvparts.hypo import LEDGER
-    except Exception:  # 账本不可用时也必须能跑（只在诊断层损失溯源）
-        LEDGER = None
-    n = 0
-    for cid in list(pins.keys()):
-        plist = pins.get(cid)
-        recs = ev.get(cid) if isinstance(ev, dict) else None
-        if not isinstance(plist, list) or not isinstance(recs, list):
-            continue
-        drop = []
-        for i, r in enumerate(recs):
-            if i >= len(plist):
-                break
-            if isinstance(r, dict) and str(r.get("trust") or "") in levels:
-                drop.append(i)
-        for i in reversed(drop):
-            pt = list(plist[i]) if isinstance(plist[i], (list, tuple)) else plist[i]
-            r = recs[i] if i < len(recs) else {}
-            recs.pop(i)
-            plist.pop(i)
-            n += 1
-            if LEDGER is not None:
-                try:
-                    LEDGER.record(
-                        "drop", "trust:%s.%d" % (cid, i),
-                        before=[{"point_img": pt,
-                                 "trust": (r or {}).get("trust"),
-                                 "frame_confirmed": (r or {}).get("frame_confirmed"),
-                                 "reason": (r or {}).get("reason"),
-                                 "source": (r or {}).get("source")}],
-                        reason="逐脚图像证据判为 %s（框未贴住/无正常笔画），从活动集移出"
-                               % ((r or {}).get("trust"),),
-                        by="stage2.run._trust_drop")
-                except Exception:
-                    pass
-    return doc, n
-
-
 def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
             roles=None, do_ocr: bool = True, min_conf: float = 0.0,
             texts: str = "both", recut: str = "off") -> dict:
-    # 命令行以外（`submission/run.py` 的整条管线）也能开「长框重读」：`STAGE2_RECUT=grow`。
-    recut = os.environ.get("STAGE2_RECUT") or recut
     t0 = time.time()
     doc = json.loads((stage1_dir / ("%s.stage1.json" % case)).read_text(encoding="utf-8"))
     png = (doc.get("image") or {}).get("path")
@@ -560,11 +457,10 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                     continue
                 _got = engine.read(_up, [a[1] for a in _add], MS_TEXT_ROLES)
                 _seen = set()
-                if MS_TEXT_NOVEL:
-                    for _r0 in reads:
-                        _v0 = (_r0.get("reads") or {}).get("designator")
-                        if _v0 and _v0[0]:
-                            _seen.add(_v0[0].strip())
+                for _r0 in reads:
+                    _v0 = (_r0.get("reads") or {}).get("designator")
+                    if _v0 and _v0[0]:
+                        _seen.add(_v0[0].strip())
                 for (_b1, _b2), _r in zip(_add, _got):
                     _rd = _r.get("reads") or {}
                     if MS_TEXT_KEEP_RE:
@@ -572,7 +468,7 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                         if not _dv or not _dv[0] or _dv[1] < MS_TEXT_CONF \
                                 or not MS_TEXT_KEEP_RE.match(_dv[0].strip()):
                             continue
-                        if MS_TEXT_NOVEL and _dv[0].strip() in _seen:
+                        if _dv[0].strip() in _seen:
                             continue
                         _seen.add(_dv[0].strip())
                         _rd = {"designator": _dv}
@@ -651,8 +547,6 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         try:
             import cv2 as _cv2                      # noqa: PLC0415
             _zc = [c for c in (doc.get("components") or []) if c.get("bbox_img")]
-            if ZOOM_READ_MAX and len(_zc) > ZOOM_READ_MAX:
-                _zc = _zc[:ZOOM_READ_MAX]
             _seen = {tuple(round(float(v), 2) for v in b) for b in boxes}
             _added = 0
             for _c in _zc:
@@ -689,7 +583,7 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                     if _k in _seen:
                         continue
                     _mid = (0.5 * (_b[0] + _b[2]), 0.5 * (_b[1] + _b[3]))
-                    if not ZOOM_READ_DUP and any(
+                    if any(
                             (0.5 * (b[0] + b[2]) - _mid[0]) ** 2
                             + (0.5 * (b[1] + b[3]) - _mid[1]) ** 2 <= 36.0 for b in boxes):
                         continue
@@ -703,21 +597,6 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                 sys.stderr.write("[zoom] comps=%d added=%d\n" % (len(_zc), _added))
         except Exception as _e:                     # 失败就退回整页读数，不拖垮管线
             src += "+zoomfail(%s)" % type(_e).__name__
-    # ★★ 用**队友的逐脚图像证据**给引脚做「信任闸门」（我们自己的胶水，开关默认关）。
-    #   依据（work\_evidpow.py，官方 10 张的框引脚 220 个）：
-    #       trust=trusted   n=142  几何未命中 23.2%
-    #       trust=uncertain n= 52  几何未命中 100%
-    #       trust=rejected  n= 26  几何未命中 100%
-    #   ⇒ 这就是**我们没有的信息**：它能把「离任何 GT 引脚都 >5px」的假脚全挑出来
-    #     （78/220 = 35%），而我们的判据目前只有「文字读没读出来」。
-    #   闸门只在这一层生效（不动 stage1 已建好的网络引用）⇒ 单独隔离出引脚通道的
-    #   收益/代价，代价方向是**网络成员引用可能变成悬空**，必须 A/B 说了算。
-    #   丢掉的脚印一条 `no_delete` 账本（不静默消失）。
-    if PIN_TRUST_DROP:
-        doc, _n_trust = _trust_drop(doc, PIN_TRUST_DROP)
-        if _n_trust:
-            print("[stage2] 引脚信任闸门（PIN_TRUST_DROP=%s）：放下 %d 个脚"
-                  % (PIN_TRUST_DROP, _n_trust))
     # ★ 队友分支的追加式读取器 —— **统一注册表**（开关与清单见文件头的 PIN_READERS）。
     #
     # 为什么是注册表：这些读取器/裁片器是「可重组的部件」，只有接口一致才能被 workflow
@@ -747,7 +626,7 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                 _extra = [dict(r, reads={k: v for k, v in r.get("reads", {}).items()
                                          if k in roles})
                           for r in _extra if any(k in r.get("reads", {}) for k in roles)]
-            if PIN_OCR_JOIN and _name in ("pin_number_repair", "pin_name_ocr"):
+            if _name in ("pin_number_repair", "pin_name_ocr"):
                 _ocr_ch[_name] = list(_extra)
             if _extra:
                 reads = list(reads) + _extra
@@ -796,7 +675,7 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
             reads = list(reads) + list(extra)
             a = assign(doc.get("components") or [], doc.get("pins") or {}, reads,
                        pincol=doc.get("pincol"), pin_evidence=doc.get("pin_evidence"))
-    # ★ 引脚名救援（`stage2/pinname.py`，`STAGE2_PINNAME_RESCUE` 默认**开**，2026-10-16）：
+    # ★ 引脚名救援（`stage2/pinname.py`，默认**开**，2026-10-16）：
     #   「号读对了、名字没读到」的 box 脚以前会被 `assemble.py` 的 NEED_NAME 闸门
     #   整条丢掉（官方 9 张：缺号 51 里有 23 根 = 45%）。这里从脚点往体内切带、
     #   剔掉体描边、按行分组只取离脚最近的一行，读一次；过闸门才写回名字。
@@ -826,7 +705,7 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         _nrr = _pnnr.fix(bgr, doc, a, engine)
     except Exception as _e:                      # noqa: BLE001
         _nrr = {"on": True, "error": "%s: %s" % (type(_e).__name__, _e)}
-    # ★ 竖排网名补读（`stage2/pwlabel.py`，`STAGE2_POWER_LABEL_ROT` 默认**开**）：
+    # ★ 竖排网名补读（`stage2/pwlabel.py`，默认**开**）：
     #   电源符号的网名（`+5V`/`VCC`/`3.3V`）在这一版图里是**旋转 90° 竖排**印的，
     #   横排 CRNN 只读得出 `'R'` 这类碎片（open_GT case2 实测 0.47 → 转帧 0.95）。
     #   官方 GT 的电源符号都带 `value`，我们缺 35 个 `v` ⇒ 官方口径最大的一处缺口。
@@ -839,10 +718,10 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
     # ★ 行内位号/值重绑（`stage2/rowbind.py`）：**不在这里调**。最终位号由
     #   `fusion.claims` 的 `solve` 全局重裁，stage2 里改什么都不留痕（`claims.py:713`
     #   把 `assigned` 全部降级成候选）——落在 `fusion/run.py` 的 `_assemble` 之后。
-    # ★ 同槽双通道联合断言（`STAGE2_PIN_OCR_JOIN`，默认 0；见文件头常量处注释）：
+    # ★ 同槽双通道联合断言（见文件头常量处注释）：
     #   放在 `build_doc` 之前、且在上面所有「单通道」修法（pinname/pinrot/
     #   pinnamereread）之后 —— 只补它们各自补不出来的那一半，已有的值一律不覆盖。
-    if PIN_OCR_JOIN and _ocr_ch:
+    if _ocr_ch:
         try:
             from . import pin_ocr_join as _poj
             _ty = {str(c.get("id")): c.get("type") for c in doc.get("components") or []}
@@ -906,7 +785,7 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         _nd["demoted"] = _sm.HIST_DEMOTED[-60:]
         _nd["reserve"] = _sm.HIST_RESERVE[-60:]
         _nd["residual"] = list(_sm.LAST_RESIDUAL)[-40:]
-        # ★ 内涵「遗漏检测」（m48732，`STAGE2_CONFORM_AUDIT` 默认开）：本来按内涵
+        # ★ 内涵「遗漏检测」（m48732）：本来按内涵
         #   规则（位号前缀 ⇄ 元件类型互证、削开头胶连）能拿到键、却因为判型/取证
         #   不对而最终没挂上键的元件。官方 10 张上它恰好点出 4 颗被丢掉的 LED
         #   （case 6 ×2、case 7、case 10）。**只写旁路报告**，不进交付物。
@@ -914,10 +793,6 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         # ★ 内涵「多余检测」（同一开关）：我方发出去的、内涵上必然判错的元件
         #   （`d`/`led` 的 Name 槽在官方 10GT 里是型号，我方 `name = key`）。
         _nd["conform_extra"] = list(_le)
-        if os.environ.get("STAGE2_DUMP_READS", "0").strip().lower() not in (
-                "", "0", "false", "off", "none"):
-            from .assign import LAST_TEXT_READS as _tr
-            _nd["text_reads"] = list(_tr)
         # ★ 大一统交叉校验层（用户 m50175，`CV_UNIFIED` 默认 0=关）：把已有的各种
         #   候选池/降权痕迹**只读**投影成统一 `Registry`（5 种并行候选表示 → `Claim`），
         #   跑内置校验（几何判据走 `GridIndex`/`AlongIndex`），产出 `Verdict` 台账。

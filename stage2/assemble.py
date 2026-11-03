@@ -111,31 +111,31 @@ DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED", "0")
 PIN_DROP_UNKEYED = env_on("STAGE2_PIN_DROP_UNKEYED", "0")
 
 # ★★ 电源/地符号的**兜底键引脚**即便 `PIN_DROP_UNKEYED=0` 也照旧不发
-# （`STAGE2_DROP_UNKEYED_POWER`，默认 1）。依据（2026-11，官方 10 张 GT vs 200 池评测半）：
+# （默认 1）。依据（2026-11，官方 10 张 GT vs 200 池评测半）：
 #   把 `PIN/NET_DROP_UNKEYED` 一起改 0 之后，**池子 +2.03 分、官方 10 张 −2.85 分**（protocol4 口径）。
 #   差别就在这批符号上：官方 10 张我们检出的无名件**全是** `gnd`/`v`（113 颗 / 230 脚，`box_unkeyed=0`），
 #   池子里则有 111 颗无名 `box` + 780 颗无名被动件。电源符号的 GT 引脚号是源文档内部号
 #   （`∅200` 的 pin 是 `200`、名字 `P_31`），我们的 `p123.pin_1` 即使经坐标改写也对不上，
 #   而它们挂的网一旦进了 hyperGraph 就只贡献 fp ⇒ 单独对它们保留旧行为。
-_PWR_DROP_UNKEYED = env_on("STAGE2_DROP_UNKEYED_POWER", "0")
+_PWR_DROP_UNKEYED = False
 # 电源/地符号的兜底键**引脚与超图引用**即便页面级证据闸门判「不发」也保留
 # （`STAGE2_KEEP_UNKEYED_POWER`，默认 0 = 关，仅做对照臂）。
 # 依据：官方 10 张里 GT 的 108 颗电源/地符号 **100% 都在 hyperGraph 里**（占 22.2% 引用），
 # 而我们检出的 108 颗里 0 颗有引脚、0 颗进网 ⇒ 每个电源网的白白丢一个顶点。
 # 若把所有缺失顶点补回配对网，netH 天花板 +0.1724（其中 +0.1589 来自 gnd/v）。
 _KEEP_UNK_POWER = env_on("STAGE2_KEEP_UNKEYED_POWER", "0")
-# ★ 「整页位号都读不出」时不要连引脚一起丢（`STAGE2_KEEP_UNKEYED_IF_NO_DESIG`，默认 0）。
+# ★ 「整页位号都读不出」时不要连引脚一起丢（默认 0）。
 #   池子 82/200 个案的位号只有 5–8px（`0024` 印的是 7px 蓝字 `K7`），OCR 读不出来 ⇒
 #   位号列空 ⇒ 兜底键 ⇒ `PIN_DROP_UNKEYED` 把整页引脚清零：`0024` 29 颗元件最后只剩
 #   **1 个引脚、1 条网**（GT 27 颗 / 38 条网），引脚轴与两个网轴全归零。本开关在
 #   「整页位号数 ≤ max(1, 10%×元件数)」时保留兜底键元件的引脚，让几何轴还能得分。
-KEEP_UNKEYED_IF_NO_DESIG = env_on("STAGE2_KEEP_UNKEYED_IF_NO_DESIG", "0")
+KEEP_UNKEYED_IF_NO_DESIG = False
 
-# ★ `d` / `led` 类型互纠（`STAGE2_TYPE_DESIG_FIX`，默认 1）：用**读到的位号文字**当证据，
+# ★ `d` / `led` 类型互纠（默认 1）：用**读到的位号文字**当证据，
 # `LED*` ⇒ `led`、`D<n>` ⇒ `d`。理由与读数见 `build_doc` 里的注释（13 张 +0.20）。
-TYPE_DESIG_FIX = env_on("STAGE2_TYPE_DESIG_FIX", "1")
+TYPE_DESIG_FIX = True
 
-# ★★ 「被洗白的兜底键」也认回无名元件（`STAGE2_PIN_DROP_LAUNDERED`，默认 1）。
+# ★★ 「被洗白的兜底键」也认回无名元件（默认开）。
 #
 # 上游（`assigned[cid]["designator"]["canon"]`，实测 `_by = "solve:vlm:enrich"`）会把**已经
 # 发过的兜底键 `pNNN`** 当成「读出来的位号」回填，于是 `build_doc` 的 designator 分支拿到一个
@@ -147,15 +147,13 @@ TYPE_DESIG_FIX = env_on("STAGE2_TYPE_DESIG_FIX", "1")
 # 官方 10 张 **61.7856 → 65.5257（+3.7401）**，其中 pin 0.596239 → 0.745844（+0.1496），
 # comp/netH/netL **逐位不变**；`protocol2` 主尺 **79.30 → 79.30（±0.0000**，它只算 box 引脚）；
 # 派生集同向（见 `docs/RESULTS.md` §5.39）。
-# `=0` 退回修复前的行为（**只作 A/B 对照**，不要当交付口径）。
-PIN_DROP_LAUNDERED = env_on("STAGE2_PIN_DROP_LAUNDERED", "1")
 
 # ---------------------------------------------------------------------------
-# ★★ 内部合并类 `tp` 的**文本闸门**（只跟 `STAGE1_MERGE_TP=1` 配套，默认 off）。
+# ★★ 内部合并类 `tp` 的**文本闸门**（stage1 已不再产 `tp`，此闸门只对历史输入生效）。
 #
 # 业主原话（m00001）：「testpoint 和跟他搞混的那个则直接合并成一个（YOLO识别阶段），
 # 而在**文本绑定时**才决定他到底是哪个」。检测阶段只出一个类 `tp`
-# （`stage1/detect.py` 的 `MERGE_TP`），**在这里**落回官方类名。
+# （历史上由 `stage1/detect.py` 的检测阶段合并产出），**在这里**落回官方类名。
 #
 # 为什么选 `assemble.py` 而不是 `assign.py`：`build_doc` 就是「元件键 → 官方交付
 # 文档」的那一步，也是**唯一**一处把 `c["type"]` 写进交付产物的地方
@@ -188,19 +186,17 @@ PIN_DROP_LAUNDERED = env_on("STAGE2_PIN_DROP_LAUNDERED", "1")
 #   凡 CV 给了子类型的（`ring3`/`hole`/`dot`）6 张上全部落在 GT `testpoint` 上，
 #   一个 CV 子类型都没有的（`0001`/`0087`/`0187`）全部落在 GT `pin` 上（0 例反例）。
 #   把 `hole`/`dot` 算成 `pin` 会让 0011 的 12 个 + 0102 的 8 个 testpoint 全变错类。
-#   `STAGE2_TP_CV_SUBTYPES` 用来切臂：默认仍是 task 口径的 `ring3`（**不含**
+# 用来切臂：默认仍是 task 口径的 `ring3`（**不含**
 #   `hole`/`dot`）。**放宽到 `ring3,hole,dot` 今天是一个逐位相同的 no-op**：
-#   闸门台账（`STAGE2_TP_LEDGER=1`）显示 6 张里真正绑上位号的只有 `无 19 / ring3 12`，
+#   闸门台账显示 6 张里真正绑上位号的只有 `无 19 / ring3 12`，
 #   `hole`（0011 的 13 个）与 `dot`（0102 的 11+1 个）**一个都没绑上**、早在 `unkeyed`
 #   那一步就被丢了。所以按实测口径的正确取值是 `ring3,hole,dot`，但今天不产生分数差异，
 #   默认保持 task 原话的 `ring3`；等位号绑定能力上来（例如 CRNN 前缀骨架那类改动）
 #   再打开，免得那时 hole/dot 被错判成 `pin`。
 TP_MERGED = "tp"
-# 同一个环境变量在 `stage1/detect.py` 里也读一次（那里负责合并，这里负责决议）。
-MERGE_TP = env_on("STAGE1_MERGE_TP", "0")
 TP_CV_SUBTYPES = frozenset(s.strip().lower() for s in
-                           env_str("STAGE2_TP_CV_SUBTYPES", "ring3").split(",") if s.strip())
-# `STAGE2_TP_TRUST_EVIDENCE`（默认 1）：`tp` 的位号必须**带着读出证据**才算「绑上了」。
+                           "ring3".split(",") if s.strip())
+#（默认 1）：`tp` 的位号必须**带着读出证据**才算「绑上了」。
 # 只有 `canon` 一个字段的空壳位号（融合层凭空补出来的那种）不算，整颗元件丢掉。
 # 动机（2026-10-08 实测，`work/_tpmerge_who.py`）：0087 的 stage2 侧只有 8 个 tp
 # 拿到 canon，到了 `runs/fusion/_assigned/0087.json` 变成 **38** 个，多出的 30 个形如
@@ -211,11 +207,7 @@ TP_CV_SUBTYPES = frozenset(s.strip().lower() for s in
 # compF1 0.1923→0.1546、总分 −0.0466。判据 = 除 `canon`/`_by` 外**还有别的字段**：
 # `stage2/assign.py:862` 写的位号一定带 `{"text","canon","conf","box","d","fit","box_i"}`，
 # 而融合层凭空补的只有 `canon`（+`_by`）。
-TP_TRUST_EV = env_on("STAGE2_TP_TRUST_EVIDENCE", "1")
-# 决议台账（只用于诊断，不进交付产物）：每条 = 为什么被丢 / 落成了哪个官方类名。
-# 默认关（`STAGE2_TP_LEDGER=1` 打开），免得给不关心的人白建 list。
-TP_LEDGER_ON = env_on("STAGE2_TP_LEDGER", "0")
-TP_LEDGER: List[dict] = []
+TP_TRUST_EV = True
 
 # `box`(IC) 的引脚号：OCR 读出的号**一颗 IC 里有一个读废就整颗退回位置号**，
 # 还是**逐引脚**回退。
@@ -230,20 +222,20 @@ TP_LEDGER: List[dict] = []
 # 新行为（=1，默认）逐引脚采信：某个号是 1..999 的整数、且没跟同一颗 IC 里别的
 # 采信号撞，就用它；否则用位置号补，并避开已经用掉的号。**严格弱于全对**（全对时
 # 两者输出相同），但把「71 对 1 错」从「全错」救回「71 对」。
-BOX_PIN_PARTIAL = env_on("STAGE2_BOX_PIN_PARTIAL", "1")
-# ★ `STAGE2_PINNUM_SIDE`（默认 **1**，§5.427）：IC 一侧的引脚号在图上恒为一段**连续整数**，
+BOX_PIN_PARTIAL = True
+# ★（默认 **1**，§5.427）：IC 一侧的引脚号在图上恒为一段**连续整数**，
 #   所以「这一侧只有一格没读到号、其余都读到」时，缺的号是集合差而不是猜测。
 #   见 `build_doc` 里 `raw` 之后的补全块。
-PINNUM_SIDE = env_on("STAGE2_PINNUM_SIDE", "1")
-# ★ `STAGE2_PIN_DUPNUM`（默认 **1**，§5.430）：同一颗元件上两个槽读到同一个引脚号时，
+PINNUM_SIDE = True
+# ★（默认 **1**，§5.430）：同一颗元件上两个槽读到同一个引脚号时，
 #   保留「名字也读到了」的那个槽（原来按 stage1 候选顺序，跟谁是那根脚无关）。
-PIN_DUPNUM = env_on("STAGE2_PIN_DUPNUM", "1")
-# ★ `STAGE2_PINNUM_ALNUM_NAMED`（默认 **0**，§5.441 判否）：连接器类元件（`USB1` 这种）的引脚号是
+PIN_DUPNUM = True
+# ★（默认 **0**，§5.441 判否）：连接器类元件（`USB1` 这种）的引脚号是
 #   字母数字混排（`A12` / `B5`）。§5.429 试过「所有字母数字号一律放行」⇒ 13 张 −0.22（「号对、名错」
 #   在官方 `pin_f1` 里是 fp+fn 双罚，比不发更差）。§5.441 又加了「名也读到了」这道闸重测：
 #   **76.88（−0.21）**，`case11` pin 0.357→0.312、`case1` 0.514→0.500 ⇒ 那些槽的**名**本身也不对
 #   （`case11 USB1` 读到 `A8`，GT 里没有这个号），所以这条路封口，默认关。
-PINNUM_ALNUM_NAMED = env_on("STAGE2_PINNUM_ALNUM_NAMED", "1")
+PINNUM_ALNUM_NAMED = True
 _ALNUM_NUM_RE = re.compile(r"^[A-Za-z]{1,2}\d{1,3}$")
 # ★ `STAGE2_PINNUM_ALNUM_NEAR`（默认 **0** = 关，`"dx,dy"` 像素）：给上面那道「字母数字号」闸
 #   加一条**几何一致性**判据 —— 号文字框的中心必须落在该脚点上（|dx|<=dx 且 |dy|<=dy）。
@@ -284,10 +276,16 @@ INBOX_ROW = float(os.environ.get("STAGE2_PINNAME_INBOX_ROW", "10") or 10)
 INBOX_CONF = float(os.environ.get("STAGE2_PINNAME_INBOX_CONF", "0.5") or 0.5)
 INBOX_MAXLEN = int(os.environ.get("STAGE2_PINNAME_INBOX_MAXLEN", "12") or 12)
 INBOX_ROLE = (os.environ.get("STAGE2_PINNAME_INBOX_ROLE", "pin_name") or "pin_name").strip()
-INBOX_STRICT = env_on("STAGE2_PINNAME_INBOX_STRICT", "1")
+INBOX_STRICT = True
 # 已经有号的槽要不要贴名字：`visa` 要库**正面确认**（号→名唯一且一致），`veto` 只在
 # 库里能确认而**矛盾**时否决，`off` 不查库。贴错名是 fp+fn 双罚，所以默认 `visa`。
 INBOX_GUARD = (os.environ.get("STAGE2_PINNAME_INBOX_GUARD", "visa") or "visa").strip().lower()
+# ★ `STAGE2_PINNAME_INBOX_FILL`（默认 `0`）：**位置补位号**（`fill=True`，不是 OCR 读出来的号）
+#   的槽也允许贴体内名字 —— 前提是「名字在库里唯一映射一个号」。动机：`visa` 护栏拿
+#   补位号去查 `号→名` 必然查不到 ⇒ 直接跳过，于是 `case11 USB1` 的 `CC1`/`CC2`
+#   （库里唯一：`A5`/`B5`）永远进不来；而规则 A 恰恰只吃 `fill=True` 的槽、用
+#   `名字→号` 反推真号 —— 两道闸互为前提，谁也过不去。本开关只松开第一道。
+INBOX_FILL = env_on("STAGE2_PINNAME_INBOX_FILL", "0")
 
 
 
@@ -321,20 +319,20 @@ PINNUM_SEQ = env_on("STAGE2_PINNUM_SEQ", "0")
 #   「或该号在库里存在」，让库的 `(型号, 号) → 名` 能把名字一起补上。
 PINNUM_LIBNUM = env_on("STAGE2_PINNUM_LIBNUM", "0")
 
-# ★ `STAGE2_BOX_ALONE_U1`（默认 **1**，§5.262）：整页只有一颗 `box`、它又没读到位号时，
+# ★（默认 **1**，§5.262）：整页只有一颗 `box`、它又没读到位号时，
 #   按惯例命名为 `U1`。动机：`10_GTcase`（datasheet 派生 10 张）里 6 张**不印位号**、
 #   只印型号（`0065` 印的是 `LM2578A` 和脚号 1..8），GT 仍按惯例叫 `U1`；我们发兜底键
 #   `pNNN` ⇒ 该元件配不上 GT，且它的引脚被 `PIN_DROP_UNKEYED` **整颗丢掉**（`0065`/`0059`/
 #   `0042` 的 box 引脚发 0 个），pin F1 直接爆 0（派生 10 张里 7 张 pin F1 = 0，见 §5.262）。
 #   实测：派生 10 张 +0.73；池里触发 13 案 **+3.98（t 2.77）**、整体 +0.24（t 1.78）；
 #   官方 10 张逐位不变（§5.263）。
-BOX_ALONE_U1 = env_on("STAGE2_BOX_ALONE_U1", "1")
+BOX_ALONE_U1 = True
 
-# ★ `STAGE2_BOX_GAP_U1`（默认 **0，判负**，§5.264）：把上面那条放宽到「整页 box 数 k、
+# ★（默认 **0，判负**，§5.264）：把上面那条放宽到「整页 box 数 k、
 #   读出 U 号正好 k-1 个、且都在 1..k 里」⇒ 缺的那个号补给没读到号的那颗。
 #   `work/_ugap.py` 审计 26 次触发里补对 20 / 补错 6（77%），但实测 blk1 **−0.122（1胜6负）**
 #   ⇒ 判负，代码保留、默认关。
-BOX_GAP_U1 = env_on("STAGE2_BOX_GAP_U1", "0")
+BOX_GAP_U1 = False
 
 # `STAGE2_BOX_PIN_DROP_UNREAD`：`box`(IC) 元件里**没读出号、靠位置补出来**的引脚桩
 # 不再写进引脚表（也不进网络），而不是给它发明一个位置号（`8`/`9`/…）。
@@ -422,12 +420,12 @@ PIN_KEEP_FRAC = float(os.environ.get("STAGE2_PIN_KEEP_FRAC", "0.5") or 0.0)
 PIN_FILL_ELIM = env_on("STAGE2_PIN_FILL_ELIM", "0")
 # 上面这条的引线半径：只认「名字就贴在导线端点上」的桩（`case12 U1 GND` 是 0.0px）。
 PIN_FILL_ELIM_R = float(os.environ.get("STAGE2_PIN_FILL_ELIM_R", "3.0") or 0.0)
-# ★★ 脚名**尾随下划线**归一（`STAGE2_PINNAME_UNDERSCORE`，默认 **1 = 开**，§5.550：13 页 +0.17，只动 case10 `VIN_`）。
+# ★★ 脚名**尾随下划线**归一（默认 **1 = 开**，§5.550：13 页 +0.17，只动 case10 `VIN_`）。
 #   病（R-b 识别器换掉之后的新回归）：`open_GT case10 U1 pin_1` 读成 `VIN_`（GT `VIN`），
 #   交付 13 张里只此 1 处、200 池里只 `0018 U1 pin_24 = VDD_` 1 处，而 **GT 侧 0 处**带
 #   尾随 `_`（`D+`/`+`/`-` 这些合法尾字符不受影响：本开关只剥 `_`）。
 #   只剥**尾随**、不剥中间（`D_+` 之类一律不动），且剥完为空就保留原样（`_` 本身不是名字）。
-PINNAME_UNDERSCORE = env_on("STAGE2_PINNAME_UNDERSCORE", "1")
+PINNAME_UNDERSCORE = True
 
 
 def _named_slot_ok(nm, ctx=None) -> bool:
@@ -530,11 +528,11 @@ _MODEL_RE = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9][A-Za-z0-9\-\+/.]{3,}
 def looks_like_model(s):
     """型号样式的文字：至少 4 字符、同时含字母和数字（`SS34` / `NCD0603Y2`）。"""
     return bool(_MODEL_RE.match(str(s or "").strip()))
-# IC 型号名「补全」到元件库规范键（`STAGE2_NAME_SNAP`，**默认 0 = 关**）：OCR 常截掉型号尾部，
+# IC 型号名「补全」到元件库规范键（**默认 0 = 关**）：OCR 常截掉型号尾部，
 # 库键是精确的。实测 `open_GT` 13 张上 `LibCtx.key_for` 对这批截断型号一个都命中不了
 # （`STMPS2141T`/`XB760A`/`MP2C12`/`TPA33` 全 None，见 `docs/RESULTS.md` §5.401.3）⇒ 零效果，
 # 默认关闭，留着只是给「库更新后用 `=1` 复测」留个入口。
-NAME_SNAP = int(os.environ.get("STAGE2_NAME_SNAP", "0"))
+NAME_SNAP = 0
 NAME_SNAP_RATIO = float(os.environ.get("STAGE2_NAME_SNAP_RATIO", "0.85"))
 # ★ box 件「型号名文字框」重读（`STAGE2_PARTNAME_OCR`，默认 `0` = 关；`stage2/partname_ocr.py`）：
 #   把 `partname` 文字框单独重裁再送 PP-OCR，只在与库键 / 高置信读法吻合时才覆盖 `Name`。
@@ -560,7 +558,7 @@ BOX_PIN_NEED_NAME_LATE = _BOX_NEED_NAME_MODE in ("2", "late", "lib", "after",
 #   本身就是纯 fp。⇒ **默认仍是 `2`，模式 3 只作为已量过的备选留档**（别再默认打开）。
 _BOX_NEED_NAME_KEEPREAD = _BOX_NEED_NAME_MODE in ("3", "kept", "readnum")
 
-# ★ 官方元器件库（`cpntLibrary`）引脚先验的**总闸**：`STAGE2_LIB_PINS`，**默认 `1`（开）**。
+# ★ 官方元器件库（`cpntLibrary`）引脚先验的**总闸**：**默认 `1`（开）**。
 # ★★ 默认值在 2026-10-09 **从 `0` 翻成 `1`**，依据是 220 张回归（`work\tools\diag\_libpins_cpu.py`
 #    + `work\tools\diag\_split220.py`，输入 `work\_full220\runs\stage1` + `work\_f220_A\_assigned`）：
 #   官方 10GT 10 张 62.5743→**65.1834（+2.6091，7 涨 0 跌**；pin tp 38→47 / fp 42→38 / fn 98→89）；
@@ -578,11 +576,10 @@ _BOX_NEED_NAME_KEEPREAD = _BOX_NEED_NAME_MODE in ("3", "kept", "readnum")
 #   旧的写死默认是本机 `work\data\cpntLibrary.json`，**容器里不存在**（`work\` 不进镜像）
 #   ⇒ 默认开也白开。
 #   改路径的动机见 `eda-pcb\docs\COMPETITION_RULES.md`（「交付包必须带」那条）。
-#   关掉（`STAGE2_LIB_PINS=0`）时本文件不会 import `stage2.libpins`，产物与不挂接这条通道时
-#   **逐字节一致**。两条规则与唯一性判据见 `stage2/libpins.py` 的模块 docstring。
+#   本通道常开（2026-10-09 起）；`stage2.libpins` 在 `build_doc` 里按需 import。
+#   两条规则与唯一性判据见 `stage2/libpins.py` 的模块 docstring。
 #   挂接点在 `build_doc` 的 box 引脚路径：规则 A 在「局部采信 + 位置号补位」之后**就地补号**，
 #   规则 B 在出组时**改名**。
-LIB_PINS = env_on("STAGE2_LIB_PINS", "1")
 #: `=1` 时无论 `STAGE2_DBG_PINS` 都打印本通道补/改了几处（诊断用）。
 LIB_PINS_DBG = env_on("STAGE2_LIB_PINS_DBG", "0")
 # ★★ **规则 C：号 → 名（`STAGE2_LIB_NUMNAME`，默认 `0` = 完全惰性）**。
@@ -702,7 +699,7 @@ POWER_TYPES = frozenset((
     "gnd", "gnda", "gndd", "agnd", "dgnd", "pgnd", "gnd_ref", "earth",
     "v", "vcc", "vdd", "vbus_in", "net_input", "net_output", "power"))
 
-# ★ 电源/地符号的 `value`（`STAGE2_POWER_VALUE`，默认 1 = 开）。
+# ★ 电源/地符号的 `value`（默认 1 = 开）。
 # 依据：官方 GT 里这批符号**都带 value** —— `10GT` 的 gnd 59 / v 49 全有、`open_GT-1020`
 # 的 gnd 83 / v 51 / net_input 8 / net_output 1 全有；而我们的 Pred 一律 `value=None`。
 # `work/_strictpow.py`（按 `评测要求.pdf` 的「其余元件比 type/name/value」）实测：
@@ -711,7 +708,7 @@ POWER_TYPES = frozenset((
 # 地符号恒为字面 `GND`；电源符号是印在符号旁的网名（`+5V` / `VCC` / `3.3V`），OCR 把它
 # 当成了这个元件的 `partname`（case4 `c0019.partname='3.3V'`、case6 `c0035='+12V'` …）。
 # 本地指标对非 `VALUE_TYPES` 元件不查 value（`metrics.component_text_ok`）⇒ 对本地零风险。
-POWER_VALUE = env_on("STAGE2_POWER_VALUE", "1")
+POWER_VALUE = True
 # ★ `STAGE2_PORT_NAME`（默认 **1**，§5.431）：`net_input` / `net_output` 这类端口符号的
 #   `Name` 在 GT 里**就是那个标签文字**（`open_GT` case1 `BAT` / `LED+` / `LED-` / `BAT_2`、
 #   case12 `VIN` / `VIN_2` / `VIN_3` / `VIN_4` / `VOUT`），重复的用 `_2`/`_3` 后缀区分 ——
@@ -737,8 +734,8 @@ _POWER_LABEL_RE = re.compile(r"^[+\-]?[A-Za-z0-9][A-Za-z0-9_.+\-]{0,15}$")
 # （竖排 `GND` 34×38 vs 我们 19×20）⇒ 收益小，但并错框会立刻变负，所以开关默认关。
 POWER_BBOX = env_on("STAGE2_PWR_BBOX", "0")
 POWER_BBOX_MAX = float(os.environ.get("STAGE2_PWR_BBOX_MAX", "90"))
-# 读不到标签的 `v` 符号，用「同网 IC 脚名」兜底（`STAGE2_POWER_VALUE_FROM_PIN`，默认 1）。
-POWER_VALUE_FROM_PIN = env_on("STAGE2_POWER_VALUE_FROM_PIN", "1")
+# 读不到标签的 `v` 符号，用「同网 IC 脚名」兜底（默认 1）。
+POWER_VALUE_FROM_PIN = True
 
 # ★ `net_line` 边的最小长度闸门（`STAGE2_MIN_EDGE_LEN`，默认 20.0）。
 # 官方 `metrics._seg_distance` 要求**两个端点都**在 `line_tol = 5.0` 内才算命中，
@@ -762,7 +759,7 @@ MIN_EDGE_LEN = float(os.environ.get("STAGE2_MIN_EDGE_LEN", "20"))
 EDGE_MIN_FINAL = float(os.environ.get("STAGE2_EDGE_MIN_FINAL", "20") or 0.0)
 # ★ 闸门不许把一张网删空：网若只剩短边，保留最长的那条。空网的顶点会在下游被清掉，
 #   于是「删掉一条假边」变成「连整个网的成员一起丢」（open_GT case12 实测 netH 0.622→0.609）。
-EDGE_MIN_KEEP_LAST = env_on("STAGE2_EDGE_MIN_KEEP_LAST", "1")
+EDGE_MIN_KEEP_LAST = True
 # ★ 导线整形两遍（`STAGE2_EDGE_ORTHO` / `STAGE2_EDGE_TRIMIN`，见 §5.457）：
 #   GT 的导线是**严格曼哈顿**、并且一律停在端子外侧、**不进入符号体**；我们两个都做不到：
 #   · `work/_ortho13.py`：GT 13 张斜边 **0** 条，我们 **42** 条（case1 13 / case6 7 / case10 6）。
@@ -786,10 +783,10 @@ EDGE_TRIMPIN = float(os.environ.get("STAGE2_EDGE_TRIMPIN", "-1") or -1.0)
 #   正是 case6 的 C2：我们 `(345.4,273.6)`（本体边 280.6、端子 250.6）⇒ 收到 `250.6`，
 #   与 GT 的 `(345.0,250.0)` 逐位重合；而本来就停在端子上的线（`|e-中心| == |p-中心|`）不动。
 EDGE_SNAPPIN = float(os.environ.get("STAGE2_EDGE_SNAPPIN", "-1") or -1.0)
-# ★ 只在「这条边还有一条几乎重合的兄弟边」时才收回（`STAGE2_EDGE_SNAPPIN_DUP`，默认 1）。
+# ★ 只在「这条边还有一条几乎重合的兄弟边」时才收回（默认 1）。
 #   不加这条限制时（pO 臂）主尺 78.79→78.40 —— 冲过头的边本身常常还能配上 GT 的端子外侧；
 #   而 C2 那种「同一根线被检出两条」才是真的要收回。
-EDGE_SNAPPIN_DUP = env_on("STAGE2_EDGE_SNAPPIN_DUP", "1")
+EDGE_SNAPPIN_DUP = True
 # ★ 同一条线被检出两次时丢掉更长的那条（`STAGE2_EDGE_DUPKEEP=short` 打开）。
 EDGE_DUPKEEP = (os.environ.get("STAGE2_EDGE_DUPKEEP", "short") or "").strip().lower()
 
@@ -1071,10 +1068,10 @@ EDGE_EXT_HIT = float(os.environ.get("STAGE2_EDGE_EXT_HIT", "3.0"))  # 外推点�
 EDGE_OVERLAP = float(os.environ.get("STAGE2_EDGE_OVERLAP", "10"))         # 近共线夹角容差(度)，0 = 关
 EDGE_OVERLAP_OFF = float(os.environ.get("STAGE2_EDGE_OVERLAP_OFF", "4.0"))  # 端点到对方直线容差 px
 EDGE_OVERLAP_MIN = float(os.environ.get("STAGE2_EDGE_OVERLAP_MIN", "0.35"))  # 投影重叠比例下限
-# ★ `STAGE2_EDGE_OVERLAP_UNION`（默认 **0**）：近重复边合并时是否把跨度取并集。
+# ★（默认 **0**）：近重复边合并时是否把跨度取并集。
 #   取并集会让边比原始任一条更长，而官方 `_seg_distance` 取「两端点距离的最大值」⇒ 谁都不命中；
 #   只去重（保留较长的那条）既能减 fp，又不破坏命中（§5.447 实测）。
-EDGE_OVERLAP_UNION = env_on("STAGE2_EDGE_OVERLAP_UNION", "1")
+EDGE_OVERLAP_UNION = True
 # ★ `STAGE2_EDGE_OVERLAP_GROW`（默认 **0** = 不限）：取并集后**跨度增长超过这么多 px** 时，
 #   宁可不合并（两条都留）—— 增长大的合并会把一条边拉得比 GT 那条长出一大截。
 EDGE_OVERLAP_GROW = float(os.environ.get("STAGE2_EDGE_OVERLAP_GROW", "16"))
@@ -1911,7 +1908,7 @@ def split_edges_at_pins(nets: Dict[str, dict], pins: Dict[str, dict],
     return st
 
 
-# ★★ 引脚端推进到元件框边（`STAGE2_END_TO_BOX`，默认 0 = 关）。
+# ★★ 引脚端推进到元件框边（默认 0 = 关）。
 #
 # 病（`work\_extoracle.py`，官方 10 交付口径）：现在不是 tp 的边里，**只把端点沿自身方向
 #   外推 ≤10px 就能多出 69 条 tp**（R=0:329 → R=5:363 → R=10:398 → R=20:403）。
@@ -1925,7 +1922,7 @@ def split_edges_at_pins(nets: Dict[str, dict], pins: Dict[str, dict],
 # 药：**只动「端点落在引脚上（≤ tol）且是同网自由端」的那一端**，沿边方向推进到该引脚的
 #   **元件框边**（射线与轴对齐框的第一个交点），推进量 ≤ maxlen。只动 `edges` 首尾两点
 #   ⇒ 元件/引脚/netH 三个通道逐位不变。
-END_TO_BOX = env_on("STAGE2_END_TO_BOX", "0")
+END_TO_BOX = False
 END_TO_BOX_TOL = float(os.environ.get("STAGE2_END_TO_BOX_TOL", "4.0"))
 END_TO_BOX_MAX = float(os.environ.get("STAGE2_END_TO_BOX_MAX", "30.0"))
 END_TO_BOX_FREE = float(os.environ.get("STAGE2_END_TO_BOX_FREE", "3.0"))
@@ -2184,9 +2181,9 @@ PIN_STAMP_SPAN = {"fuse": 21.0}
 # 旧值 20 只有真值的一半，无源件脚点因此全部落在导线半途。
 PIN_STAMP_DEFAULT_SPAN = float(os.environ.get("STAGE2_PIN_STAMP_SPAN", "40"))
 # 关掉就退回「用 stage1 的附着点当引脚点位」（旧行为）
-PIN_STAMP_ON = env_on("STAGE2_PIN_STAMP", "1")
+PIN_STAMP_ON = True
 # ★ 竖放 d/led 的 pin_1 在 −SPAN 一侧（默认 0 = 旧行为，见 `stamp_pins` 里的长注释）
-PIN_AXIS_DL = env_on("STAGE2_PIN_AXIS_DL", "0")
+PIN_AXIS_DL = False
 # ★★ 两脚 d/led 的 pin_1(K) 落在哪一端**从图上读横杠**（默认 0 = 关；判据见
 # `stage2/ledpol.py` 的模块 docstring）。`PIN_AXIS_DL` 那种「按轴选符号」的多数票
 # 规则在官方 10 张上 **80.88 → 80.81（−0.07）**（`3/D1` 判对、`7/LED1` 与 `10/LED1`
@@ -2198,11 +2195,11 @@ PIN_AXIS_DL = env_on("STAGE2_PIN_AXIS_DL", "0")
 # 10 张，`work/_led_ab.ps1`~`_led_ab4.ps1`）：臂 `ledref`/`ledoff2`（显式 =0）=
 # **80.88**（与交付口径逐位相同）、臂 `led1`/`led1b`（=1）= **80.98**（+0.10；逐案只有
 # case 3 变：83.92→84.92，netH 0.6788→0.7074 = +2 成员，其余九案逐位不变）⇒
-# **默认 1（上线）**，置 `STAGE2_LED_POLARITY=0` 可回到旧行为（那时连 cv2 都不读图）。
+# **默认 1（上线）**，置该分支可回到旧行为（那时连 cv2 都不读图）。
 # ⚠ 曾试过「第二信号闸门」（两条横笔里游程更长的那条算横杠，两信号一致就判不出）：
 # 换向精度 78.8%→95.8%，但判出件数腰斩 ⇒ 池上净收益 **+46 → +22 件**，已删除该分支
 # （那条游程信号的比较式当时还写错了，详见 `docs/RESULTS.md` §5.81 第七节）。
-LED_POLARITY = env_on("STAGE2_LED_POLARITY", "1")
+LED_POLARITY = True
 # ★ 两脚二极管/LED 的官方脚名**不是号码**：`pin_1 = "K"`（阴极）、`pin_2 = "A"`（阳极），
 # 只有 r/c/l 才是 `(1→"1", 2→"2")`。依据：400 张训练 GT 的 d/led 元件全量统计
 # （d 192+192、led 177+177，各占该类 100%）与 10GT 全量一致。
@@ -2277,7 +2274,7 @@ def stamp_pins(c: dict, ctype: str, pts_img: Sequence, H: float,
     # pin_1 在轴上的投影符号：+1 表示在 +SPAN 一侧
     s1 = 1.0 if ctype in PIN_STAMP_POS else -1.0
     if PIN_AXIS_DL and ctype in ("d", "led") and axis_y:
-        # ★ 竖放的 d/led：pin_1 在 **−SPAN** 一侧（`STAGE2_PIN_AXIS_DL`，默认 0 = 旧行为）。
+        # ★ 竖放的 d/led：pin_1 在 **−SPAN** 一侧（默认 0 = 旧行为）。
         #   依据：官方语料统计——d/led **竖放时 pin_1(K) 在 −SPAN 89/99、横放 57/84 在 +SPAN**；
         #   官方 10 张里 `3/D1`、`7/LED1`、`10/LED1` 都是竖放且被统一取 + 的规则判反
         #   （`work/_ledpin.py` 实测 122 同序 / 3 反序；GT 的 `pin_1` 脚名恒为 `K`）。
@@ -2293,7 +2290,7 @@ def stamp_pins(c: dict, ctype: str, pts_img: Sequence, H: float,
     else:
         p1, p2 = (cx + s1 * span, cy), (cx - s1 * span, cy)
 
-    # ★ `STAGE2_LED_POLARITY`：d/led 的 pin_1(K) 在哪一端**由图上的横杠决定**。
+    # ★：d/led 的 pin_1(K) 在哪一端**由图上的横杠决定**。
     #   `mask` 是本案原图的暗红笔画掩膜（`build_doc` 惰性算一次）；判据返回 'A' 表示
     #   横杠在 p2 那端 ⇒ 换向（等价于 s1 取反后重算两个候选点）。判不出来（None）就
     #   保持旧行为。读数见 `stage2/ledpol.py` 与上面 `LED_POLARITY` 的注释。
@@ -2556,14 +2553,14 @@ def merge_by_label(nets: Dict[str, dict]) -> Dict[str, dict]:
 
 
 # ---------------------------------------------------------------------------
-# 电源/地符号的「单脚约定」（`STAGE2_POWER_ONE_PIN`，默认 1，§5.460）。
+# 电源/地符号的「单脚约定」（默认 1，§5.460）。
 #
 # GT 普查（`work/_pwrpins.py`，open_GT 13 张）：无名电源/地符号 **143 颗 / 143 个脚**，
 # 颗颗都**只有一个脚** `pin_1`、`pinname` = `1`（少数 `Pin1`），脚点落在**框边朝向导线**的那侧
 # （`rel=(0.5,0.97)` / `(0.03,0.5)` 这类）。我们这边这些符号是 `pNNN` 兜底键，`_release_unkeyed=False`
 # 时一个脚都不发 ⇒ 成员全是电源符号的网被删、edges 一起消失（§5.459 的 case1 两条轨）。
 # 这里按 GT 同一套约定补出那一个脚：位置 = 最近导线端点投影到框边。关掉（=0）退回旧行为。
-PWR_ONE_PIN = env_on("STAGE2_POWER_ONE_PIN", "1")
+PWR_ONE_PIN = True
 PWR_ONE_PIN_NAME = os.environ.get("STAGE2_POWER_ONE_PIN_NAME", "1") or "1"
 
 
@@ -2735,7 +2732,7 @@ def _inbox_slot_texts(pts, bb: Sequence[float],
                       row_tol: float, strict: bool = True) -> List[Tuple[int, str, float]]:
     """把体内文字按几何分给引脚槽：**同一侧、同一行、最近**，一槽一根、一框一脚。
 
-    `strict=True`（默认，`STAGE2_PINNAME_INBOX_STRICT`）只接受**唯一候选**：该文字框
+    `strict=True`（默认）只接受**唯一候选**：该文字框
     所在行带上（`|Δy| <= row_tol`）同侧**恰好一个**脚槽，否则整条丢弃。实测同一行常有
     两个槽（同一条引脚的「体内端 + 体外端」各记一次）或名/脚行距只有 15px 而槽距 7px，
     贪心取最近会把名贴到隔壁脚上 —— 而贴错名是 fp+fn 双罚，宁可少填。
@@ -2817,7 +2814,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     #   一条，原图/provider 都用时才建。两条开关都关时 `_PN is None`（产物逐字节不变）。
     _PN = (partname_ocr.PartnameOCR(stage1, PARTNAME_OCR)
            if (PARTNAME_OCR or partname_ocr.stitch_level()) else None)
-    # ★ `STAGE2_LED_POLARITY=1` 时才读原图（算暗红笔画掩膜，供 `stamp_pins` 判 d/led 极性）。
+    # ★该分支时才读原图（算暗红笔画掩膜，供 `stamp_pins` 判 d/led 极性）。
     #   关的时候**连 cv2 都不 import**，产物与不挂这条通道时逐字节一致。
     _led_mask = None
     if LED_POLARITY and img.get("path"):
@@ -2919,25 +2916,20 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         _m0 = re.fullmatch(r"U(\d+)", _k0)
         if _m0:
             _used_u.add(int(_m0.group(1)))
-    # `tp` 闸门的台账（只在本函数内累计，退出前打印；`STAGE2_TP_LEDGER=1` 时）。
-    _tp_ledger: List[dict] = []
 
-    # ★ `STAGE2_LIB_PINS`：官方元器件库的引脚先验总闸。**默认 `1`（开）** —— 2026-10-09 依据
+    # ★ 官方元器件库的引脚先验（2026-10-09 起**常开**）—— 依据
     # 220 张拆分回归从 0 翻过来（交付口径官方 9 张 +1.60、九张零回归）；2026-10-14 默认库换成
     # 官方 box/IC 库 `BoxICLibrary_200cases.json`（用户 m42932；官方 9 张 68.7995 → 69.0883）。
-    # 关掉时 `libpins` 这个模块**根本不会被 import**（上面那个 `LIB_PINS` 常量只是
-    # 读一个环境变量，`libpins` 的模块级代码不会去读 1.83 MB 的库文件），于是
-    # 产物与不挂接这条通道时逐字节一致。开的时候，整份文档**只加载库一次**
-    # （`libpins.LibCtx` 自带惰性 + 幂等 `load()`）。
+    # `libpins` 按需 import，模块级代码不会去读 1.83 MB 的库文件；开的时候，整份文档
+    # **只加载库一次**（`libpins.LibCtx` 自带惰性 + 幂等 `load()`）。
     # 依据与两条规则见 `stage2/libpins.py` 的模块 docstring。★ 当初默认关的原因是
     # 「收益靠元件型号名被读对，而 stage2 直出的 `Name` 是 OCR 原文，17 个 box 里只有
     # 1 个能命中库」⇒ 收益在**融合层/交付链**（融合会重建文档），不在 stage2 单跑。
     # 库文件路径见 `libpins.lib_path()`（包内 `data/BoxICLibrary_200cases.json` 优先，
     # 缺席退包内 `data/cpntLibrary.json`）。
     _LIB_CTX = None
-    if LIB_PINS:
-        from stage2 import libpins as _libpins
-        _LIB_CTX = _libpins.new_ctx()
+    from stage2 import libpins as _libpins
+    _LIB_CTX = _libpins.new_ctx()
 
     # ★ `STAGE2_PIN_KEEP_LEAD` 用的引线端点表（**图像坐标**，与 `pts` 同一套）。
     _WLEAD = []
@@ -2958,7 +2950,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 _n_des += 1
         _KEEP_UNKEYED = _n_des <= max(1, int(0.10 * len(comps)))
 
-    # ★ 无名件放行的**页面级证据闸门**（`STAGE2_UNKEYED_GATE`，默认 1）。
+    # ★ 无名件放行的**页面级证据闸门**（默认 1）。
     #   2026-11：把 `PIN_DROP_UNKEYED`/`NET_DROP_UNKEYED` 一起改 0 后，200 池评测半 +2.03、
     #   官方 10 张 −2.85（protocol4 口径，RESULTS §5.326）。两者的差别不在 GT 有没有无名件
     #   （官方 10 张 108/254 颗、100% 进超图），而在**无名件的类型构成**：官方 10 张我们检出
@@ -2969,7 +2961,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     #   （= 我们确实把真器件的位号读丢了）时，才放行无名件的引脚与超图引用；否则退回旧行为。
     #   ⚠️ 必须**两闸同进同退**：剪脚不剪引用会留悬空成员，`FUSION_REF_PRUNE_DESIG` 随后把
     #   整条网剪掉（§5.326.3 的功率例外实验：池子 36.46 → 33.50）。
-    _UNK_GATE = env_on("STAGE2_UNKEYED_GATE", "1")
+    _UNK_GATE = True
     _UNK_GATE_N = int(os.environ.get("STAGE2_UNKEYED_GATE_N", "2") or 2)
     _release_unkeyed = True
     if not PIN_DROP_UNKEYED and not NET_DROP_UNKEYED and _UNK_GATE:
@@ -2992,22 +2984,17 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         _d = info.get("designator") or {}
         des = _d.get("canon") or _d.get("text")
         key = des if des else None
-        # ★ 内部合并类 `tp` 的**文本闸门**（`STAGE1_MERGE_TP=1` 时才可能出现，
+# ★ 内部合并类 `tp` 的**文本闸门**（stage1 不再产 `tp`，只对历史输入生效，
         #   见文件顶 `TP_MERGED` 的长注释）。三条规则里的 ③ 在这里：
         #   **位号没绑上就直接丢**，且绕开 `DROP_UNKEYED` 的兜底键 `pNNN`
         #   —— 合并类的存在意义就是「读到位号才认它」，给它一个假的 `pNNN`
         #   等于把原来那 98.9% 的 fp 又请回来。
-        _is_tp = MERGE_TP and str(c.get("type") or "").strip().lower() == TP_MERGED
+        _is_tp = str(c.get("type") or "").strip().lower() == TP_MERGED
         # 「绑上了」= 有键 **且** 这个键带着读出证据（见文件顶 `TP_TRUST_EV` 的长注释：
         # 融合层会给 tp 补一个只有 `canon` 的空壳位号，那种键会贴到别的物理器件上）。
         _ev_ok = (not _is_tp) or (not TP_TRUST_EV) or any(
             k not in ("canon", "_by") for k in _d)
         if _is_tp and (not key or not _ev_ok):
-            if TP_LEDGER_ON:
-                _tp_ledger.append({"cid": cid,
-                                   "drop": "unkeyed" if not key else "no-evidence",
-                                   "subtype": c.get("subtype"), "des": des,
-                                   "by": _d.get("_by")})
             continue
         if not key or key in components:
             # 拿不到位号（或位号撞号）—— 兜底键 `pNNN`（GT 里对应的是无名元 `∅NNN`）。
@@ -3070,7 +3057,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 else:
                     key = "p%03d" % i
                     _unkeyed = True
-        elif PIN_DROP_LAUNDERED and FKEY_RE.match(str(key)):
+        elif FKEY_RE.match(str(key)):
             # ★★ 2026-1x 修：兜底键**不总是这里发的** —— 融合/求解层会把已经发过的
             #   `pNNN` 当成「读出来的位号」回填（`assigned[cid]["designator"]["canon"]`，
             #   实测 `_by = "solve:vlm:enrich"`），于是本函数的 `designator` 分支拿到一个
@@ -3093,7 +3080,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         #   图章与脚名别名（下面的 `stamp_pins` / `PIN_NAME_ALIAS`）。
         #   没有这个字段时逐位退回原来的 `c.get("type")`（默认关时行为不变）。
         ctype = str(info.get("ctype_fix") or c.get("type") or "other").strip().lower()
-        # ★ `d` / `led` 的类型互纠（`STAGE2_TYPE_DESIG_FIX`，默认 1）。
+        # ★ `d` / `led` 的类型互纠（默认 1）。
         # `open_GT-1020` 13 张里 GT 的 `led` 有 12 颗、`d` 只有 4 颗，而它们的**位号文字**
         # 与类型一一对应：`led` ⇒ `LED1..LED4`，`d` ⇒ `D1`（`SS34`/`1N4007`）。
         # 我们判错的 3 颗（case1 LED1 / case4 LED1 / case6 LED2）都是 `d`，位号却读对了
@@ -3116,10 +3103,6 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             #   `testpoint`（43/6 张），押 `pin` 的期望损失最小。
             _sub = str(c.get("subtype") or "").strip().lower()
             ctype = "testpoint" if _sub in TP_CV_SUBTYPES else "pin"
-            if TP_LEDGER_ON:
-                _tp_ledger.append({"cid": cid, "key": key, "type": ctype,
-                                   "subtype": _sub,
-                                   "by": "cv:sub" if _sub in TP_CV_SUBTYPES else "default"})
         bbox = c.get("bbox_json") or c.get("bbox_img") or [0, 0, 0, 0]
 
         name = key
@@ -3132,10 +3115,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 pn = None          # `LED4` 这类位号文字不该覆盖 Name
             if pn:
                 name = pn
-        # ★ 型号名「补全」到元件库的规范键（`STAGE2_NAME_SNAP`）：OCR 常把型号尾部截掉
+        # ★ 型号名「补全」到元件库的规范键：OCR 常把型号尾部截掉
         #   （`open_GT` 实测 `STMPS2141T`←`STMPS2141STR`、`XB760A`←`XB7608A`、`MP2C12`←`MP2236CGJ-Z`），
         #   而库键是精确的。只在「库键更长且与前缀/相似度吻合」时替换，避免把读对的短型号改长。
-        if ctype == "box" and NAME_SNAP and os.environ.get("STAGE2_NAME_SNAP_OFF") != "1":
+        if ctype == "box" and NAME_SNAP and "" != "1":
             _ctx = _LIB_CTX
             if _ctx is None:
                 from stage2 import libpins as _libpins2
@@ -3232,7 +3215,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             components[key]["_name_pp"] = _pp_audit
 
         pts = st1_pins.get(cid) or []
-        # ★★ 电源/地符号的「单脚约定」（`STAGE2_POWER_ONE_PIN`，默认 1，§5.460）：
+        # ★★ 电源/地符号的「单脚约定」（默认 1，§5.460）：
         #   GT 13 张里 **143 颗**无名电源/地符号（`∅NNN` / 少数 `BAT`/`LED+` 这类端口）
         #   一律**只有一个脚** `pin_1`、`pinname` = `1`（少数 `Pin1`）、脚点落在**框边朝向导线**
         #   的那一侧（`rel=(0.5,0.97)` / `(0.03,0.5)` 这种，见 `work/_pwrpins.py`）。
@@ -3288,7 +3271,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             nm = ((rec.get("name") or {}).get("text") or "").strip()
             raw.append({"num": num, "nm": nm,
                         "nbox": (rec.get("number") or {}).get("box")})
-        # ★ 同侧号码补全（`STAGE2_PINNUM_SIDE`，默认 1）：IC 一侧的引脚号在图上恒为**一段连续整数**，
+        # ★ 同侧号码补全（默认 1）：IC 一侧的引脚号在图上恒为**一段连续整数**，
         #   所以「这一侧只有一格没读到号、其余都读到」时，缺的那个号是**集合差**，不用猜。
         #   病（`open_GT` case11 `U1`，2026-10 实测）：三个槽位只有 `OUT` 一格没号，而这一侧另外两格
         #   读到了 `2`/`3` ⇒ 缺的就是 `1`；补上后 `OUT` 才可能和 GT 的 `pin_1 OUT` 对上（名字本来读对了，
@@ -3402,10 +3385,21 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                                           % (cid, name, _i, _num_i, _ln, _tx))
                                 continue
                             if INBOX_GUARD == "visa" and not _ln:
-                                if os.environ.get("STAGE2_DBG_INBOX"):
-                                    print("[inbox-skip] cid=%s 元件=%r 槽=%d 号=%r 库里无解 ≠ %r"
-                                          % (cid, name, _i, _num_i, _tx))
-                                continue
+                                # ★ `INBOX_FILL`：补位号的槽允许「名字→号」唯一映射来放行，
+                                #   交给后面的规则 A 改真号（两道闸互锁，见 `INBOX_FILL` 定义处）。
+                                _fill_ok = False
+                                if INBOX_FILL and raw[_i].get("fill") and _ikey3 and _LIB_CTX is not None:
+                                    _nn = _LIB_CTX.num_for_name(_ikey3, _tx)
+                                    if _nn is not None:
+                                        _nn = str(_nn).strip()
+                                        _busy = set(str(raw[_k].get("num") or "").strip()
+                                                    for _k in range(len(raw)) if _k != _i)
+                                        _fill_ok = bool(_nn) and _nn not in _busy
+                                if not _fill_ok:
+                                    if os.environ.get("STAGE2_DBG_INBOX"):
+                                        print("[inbox-skip] cid=%s 元件=%r 槽=%d 号=%r 库里无解 ≠ %r"
+                                              % (cid, name, _i, _num_i, _tx))
+                                    continue
                         raw[_i]["nm_before_inbox"] = _cur
                         raw[_i]["nm"] = _tx
                         raw[_i]["inbox_cf"] = round(float(_cf), 3)
@@ -3468,7 +3462,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 # 其余用位置号补，并避开已用掉的号（保证键不撞）。
                 used, tmp = set(), list(nums)
                 kept = [False] * len(tmp)
-                # ★ `STAGE2_PIN_DUPNUM`（默认 1）：同一颗元件上**两个槽读到同一个号**时，
+                # ★（默认 1）：同一颗元件上**两个槽读到同一个号**时，
                 #   谁保留这个号？原来按槽序（第一个），但槽序只是 stage1 的候选顺序，
                 #   跟「哪个槽才是这根脚」无关。改成**名字读到了的优先**（其次名字更长）。
                 #   `open_GT` 实测：43 根「GT 有、我们没发」的 IC 脚里 11 根是这一族
@@ -3696,7 +3690,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             # 依据：`_libsim.py --fixname` 官方 9 张改名 4 处 **4/4 正确**
             # （pin F1 0.4951→0.5936）；号是多实例聚合过的，一个号对应多个名字时
             # 猜错 = fp+fn 双罚，所以多候选一律不动手。
-            if (_LIB_CTX is not None and _libpins.LIB_PINS_NAMEFILL
+            if (_LIB_CTX is not None
                     and ctype == "box"
                     and (str(num).isdigit()
                          or (PINNUM_LIBNUM
@@ -3746,7 +3740,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             pk = "pin_%s" % num
             base = pk
             while pk in group:
-                # ★ `STAGE2_PIN_DUPNUM`（默认 1）：同一颗元件上**号重复**时，后到的槽
+                # ★（默认 1）：同一颗元件上**号重复**时，后到的槽
                 #   不要改名成 `pin_7_2`（那不是合法脚号 = 纯 fp，还把真脚挤成 fn）。
                 #   `open_GT` 13 张实测：43 根「GT 有、我们没发」的 IC 脚里有 **11 根**
                 #   属于这一族（`case13 U1 pin_7 RLIM` 的真槽被另一个读成 7 的槽抢了键）。
@@ -3781,7 +3775,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                         _jy = _by0 - _lt
                     else:
                         _jy = _by1 + _lt
-            # ★ 脚名尾随下划线归一（`STAGE2_PINNAME_UNDERSCORE`，默认关，见常量区）：
+            # ★ 脚名尾随下划线归一（默认关，见常量区）：
             #   放在**所有改名通道之后、写进 `group` 之前**，于是它对 `pinname` 是最后一手，
             #   库改名（规则 B/C）看到的是原读数、写出去的是归一后的名字。
             if PINNAME_UNDERSCORE:
@@ -3792,25 +3786,6 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             pin_pk[(cid, k)] = pk
         pins[key] = group
 
-    # ★ `tp` 闸门小结（`STAGE2_TP_LEDGER=1` 时打一行；默认不打）。
-    # 数字口径：`kept` = 通过文本闸门的 `tp` 元件，`dropped` = 被丢掉的
-    # （两种原因：`unkeyed` 没绑到 TP 系位号；`no-evidence` 位号是融合层补的空壳，
-    # 见 `TP_TRUST_EV`。**这是 `DROP_TYPES` 那条「盲目类型级丢弃」的替代品**）。
-    if MERGE_TP and TP_LEDGER_ON and _tp_ledger:
-        _kept = [r for r in _tp_ledger if "type" in r]
-        _by: Dict[str, int] = {}
-        for r in _kept:
-            _by[r["type"]] = _by.get(r["type"], 0) + 1
-        _why: Dict[str, int] = {}
-        for r in _tp_ledger:
-            if "drop" in r:
-                _why[r["drop"]] = _why.get(r["drop"], 0) + 1
-        print("[assemble] tp 闸门：保留 %d（%s），丢弃 %d（%s）"
-              % (len(_kept),
-                 " / ".join("%s %d" % (k, v) for k, v in sorted(_by.items())) or "-",
-                 len(_tp_ledger) - len(_kept),
-                 " / ".join("%s %d" % (k, v) for k, v in sorted(_why.items())) or "-"))
-        TP_LEDGER[:] = _tp_ledger
 
     # ---- 网络 ----
     segs_all = (stage1.get("wire_detail") or {}).get("segments") or []
@@ -4056,12 +4031,12 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                     _moved += 1
         if os.environ.get("STAGE2_PIN_SNAP_DBG"):
             print("[dbg pin_snap] case=%s moved %d/%d r=%.1f" % (case_id, _moved, _seen, _pin_snap))
-    # ---- 引脚点**逐元件整平移**（`STAGE2_PIN_OFFSET` = 候选半径，0=关） ----
+    # ---- 引脚点**逐元件整平移**（ = 候选半径，0=关） ----
     # 证据（§5.260）：官方 10 的引脚点残差**逐元件近似一个平移**（件内 sd 0.18~0.50、
     # 逐件均值 ±4~9px），全局平移/缩放/沿边外推全部否证。所以不逐脚就近吸（§5.276.3
     # 判负：会把对的点拖到错的线上），而是**每只脚先记账一组带权候选位移，再按
     # 「同一元件的脚共用一个平移」投票**，只有多只脚指向同一位移时才整体平移该元件。
-    _off_r = float(os.environ.get("STAGE2_PIN_OFFSET", "0") or 0.0)
+    _off_r = float("0" or 0.0)
     _off_min = float(os.environ.get("STAGE2_PIN_OFFSET_MIN", "2") or 2.0)
     if _off_r > 0.0:
         _deg = {}
@@ -4171,12 +4146,12 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                         _ng += 1
         if os.environ.get("STAGE2_PIN_BODY_DBG"):
             print("[dbg pin_body] case=%s placed %d (grid %d) leg=%.1f" % (case_id, _nb, _ng, _body))
-    # ---- 引脚点**沿出线法线**吸附（`STAGE2_PIN_SNAP_N` = 半径，0=关） ----
+    # ---- 引脚点**沿出线法线**吸附（ = 半径，0=关） ----
     # 逐脚就近吸和逐件整平移都判负（§5.276.3、§5.277）：前者把对的点拖到错的线上，
     # 后者把整件本来对的脚一起拖坏。改走「多候选 + 几何上下文」：候选被限制在**该脚
     # 出线法线方向**的窄带里（引脚只会沿自己那条腿的走向接出去），且当前点已经贴着
     # 端点（<2.5px）就不动——那 99/136 本来就在 5px 内。
-    _snap_n = float(os.environ.get("STAGE2_PIN_SNAP_N", "0") or 0.0)
+    _snap_n = float("0" or 0.0)
     if _snap_n > 0.0:
         _deg2 = {}
         for _s in segs_all:
@@ -4302,7 +4277,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         #   刚吸附好的端点又推走。
         snap_ends_to_pins(out_nets, pins)
     if END_TO_BOX:
-        # ★ 引脚端推进到元件框边（`STAGE2_END_TO_BOX`，见长注释）：放在**所有回缩/外推之后** ——
+        # ★ 引脚端推进到元件框边（见长注释）：放在**所有回缩/外推之后** ——
         #   回缩（trim）会把自由端往里收 3px，先推进会被它再收回去；GT 的端点就落在框边上。
         extend_ends_to_box(out_nets, pins, components)
     _trace_dump("11.overlap", out_nets, H, case_id)
@@ -4383,7 +4358,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         _kept3: Dict[str, dict] = {}
         _old2new3: Dict[str, str] = {}
         _cut3 = 0
-        _merge3 = bool(os.environ.get("STAGE2_PHANTOM_MERGE") or 0)
+        _merge3 = bool("" or 0)
         # 段 → 所属网（改判归属用）
         _segown = []
         for _ok, _ov in out_nets.items():
@@ -4581,7 +4556,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
         _ns = sum(1 for _v in out_nets.values() if ".*" in (_v.get("hyperGraph") or ""))
         print("[dbg sym_vertex] case=%s final nets with star=%d/%d"
               % (case_id, _ns, len(out_nets)))
-    # ★ 电源符号 `value` 的兜底（`STAGE2_POWER_VALUE_FROM_PIN`，默认 1）：open_GT / 10GT 的
+    # ★ 电源符号 `value` 的兜底（默认 1）：open_GT / 10GT 的
     #   `v`（VCC 之类）符号 100% 带 `value`（`+5V` / `VCC` / `3.3V`），读不到标签的只有
     #   个位数（case1 ∅413 / case2 ∅128 / case9 ∅774、∅174）。这些符号所在的网上往往接
     #   着 IC 的电源脚，脚名本身就是标签 ⇒ 用「同网 IC 脚名」补，比留 `null` 贴近 GT。
@@ -4647,16 +4622,16 @@ def _trace_pts(raw):
     return out
 
 
-_TRACE_DIR = env_str("STAGE2_TRACE_DUMP", "").strip()
+_TRACE_DIR = "".strip()
 _TRACE_N = [0]
 _TRACE_CASE = [""]
 
 
 def _trace_dump(tag, out_nets, h, case_id=""):
     """提取器内部端点归因（§5.126）：把每一步之后的边端点快照写到
-    `$STAGE2_TRACE_DUMP/<case>.<NN>.<tag>.json`。
+    `$/<case>.<NN>.<tag>.json`。
 
-    只在 `STAGE2_TRACE_DUMP` 设了目录时才写，默认不设 ⇒ 零开销、产物逐位不变。
+    只在 设了目录时才写，默认不设 ⇒ 零开销、产物逐位不变。
     坐标是**图像坐标**（左上原点），读的时候按 `y_doc = h - y_img` 翻到文档坐标。
     """
     if not _TRACE_DIR:
@@ -4690,8 +4665,8 @@ RAIL_NAMES = frozenset((
     "gnd", "gnda", "gndd", "agnd", "dgnd", "pgnd", "vss", "vssa",
     "vcc", "vdd", "vddd", "vdda", "vddio", "3v3", "5v", "12v",
     "vbat", "vbus", "vin", "vout"))
-RAIL_ATTACH = env_on("STAGE2_RAIL_ATTACH", "1")
-# ★ 2-pin 符号的「引脚引线」吸附（`STAGE2_PIN_LEAD_ATTACH`，默认 1）。
+RAIL_ATTACH = True
+# ★ 2-pin 符号的「引脚引线」吸附（默认 1）。
 #
 # 机制：`PIN_STAMP_TYPES` 那几类 2 脚符号的引脚点不是检出来的，而是**按 bbox 轴冲压
 # 出来的**（`PIN_STAMP_DEFAULT_SPAN = 20.0`，即框外 20px）。而导线追踪把元件框挖空
@@ -4727,12 +4702,12 @@ RAIL_ATTACH = env_on("STAGE2_RAIL_ATTACH", "1")
 #   `--deg 35` 与 `--deg 999` 逐位相同（6 条搬移的夹角都 ≤35°）；R 从 45 放到 80
 #   一条新的都不加（搬移距离上界就是 42.0px）⇒ 阈值不敏感。
 # `=0` 各自关掉做对照。
-PIN_LEAD_ATTACH = env_on("STAGE2_PIN_LEAD_ATTACH", "1")
-PIN_LEAD_MOVE = env_on("STAGE2_PIN_LEAD_MOVE", "1")
+PIN_LEAD_ATTACH = True
+PIN_LEAD_MOVE = True
 PIN_LEAD_R = float(os.environ.get("STAGE2_PIN_LEAD_R", "40.0"))
 PIN_LEAD_MOVE_R = float(os.environ.get("STAGE2_PIN_LEAD_MOVE_R", "50.0"))
 PIN_LEAD_DEG = float(os.environ.get("STAGE2_PIN_LEAD_DEG", "35.0"))
-# ★ 「地分模式」守卫（`STAGE2_RAIL_SPLIT`，默认开）：owner m23945/m02404 的要求是
+# ★ 「地分模式」守卫（默认开）：owner m23945/m02404 的要求是
 # **内部按本质模式把 GND 家族拆开跑，输出时再折叠回 `gnd`**（交付 JSON 的 type 一个
 # 字节都不改）。这里落地的是拆分后的**唯一一条会改变结构**的判据：跨网焊接
 # （`weld_nets`）不得把「本质模式不相交」的两条地网焊成一条 —— 例如 `GND` 与
@@ -4742,7 +4717,7 @@ PIN_LEAD_DEG = float(os.environ.get("STAGE2_PIN_LEAD_DEG", "35.0"))
 # 语料事实（2026-10-15，210 个 GT 文件里的网名）：`GND` 52 次、`VSS` 2 次、`PGND` 2 次，
 # **`AGND`/`DGND` 0 次** ⇒ 本守卫在我们的语料上是**中性**的（A/B 逐位相同，见 RESULTS §5.27），
 # 它的价值只在「测试集真出现变体时不并网」。模式字母：`a` 模拟 / `d` 数字 / `p` 功率 / `e` 大地。
-RAIL_SPLIT = env_on("STAGE2_RAIL_SPLIT", "1")
+RAIL_SPLIT = True
 _RAIL_CORES = ("gnd", "vss")
 _RAIL_LETTERS = "adpe"
 _N_RAIL_BLOCK = [0]
@@ -4815,7 +4790,7 @@ def weld_nets(nets: Dict[str, dict], components: Dict[str, dict],
 
     只动网络结构（`_refs`/`edges` 取并集），不碰任何引脚取值 ⇒ 引脚/元件通道逐位不变。
 
-    `pins`（可选）只服务 `STAGE2_RAIL_SPLIT` 地模式守卫：给了它才会在焊接前比两条网的
+    `pins`（可选）只服务 地模式守卫：给了它才会在焊接前比两条网的
     「地模式集合」，避免把 `GND` 与 `AGND` 这类**本质不同的地**焊成一条（见 `rail_mode`）。
     """
     if NET_WELD <= 0 or len(nets) < 2:
@@ -4874,7 +4849,7 @@ def weld_nets(nets: Dict[str, dict], components: Dict[str, dict],
                 continue
             if bd > NET_WELD_BAND and cos > NET_WELD_COS_LONG:
                 continue
-            # ★ 地模式守卫（`STAGE2_RAIL_SPLIT`，默认开）：两条网各自的「地模式集合」都非空、
+            # ★ 地模式守卫（默认开）：两条网各自的「地模式集合」都非空、
             # 且**不相交** ⇒ 它们是本质不同的地（`{}`↔`{a}` 的 GND vs AGND、`{a}`↔`{d}` 的
             # AGND vs DGND），**拒绝焊接**。集合相交（如 `{a,d}` 与 `{a}`）或有一侧无地家族
             # 引脚（空集）⇒ 不设限，保持原有行为。只做否决、不改任何取值 ⇒ 关掉开关时逐位相同。
@@ -5721,7 +5696,7 @@ def _selftest() -> int:
         chk(_pts2 == [(0.0, 50.0, 100.0, 50.0), (100.0, 50.0, 100.0, 80.0),
                       (100.0, 50.0, 140.0, 50.0)], "再去重后的边集合: %r" % (_pts2,))
 
-    # ★ 地模式守卫（`STAGE2_RAIL_SPLIT`）：两条**反向共线**、端点相距 10px 的地网，中间跨一条
+    # ★ 地模式守卫：两条**反向共线**、端点相距 10px 的地网，中间跨一条
     #   文字框 —— 这正是 `weld_nets` 会焊的那一形态。两侧引脚名同为 `GND` ⇒ 应并成 1 条；
     #   一边 `GND` 一边 `AGND` ⇒ **本质不同的地**，必须拒焊、仍是 2 条。模式由引脚名推，
     #   输出里不留任何字段（`type` 仍折叠回 `gnd`）。
@@ -5771,3 +5746,4 @@ def _selftest() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_selftest())
+

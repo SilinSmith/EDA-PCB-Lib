@@ -139,7 +139,7 @@ class PinTextRoleGuardTests(unittest.TestCase):
 
     def test_strong_truncated_number_uses_three_strong_same_box_votes_only_on_color(self):
         # `_best_number_read` 的「同框三票一致才改号」在主分支上存在，但它是 opt-in：
-        # `stage2/assign.py:58 PINNUM_CONSENSUS = env_on("STAGE2_PINNUM_CONSENSUS", "0")`
+        # `stage2/assign.py:58 PINNUM_CONSENSUS = env_on("", "0")`
         # （队友分支默认 "1"），函数体两边逐字节相同 ⇒ 测试按本仓既有惯例把这个开关打开
         # （同 tests/test_pin_number_consensus.py:14/26/36/44/55）。
         digits = {"pin_number": ("1", .999), "designator": ("14", .987),

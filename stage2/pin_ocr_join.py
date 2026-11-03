@@ -1,4 +1,4 @@
-"""同槽双通道联合断言：脚号 PP-OCR ∧ 脚名 PP-OCR（`STAGE2_PIN_OCR_JOIN`）。
+"""同槽双通道联合断言：脚号 PP-OCR ∧ 脚名 PP-OCR。
 
 问题：`pin_number_reading` 与 `pin_name_reading` 是两条**互相独立**的外部通道
 （不同裁片、不同判据、各自 ≥.90 的接受门），但它们的读数进 `assign` 之后是按

@@ -298,7 +298,7 @@ INK_FREE_PAD = float(os.environ.get("STAGE1_PIN_INK_TEXT_PAD", "0.0"))
 TWO_PIN = frozenset({"r", "c", "l", "d", "led", "fuse", "crystal_2pin", "battery",
                      "battary", "net_short", "switch", "buzzer", "amp"})
 # 一脚符号
-# ★ `"tp"` 是 `STAGE1_MERGE_TP=1` 时 `stage1/detect.py` 把 `pin`/`testpoint` 合并出的
+# ★ `"tp"` 是该分支时 `stage1/detect.py` 把 `pin`/`testpoint` 合并出的
 #   **内部类**（见 detect.py:100-124）。少了它，开关打开后 `pins_from_prior` 在
 #   `:263` 匹配不上、一路掉到 `:274 return []` —— 而它的两个父类都在表里，
 #   于是「合并」会**顺手删掉测试点/焊盘的兜底脚**（脚不进 pin F1、但进 net 超图 0.35）。
@@ -1343,3 +1343,4 @@ if __name__ == "__main__":
     except Exception:
         pass
     raise SystemExit(_selftest())
+

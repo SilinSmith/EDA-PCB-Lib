@@ -3,7 +3,7 @@
 
 为什么它等价于交付链：`fusion/run.py:128` 就是 `base = build_doc(s1_doc, assigned, case)`，
 本脚本用**同一份输入**（`work\_fast_out_reg9\runs\stage1\<case>.stage1.json` +
-`work\_fnew\_assigned\<case>.json`）直接调同一个函数，只切 `STAGE2_LIB_PINS`。
+`work\_fnew\_assigned\<case>.json`）直接调同一个函数，只切。
 写文件用 `stage2/run.py:249` 的同一写法（`json.dumps(pred, ensure_ascii=False)`），
 所以两份产物可以逐字节比。
 
@@ -41,7 +41,7 @@ def main():
 
     report = {'cases': [], 'total': {'add': 0, 'rename': 0, 'net_hg': 0}}
     for mode in ('off', 'on'):
-        os.environ['STAGE2_LIB_PINS'] = '1' if mode == 'on' else '0'
+        os.environ[''] = '1' if mode == 'on' else '0'
         os.environ['STAGE2_LIB_PINS_DBG'] = '0'
         # 每次都重新 import，确保模块级 LIB_PINS 常量跟着环境变量走
         for m in ('stage2.assemble', 'stage2.libpins'):
@@ -104,3 +104,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

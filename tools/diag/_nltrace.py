@@ -8,13 +8,13 @@
 1. 用 `metrics` 的官方口径拿 net 配对 `pairs`，对每对 (pred_net, gt_net) 按 `line_tol`
    求最大基数匹配（同 `net_line_f1`），得到**配不上的我方边**。
 2. 这些边的每一端，找 GT 同网最近段端，> 5px 即「坏端」。
-3. 取该端在每个 `STAGE2_TRACE_DUMP` 快照里的位置（同 net key + 同 edge 序号，
+3. 取该端在每个 快照里的位置（同 net key + 同 edge 序号，
    快照按 `edges` 插入序写），量相邻两步之间的位移与方向（正 = 外推，负 = 回缩）。
 
 用法：
-  $env:STAGE2_TRACE_DUMP="Y:\\workspace\\EDA\\work\\_trace_all"
+  $env:="Y:\\workspace\\EDA\\work\\_trace_all"
   python -X utf8 tools/eval/fast.py --cases 1,...,10 --no-vlm --extra "-offline -vlm-pin off" --out all
-  Remove-Item Env:\\STAGE2_TRACE_DUMP
+  Remove-Item Env:\\
   python -X utf8 tools/diag/_nltrace.py --tracedir ..\\work\\_trace_all
 """
 from __future__ import annotations

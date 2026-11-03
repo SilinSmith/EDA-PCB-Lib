@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""引脚名救援（`STAGE2_PINNAME_RESCUE`，2026-10-16 起**默认开**）：号读出来了、名字没读到 ⇒ 以前整条丢。
+"""引脚名救援（2026-10-16 起默认开）：号读出来了、名字没读到 ⇒ 以前整条丢。
 
 ★ 默认值依据（端到端 A/B，`tools\\eval\\fast.py`，两套装置都不为负）
   * 官方 10 张 `--no-vlm`：**60.5854 → 61.0000（+0.4146/张，3 涨 0 跌）** ——
@@ -9,7 +9,7 @@
     —— 0176 +0.33、0011 +0.10、0166 +0.08、0050 +0.01。
   * 实际补名（与关闭臂逐槽位 diff）：case 4 `U1`（c0001）号 5 补 `PROG`；case 5 `U1`
     号 7 补 `P`、号 1 补 `GND`；case 6 两颗 IC 号 3 补 `FAULT`、号 8 补 `EN` —— 共 6 处。
-  关闭时（`STAGE2_PINNAME_RESCUE=0`）行为与不挂接这条通道**逐位一致**。
+  不挂接这条通道时行为逐位一致。
 
 
 问题（可复现读数）
@@ -46,7 +46,7 @@
 * 只对 `type == "box"` 且「**号已读到、名为空**」的脚动手；不动任何已有名字。
 * 判错的名字在下游是 **fp+fn 双罚**（`schematic_parser/metrics.py:466`），所以闸门
   宁可少发：`CONF_MIN` 默认 0.70（离线比过 0.5/0.6/0.7/0.8，0.7 与 0.8 并列最好）。
-* 读不出就什么都不写，行为与今天逐位一致（`STAGE2_PINNAME_RESCUE=0` 也一样）。
+* 读不出就什么都不写，行为与今天逐位一致。
 """
 from __future__ import annotations
 
@@ -63,12 +63,8 @@ except ImportError:                     # 直接 `python stage2\pinname.py` 自�
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from envflag import env_on
 
-#: 总开关（默认开，2026-10-16；依据见模块 docstring：官方 10 +0.4146、派生 val 19 +0.0274，两套装置都 0 跌）
-ON = env_on("STAGE2_PINNAME_RESCUE", "1")
 #: 采信门槛
 CONF_MIN = float(os.environ.get("STAGE2_PINNAME_RESCUE_CONF", "0.70"))
-#: 两参考点（脚点 y / 该脚号码文字框的 y）必须取到**同一行**才发（默认开）
-AGREE = env_on("STAGE2_PINNAME_RESCUE_AGREE", "1")
 #: 带的内缩（跳过体描边）与深度
 INSET = float(os.environ.get("STAGE2_PINNAME_RESCUE_INSET", "4.0"))
 DEPTH = float(os.environ.get("STAGE2_PINNAME_RESCUE_DEPTH", "52.0"))
@@ -172,10 +168,8 @@ def _cbox_cy(b):
 
 def rescue(bgr, doc, a, engine, dbg_cid=None) -> dict:
     """把「号读对、名没读到」的 box 脚补上名字；就地改 `a`，返回统计。"""
-    st = {"on": bool(ON), "conf_min": CONF_MIN, "n_cand": 0, "n_emit": 0,
+    st = {"on": True, "conf_min": CONF_MIN, "n_cand": 0, "n_emit": 0,
           "emit": [], "skip": {}}
-    if not ON:
-        return st
     try:
         rec = engine.recognizer()
     except Exception as e:                     # noqa: BLE001
@@ -256,7 +250,7 @@ def rescue(bgr, doc, a, engine, dbg_cid=None) -> dict:
         per.setdefault(pi, []).append(((txt or "").strip(), float(conf)))
     for pi, (cid, i, pin, num, pt, tbs) in enumerate(plans):
         cands = per.get(pi) or []
-        if AGREE and len(cands) > 1:
+        if len(cands) > 1:
             if cands[0][0].lower() != cands[1][0].lower():
                 _skip("disagree")
                 continue

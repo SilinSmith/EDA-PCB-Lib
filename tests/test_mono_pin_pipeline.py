@@ -121,7 +121,7 @@ class MonoPinPipelineTests(unittest.TestCase):
         engine.read.assert_not_called()
         self.assertEqual(report["n_pin_name"], 0)
         self.assertEqual(report["n_pin_number"], 0)
-        # ★ §5.262 起「整页唯一 box 且没读到号」会按惯例命名 `U1`（`STAGE2_BOX_ALONE_U1`，
+        # ★ §5.262 起「整页唯一 box 且没读到号」会按惯例命名 `U1`（
         #   默认 1），于是这颗元件的脚**不再**被 `PIN_DROP_UNKEYED` 整颗丢掉 —— 旧断言
         #   「一个脚都不许有」已不成立（脚名还可能来自器件库，例如 `GND`）。
         #   真正的不变式是：**没跑 OCR 就不许有 OCR 出来的内容** —— 拿 `_assigned` 里的

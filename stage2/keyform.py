@@ -154,11 +154,8 @@ def pick(texts: Sequence[dict], comps: Sequence[dict], canon_fn,
         gmin = _env_f("STAGE2_KEY_GMIN", 0.30)
     if min_conf is None:
         min_conf = _env_f("STAGE2_KEY_MINCONF", 0.55)
-    if rescue is None:
-        rescue = os.environ.get("STAGE2_KEY_RESCUE", "0").strip() not in ("", "0")
 
     wcheck = os.environ.get("STAGE2_KEY_WCHECK", "1").strip() not in ("", "0")
-    anyrole = os.environ.get("STAGE2_KEY_ANYROLE", "0").strip() not in ("", "0")
     n_pair = n_wide = n_shape = n_rescue = n_wpen = 0
     cw = _char_width(texts or [], canon_fn, comps or [], gmin, min_conf)
     pairs = []
@@ -181,9 +178,8 @@ def pick(texts: Sequence[dict], comps: Sequence[dict], canon_fn,
             # ★ 专职通道：**只认 `designator` 这一种读法**。同一块框在别的角色下会被
             #   裁成别的样子（实测 0001 的 `C13` 框：designator 读 `C13` conf 0.998，
             #   而另一角色读 `C1` conf 0.999）——按分数挑就会挑到掉字的那一版，正是
-            #   老路径 `U6 → J2` 之类错的来源。`STAGE2_KEY_ANYROLE=1` 可回退成全角色。
-            _roles = (list(reads.items()) if anyrole
-                      else [(r, v) for r, v in reads.items() if r == "designator"])
+            #   老路径 `U6 → J2` 之类错的来源。
+            _roles = [(r, v) for r, v in reads.items() if r == "designator"]
             for role, v in _roles:
                 if not v or not v[0]:
                     continue

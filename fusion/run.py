@@ -100,7 +100,7 @@ CONV_EXACT = env_on("FUSION_CONV_EXACT", "1")
 # ★★ 交付文档里**不能有悬空引用**（指着一个本文件没发出的引脚）。开关名：`FUSION_REF_PRUNE`。
 #
 # 病（`work/_fast_out_trimdef2` 那类 VLM 臂）：兜底键元件（`pNNN`）的引脚被
-# `STAGE2_PIN_DROP_LAUNDERED` / `STAGE2_PIN_DROP_UNKEYED` 摘掉之后，**网络侧还留着
+# / 摘掉之后，**网络侧还留着
 # `p012.1` 这样的引用** —— 它指向一个文档里根本不存在的引脚。判题机报告里
 # `connectivity.diagnostics.unmapped_pred_pin_references` 数得就是这类东西
 # （第 6 次提交 case 1 有 18 条，因此 `conn` 少了一截）。
@@ -591,7 +591,7 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
                          if k not in ("rows", "skip", "blocked")}
     pred = _assemble(doc, assigned, case, vlm_doc, sol, assigned0,
                      pin_index=pin_index)
-    # ---- ⓪.98 行内位号重绑（`STAGE2_ROW_BIND`，默认 0）：落点必须在装配之后 --
+    # ---- ⓪.98 行内位号重绑（默认 0）：落点必须在装配之后 --
     # 位号印在符号**右侧** ⇒ 逐颗捡最近文字框在等距排里必然右偏一颗（§5.423）。
     # 最终位号是 `DC.apply(base, s1_doc, assigned0, sol, …)` 按 claim 解写回的：
     # `claims.from_assigned` 把 stage2 的位号全部降级成候选、由 `solve` 全局重裁，
@@ -600,7 +600,7 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
     # （`work/_o13rb6` 74.93 逐位不动），所以这里改成：拿 `assigned0`（`pool.apply()`
     # 之前那份，位号仍与文字框同源）跑 `rowbind.fix` 做行内对齐，再把
     # **最终文档**的键按 cid 改名，`components` / `pins` / `nets.hyperGraph` 一起改。
-    if os.environ.get("STAGE2_ROW_BIND", "1").strip() not in ("", "0"):
+    if "1".strip() not in ("", "0"):
         rep_rb = {}
         try:
             import copy as _copy
@@ -807,3 +807,4 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

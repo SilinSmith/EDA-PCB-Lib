@@ -12,7 +12,7 @@ pin1、把真名挤到 pin2。几何（宽高比）分不开：`L`（合法名�
   * 左侧短名 `L`（7x10）              → `mxmn` = 0.000（几何分不开、颜色分得开）
 ⇒ 这条统计就是 `stage2/text.py::colored_frac` / `STAGE2_PINNAME_CFRAC` 的依据。
 （落地后实测：加上「器件名框放行」修复后，该颜色闸门在 10 张上**中性**——
-两臂逐位相同，故 `STAGE2_TEXT_INK` 默认仍为 0，见 §5.92 的四档闸门对比表。）
+两臂逐位相同，故 默认仍为 0，见 §5.92 的四档闸门对比表。）
 
 用法：python -X utf8 eda-pcb\\tools\\diag\\_inkstat.py [--case 5] [--run work\\_fast_out_cd10on]
 """

@@ -3,7 +3,7 @@
 
 用法（在仓库根 `Y:\workspace\EDA` 下）：
     python -X utf8 eda-pcb\tools\diag\_protorun.py [run_dir] [case]
-默认 run_dir = work\_fast_out_c6、case = 6。会先设 STAGE2_PINROT=1 / STAGE2_PINROT_RAW=1。
+默认 run_dir = work\_fast_out_c6、case = 6。会先设该分支/该分支。
 """
 import json
 import os
@@ -17,7 +17,7 @@ PKG = ROOT / "eda-pcb"
 sys.path.insert(0, str(PKG))
 sys.path.insert(0, str(PKG / "stage2"))
 os.environ["STAGE2_PINROT"] = "1"
-os.environ["STAGE2_PINROT_RAW"] = "1"
+os.environ[""] = "1"
 
 import cv2                                            # noqa: E402
 
@@ -47,3 +47,4 @@ for r in st["raw"]:
     print("raw", r)
 (ROOT / "work" / "_protorun_st.json").write_text(
     json.dumps(st, ensure_ascii=False), encoding="utf-8")
+

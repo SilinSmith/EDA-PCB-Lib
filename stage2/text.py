@@ -143,7 +143,7 @@ TIGHT_ROLES = tuple(r.strip() for r in
 # `NUM_MAX_H`：竖排裁片本身就是宽高互换的，高 26 那条是按直立框量的上界，单体框实测
 # 34×26 / 34×27（`_pnum_REPORT.md` §4.2）的短边正好越界，照搬会把要救的框全挡掉。
 PIN_NUM_ROT = float(os.environ.get("STAGE2_PIN_NUM_ROT", "0")) > 0
-# ★★ 文字框的「**有色墨迹**」统计（`STAGE2_TEXT_INK`，**默认 0 = 关**）。
+# ★★ 文字框的「**有色墨迹**」统计（由 `STAGE2_PINNAME_INK` 打开）。
 #
 # 病（10GT case 5 的 `U3`，见 `docs/RESULTS.md` §5.91）：pin1 名字框那一行有两个候选
 # —— 真名 `ADJ(GND)`（67x13）与**红点引脚标记**（8x8，CRNN 读 `Q`）。名轮把标记绑给
@@ -153,43 +153,18 @@ PIN_NUM_ROT = float(os.environ.get("STAGE2_PIN_NUM_ROT", "0")) > 0
 #   * 红点（`U3` 两处 + `p022`）= **0.641 / 0.484 / 0.500**。
 # 判据与 `tight_ink_box` 同源（`max-min >= SAT` 且灰度 < DARK），只是这里算**占比**。
 # 结果作为 `cfrac` 挂在 `read()` 返回的每条记录上（`assign.py` 的名轮据此踢掉标记框）。
-TEXT_INK = os.environ.get("STAGE2_TEXT_INK", "0").strip().lower() in ("1", "true", "yes", "on")
 TEXT_INK_SAT = float(os.environ.get("STAGE2_TEXT_INK_SAT", "60"))
 TEXT_INK_DARK = float(os.environ.get("STAGE2_TEXT_INK_DARK", "160"))
 # ★★ 同一份统计的**只供名轮**入口（`STAGE2_PINNAME_INK`，默认 **1 = 开**，§5.550：13 页 82.97→83.72 的主修手 +0.43）。
-#   与 `STAGE2_TEXT_INK` 的唯一区别是**意图**：这条明确写着「只为名轮的 `cfrac` 闸门开」，
-#   便于单独 A/B 而不必连带声明「整条颜色通道」。实现上等价（`cfrac` 只被
-#   `assign.PINNAME_CFRAC`(:2813 / :3023) 消费），所以这里直接并进同一个标志位，
-#   不新造第二套阈值、也不让 `read()` 有第二条算 `cfrac` 的路径。
+#   这条明确写着「只为名轮的 `cfrac` 闸门开」，便于单独 A/B；实现上等价（`cfrac` 只被
+#   `assign.PINNAME_CFRAC`(:2813 / :3023) 消费），与整条颜色通道共用同一份统计。
 #   动机（新识别器回归）：`open_GT case6` 的 `U4`/`U1` 各有一个**红圈极性标记**被读成
 #   脚名（`o1` 0.44 / `o` 0.80）并抢到脚名槽 —— 实测红点框 `cfrac` 0.250/0.512、
 #   真名框全 0.000，正是 `PINNAME_CFRAC`(0.20) 能分开的那一类。
 PINNAME_INK = os.environ.get("STAGE2_PINNAME_INK", "1").strip().lower() in ("1", "true", "yes", "on")
-TEXT_INK = TEXT_INK or PINNAME_INK
+TEXT_INK = PINNAME_INK
 
-# ★★★ 字形聚类自举（`STAGE2_GLYPH_VOTE`，**默认 0 = 关**）：同页同一字形的多次读数互相投票。
-#
-# 动机：识别错误是**逐裁剪**随机的——同一个 `4` 在一处读对、在另一处读成 `9`，而它们
-# 在像素上几乎一样。一页上有 60+ 个脚号、只用到 10 个数字，冗余极大；错例里最常见的
-# 又是「差一个字符」（§5.348：错键 71.9% 是同首字母数字差一位），正是投票能吃掉的错误。
-#
-# 做法：把全页文字框按**外观签名**（16×32 二值墨迹）聚成同形簇 → 簇内把每个成员的
-# top-k 候选按置信度加权求和 → 取簇共识；只有当共识串**本来就在该框自己的 top-k 里**
-# （说明不是凭空塞进来的）且簇内分差 ≥ `MARGIN` 时才改写该框的读数。
-# 这条「自己在候选里」的守卫是为了不把 `0/O`、`1/l` 这类真同形字互相污染。
-GLYPH_VOTE = int(os.environ.get("STAGE2_GLYPH_VOTE", "0") or 0)
-# ★★ 「读歪的脚名」用高分辨率权重补读一次（`STAGE2_PINNAME_RETRY`，默认 **0**；§5.466）。
-#   病：32px 权重在细竖笔上丢字 —— `open_GT` case12 `U1 pin_1` GT `TIM` 读成 `16`/`TM`、
-#   case13 `U1 pin_7` GT `RLIM` 读成 `RLM`、case7 `U1 pin_2` GT `IN` 读成 `2B`。
-#   这几格单颗就值 2.5~3.3 分（`work/_pinnameoracle.py`），但**全局**换 64px 是 −0.26
-#   （§5.454 `nm64`：`case13 +2.50`/`case7 +3.33` 抵不过 `case1 −2.31`/`case5 −3.91`）。
-#   ⇒ 只把「弱读数」那几格拿去用 `STAGE2_PINNAME_RETRY_CKPT` 重读一次，其余一个字不动。
-PINNAME_RETRY = int(os.environ.get("STAGE2_PINNAME_RETRY", "0") or 0)
-PINNAME_RETRY_LEN = int(os.environ.get("STAGE2_PINNAME_RETRY_LEN", "3") or 3)
-PINNAME_RETRY_CONF = float(os.environ.get("STAGE2_PINNAME_RETRY_CONF", "0.60") or 0.60)
-_PN_RETRY: List[Tuple[str, str, float, float]] = []
 ENS_MARGIN = float(os.environ.get("STAGE2_ENS_MARGIN", "0.05") or 0.0)
-ENS_MODE = (os.environ.get("STAGE2_ENS_MODE") or "conf").strip().lower()
 ENS_ROLES = tuple(r.strip() for r in
                   (os.environ.get("STAGE2_ENS_ROLES") or "designator,value,pin_number,pin_name").split(",")
                   if r.strip())
@@ -268,7 +243,7 @@ def _ctc_logprob(lp: np.ndarray, label: str, itos: Dict[int, str]) -> float:
     return float(out)
 
 
-# ★★ 单位字母的**墨迹判别**（`STAGE2_VALUE_MU` / `STAGE2_VALUE_NU`，默认 0 = 关）。
+# ★★ 单位字母的**墨迹判别**（`STAGE2_VALUE_MU`，默认 1 = 开）。
 #
 # 病：GT 里微符号恒为 **U+03BC**（池子 200 页 110 个、GT10 1 个），我们只输出 ASCII `u`；
 # 反过来 `10nF` 被读成 `10uF`（GT10 case1 `C158`，§5.370）。CRNN 在 8-10px 上把
@@ -281,8 +256,6 @@ def _ctc_logprob(lp: np.ndarray, label: str, itos: Dict[int, str]) -> float:
 # 只在字符串形状是「数字 + 单位 + 尾字母」（`12uF`/`0.1uF`/`4.7<n>H`）时才动。
 VALUE_MU = os.environ.get("STAGE2_VALUE_MU", "1").strip().lower() in ("1", "true", "yes", "on")
 VALUE_MU_TAIL = float(os.environ.get("STAGE2_VALUE_MU_TAIL", "2.0") or 2.0)
-VALUE_NU = os.environ.get("STAGE2_VALUE_NU", "0").strip().lower() in ("1", "true", "yes", "on")
-VALUE_NU_MB = float(os.environ.get("STAGE2_VALUE_NU_MB", "-0.02") or -0.02)
 VALUE_UNIT_ROLES = ("value",)
 _UNIT_STATS: Dict[str, int] = {}
 # ★★ 「值尾部那个读不出来的字母」补全（`STAGE2_VALUE_TAIL`，默认 **1 = 开**；§5.491）。
@@ -468,7 +441,7 @@ def _glyph_runs(dark: np.ndarray) -> List[Tuple[int, int]]:
 
 
 def _unitglyph_features(bgr: np.ndarray, box: Box) -> Optional[Dict[str, float]]:
-    """量框内**倒数第二个字形**（`12uF` 里的 `u`）的形态，供 `μ`/`u`、`n`/`u` 判别。
+    """量框内**倒数第二个字形**（`12uF` 里的 `u`）的形态，供 `μ`/`u` 判别。
 
     - `tail`：该字形底边低于框内基线的像素数。`μ` 有降部（p50 3px），`u`/`n` 没有（恒 0）。
     - `mb`：该字形**上三分之一与下三分之一的墨量之差**。`n` 的拱在顶上（+0.03），
@@ -513,8 +486,7 @@ UNIT_MU = "\u03bc"
 
 
 def fix_unit_text(bgr: np.ndarray, txt: str, box: Box,
-                  tail_min: float = None, mb_split: float = None,
-                  do_nu: bool = None) -> str:
+                  tail_min: float = None) -> str:
     """用字形墨迹改掉 `12uF` 里的单位字母：降部 → `μ`；`n`/`u` 按上下墨量判。
 
     只在字符串形状是「数字 + 单位 + 尾字母」时才动，其余原样返回。
@@ -522,8 +494,6 @@ def fix_unit_text(bgr: np.ndarray, txt: str, box: Box,
     if not txt:
         return txt
     tail_min = VALUE_MU_TAIL if tail_min is None else tail_min
-    mb_split = VALUE_NU_MB if mb_split is None else mb_split
-    do_nu = VALUE_NU if do_nu is None else do_nu
     m = _MU_RE.match(txt.strip())
     if not m:
         return txt
@@ -534,10 +504,6 @@ def fix_unit_text(bgr: np.ndarray, txt: str, box: Box,
     new = u
     if u in "uU" and f["tail"] >= tail_min:
         new = UNIT_MU
-    elif do_nu and u in "nNuU":
-        new = ("u" if f["mb"] <= mb_split else "n") if u in "nNuU" else u
-        if u.isupper():
-            new = new.upper()
     if new == u:
         return txt
     return txt[:m.start("u")] + new + txt[m.end("u"):]
@@ -877,77 +843,6 @@ class TextEngine:
             self._rec3 = None
         return self._rec3
 
-    def recognizer_retry(self):
-        """`STAGE2_PINNAME_RETRY_CKPT` 的「补读」权重（默认空 = 不补读）·§5.466。
-
-        为什么要是**独立的第三份权重**：`STAGE2_CKPT_ROLES` 是「整类角色换权重」（§5.454 实测
-        全局换 64px 是 −0.26），而这里要的是「**只把读歪的那几格**拿去重读一次」——
-        32px 权重在细竖笔上会丢字（`TIM`→`TM`、`RLIM`→`RLM`），64px 能读对，但全局换过来
-        会连带把读得好的格子弄坏（`case1 −2.31`/`case5 −3.91`/`case12 −2.45`）。
-        """
-        if self._triedr:
-            return self._recr
-        self._triedr = True
-        p = (os.environ.get("STAGE2_PINNAME_RETRY_CKPT") or "").strip()
-        if not p or not Path(p).is_file():
-            return None
-        try:
-            from textrec.infer import Recognizer
-            self._recr = Recognizer.load(Path(p), device=self.device)
-        except Exception:                                        # noqa: BLE001
-            self._recr = None
-        return self._recr
-
-    @staticmethod
-    def _pn_bad(txt: str) -> bool:
-        """结构性「读歪」（不含置信度）：空 / 太短 / 纯数字。"""
-        t = (txt or "").strip()
-        if not t:
-            return True
-        if len(t) <= PINNAME_RETRY_LEN:
-            return True
-        return t.isdigit()
-
-    @classmethod
-    def _pn_weak(cls, txt: str, conf: float) -> bool:
-        """「这格脚名读歪了」的判据（§5.466）：结构性坏，或置信度低。"""
-        return cls._pn_bad(txt) or float(conf) < PINNAME_RETRY_CONF
-
-    def _pinname_retry(self, gray, items, keys, reads) -> None:
-        """只把弱读数的 `pin_name` 格子用高分辨率权重补读一次（就地改写 `reads`）。"""
-        rrec = self.recognizer_retry()
-        if rrec is None:
-            return
-        sel = []
-        for k, (i, r) in enumerate(keys):
-            if r != "pin_name":
-                continue
-            cur = reads[i].get(r)
-            if cur is None or not self._pn_weak(cur[0], cur[1]):
-                continue
-            sel.append(k)
-        if not sel:
-            return
-        for s in range(0, len(sel), self.chunk):
-            ks = sel[s:s + self.chunk]
-            got = rrec.read_many(gray, [items[k] for k in ks])
-            for k, (txt, conf) in zip(ks, got):
-                i, r = keys[k]
-                cur = reads[i].get(r) or ("", 0.0)
-                t = (txt or "").strip()
-                if not t:
-                    continue
-                # 只有「确实更好」才换（§5.466 第一版就栽在这）：要么原来结构性地坏、新的不坏，
-                # 要么置信度明显更高。否则 64px 会把 32px 读得短但正确的格子换坏
-                # （实测 case5 pin 0.606→0.529、case8 0.800→0.710）。
-                _better = ((self._pn_bad(cur[0]) and not self._pn_bad(t))
-                           or float(conf) > float(cur[1]) + 0.10)
-                if not _better:
-                    continue
-                if t != cur[0]:
-                    _PN_RETRY.append((cur[0], t, float(cur[1]), float(conf)))
-                reads[i][r] = (t, float(conf))
-
     # ------------------------------------------------------------------
     def _pin_num_rot(self, rec, gray: np.ndarray, boxes: Sequence[Box],
                      crops: Dict[int, Box],
@@ -1047,23 +942,7 @@ class TextEngine:
                 for (i, r), (txt, conf) in zip(kys[s:s + self.chunk], got):
                     reads[i][r] = (txt, float(conf))
         rec3 = self.recognizer_ens()
-        if rec3 is not None and ENS_MODE == "logit":
-            # 后验平均：两个权重在同一裁片上的 softmax 逐时步平均后解码。
-            for s in range(0, len(items), self.chunk):
-                part = items[s:s + self.chunk]
-                lp1 = rec.logits_many(gray, part)
-                lp2 = rec3.logits_many(gray, part)
-                for (i, r), a1, a2 in zip(keys[s:s + self.chunk], lp1, lp2):
-                    if r not in ENS_ROLES or reads[i].get(r) is None:
-                        continue
-                    t = min(a1.shape[0], a2.shape[0])
-                    p = 0.5 * (np.exp(a1[:t]) + np.exp(a2[:t]))
-                    txt, conf = rec.decode_probs(p)
-                    cur = reads[i][r]
-                    if txt and (txt != cur[0]) and ENS_DBG:
-                        _ENS.append((cur[0], txt, cur[1], float(conf)))
-                    reads[i][r] = (txt, float(conf))
-        elif rec3 is not None:
+        if rec3 is not None:
             # `STAGE2_CKPT_ENS`：第二个权重独立重读同一批裁片，逐 (框,角色) 按
             # 「置信度领先 ENS_MARGIN 才换」合并。两个模型误差不相关，换的只是
             # 一方明显更确定的那些格子。
@@ -1077,8 +956,6 @@ class TextEngine:
                         if ENS_DBG:
                             _ENS.append((cur[0], txt, cur[1], float(conf)))
                         reads[i][r] = (txt, float(conf))
-        if GLYPH_VOTE > 0:
-            self._glyph_vote(bgr, gray, boxes, roles, rec, reads)
         if VALUE_DOT:
             self._fix_dot(gray, boxes, roles, reads)
         if VALUE_TAIL:
@@ -1088,12 +965,8 @@ class TextEngine:
             self._fix_tail(gray, boxes, roles, reads)
         if READ_LENFIX:
             self._length_fix(gray, boxes, roles, rec, reads)
-        if VALUE_MU or VALUE_NU:
+        if VALUE_MU:
             self._fix_units(bgr, boxes, roles, reads)
-        # 放在**最后**：补读只允许改脚名，不能让后续 `_length_fix`/`_fix_units` 看到不同的
-        # `gray`/状态而把**脚号**也换了（§5.466 第一版就在 case8 把 slot1 的号 11 变 15）。
-        if PINNAME_RETRY > 0:
-            self._pinname_retry(gray, items, keys, reads)
         # 放最后：触发要看**最终**的直立引脚号读数（`_length_fix` 等已经改完）。
         rot = self._pin_num_rot(rec, gray, boxes, rot_crops, reads) if PIN_NUM_ROT else {}
         return [{"bbox": boxes[i], "reads": reads[i],
@@ -1184,7 +1057,7 @@ class TextEngine:
     # ------------------------------------------------------------------
     def _fix_units(self, bgr: np.ndarray, boxes: Sequence[Box], roles: Sequence[str],
                    reads: List[Dict]) -> None:
-        """`STAGE2_VALUE_MU` / `STAGE2_VALUE_NU`：用字形墨迹改单位字母（详见上面的长注释）。"""
+        """`STAGE2_VALUE_MU`：用字形墨迹改单位字母（详见上面的长注释）。"""
         want = [r for r in roles if r in VALUE_UNIT_ROLES]
         if not want:
             return
@@ -1294,44 +1167,6 @@ class TextEngine:
                     continue
                 _UNIT_STATS["dot"] = _UNIT_STATS.get("dot", 0) + 1
                 reads[i][r] = (new, conf)
-
-    # ------------------------------------------------------------------
-    def _glyph_vote(self, bgr: np.ndarray, gray: np.ndarray, boxes: Sequence[Box],
-                    roles: Sequence[str], rec, reads: List[Dict]) -> None:
-        """`STAGE2_GLYPH_VOTE` 的实装：算签名 + top-k 候选，然后交给 `glyph_vote`。"""
-        vroles = [r for r in roles if r in GLYPH_VOTE_ROLES]
-        if not vroles:
-            return
-        sigs: Dict = {}
-        uses: Dict = {}
-        want_tight = bool(TIGHT_ROLES) and any(r in TIGHT_ROLES for r in vroles)
-        for i, b in enumerate(boxes):
-            cb = pad_box(b, self.pad_min, self.pad_frac,
-                         pad_min_y=self.pad_min_y, pad_frac_y=self.pad_frac_y)
-            tb = tight_ink_box(bgr, b) if want_tight else None
-            for r in vroles:
-                use = cb
-                if tb is not None and r in TIGHT_ROLES:
-                    use = pad_box(tb, self.pad_min, self.pad_frac,
-                                  pad_min_y=self.pad_min_y,
-                                  pad_frac_y=(PINNUM_PAD_FRAC_Y if r == "pin_number"
-                                              else self.pad_frac_y))
-                s = glyph_sig(gray, use)
-                if s is not None:
-                    sigs[(i, r)] = s
-                    uses[(i, r)] = use
-        keys = list(sigs)[:GLYPH_VOTE_MAX]
-        if not keys:
-            return
-        got = rec.read_topk(gray, [(uses[k], k[1]) for k in keys],
-                            k=GLYPH_VOTE, beam=GLYPH_VOTE_BEAM)
-        cands = {k: v for k, v in zip(keys, got)}
-        n = glyph_vote(reads, cands, {k: sigs[k] for k in keys})
-        if os.environ.get("STAGE2_GLYPH_VOTE_DBG", "0") not in ("0", "", "off"):
-            print("[glyph] 簇改写 %d / 参与 %d  roles=%s" % (n, len(keys), _STATS))
-            for e in _EXAMPLES:
-                print("[glyph]   %s %r -> %r conf=%.2f 簇=%d" % e)
-            _EXAMPLES.clear()
 
     # ------------------------------------------------------------------
     def describe(self) -> str:

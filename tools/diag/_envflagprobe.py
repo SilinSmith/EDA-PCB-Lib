@@ -32,7 +32,7 @@ rows = [
     ("FUSION_LLM", "off", R.DO_LLM),
     ("FUSION_GAP_FILL", "none", S.GAP_FILL),
     ("FUSION_CROPFIX", "OFF", C.ON),
-    ("STAGE2_PIN_ALONG", "none", SA.PIN_ALONG),
+    ("", "none", SA.PIN_ALONG),
 ]
 for name, val, got in rows:
     env = os.environ.get(name)

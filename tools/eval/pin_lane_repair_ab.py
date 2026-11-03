@@ -159,7 +159,7 @@ def process_checks(args, engine, sources, arms, expected, result):
     wanted = requested & {s["case_id"] for s in sources}
     if not wanted:
         return
-    prior_env = {key: os.environ.get(key) for key in ("STAGE2_PIN_LANE_CROP", "STAGE2_PIN_LANE_CLEANUP")}
+    prior_env = {key: os.environ.get(key) for key in ("", "")}
     prior_run_flag = getattr(run, "PIN_LANE_CROP", None)
     prior_run_cleanup = getattr(run, "PIN_LANE_CLEANUP", None)
     prior_pincol = run.PINCOL_WIN_TEXTS
@@ -174,7 +174,7 @@ def process_checks(args, engine, sources, arms, expected, result):
             initial = read(args.fixtures / "reads" / f"{case}.reads.json")
             for arm in ("binding_only", "full"):
                 enabled = arm == "full"
-                os.environ["STAGE2_PIN_LANE_CROP"] = "1" if enabled else "0"
+                os.environ[""] = "1" if enabled else "0"
                 os.environ["STAGE2_PIN_LANE_CLEANUP"] = args.default_cleanup
                 if hasattr(run, "PIN_LANE_CROP"):
                     run.PIN_LANE_CROP = enabled
@@ -202,7 +202,7 @@ def process_checks(args, engine, sources, arms, expected, result):
             ("high_min_conf", None, True, .95),
             ("no_ocr", None, False, 0.0),
         )
-        os.environ["STAGE2_PIN_LANE_CROP"] = "1"
+        os.environ[""] = "1"
         if hasattr(run, "PIN_LANE_CROP"):
             run.PIN_LANE_CROP = True
         for source in sources:

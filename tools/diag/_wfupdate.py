@@ -26,7 +26,7 @@ NOTE_HEAD = """**★ 第六批（本会话 2026-10-07）的四项改动与一条
 |---|---|---|---|---|
 | 1 | 稀疏封装引脚号不再被位置先验覆盖（`FUSION_BOX_PIN_PRIOR=0`） | `fusion/priors.py` | 44.16 → **53.41** | — |
 | 2 | 并网改看「端点微越过 + 不平行」（规则 5，`STAGE1_WIRE_OVER=12`，`WIRE_TOL` 回退 1.5） | `stage1/labels.py` · `stage1/nets.py` | 55.73 → **56.31** | 34.69 → **35.23** |
-| 3 | 文字归属改量「框到框」而不是「文字中心到框」（`STAGE2_OWN_BBOX=1`） | `stage2/assign.py` | 56.31 → **56.45** | 34.69 → **35.28** |
+| 3 | 文字归属改量「框到框」而不是「文字中心到框」（该分支） | `stage2/assign.py` | 56.31 → **56.45** | 34.69 → **35.28** |
 | 4 | 引脚号候选的沿边衰减加快（`STAGE2_PINNUM_DECAY` 20 → 10） | `stage2/assign.py` | 56.45 → **56.71** | 35.28 → **35.39** |
 
 **★ 方法学（本会话踩出来的，比上面四条更值钱）**
@@ -105,7 +105,7 @@ OWN_NOTE = """**★★ 归属判据的真凶（本会话修复）：`FAR` 量的
 - **修法（`eda-pcb/stage2/assign.py`）**
   1. 新增 `def dist_rect_to_rect(a, b) -> float`：两矩形间距，重叠即 0
      （`dx = max(b[0]-a[2], 0.0, a[0]-b[2])`，`dy` 同理）。
-  2. 新增 `OWN_BBOX = env_on("STAGE2_OWN_BBOX", "1")`。
+  2. 新增 `OWN_BBOX = True`。
   3. 归属判定 `d_own = dist_rect_to_rect(b, comps[j]["bbox"]) if OWN_BBOX else d`，
      `rec = dict(t, d=d, own=d_own, ...)`，`if d_own <= far: owned[...] else: free.append(rec)`；
      **`rec["d"]`（中心距）原样保留**，因为评分与 `NEAR` 判据用的是它。`OWN_BBOX=0` 退回历史行为。
