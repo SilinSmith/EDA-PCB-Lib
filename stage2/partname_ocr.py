@@ -137,6 +137,9 @@ def _env_flag(name: str, default: str = "0") -> str:
 #: `STAGE2_PARTNAME_STITCH`：默认 **`1` = 开**（§5.562：13 页 84.1735→84.3409）；
 #: `0` = 关；`2` 与 `1` 行为相同（留 `2` 给以后细分）。
 STITCH = _env_flag("STAGE2_PARTNAME_STITCH", "1")
+#: `STAGE2_PARTNAME_REREAD`：单框也走同一套「重读 + 库键 + 脚数自洽」判据；默认 **`1` = 开**
+#: （§5.563：13 页 84.3409→84.4791，池 29.0663→29.0887）。
+REREAD = _env_flag("STAGE2_PARTNAME_REREAD", "1")
 #: 同行判定：|cy 差| <= ROW * 行高。
 STITCH_ROW = float(_env_flag("STAGE2_PARTNAME_STITCH_ROW", "0.6"))
 #: 邻居水平间隙上限（* 行高）。
@@ -162,6 +165,11 @@ LIBGUARD_ORPHAN = _env_flag("STAGE2_PARTNAME_LIBGUARD_ORPHAN", "1") in ("1", "2"
 def stitch_level() -> int:
     """`STAGE2_PARTNAME_STITCH` 的档位；空值/非法值一律 0（关）。"""
     return 1 if STITCH in ("1", "2") else 0
+
+
+def reread_level() -> int:
+    """`STAGE2_PARTNAME_REREAD` 的档位（单框也重读）。"""
+    return 1 if REREAD in ("1", "2") else 0
 
 
 def libguard_on() -> bool:
@@ -535,7 +543,7 @@ class PartnameOCR:
             self.stats["stitch_skip"] += 1
             return None
         sel, uni = self._row(box)
-        if len(sel) < 2:                               # 本来就只有一个框：不归这条通道管
+        if len(sel) < 2 and reread_level() <= 0:      # 只有一个框，且没开单框重读：不归这条通道管
             self.stats["stitch_skip"] += 1
             return None
         got = self._read_union(uni)

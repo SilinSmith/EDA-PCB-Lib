@@ -41902,3 +41902,46 @@ python -X utf8 work\_cv.py stitchShip --run                  # 84.3409 / 83.2876
 python -X utf8 work\_cv.py dswOff --run                      # 等价性：13/13 = pnameShip
 python -X utf8 work\_poolgate.py stitchShip --pool-ref pnDef  # 29.0663（只有 0091 变，非确定页）
 ```
+
+## 5.563 单框型号名重读（+0.1382，已翻默认）
+
+### 5.563.1 起因：拼接只覆盖「多框」那一颗
+
+§5.562 的 `work/_pn_stitch_probe.py` 表里，13 页 32 颗 box 件中「多框同行」只有 case11 一颗；但同一张表显示**另 8 颗单框件重读也能新增库键命中**——它们被 `stitch()` 的 `len(sel) >= 2` 挡住了。
+
+### 5.563.2 药：`STAGE2_PARTNAME_REREAD`（默认已翻 `"1"`）
+
+`stage2/partname_ocr.py:525` 的门槛从「至少两框」放宽为「至少两框 **或** `reread_level() > 0`」，走的仍是同一套判据（并集框＝自身的原图重读；**exact 库键** + 脚数两口径差 ≤ 1 + `guard()`）。没有新增任何启发式，只是让单框也进同一条通道。
+
+### 5.563.3 结果
+
+| tag | mean | official | judge | comp | pin | netH | line |
+|---|---|---|---|---|---|---|---|
+| `stitchShip`（5.562 交付档） | 84.3409 | 83.2876 | 80.6743 | 3.234 | 4.387 | 3.814 | 4.224 |
+| `rereadShip`（默认档） | **84.4791** | **83.4257** | **80.8125** | **3.096** | 4.387 | 3.814 | 4.224 |
+
+- Δ **+0.1382**；逐案只有两页变，且都是 GT 正确方向：
+  - **case6 U1** `789M12` → **`78M12`**（+0.78；comp 0.026）
+  - **case10 U2** `CON8` → **`CJ78L05`**（+1.02；comp 0.034）
+  - 其余 **11/13 逐字节相同**；pin/netH/line 三轴一位未动。
+- laziness：`STAGE2_PARTNAME_REREAD=0` 时 13/13 `_Pred.json` sha256 与 `stitchShip` 全等。
+- **池门禁**：`work/_poolgate.py cvpool_reread1 --pool-ref pnDef STAGE2_PARTNAME_REREAD=1` → **29.0887**（vs `stitchShip` 29.0663 **+0.022**；vs `pnDef` 29.0966 **−0.008**，噪声内）。
+
+### 5.563.4 累计（本轮会话的交付档演进）
+
+| 交付档 | 13 页 mean / official / judge | 池 |
+|---|---|---|
+| `pnDef`（会话起点） | 83.7165 / 82.6631 / 79.9219 | 29.0966 |
+| `shipAlnum`（字母脚号，§5.558） | 83.8454 / 82.7920 / 80.0508 | 29.1449 |
+| `pnameShip`（体内脚名，§5.561） | 84.1735 / 83.1201 / 80.3865 | 29.1235 |
+| `stitchShip`（型号名拼接，§5.562） | 84.3409 / 83.2876 / 80.6743 | 29.0663 |
+| **`rereadShip`（单框重读，本节）** | **84.4791 / 83.4257 / 80.8125** | **29.0887** |
+
+轴损：comp 3.096 / pin 4.387 / netH 3.814 / line 4.224 = **15.52**（起点 16.28）。
+
+### 5.563.5 复现
+```
+python -X utf8 work\_cv.py rereadShip --run                     # 84.4791 / 83.4257 / 80.8125
+python -X utf8 work\_cv.py rereadOff --run --env STAGE2_PARTNAME_REREAD=0   # 13/13 = stitchShip
+python -X utf8 work\_poolgate.py cvpool_reread1 --pool-ref pnDef STAGE2_PARTNAME_REREAD=1  # 29.0887
+```
