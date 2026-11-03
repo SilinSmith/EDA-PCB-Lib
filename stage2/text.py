@@ -129,6 +129,20 @@ PINNUM_PAD_FRAC_Y = float(os.environ.get("STAGE2_PINNUM_PAD_FRAC_Y", "0.0"))
 TIGHT_ROLES = tuple(r.strip() for r in
                     os.environ.get("STAGE2_TIGHT_ROLES", "pin_number,pin_name").split(",")
                     if r.strip()) if PINNUM_TIGHT else ()
+# ★★ 引脚号的**旋转补读**（`STAGE2_PIN_NUM_ROT`，**默认 0 = 关**）。
+#
+# 病（`work\_pnum_REPORT.md` §4，池案 0003 / U2 顶边那 13 个号）：竖排（整行旋转 90°）的
+# 引脚号被检测器按**横排**文字框交出来，CRNN 直立读出来是「两个字并成一列」的乱码 ⇒ 过不了
+# `assign.PINNUM_RE`，在号轮 `if not got: continue` 被静默丢掉（池 30 案共 B4+B5 = 192 槽，
+# 占 stage1 已检槽点的 20.5%）。框**检出了、位置对、尺寸对**，缺的只是一次旋转。
+#
+# 触发与接受**都不新增阈值**：直立读 `fit_pinnum()<=0` 才补读（既有判据）；补出来的串仍要过
+# 既有 `PINNUM_RE`，之后照旧进 `assign._best_read` / `_score` 与全部几何门。旋转只试 90°/270°
+# 两个方向（同一张裁片做两次高宽互换的遍历），没有「角度步长」这类参数。
+# 尺寸守门用 `stage1.pincol.NUM_MAX_W`（既有：引脚号文字框的最大边长，42px）。**不看**
+# `NUM_MAX_H`：竖排裁片本身就是宽高互换的，高 26 那条是按直立框量的上界，单体框实测
+# 34×26 / 34×27（`_pnum_REPORT.md` §4.2）的短边正好越界，照搬会把要救的框全挡掉。
+PIN_NUM_ROT = float(os.environ.get("STAGE2_PIN_NUM_ROT", "0")) > 0
 # ★★ 文字框的「**有色墨迹**」统计（`STAGE2_TEXT_INK`，**默认 0 = 关**）。
 #
 # 病（10GT case 5 的 `U3`，见 `docs/RESULTS.md` §5.91）：pin1 名字框那一行有两个候选
@@ -142,6 +156,16 @@ TIGHT_ROLES = tuple(r.strip() for r in
 TEXT_INK = os.environ.get("STAGE2_TEXT_INK", "0").strip().lower() in ("1", "true", "yes", "on")
 TEXT_INK_SAT = float(os.environ.get("STAGE2_TEXT_INK_SAT", "60"))
 TEXT_INK_DARK = float(os.environ.get("STAGE2_TEXT_INK_DARK", "160"))
+# ★★ 同一份统计的**只供名轮**入口（`STAGE2_PINNAME_INK`，默认 **1 = 开**，§5.550：13 页 82.97→83.72 的主修手 +0.43）。
+#   与 `STAGE2_TEXT_INK` 的唯一区别是**意图**：这条明确写着「只为名轮的 `cfrac` 闸门开」，
+#   便于单独 A/B 而不必连带声明「整条颜色通道」。实现上等价（`cfrac` 只被
+#   `assign.PINNAME_CFRAC`(:2813 / :3023) 消费），所以这里直接并进同一个标志位，
+#   不新造第二套阈值、也不让 `read()` 有第二条算 `cfrac` 的路径。
+#   动机（新识别器回归）：`open_GT case6` 的 `U4`/`U1` 各有一个**红圈极性标记**被读成
+#   脚名（`o1` 0.44 / `o` 0.80）并抢到脚名槽 —— 实测红点框 `cfrac` 0.250/0.512、
+#   真名框全 0.000，正是 `PINNAME_CFRAC`(0.20) 能分开的那一类。
+PINNAME_INK = os.environ.get("STAGE2_PINNAME_INK", "1").strip().lower() in ("1", "true", "yes", "on")
+TEXT_INK = TEXT_INK or PINNAME_INK
 
 # ★★★ 字形聚类自举（`STAGE2_GLYPH_VOTE`，**默认 0 = 关**）：同页同一字形的多次读数互相投票。
 #
@@ -261,6 +285,31 @@ VALUE_NU = os.environ.get("STAGE2_VALUE_NU", "0").strip().lower() in ("1", "true
 VALUE_NU_MB = float(os.environ.get("STAGE2_VALUE_NU_MB", "-0.02") or -0.02)
 VALUE_UNIT_ROLES = ("value",)
 _UNIT_STATS: Dict[str, int] = {}
+# ★★ 「值尾部那个读不出来的字母」补全（`STAGE2_VALUE_TAIL`，默认 **1 = 开**；§5.491）。
+#
+# 病：`open_GT` case13 的 C2/C6 值字是 `22uf`，但 `f` 是一根细竖笔，CRNN 在 32px 下**读不出**
+# 它 —— 贪心串是 `22u`，`_length_fix` 明知「图上有 4 个字形」也只能在 beam 里挑，而 beam 给的
+# 4 字候选是 `220u`/`22um`/`22u1`（全错），其中 `22um` 还会被 `canon_value` 削回 `22u`。
+# ⇒ 这条路的瓶颈不是「分辨 f 还是 F」，而是**根本没有字符能命名那个字形**。
+#
+# 做法：只在「读数 = 数字 + 单位字母（p/n/u/µ）」且「字形段数 = 读数长度 + 1」时才动手 ——
+# 即图上确实多一个没读出来的字形、位置在末尾；然后用**字宽**决定大小写：
+# 该字形列宽 < `VALUE_TAIL_W` × 同框数字列宽中位数 ⇒ 小写 `f`，否则大写 `F`
+# （实测 case13：`22uf` 尾字宽 7px、数字 9px ⇒ 0.78；`100nF` 尾字宽 10–11px ⇒ ≥1.1）。
+# ⚠ 必须同时开 `STAGE2_VALUE_TAILRE=1`（`assign.VALUE_RE` 才认小写尾字母），否则 `canon_value`
+# 会把刚补上的 `f` 再削掉 —— 两个旋钮是一对，单开任何一个都逐位惰性（§5.491.5 两条对照档）。
+#
+# 2026-11 落默认：主尺 80.36 → **80.48**（只有 case13 +1.54，全尺只改 2 个值且都改对）；
+# 池 30 案 Δ −0.02 落在批次噪声内，且逐案复核证明**本档在池上一处都没触发**（0003/0004 的
+# 预测与无 env 档逐字节相同）⇒ 没有可复现的池伤害，翻默认。
+VALUE_TAIL = int(os.environ.get("STAGE2_VALUE_TAIL", "1") or 0)
+VALUE_TAIL_W = float(os.environ.get("STAGE2_VALUE_TAIL_W", "0.85") or 0.85)
+VALUE_DOT = int(os.environ.get("STAGE2_VALUE_DOT", "1") or 0)
+VALUE_DOT_W = float(os.environ.get("STAGE2_VALUE_DOT_W", "0.45") or 0.45)
+VALUE_DOT_BOT = float(os.environ.get("STAGE2_VALUE_DOT_BOT", "0.45") or 0.45)
+_DOTSRC_RE = re.compile(r"^(?P<a>\d)(?P<b>\d+)(?P<u>[pnu\u00b5\u03bc]?)$")
+_TAILSRC_RE = re.compile(r"^(?P<num>\d+(?:\.\d+)?)\s*(?P<u>[pnu\u00b5\u03bc])$")
+_TAIL_DONE_RE = re.compile(r"^[+-]?(\d+(\.\d+)?|\.\d+)\s*[pnu\u00b5\u03bcmkKMGR]?[FHV\u03a9AWRJfhvr]?$")
 GLYPH_VOTE_ROLES = tuple(r.strip() for r in os.environ.get(
     "STAGE2_GLYPH_VOTE_ROLES", "designator,pin_number,pin_name,value").split(",") if r.strip())
 
@@ -900,6 +949,48 @@ class TextEngine:
                 reads[i][r] = (t, float(conf))
 
     # ------------------------------------------------------------------
+    def _pin_num_rot(self, rec, gray: np.ndarray, boxes: Sequence[Box],
+                     crops: Dict[int, Box],
+                     reads: List[Dict[str, Tuple[str, float]]]
+                     ) -> Dict[int, Tuple[str, float]]:
+        """`STAGE2_PIN_NUM_ROT`：直立读不出合法脚号的框，补一次 90°/270° 旋转读。
+
+        只做**补读**：不改任何既有读数（结果单独返回、由 `read` 挂在框的 `pin_number_rot`
+        键上），不改框、不动几何。触发（`fit_pinnum<=0`）与接受（`PINNUM_RE`）都是既有判据，
+        这里只多花两次 CRNN 前向，判断权全部留给 `assign`。
+        """
+        from .assign import fit_pinnum                     # 既有判据，lazy 避免循环 import
+        from stage1 import pincol as _pincol               # 既有尺寸窗（见 `PIN_NUM_ROT`）
+        out: Dict[int, Tuple[str, float]] = {}
+        hi, wi = gray.shape[:2]
+        for i, cb in crops.items():
+            b = boxes[i]
+            if max(b[2] - b[0], b[3] - b[1]) > _pincol.NUM_MAX_W:
+                continue                                  # 一排字并成的大框：旋转也读不成一个号
+            cur = reads[i].get("pin_number")
+            if cur is not None and fit_pinnum(cur[0]) > 0.0:
+                continue                                  # 直立已经读出合法号，不碰
+            x1 = max(0, int(round(cb[0]))); y1 = max(0, int(round(cb[1])))
+            x2 = min(wi, int(round(cb[2]))); y2 = min(hi, int(round(cb[3])))
+            if not (x2 > x1 and y2 > y1):
+                continue
+            sub = gray[y1:y2, x1:x2]
+            best = None
+            for k in (1, 3):                              # 90° / 270°：高宽互换的两个方向
+                r = np.rot90(sub, k)
+                got = rec.read_many(
+                    r, [((0.0, 0.0, float(r.shape[1]), float(r.shape[0])), "pin_number")])
+                txt, conf = got[0]
+                t = (txt or "").strip()
+                if not t or fit_pinnum(t) <= 0.0:
+                    continue
+                if best is None or float(conf) > best[1]:
+                    best = (t, float(conf))
+            if best is not None:
+                out[i] = best
+        return out
+
+    # ------------------------------------------------------------------
     def read(self, bgr: np.ndarray, boxes: Sequence[Box],
              roles: Sequence[str] = ROLES) -> List[Dict]:
         """-> [{"bbox": Box, "reads": {role: (text, conf)}}, ...]"""
@@ -914,6 +1005,7 @@ class TextEngine:
 
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) if bgr.ndim == 3 else bgr
         reads: List[Dict[str, Tuple[str, float]]] = [dict() for _ in boxes]
+        rot_crops: Dict[int, Box] = {}
         items, keys = [], []
         for i, b in enumerate(boxes):
             # 只对**裁剪**外扩；`reads[i]["bbox"]` 保持原框，`assign` 的几何归属不受影响。
@@ -928,6 +1020,11 @@ class TextEngine:
                                    pad_min_y=self.pad_min_y, pad_frac_y=self.pad_frac_y)
                     cb_ty = pad_box(tb, self.pad_min, self.pad_frac,
                                     pad_min_y=self.pad_min_y, pad_frac_y=PINNUM_PAD_FRAC_Y)
+            if PIN_NUM_ROT and "pin_number" in roles:
+                # 旋转补读的裁片必须与号轮**完全一致**（切描边 + `PINNUM_PAD_FRAC_Y`），
+                # 否则量到的增益里会混进「换了裁片」这一项。
+                rot_crops[i] = (cb_ty if (cb_t is not None and "pin_number" in TIGHT_ROLES)
+                                else cb)
             for r in roles:
                 if cb_t is not None and r in TIGHT_ROLES:
                     items.append((cb_ty if r == "pin_number" else cb_t, r))
@@ -982,6 +1079,13 @@ class TextEngine:
                         reads[i][r] = (txt, float(conf))
         if GLYPH_VOTE > 0:
             self._glyph_vote(bgr, gray, boxes, roles, rec, reads)
+        if VALUE_DOT:
+            self._fix_dot(gray, boxes, roles, reads)
+        if VALUE_TAIL:
+            # ⚠ 必须排在 `_length_fix` **之前**：长度修补会把 `22u` 改成 `22um`/`220u`（错字），
+            # 之后 `_TAILSRC_RE` 就不再匹配 `数字+单位` 形状，`canon_value` 再把 `m` 削掉 ⇒
+            # 白忙一场（§5.491 第一版就是 case13 C6 没补上）。
+            self._fix_tail(gray, boxes, roles, reads)
         if READ_LENFIX:
             self._length_fix(gray, boxes, roles, rec, reads)
         if VALUE_MU or VALUE_NU:
@@ -990,7 +1094,10 @@ class TextEngine:
         # `gray`/状态而把**脚号**也换了（§5.466 第一版就在 case8 把 slot1 的号 11 变 15）。
         if PINNAME_RETRY > 0:
             self._pinname_retry(gray, items, keys, reads)
+        # 放最后：触发要看**最终**的直立引脚号读数（`_length_fix` 等已经改完）。
+        rot = self._pin_num_rot(rec, gray, boxes, rot_crops, reads) if PIN_NUM_ROT else {}
         return [{"bbox": boxes[i], "reads": reads[i],
+                 **({"pin_number_rot": rot[i]} if i in rot else {}),
                  **({"cfrac": colored_frac(bgr, boxes[i])} if TEXT_INK else {})}
                 for i in range(len(boxes))]
 
@@ -1090,6 +1197,103 @@ class TextEngine:
                 if new != cur[0]:
                     _UNIT_STATS["changed"] = _UNIT_STATS.get("changed", 0) + 1
                     reads[i][r] = (new, cur[1])
+
+    # ------------------------------------------------------------------
+    def _fix_tail(self, gray: np.ndarray, boxes: Sequence[Box], roles: Sequence[str],
+                  reads: List[Dict]) -> None:
+        """`STAGE2_VALUE_TAIL`：给「图上有、读法里没有」的值尾字母补上 `f`/`F`（详见上面的长注释）。"""
+        want = [r for r in roles if r in VALUE_UNIT_ROLES]
+        if not want:
+            return
+        H, W = gray.shape[:2]
+        for i, b in enumerate(boxes):
+            for r in want:
+                cur = reads[i].get(r)
+                if cur is None or not cur[0]:
+                    continue
+                txt, conf = cur[0].strip(), float(cur[1])
+                if not _TAILSRC_RE.match(txt):
+                    continue
+                cb = pad_box(b, self.pad_min, self.pad_frac,
+                             pad_min_y=self.pad_min_y, pad_frac_y=self.pad_frac_y)
+                x0, y0, x1, y1 = (int(round(v)) for v in cb)
+                x0, y0 = max(0, x0), max(0, y0)
+                x1, y1 = min(W, x1), min(H, y1)
+                g = gray[y0:y1, x0:x1]
+                if g.size == 0 or g.shape[1] < 4:
+                    continue
+                dark = g < max(1.0, float(g.mean()) * LENFIX_INK)
+                runs = [t for t in _glyph_runs(dark) if (t[1] - t[0]) >= LENFIX_MINW]
+                if len(runs) != len(txt) + 1:
+                    continue
+                a, bb2 = runs[-1]
+                seg = dark[:, a:bb2]
+                rows = np.nonzero(seg.any(1))[0]
+                if len(rows) < 4 or (rows[-1] - rows[0] + 1) < 0.6 * dark.shape[0]:
+                    continue
+                wid = [t[1] - t[0] for t in runs]
+                wd = float(np.median(wid[:-1])) if len(wid) > 1 else 0.0
+                if wd <= 0.0:
+                    continue
+                letter = "f" if float(wid[-1]) < VALUE_TAIL_W * wd else "F"
+                new = txt + letter
+                if not _TAIL_DONE_RE.match(new):
+                    continue
+                _UNIT_STATS["tail"] = _UNIT_STATS.get("tail", 0) + 1
+                reads[i][r] = (new, conf)
+
+    # ------------------------------------------------------------------
+    def _fix_dot(self, gray: np.ndarray, boxes: Sequence[Box], roles: Sequence[str],
+                 reads: List[Dict]) -> None:
+        """`STAGE2_VALUE_DOT`：读法里丢了小数点时按字形段补回（§5.500）。
+
+        病：`case13 C8` 的 GT 是 `2.7nf`，我们读成 `27n`。裁剪剖面的字形段是
+        `w=10 / w=2(只占底部两行) / w=10 / w=9 / w=7` —— 那条又窄又贴底的段就是小数点。
+        判据：段数 = 读数长度 + 2、其中**恰好一条**宽度 ≤ `VALUE_DOT_W` × 段宽中位数、
+        且该段只在裁剪高度底部 `VALUE_DOT_BOT` 以内有墨。补完仍要过 `_TAIL_DONE_RE`。
+        """
+        want = [r for r in roles if r in VALUE_UNIT_ROLES]
+        if not want:
+            return
+        H, W = gray.shape[:2]
+        for i, b in enumerate(boxes):
+            for r in want:
+                cur = reads[i].get(r)
+                if cur is None or not cur[0]:
+                    continue
+                txt, conf = cur[0].strip(), float(cur[1])
+                m = _DOTSRC_RE.match(txt)
+                if not m:
+                    continue
+                cb = pad_box(b, self.pad_min, self.pad_frac,
+                             pad_min_y=self.pad_min_y, pad_frac_y=self.pad_frac_y)
+                x0, y0, x1, y1 = (int(round(v)) for v in cb)
+                x0, y0 = max(0, x0), max(0, y0)
+                x1, y1 = min(W, x1), min(H, y1)
+                g = gray[y0:y1, x0:x1]
+                if g.size == 0 or g.shape[1] < 6:
+                    continue
+                dark = g < max(1.0, float(g.mean()) * LENFIX_INK)
+                runs = [t for t in _glyph_runs(dark) if (t[1] - t[0]) >= 1]
+                if len(runs) != len(txt) + 2:
+                    continue
+                wid = [t[1] - t[0] for t in runs]
+                wd = float(np.median(wid))
+                if wd <= 2.0:
+                    continue
+                cand = [k for k, w in enumerate(wid) if w <= VALUE_DOT_W * wd]
+                if len(cand) != 1:
+                    continue
+                k = cand[0]
+                seg = dark[:, runs[k][0]:runs[k][1]]
+                rows = np.nonzero(seg.any(1))[0]
+                if len(rows) == 0 or float(rows[0]) < VALUE_DOT_BOT * dark.shape[0]:
+                    continue
+                new = m.group("a") + "." + m.group("b") + m.group("u")
+                if not _TAIL_DONE_RE.match(new):
+                    continue
+                _UNIT_STATS["dot"] = _UNIT_STATS.get("dot", 0) + 1
+                reads[i][r] = (new, conf)
 
     # ------------------------------------------------------------------
     def _glyph_vote(self, bgr: np.ndarray, gray: np.ndarray, boxes: Sequence[Box],

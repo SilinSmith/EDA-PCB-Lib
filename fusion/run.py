@@ -67,6 +67,7 @@ from fusion import rescan as RS                        # noqa: E402
 from fusion import solve as SV                         # noqa: E402
 from stage2.assemble import build_doc                  # noqa: E402
 from stage2 import librefine as LR                      # noqa: E402
+from stage2 import partname_ocr as PN                   # noqa: E402
 from stage2 import pinlib as PB                         # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]      # `fusion/run.py` -> `eda-pcb/` -> 仓库根
@@ -391,6 +392,19 @@ def run_case(case: str, stage1_dir: Optional[Path] = None,
         rep_ns = {"on": bool(NS.ON), "err": str(exc)}
         if log:
             log("  [name_snap] 跳过：%s" % exc)
+    # ---- ⓪.93 型号名「文字框重读」结果的**重新压回**（`STAGE2_PARTNAME_OCR`，默认 0=关）--
+    # 与上一步同理，位置必须**在建池之前**：`comp.<cid>.partname` 的候选值是
+    # `CL.from_stage2` 从 `assigned` 抄的，`DC.apply` 又拿 claim 覆盖 `Name` ⇒ ⓪.92/⓪.93 的
+    # 吸附会把 `stage2` 重读 PP 后采纳的型号名顶掉（实测 case1 U1：采纳 `IP5306-4.35V`=GT，
+    # 被 `modelset` 吸成 `IP5306`）。采用记录由 `stage2/partname_ocr.py:carry` 挂在
+    # `partname` 上随 `_assigned` 落盘（`level()==0` 时一个 key 都不会有）。
+    rep_pp = {}
+    try:
+        rep_pp = PN.reassert(assigned)
+    except Exception as exc:                               # noqa: BLE001
+        rep_pp = {"err": str(exc)}
+        if log:
+            log("  [partname_pp] 跳过：%s" % exc)
     # ---- ⓪.94 元件「值」的类型内规范化（`FUSION_VALUE_FIX`，默认 0=关）----
     # 与 ⓪.93 同理，**必须在建池之前**（`value` 那条 claim 的候选值也是从这里抄的）。
     # 只做两条物理约束内的机械规则：电感/电容的单位家族互斥（`l` 只能亨、`c` 只能法）、

@@ -32,6 +32,7 @@ from .text import (DEFAULT_CKPT, LINESPLIT, TextEngine, detect_texts, imread_uni
                    read_stage1_texts)
 from .assign import assign, dist_to_rect, page_scale_from_heights, set_page_scale
 from .assemble import build_doc
+from . import partname_ocr
 from .expect import merge_runs, score_expect, should_grow
 from .growbox import grow_reading
 
@@ -63,6 +64,10 @@ PINCOL_WIN_KEYS = tuple(k.strip() for k in
 #
 #    ★ 默认值：这里先全部 **off**（队友分支里默认是 1/auto），因为并进来必须先做
 #      A/B（用户 m55811 的要求：改了识别逻辑的要 A/B）。逐个 A/B 有正收益的再翻默认。
+#      已翻默认的三个（§5.515，13 页 +0.149/+0.149/+0.032、池 28.4589→28.5735）：
+#      `STAGE2_PIN_NUMBER_REPAIR`=1、`STAGE2_PIN_NAME_OCR`=auto、`STAGE2_PIN_OCR_JOIN`=1；
+#      缺 `rapidocr-onnxruntime` 时两条读取器都 `provider is None → return []`，
+#      实测逐字节退回旧默认（13/13 sha256 相同）。
 #      · `STAGE2_COLOR_NUMBER_CROP`  =1 彩色引脚外部脚号重裁（`stage2/color_crops.py`）
 #      · `STAGE2_PIN_TEXT_CROP`      =1 完整旋转引脚词（`stage2/pin_text_crops.py`）
 #      · `STAGE2_PIN_LANE_CROP`      =1 独立引脚车道窗口 + 选择性恢复（§5.59 起**默认 1**：
@@ -81,9 +86,38 @@ COLOR_NUMBER_CROP = env_on("STAGE2_COLOR_NUMBER_CROP", "0")
 PIN_TEXT_CROP = env_on("STAGE2_PIN_TEXT_CROP", "0")
 PIN_LANE_CROP = env_on("STAGE2_PIN_LANE_CROP", "1")
 PIN_LANE_CLEANUP = os.environ.get("STAGE2_PIN_LANE_CLEANUP", "light").strip().lower()
-PIN_NAME_OCR = os.environ.get("STAGE2_PIN_NAME_OCR", "off").strip().lower()
+PIN_NAME_OCR = os.environ.get("STAGE2_PIN_NAME_OCR", "auto").strip().lower()
 MONO_PIN_OCR = os.environ.get("STAGE2_MONO_PIN_OCR", PIN_NAME_OCR).strip().lower()
-PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "0")
+PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "1")
+# ★ 同槽双通道联合断言（`STAGE2_PIN_OCR_JOIN`，§5.515 起默认 **1**；`stage2/pin_ocr_join.py`）：
+#   `STAGE2_PIN_NUMBER_REPAIR`（号）与 `STAGE2_PIN_NAME_OCR`（名）是两条独立外部通道，
+#   但读数进 `assign` 后按**槽**分配：号与名落到相邻的两个槽上时，两个槽各自缺一半，
+#   缺名字的那个被 `assemble.py` 的迟到 need-name 闸门整条丢掉 ⇒ 两条通道都对同一根
+#   脚给了证据却谁都发不出去（`case11 U1` 实测就是这样丢 6 根脚：`read_pin_numbers`
+#   接受 idx0→'8'、idx2→'6'，`read_pin_names` 接受 idx0→'LED1'、idx2→'VDD'，
+#   都 ≥.99，而 GT 的 `pin_8` 正是 `LED1`、`pin_6` 正是 `VDD`）。
+#   打开后只做一件事：两条通道**对同一 `(component_id, pin_index)` 都接受**的槽，
+#   用缺的那一半补齐（不覆盖已有值、不新增槽、不删任何读数、不引入任何阈值）。
+#   必须与上面两个开关同时开：任一通道关掉 ⇒ 该通道无读数 ⇒ 自然弃权。
+PIN_OCR_JOIN = env_on("STAGE2_PIN_OCR_JOIN", "1")
+# ★ 整颗元件「引脚号 ↔ 引脚名」抄表（`STAGE2_PIN_TABLE`，默认 **0=关**；
+#   `stage2/pin_table_vlm.py`）：上面那条联合断言要求**两条单脚通道对同一个槽都接受**
+#   才补缺的那一半；这里换一个证据源——把**整颗元件的符号裁片**（外扩
+#   `STAGE2_ZOOM_READ_PAD`、放大 2×）交给本地 VLM **一次抄出整张 `(号, 名)` 表**
+#   （`vlm/pinzoom.py` 是逐脚放大读、`vlm/pinname.py` 只读名字，都没有「整张表」这条
+#   通道）。表**只用来改名字**，且必须过「表自洽」+「号在本元件内唯一」两道闸门。
+#   写号 / 按侧拟合外推号 / 无闸门填空名 / 不看号唯一地覆盖，四种离线实测都判负
+#   （13 页 pin f1：0.5343 → 0.4871 / 0.4871 / 0.5135 / 0.5467），当前口径是离线
+#   0.5343 → 0.5781、13 页无一处变差（详见模块文件头）。
+#   关 ⇒ 连 import 都不做，下游逐位不变。
+PIN_TABLE = env_on("STAGE2_PIN_TABLE", "0")
+# ★ box 件「型号名文字框」重读（`STAGE2_PARTNAME_OCR`，§本次，默认 **0=关**；
+#   `stage2/partname_ocr.py`）：把 `partname.box` 那颗文字框单独重裁一次送 PP-OCR，
+#   在 `assemble.build_doc` 的 `Name` 最终成型处按档位覆盖：
+#     `0` = 关（产物与不挂这条通道时逐字节相同）
+#     `1` = 保守：只有 `libpins.norm(PP 文本)` 精确命中「形态良好」的库键才采用 PP 原串
+#     `2` = 进取：`1` 之外再加「与现名相同」或「conf ≥ 0.90 且纯可打印 ASCII 且 ≥3 字符」
+PARTNAME_OCR = partname_ocr.level()
 
 # ★ 引脚「灰底证据」通道（`STAGE2_PIN_GREY_EVIDENCE`，§5.59 起默认 1）：
 #   队友的读音器（`pin_text_crops._observations`）只认「彩色端点」证据
@@ -694,6 +728,7 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
     #              绝不改入参、绝不删既有读数 ⇒ 关掉时下游逐位不变
     #     开关     只在**这里**读 env（模块自身不读 env）
     # 关掉或角色不匹配都整项跳过；单项异常只打印，不拖垮其它读取器。
+    _ocr_ch = {}          # JOIN 用：两条 PP-OCR 通道各自的原始读数（JOIN 关 ⇒ 恒空）
     if do_ocr:
         for _name, _on, _mod, _fn, _need, _kw in PIN_READERS:
             if not _on:
@@ -712,6 +747,8 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                 _extra = [dict(r, reads={k: v for k, v in r.get("reads", {}).items()
                                          if k in roles})
                           for r in _extra if any(k in r.get("reads", {}) for k in roles)]
+            if PIN_OCR_JOIN and _name in ("pin_number_repair", "pin_name_ocr"):
+                _ocr_ch[_name] = list(_extra)
             if _extra:
                 reads = list(reads) + _extra
 
@@ -802,6 +839,36 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
     # ★ 行内位号/值重绑（`stage2/rowbind.py`）：**不在这里调**。最终位号由
     #   `fusion.claims` 的 `solve` 全局重裁，stage2 里改什么都不留痕（`claims.py:713`
     #   把 `assigned` 全部降级成候选）——落在 `fusion/run.py` 的 `_assemble` 之后。
+    # ★ 同槽双通道联合断言（`STAGE2_PIN_OCR_JOIN`，默认 0；见文件头常量处注释）：
+    #   放在 `build_doc` 之前、且在上面所有「单通道」修法（pinname/pinrot/
+    #   pinnamereread）之后 —— 只补它们各自补不出来的那一半，已有的值一律不覆盖。
+    if PIN_OCR_JOIN and _ocr_ch:
+        try:
+            from . import pin_ocr_join as _poj
+            _ty = {str(c.get("id")): c.get("type") for c in doc.get("components") or []}
+            _jn = _poj.join(a, _ocr_ch, _ty, min_conf=min_conf)
+            if _jn.get("assert"):
+                print("[stage2] 同槽双通道断言：%d 个槽（补号 %d、补名 %d；"
+                      "已有名字跳过 %d、同号占位跳过 %d、非箱体 %d）"
+                      % (_jn["assert"], _jn["filled_number"], _jn["filled_name"],
+                         _jn["skip_named"], _jn["skip_claimed"], _jn["skipped_type"]))
+        except Exception as _e:                      # noqa: BLE001
+            print("[stage2] 同槽双通道断言失败：%s" % (_e,))
+    # ★ 整颗元件「引脚号 ↔ 引脚名」抄表（`STAGE2_PIN_TABLE`，默认 0；见文件头常量处注释）：
+    #   同样放在 `build_doc` 之前、所有单通道修法之后。只改已有槽的**名字**，
+    #   不动坐标、不动号、不增删槽；端点不可用 / 表不可信 ⇒ 整条通道 no-op。
+    if PIN_TABLE:
+        try:
+            from . import pin_table_vlm as _ptv
+            _pt = _ptv.apply(bgr, doc, a)
+            _ab = ",".join("%s=%d" % (k, v)
+                           for k, v in sorted((_pt.get("abstain") or {}).items()))
+            print("[stage2] 整颗元件抄表：箱体 %d 颗、问 %d 次 %.1fs、改名 %d 只；弃权 %s%s"
+                  % (_pt.get("comps", 0), _pt.get("asked", 0), _pt.get("secs", 0.0),
+                     _pt.get("renamed", 0), _ab or "-",
+                     ("；错误 %s" % _pt["error"]) if _pt.get("error") else ""))
+        except Exception as _e:                      # noqa: BLE001
+            print("[stage2] 整颗元件抄表失败：%s" % (_e,))
     pred = build_doc(doc, a, case)
     pin_index = pred.pop("__pin_index", None)
     t3 = time.time()
@@ -933,6 +1000,9 @@ def main(argv=None) -> int:
 
     engine = TextEngine(ckpt=args.ckpt, device=args.device)
     print("[stage2] %d 个 case  识别器: %s" % (len(cases), engine.describe()[11:]))
+    if PARTNAME_OCR:
+        print("[stage2] 型号名重读（STAGE2_PARTNAME_OCR=%d）：box 件 partname 文字框重送 PP-OCR"
+              % PARTNAME_OCR)
 
     rows, failed, t0 = [], [], time.time()
     for i, c in enumerate(cases, 1):

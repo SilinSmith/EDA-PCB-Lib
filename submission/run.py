@@ -342,8 +342,15 @@ def _apply_offline(a) -> None:
     #   case6 94.01→91.78、case7 93.21→91.03、case10 90.31→**88.14**（pin 0.8696→0.7826）。
     #   实测 `STAGE1_WIRE_COLOUR=dominant` 本身零影响（90.80 逐轴相同），留着只为彻底
     #   绕开 `stage1/wires.py::_hint_wire_hue` 那条 VLM 旁路。
+    # ★★ 2026 修正（§5.483）：离线档改为 `confirm`。`dominant` 会把**符号本身的颜色**
+    #   当成导线色 —— case12 的暗红符号占主色相 h=35，整页导线于是画在符号笔画上
+    #   （stage1 段 60% 红、交付导线只覆盖 GT 5.8%，该页 net_line = 0.000）。`confirm`
+    #   先在元件框外做「长直线最多的色相」本地估计（`pskel.local_wire_hue`，无外部调用），
+    #   再要求它在调色板里被证实，且**只在主色相是红系时**才改写 dominant（`pskel.py:534`）
+    #   ⇒ 其余 12 页逐位不变。13 页主尺 +0.20（80.16 → 80.36，case12 57.08 → 59.63），
+    #   池 30 案 +0.06（落在批次噪声 ±0.1 内，逐案无一致性伤害）。
     for k, v in (("FUSION_LLM", "0"), ("FUSION_ITERATE", "0"),
-                 ("STAGE1_WIRE_COLOUR", "dominant")):
+                 ("STAGE1_WIRE_COLOUR", "confirm")):
         if k not in os.environ:
             os.environ[k] = v
     print("[run] 离线档：-vlm off｜FUSION_LLM=%s｜FUSION_ITERATE=%s｜STAGE1_WIRE_COLOUR=%s"
@@ -648,6 +655,9 @@ def _scale_doc_xy(doc, s):
     return doc
 
 
+STAR_PIN_ON = os.environ.get("STAGE2_STAR_PIN", "0") not in ("0", "", "off")
+
+
 def _sanitize_pred(doc):
     """出口不变式：网表成员必须指向**存在**的元件与引脚。
 
@@ -669,21 +679,34 @@ def _sanitize_pred(doc):
         if not hg:
             continue
         keep, bad = [], []
+        _rw = False
         for tok in hg.strip().strip("()").split(","):
             tok = tok.strip()
             if "." not in tok:
                 continue
             c, _, num = tok.rpartition(".")
             # `*` = 「不指具体引脚」的通配成员：只有**没有引脚**的电源/地符号会这么写
-            # （`assemble.STAGE2_SYM_VERTEX` 把它们当纯顶点挂进网）。判题机对非 box 类型
-            # 本来就按 `net_pin_collapse_nonbox` 折叠成元件身份，脚号不参与比较，所以
-            # 这条仍然满足「成员必须指向存在的元件」这个不变式。
+            # （`assemble.STAGE2_SYM_VERTEX` 把它们当纯顶点挂进网）。
+            # ⚠ 老注释说「判题机对非 box 类型按 `net_pin_collapse_nonbox` 折叠成元件身份，
+            #   脚号不参与比较」—— 那是 **反的**：`EvalConfig.net_pin_collapse_nonbox`
+            #   默认 **False**（`metrics.py:131`，与官方产物标定一致），`_net_sets` 直接拿
+            #   `net_pin_set()` 的 `(元件, 脚号)` 去配对 ⇒ `*` 永远对不上 GT 的 `1`。
+            #   13 页主尺上 **133/231 张 GT 网含无名电源符号**，每张都被这一处扣成部分分。
+            #   `STAGE2_STAR_PIN=1` 把 `*` 换成该符号**唯一那颗脚**的脚号（`pin_1` → `1`）。
             if num == "*":
                 ok = c in comps
+                if ok and STAR_PIN_ON:
+                    _grp = pins.get(c) or {}
+                    if isinstance(_grp, dict) and len(_grp) == 1:
+                        _pk = next(iter(_grp))
+                        if isinstance(_pk, str) and _pk.startswith("pin_"):
+                            num = _pk[4:]
+                            ok = bool(num)
+                            _rw = _rw or ok
             else:
                 ok = c in comps and ("pin_" + num) in (pins.get(c) or {})
             (keep if ok else bad).append(c + "." + num)
-        if not bad:
+        if not bad and not _rw:
             continue
         changed = True
         if not keep:
@@ -1168,8 +1191,16 @@ def _run(a) -> int:
             #   这里每完成一张先把阶段二文档顶上去，后面各层照旧覆盖（导出优先序不变，
             #   分数与非渐进路径逐位相同）⇒ 任何时刻被杀都不至于整批空手。
             try:
-                shutil.copyfile(s2_dir / ("%s.json" % cid),
-                                final_dir / ("%s_Pred.json" % cid))
+                # ★ 2026-11：单进程档原来在这里**直接 copyfile**，绕过了出口不变式
+                #   `_sanitize_pred`（lane 档走 `_publish_one` 才会过）⇒ 悬空引用和
+                #   `pNNN.*` 通配脚一路写进交付。这里补上：内容没变仍逐字节照抄。
+                _src = s2_dir / ("%s.json" % cid)
+                _dst = final_dir / ("%s_Pred.json" % cid)
+                _doc, _ch = _sanitize_pred(json.loads(_src.read_text(encoding="utf-8")))
+                if _ch:
+                    _dst.write_text(json.dumps(_doc, ensure_ascii=False), encoding="utf-8")
+                else:
+                    shutil.copyfile(_src, _dst)
                 n_prog += 1
             except Exception as _e:                               # noqa: BLE001
                 _log(fp, "  ⚠️ 渐进导出失败 %s: %s: %s"
@@ -1562,8 +1593,19 @@ def _run(a) -> int:
     pinkey_rows = []
     _pinkey_on = os.environ.get("FUSION_PINKEY_FIX", "1").strip().lower() not in (
         "", "0", "false", "off", "none")
+    # ★ `FUSION_PINKEY_ALNUM`（默认 **0** = 关）：把「合法脚号键」从 `^\d{1,3}$` 放宽到
+    #   「或 `^[A-Za-z]{1,2}\d{1,3}$`」。动机：连接器（`USB1` 这种 TYPE-C）的脚号本来
+    #   就是行字母+列号（`A5`/`A12`/`B12`），GT 的引脚键就是 `pin_A5` 这种形态；旧口径把
+    #   它们当非法键改号成 `pin_8/pin_9/…` ⇒ 判分上是 fp+fn 双罚（`open_GT` case11 实测）。
+    #   与整关通道（`FUSION_PINKEY_FIX=0`）的区别：那个连 `pin_+1V8`/`pin_U6` 这类真垃圾
+    #   键一起放行，本开关只放行「字母+数字」一种形态。
+    _pinkey_alnum = os.environ.get("FUSION_PINKEY_ALNUM", "1").strip().lower() not in (
+        "", "0", "false", "off", "none")
+    _pinkey_ok_re = (re.compile(r"\d{1,3}|[A-Za-z]{1,2}\d{1,3}") if _pinkey_alnum
+                     else re.compile(r"\d{1,3}"))
     if _pinkey_on:
-        _log(fp, "非法脚号改键通道：开（FUSION_PINKEY_FIX=1）")
+        _log(fp, "非法脚号改键通道：开（FUSION_PINKEY_FIX=1），合法键=%s"
+             % ("数字或字母数字" if _pinkey_alnum else "仅数字"))
 
     def _pinkey_step(cid):
         """把**非法脚号键**收成合法数字键（§5.261）；失败一律不影响导出。
@@ -1598,7 +1640,7 @@ def _run(a) -> int:
             nxt = (max(used) + 1) if used else 1
             for pk in list(grp):
                 s = str(pk)[4:] if str(pk).startswith("pin_") else str(pk)
-                if re.fullmatch(r"\d{1,3}", s):
+                if _pinkey_ok_re.fullmatch(s):
                     continue
                 while nxt in used:
                     nxt += 1
@@ -2212,3 +2254,4 @@ def _write_decision(out_dir: Path, summary: dict, cases_log: list,
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     raise SystemExit(main())
+

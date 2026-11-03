@@ -107,6 +107,17 @@ MODE = int(os.environ.get("FUSION_PIN_LIBSEQ", "1") or "1")
 # 名时才用，且要求「最优明显优于次优」（`VDD` vs `VDDC` 这种近名不能互相抢）。
 FUZZY = float(os.environ.get("FUSION_PIN_LIBSEQ_FUZZY", "0.85") or 0.85)
 FUZZY_MARGIN = float(os.environ.get("FUSION_PIN_LIBSEQ_MARGIN", "0.06") or 0.06)
+# ★★ 型号名 → 库键的**唯一性**复核（`STAGE2_PINLIB_KEY_UNIQ`，默认 **1 = 开**，§5.550：13 页 +0.15，池 0 次触发）。
+#
+# 病（R-b 识别器回归，`open_GT case6 U1`）：图上印的是 `78M12`（GT 也是），识别器读成
+# `789M12`；`libpins.key_for` 的模糊档（`difflib.get_close_matches(n=1)`）在
+# `789M12 → 78M12` 与 `789M12 → 79M12` 上是**同分 0.909**（打平），它取了先排到的
+# `79M12`；而两颗的引脚表正好相反：`78M12 = IN1/GND2/OUT3`、`79M12 = GND1/IN2/OUT3`
+# ⇒ 下面 `repair_slots` 把**本来读对的** `GND=2` 改成 `1`，整串号/网跟着错。
+# 判据与 `_resolve_name` 同源、阈值直接复用 `FUZZY`/`FUZZY_MARGIN`（不新造数）：
+# 只复核**模糊命中**（精确/归一化档命中天然唯一），最佳与次佳比值差 < `FUZZY_MARGIN`
+# 就当作「认不出型号」，退回不做任何槽位改写。
+PINLIB_KEY_UNIQ = int(_env("STAGE2_PINLIB_KEY_UNIQ", "1") or 0)
 
 _MAPS: Optional[dict] = None
 
@@ -181,6 +192,16 @@ def _resolve_name(n: str, byname: dict):
     return None
 
 
+def _ctx_key(ctx, pname: str) -> Optional[str]:
+    """`LibCtx.key_for` 的**唯一性复核版**（`STAGE2_PINLIB_KEY_UNIQ=0` 时逐位等于原行为）。
+
+    实现只有一份：`libpins.LibCtx.key_for_uniq`（三个消费点共用：本模块的
+    `repair_doc`/`repair_slots`、`librefine.refine`）。这里只保留一个名字，
+    让本模块的调用点不必各自记开关。异常语义原样上抛 —— 调用点本来就各自 try 住。
+    """
+    return _libpins.key_uniq(ctx, pname)
+
+
 def _key_for(ctx, pname: str) -> Optional[str]:
     """型号名 → 库键：`libpins` 的三档（精确 / 归一 / 模糊）**+ 一档前缀**。
 
@@ -194,10 +215,7 @@ def _key_for(ctx, pname: str) -> Optional[str]:
     """
     if not pname:
         return None
-    try:
-        k = ctx.key_for(pname)
-    except Exception:                                       # noqa: BLE001
-        k = None
+    k = _ctx_key(ctx, pname)
     if k:
         return k
     nt = _libpins.norm(pname)
@@ -269,7 +287,7 @@ def repair_doc(doc: dict, ctx=None, mode: Optional[int] = None,
         if not cname:
             continue
         try:
-            key = ctx.key_for(cname)
+            key = _ctx_key(ctx, cname)
         except Exception:                                   # noqa: BLE001
             key = None
         if not key:

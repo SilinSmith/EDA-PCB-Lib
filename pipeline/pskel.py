@@ -1180,6 +1180,11 @@ class WireExtractor:
         has_chroma = False
         if self.use_colour:
             cm = wire_colour_mask(bgr, ink)
+            if os.environ.get("STAGE1_WIRE_DEBUG"):
+                print("  [wire] scale=%.2f ink=%d hint=%s mode=%s mask=%s"
+                      % (self.scale, int((ink > 0).sum()), HINT_HUE,
+                         os.environ.get("STAGE1_WIRE_COLOUR", "confirm"),
+                         "None" if cm is None else int((cm > 0).sum())), flush=True)
             if cm is not None:
                 has_chroma = True
                 # ★ 2026-10-10（用户 m40034：「你还要用其他手段交叉验证才能得出这是导线」）：

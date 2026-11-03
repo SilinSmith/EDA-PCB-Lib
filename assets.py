@@ -42,6 +42,7 @@ REPO = Path(__file__).resolve().parent
 WORKSPACE = REPO.parent
 
 YOLO_ENV = "YOLO_WEIGHTS"
+SYM16_ENV = "SYM16_WEIGHTS"
 CRNN_ENV = "STAGE2_CKPT"
 CPNT_ENV = "STAGE2_CPNT_LIB"
 BOXIC_ENV = "STAGE2_BOXIC_LIB"
@@ -52,6 +53,16 @@ def _candidates(kind: str) -> List[Path]:
         return [
             REPO / "weights" / "pcb43_v2_from_best.pt",
             REPO / "yolo_part" / "runs" / "detect" / "pcb43_v2_from_best" / "weights" / "best.pt",
+        ]
+    if kind == "sym16":
+        # 16 类「小符号」检测器（`yolo_part/symds`，imgsz 1280）。服务
+        # `stage1/sym16.py` 的两条臂（`STAGE1_SYM16` 默认关 / `STAGE1_SYM16_FIX` 默认开，
+        # §5.532），产品检测器 `yolo_weights()` 的候选表与调用参数一概不动。
+        return [
+            # ① 包内（随仓库提交 ⇒ 进镜像的唯一保证；`yolo_part/runs/**` 被 .gitignore 排除）
+            REPO / "weights" / "sym16_1280_best.pt",
+            # ② 本机训练产物（开发时兜底）
+            REPO / "yolo_part" / "runs" / "detect" / "sym16_1280" / "weights" / "best.pt",
         ]
     if kind == "cpntlib":
         # ① 包内（随仓库提交 ⇒ 进镜像的唯一保证）；②③④ 只在本机开发时兜底。
@@ -99,6 +110,11 @@ def resolve(kind: str, env: str, extra: Iterable[Path] = (), must_exist: bool = 
 
 def yolo_weights(must_exist: bool = True) -> str:
     return resolve("yolo", YOLO_ENV, must_exist=must_exist)
+
+
+def sym16_weights(must_exist: bool = True) -> str:
+    """sym16 小符号检测器权重（`stage1/sym16.py` 专用，见 `_candidates("sym16")`）。"""
+    return resolve("sym16", SYM16_ENV, must_exist=must_exist)
 
 
 def textrec_ckpt(must_exist: bool = True) -> str:

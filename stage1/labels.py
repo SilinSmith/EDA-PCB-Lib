@@ -137,9 +137,12 @@ TEXT_BRIDGE_PAD = float(os.environ.get("STAGE1_TEXT_BRIDGE_PAD", "3.0"))   # 框
 #     （同一对旋钮：10GT 上 +0.53，220 上 **−0.90**；10GT 只占 220 的 4.5%，
 #       所以净亏全部来自那 210 张彩色图 —— 它们的走线渲染不吃「结点圆点断口」这套。）
 #
-# ⇒ **默认留在 16.0 / 1.5。** 想在 KiCad 风格图纸上开，显式设
-#   `STAGE1_WIRE_WELD=24 STAGE1_WIRE_PERP=14`。**别再把这对值当默认。**
-WIRE_WELD = float(os.environ.get("STAGE1_WIRE_WELD", "16.0"))
+# ⇒ **默认改成 12.0 / 1.5（§5.497）。** 16 是历史值：在 13 页主尺上它比 12 差
+#   0.14（折叠）/ 0.13（判题机口径，case7 +1.82、case1 −0.15），220 池上差 0.20
+#   （0072 +2.07、0001 +0.65、0165 +0.67 都已用单案复核，不是批次抖动）。
+#   4/6/8/10/12 **逐位相同** ⇒ 这是一级台阶，不是某个具体值；取 12 离老默认最近。
+#   想在 KiCad 风格图纸上更激进，显式设 `STAGE1_WIRE_WELD=24 STAGE1_WIRE_PERP=14`。
+WIRE_WELD = float(os.environ.get("STAGE1_WIRE_WELD", "12.0"))
 WIRE_PERP = float(os.environ.get("STAGE1_WIRE_PERP", "1.5"))
 WIRE_COS = float(os.environ.get("STAGE1_WIRE_COS", "-0.75"))
 # 规则 (3) 的**墨迹判据**：两端连线上的采样点里要有多少比例落在墨上才允许焊接。

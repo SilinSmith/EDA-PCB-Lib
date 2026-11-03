@@ -141,7 +141,7 @@ def refine(doc: dict, ctx=None, log=None) -> Dict[str, Any]:
         if not rows:
             continue
         st["n_seen"] += len(rows)
-        key = ctx.key_for(comp.get("Name") or "")
+        key = LP.key_uniq(ctx, comp.get("Name") or "")
         if not key:
             continue
         st["n_key"] += len(rows)

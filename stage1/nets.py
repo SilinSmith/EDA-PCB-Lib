@@ -66,6 +66,35 @@ PIN_JOIN_SYNTH = float(os.environ.get("STAGE1_PIN_JOIN_SYNTH", "3"))
 # `longest` 只是「在同样够得着的前提下，优先相信更长的那条线」，不动任何阈值。
 PIN_ATTR = os.environ.get("STAGE1_PIN_ATTR", "nearest").strip().lower()
 PIN_ATTR_SLACK = float(os.environ.get("STAGE1_PIN_ATTR_SLACK", "6"))
+
+# 单脚元件（电源/地符号）的接线半径（`STAGE1_PWR_JOIN_DIST`，默认 0 = 关闭）。
+# 这类符号在图上**总是**用一根短引线接到某条导线上，但它们的脚位是我们按 bbox 估的
+# （实测 143 颗里只有 29.6% 落在 GT 脚位 5px 内、平均偏 12.1px，见 §5.493），
+# 用通用的 `join_dist=12` 会有一批落在半径外 ⇒ 整颗符号不进任何网。
+# 单独给它们一个更宽的半径，不动密排 IC 的 12px（那里放大半径会串网，§5.493.7）。
+PWR_JOIN_DIST = float(os.environ.get("STAGE1_PWR_JOIN_DIST", "0") or 0)
+
+# 多脚件（IC / 连接器）的接线半径（默认 20，见 §5.495）。
+# 交付里 41 颗悬空脚中有 34 颗离最近导线 12–45px（IC 的长引线、我们导线描到引线中段就停了，
+# 见 §5.493）：它们进不了任何网 ⇒ 该脚对应的 (元件, 脚号) 在判题机口径下同时算缺人和多余。
+# 只对「脚数 ≥ `STAGE1_MULTI_MIN_PINS`」的件放宽，避免动到无源件/电源符号。
+# 20 是扫描出来的平台（16 太短、26 起饱和、45 会掉 case8），裸放大在 13 页上 +0.19/+0.25，
+# 但有 0046 那 −0.157 的串网 ⇒ 必须配下面的方向判据一起用。
+MULTI_JOIN_DIST = float(os.environ.get("STAGE1_MULTI_JOIN_DIST", "20") or 0)
+MULTI_MIN_PINS = int(os.environ.get("STAGE1_MULTI_MIN_PINS", "4") or 4)
+
+# 放大的半径要不要「看方向」（默认 1 = 看）。
+# 只有被放宽半径的那批脚（多脚件 / 单脚符号）才会检查：脚到它选中的那条段的
+# 最近点，方向必须落在脚的外法向一侧（点积 ≥ `STAGE1_JOIN_NRM_COS`）。
+# `COS=-0.3` 是量出来的：只要不是「导线明显在脚背后」就放行 —— 这样 13 页上
+# 的收益与裸放大**逐位相同**（80.66/79.43、判题机 77.10），而 `0046` 那处
+# 「IC 的脚把侧后方导线认成自己那条」被判据挡住（单案 47.735 → 47.892 = 基线）。
+JOIN_NRM = int(os.environ.get("STAGE1_JOIN_NRM", "1") or 0)
+JOIN_NRM_COS = float(os.environ.get("STAGE1_JOIN_NRM_COS", "-0.3") or -0.3)
+# 方向不振、但**导线端点就贴在脚上**时照样算接上（`STAGE1_JOIN_ENDOK`，默认 1）。
+# 侧向贴近一条长导线的脚（方向判据过不去）里，有一部分其实是「导线正好从脚边起头」，
+# 端点到脚的距离就在历史半径 12px 内 —— 这类不该被方向判据毙掉。
+JOIN_ENDOK = int(os.environ.get("STAGE1_JOIN_ENDOK", "1") or 0)
 # 少于这么多引脚的「网络」丢掉（孤立毛刺）。注意它同时也就是「空网丢弃」的开关：
 # `MIN_NET_PINS = 1` 已经把 0 引脚的网挡在 `build_nets` 外面，所以不再需要单独的
 # `DROP_EMPTY` 常量（2026-07 审计删掉了那个只写不读的装饰常量）。
@@ -100,12 +129,40 @@ def _nearest_seg(pts: np.ndarray, segs: np.ndarray, full: bool = False):
     return out + (d,) if full else out
 
 
+def _closest_on_seg(px: float, py: float, s):
+    """点 (px,py) 到线段 s=[x1,y1,x2,y2] 的最近点。"""
+    x1, y1, x2, y2 = float(s[0]), float(s[1]), float(s[2]), float(s[3])
+    dx, dy = x2 - x1, y2 - y1
+    L2 = dx * dx + dy * dy
+    t = 0.0 if L2 <= 0 else max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / L2))
+    return x1 + t * dx, y1 + t * dy
+
+
+def _outward_nrm(p, bb):
+    """引脚相对元件框的向外法向（取最近的边框一侧）。"""
+    try:
+        x, y = float(p[0]), float(p[1])
+        x1, y1, x2, y2 = [float(v) for v in bb[:4]]
+    except Exception:
+        return None
+    dl, dr = x - x1, x2 - x
+    dt, db = y - y1, y2 - y
+    m = min(dl, dr, dt, db)
+    if m == dl:
+        return (-1.0, 0.0)
+    if m == dr:
+        return (1.0, 0.0)
+    if m == dt:
+        return (0.0, -1.0)
+    return (0.0, 1.0)
+
+
 def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
                weld=None, perp_tol=None, cos_tol=None, ink=None, over=None,
                join_dist: float = PIN_JOIN_DIST, min_pins: int = MIN_NET_PINS,
                join_far: float = PIN_JOIN_FAR, report=None,
                pin_synth=None, join_synth: float = PIN_JOIN_SYNTH,
-               bridges=None, bridge=None, bridge_pad=None):
+               bridges=None, bridge=None, bridge_pad=None, boxes=None):
     """返回 (nets, seg_groups)。
 
     `comp_pins`: `{comp_id: [(x, y), ...]}`（图像坐标）
@@ -154,14 +211,26 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
         bridges=bridges, bridge=bridge, bridge_pad=bridge_pad)
 
     # 收集所有引脚点，并记住它属于哪个元件、第几个脚
-    pts, owner, jd = [], [], []
+    pts, owner, jd, wide, nrm = [], [], [], [], []
     for cid, plist in comp_pins.items():
         sf = (pin_synth or {}).get(cid) or []
+        single = (len(plist) == 1)
+        multi = (len(plist) >= MULTI_MIN_PINS) and MULTI_JOIN_DIST > 0
+        bb = (boxes or {}).get(cid)
         for k, p in enumerate(plist):
             pts.append((float(p[0]), float(p[1])))
             owner.append((cid, k))
             # 「补出来的脚」用紧半径挑导线，其余用 `join_dist`。见 `PIN_JOIN_SYNTH`。
-            jd.append(float(join_synth) if (k < len(sf) and sf[k]) else float(join_dist))
+            if PWR_JOIN_DIST > 0 and single and not (k < len(sf) and sf[k]):
+                jd.append(max(float(join_dist), PWR_JOIN_DIST))
+                wide.append(True)
+            elif multi and not (k < len(sf) and sf[k]):
+                jd.append(max(float(join_dist), MULTI_JOIN_DIST))
+                wide.append(True)
+            else:
+                jd.append(float(join_synth) if (k < len(sf) and sf[k]) else float(join_dist))
+                wide.append(False)
+            nrm.append(_outward_nrm(p, bb) if (JOIN_NRM and bb is not None) else None)
     if not pts:
         return [], seg_groups
     P = np.asarray(pts, np.float64)
@@ -211,6 +280,20 @@ def build_nets(comp_pins, segments, tol=None, ext=None, ext_nearest=None,
             return best_g
         if dist[m] > jdm:
             return -1
+        if JOIN_NRM and wide[m] and nrm[m] is not None and float(dist[m]) > float(join_dist):
+            # 只审「靠放宽半径才够得着」的那批脚（历史半径内的接线一律照旧）。
+            s = segs[int(sidx[m])]
+            cx, cy = _closest_on_seg(float(P[m][0]), float(P[m][1]), s)
+            vx, vy = cx - float(P[m][0]), cy - float(P[m][1])
+            L = math.hypot(vx, vy)
+            if L > 1e-6 and (vx * nrm[m][0] + vy * nrm[m][1]) / L < JOIN_NRM_COS:
+                if not JOIN_ENDOK:
+                    return -1
+                # 端点到脚的距离还在历史半径内 ⇒ 这条导线是真的从脚上起头的
+                e1 = math.hypot(float(s[0]) - float(P[m][0]), float(s[1]) - float(P[m][1]))
+                e2 = math.hypot(float(s[2]) - float(P[m][0]), float(s[3]) - float(P[m][1]))
+                if min(e1, e2) > float(join_dist):
+                    return -1
         return int(seg_groups[int(sidx[m])])
 
     buckets: Dict[int, List] = {}

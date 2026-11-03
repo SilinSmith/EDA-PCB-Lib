@@ -127,6 +127,17 @@ PITCH_FALLBACK = os.environ.get("STAGE1_PINC_FALLBACK", "0").strip().lower() not
 NUM_MIN_EL = int(os.environ.get("STAGE1_PINC_MIN_EL", "4"))
 # 引脚点离框边多远（官方 GT 实测 ~10.6px；与 stage1 的 PIN_OUT_BOX=12 对齐）
 OUT_DIST = float(os.environ.get("STAGE1_PINC_OUT", "12.0"))
+# ★ 本级新加：用**符号色量出来的逐侧引线长度**代替常数 `OUT_DIST`（默认关）。
+#   动机（RESULTS §5.485）：不同符号的引线从 8px 到 40px 不等（13 页 GT 逐侧腿长
+#   中位数 p10 19 / p50 20 / p90 40），用同一个 12px 常数会让整列留在 GT 内侧 8~28px；
+#   而 case11 `U1` 的右侧又是 20px，同一页的不同侧面也不一样。
+PINC_LEG_COLOR = int(os.environ.get("STAGE1_PINC_LEG_COLOR", "0"))
+# 量出来的引线长度上限（0 = 不设上限）。GT 最大值 40px，超过的都是「红墨连成一片」。
+PINC_LEG_MAX = float(os.environ.get("STAGE1_PINC_LEG_MAX", "0") or 0)
+# 逐侧腿长再用「导线投票」复核（1 = 开）。见 `_leg_votes`。
+PINC_LEG_VOTE = int(os.environ.get("STAGE1_PINC_LEG_VOTE", "1"))
+# 量测腿长的下限：小于它就当没量到（GT 逐侧腿长 p10=19，最小值也在 8 以上）。
+PINC_LEG_MIN = float(os.environ.get("STAGE1_PINC_LEG_MIN", "6"))
 # 号码窗从框边往外多深；名字窗从框边往内多深（还会被框宽的 0.45 倍卡住）
 NUM_REACH = float(os.environ.get("STAGE1_PINC_NUM_REACH", "26"))
 NAME_REACH = float(os.environ.get("STAGE1_PINC_NAME_REACH", "90"))
@@ -153,6 +164,27 @@ MAX_SIDE = int(os.environ.get("STAGE1_PINC_MAX_SIDE", "200"))
 MIN_SIDE = float(os.environ.get("STAGE1_PINC_MIN_SIDE", "60"))
 # ★ 至少要检到几个**真号码候选**才认这次枚举（否则纯属几何外推）。
 MIN_NUM = int(os.environ.get("STAGE1_PINC_MIN_NUM", "2"))
+# 拟合 pitch 至少需要几个「号码文字」位置。默认 4（老行为：3 个号的边一律不拟合）。
+# case 11 的 U1/U2 每边只有 3 个号码（`[394,414,434]`，真 pitch=20，GT 每边 4 脚），
+# 3 个号本身足够定位 pitch —— 但 3 点拟合没有冗余，必须靠 `MIN_EL` 与
+# 「有据格点占比」两道闸门兜住假 pitch（见 `_side_records`）。
+PITCH_FIT_MIN = int(os.environ.get("STAGE1_PINC_FIT_MIN", "4"))
+# 次谐波守卫的容差：0=老的绝对 1 个点；1=按点数 10% 相对（小样本上更严）
+HARM_REL = os.environ.get("STAGE1_PINC_HARM_REL", "0").strip().lower() not in (
+    "", "0", "false", "no", "off")
+# ★ 次谐波守卫改成**实现文档里写的那条判据**：`score = 落点 − 0.25×空槽`（`STAGE1_PINC_HARM_SCORE`）。
+#   老实现只比「解释了几个点」，而 2× 格点是 1× 的子集 ⇒ 「解释得少一点」被当成噪声容差，
+#   于是 3 个号的侧面必然被判成 2× 甚至 3×（case11 U1 的 `[394,414,434]`：真 pitch=20，
+#   老代码漂到 120 后返回 None）。空槽项才是区分「真 pitch」与「半格」的唯一信息。
+HARM_SCORE = os.environ.get("STAGE1_PINC_HARM_SCORE", "0").strip().lower() not in (
+    "", "0", "false", "no", "off")
+# 号码内点数不足 NUM_MIN_EL 时，用「墨迹桩相位共证」补救（见 `_side_records`）
+STUB_PHASE = os.environ.get("STAGE1_PINC_STUB_PHASE", "0").strip().lower() not in (
+    "", "0", "false", "no", "off")
+_DBG = os.environ.get("STAGE1_PINC_DEBUG", "0").strip().lower() not in (
+    "", "0", "false", "no", "off")
+# 桩相位共证额外要求的最短「连续 1× 间距段」长度（段数 = 桩数 - 1）
+STUB_RUN = int(os.environ.get("STAGE1_PINC_STUB_RUN", "2"))
 # 是否把「没有桩、只在格点上」的位置也发出来（owner m25661「等距对齐」）
 # ⚠️ 关掉它（`STAGE1_PINC_FILL=0`）的实测（2026-10-09，交付口径 × 官方 10 张，
 #    `docs\RESULTS.md` §2.16）：`CLUSTER_IC=5` 之上再赚 `69.89 → 70.08`（只动 case 8：
@@ -381,7 +413,8 @@ def _num_candidates(texts: Sequence, box: Sequence[float], side: str,
 
 # ------------------------------------------------------------------ 格点拟合
 def _fit_pitch(pos: Sequence[float], min_pitch: float = PITCH_MIN,
-               max_pitch: float = PITCH_MAX) -> Optional[float]:
+               max_pitch: float = PITCH_MAX,
+               min_pts: int = 4) -> Optional[float]:
     """从一堆（含漏检、含噪声的）位置里稳健地拟合出**等距间距**。
 
     先在 `[min_pitch, max_pitch)` 上直接扫候选 pitch（0.1 步长），用
@@ -393,11 +426,11 @@ def _fit_pitch(pos: Sequence[float], min_pitch: float = PITCH_MIN,
     取到 2 倍或 5px；只用「差的直方图众数」在位置带半像素抖动时会跑偏。
     """
     s = np.asarray(sorted(float(v) for v in pos))
-    if s.size < 4:
+    if s.size < max(3, min_pts):
         return None
     d = np.diff(s)
     d = d[d >= max(3.0, min_pitch * 0.5)]
-    if d.size < 3:
+    if d.size < max(2, min_pts - 1):
         return None
     # ① 相邻差取众数（0.5px 桶）当基础 pitch：
     #    「逐个候选去扫全局」在含噪声时会偏向**大的** pitch（tol 随 pitch 变大 ⇒
@@ -420,10 +453,30 @@ def _fit_pitch(pos: Sequence[float], min_pitch: float = PITCH_MIN,
             best = max(best, int((np.abs((s - a) - kk * pitch) <= tol).sum()))
         return best
 
-    # ② 次谐波守卫：`p0/2` 也会「看起来很整齐」；若 2 倍 pitch 的解释力不差就取大的
+    # ② 次谐波守卫：`p0/2` 也会「看起来很整齐」；若 2 倍 pitch 的解释力不差就取大的。
+    #    绝对容差 1 个点在小样本上是致命的：只有 3 个号码时 2× 必然「少解释 1 个」
+    #    ⇒ 3 个号会被判成 40px 的 pitch（case 11 的 U1：`[394,414,434]` 真 pitch=20）。
+    #    `STAGE1_PINC_HARM_REL=1` 改成「≤10% 的点」——3 个点容差 0、20 个点容差 2。
+    #    基准取**最初**的 `_base` 而不是循环里被改写后的 p0（老代码拿更新后的 p0 比较，
+    #    于是 2× 通过后 3× 更容易通过，一路漂到 120）。
+    _base = _on(p0)
+
+    def _slot_score(pitch):
+        """`落点 − 0.25×空槽`：2× 格点是 1× 的子集，只有空槽一项能把它区分开。"""
+        span = (float(s[-1]) - float(s[0])) / pitch
+        n_slot = int(round(span)) + 1
+        return _on(pitch) - 0.25 * max(0, n_slot - _on(pitch))
+
+    _base_s = _slot_score(p0)
     for mult in (2.0, 3.0):
         cand = p0 * mult
-        if cand < max_pitch and _on(cand) >= _on(p0) - 1:
+        if HARM_SCORE:
+            if cand < max_pitch and _slot_score(cand) > _base_s:
+                p0 = cand
+            continue
+        # 关掉相对容差时逐字保留老表达式（拿**更新后**的 p0 比较），保证默认路径不变
+        need = (_base - max(0, int(round(0.1 * _base)))) if HARM_REL else (_on(p0) - 1)
+        if cand < max_pitch and _on(cand) >= need:
             p0 = cand
     tol = min(0.2 * p0, 1.5)
     best = None
@@ -486,28 +539,101 @@ def _snap_anchor(pos: Sequence[float], pitch: float) -> float:
 
 
 # ------------------------------------------------------------------ 单侧枚举
-def _windows(box: Sequence[float], side: str, pos: float, pitch: Optional[float]):
-    """给一个格点算 (引脚点, 号码窗, 名字窗)。窗是图像坐标的 `(x1,y1,x2,y2)`。"""
+def _legs_of(bb: Sequence[float], sym: np.ndarray) -> Optional[Tuple]:
+    """逐侧引线长度 `(L,R,T,B)`；量不到或撞窗口上限的侧给 `None`（回退常数 `OUT_DIST`）。
+
+    量法直接用 `stage1/pins.py::_color_leg_box`（同一份代码、同一条判据，避免两处口径分叉）。
+    撞上限（`>= PIN_LEG_COLOR_MAX - 1`）意味着「红墨一路铺到窗口尽头」，那是两段红墨被
+    `PIN_LEG_COLOR_GAP` 桥接的结果，不是引线长度（case11 `U1` 右列 46 就是这种）。
+    """
+    try:
+        from . import pins as _pins
+    except ImportError:                                   # pragma: no cover
+        import pins as _pins
+    try:
+        lg = _pins._color_leg_box([float(v) for v in bb], sym)
+    except Exception:                                     # pragma: no cover
+        return None
+    if not lg:
+        return None
+    _lim = float(getattr(_pins, "PIN_LEG_COLOR_MAX", 0.0) or 0.0)
+    out = []
+    for v in lg:
+        if v is None:
+            out.append(None)
+            continue
+        v = float(v)
+        if v < PINC_LEG_MIN:
+            out.append(None)      # 比框边还近 = 量的不是引线（符号内墨/外框线）
+        elif _lim > 0 and v >= _lim - 1.0:
+            out.append(None)      # 撞窗口上限 = 两段墨被桥接
+        else:
+            out.append(v)
+    return tuple(out)
+
+
+def _leg_votes(box: Sequence[float], side: str, lat: Sequence[float],
+               out: float, segs, ret_dmin: bool = False):
+    """把这一列格点按 `out` 摆出去，数有多少个落在真实导线 6px 内。"""
+    if not len(lat) or segs is None:
+        return 0
+    try:
+        s = np.asarray([[float(q[0][0]), float(q[0][1]),
+                         float(q[-1][0]), float(q[-1][1])] for q in segs],
+                       dtype=np.float64)
+    except Exception:                                     # pragma: no cover
+        return 0 if not ret_dmin else -1.0
+    if not s.size:
+        return 0
     x0, y0, x1, y1 = [float(v) for v in box]
+    if side == "L":
+        pts = np.array([[x0 - out, float(p)] for p in lat])
+    elif side == "R":
+        pts = np.array([[x1 + out, float(p)] for p in lat])
+    elif side == "T":
+        pts = np.array([[float(p), y0 - out] for p in lat])
+    else:
+        pts = np.array([[float(p), y1 + out] for p in lat])
+    a, b = s[:, None, :2], s[:, None, 2:]
+    p = pts[None, :, :]
+    ab = b - a
+    L2 = np.where((ab ** 2).sum(-1) < 1e-9, 1e-9, (ab ** 2).sum(-1))
+    t = np.clip(((p - a) * ab).sum(-1) / L2, 0.0, 1.0)
+    d = np.hypot(*(p - (a + t[..., None] * ab)).transpose(2, 0, 1))
+    if ret_dmin:
+        return float(np.median(d.min(axis=0))) if d.size else -1.0
+    return int((d.min(axis=0) <= 6.0).sum())
+
+
+def _windows(box: Sequence[float], side: str, pos: float, pitch: Optional[float],
+             out: Optional[float] = None):
+    """给一个格点算 (引脚点, 号码窗, 名字窗)。窗是图像坐标的 `(x1,y1,x2,y2)`。
+
+    `out` 覆盖该侧的「框边→引脚」法向距离（默认 `OUT_DIST`）。`STAGE1_PINC_LEG_COLOR=1`
+    时由调用方传入**用颜色量出来的该侧引线长度**（见 `stage1/pins.py::_color_leg_box`）——
+    不同符号的引线长度从 8px 到 40px 不等，用同一个常数会把整列推到 GT 之外。
+    """
+    x0, y0, x1, y1 = [float(v) for v in box]
+    od = OUT_DIST if out is None else float(out)
     half = max(3.0, (pitch or 10.0) * 0.48)
     name = min(NAME_REACH, max(24.0, 0.45 * max(x1 - x0, y1 - y0)))
     if side == "L":
-        pin = (x0 - OUT_DIST, pos)
-        out = (x0 - NUM_REACH, pos - half, x0 - 1.0, pos + half)
+        pin = (x0 - od, pos)
+        out_w = (x0 - NUM_REACH, pos - half, x0 - 1.0, pos + half)
         inn = (x0 + 1.0, pos - half, min(x1, x0 + name), pos + half)
     elif side == "R":
-        pin = (x1 + OUT_DIST, pos)
-        out = (x1 + 1.0, pos - half, x1 + NUM_REACH, pos + half)
+        pin = (x1 + od, pos)
+        out_w = (x1 + 1.0, pos - half, x1 + NUM_REACH, pos + half)
         inn = (max(x0, x1 - name), pos - half, x1 - 1.0, pos + half)
     elif side == "T":
-        pin = (pos, y0 - OUT_DIST)
-        out = (pos - half, y0 - NUM_REACH, pos + half, y0 - 1.0)
+        pin = (pos, y0 - od)
+        out_w = (pos - half, y0 - NUM_REACH, pos + half, y0 - 1.0)
         inn = (pos - half, y0 + 1.0, pos + half, min(y1, y0 + name))
     else:
-        pin = (pos, y1 + OUT_DIST)
-        out = (pos - half, y1 + 1.0, pos + half, y1 + NUM_REACH)
+        pin = (pos, y1 + od)
+        out_w = (pos - half, y1 + 1.0, pos + half, y1 + NUM_REACH)
         inn = (pos - half, max(y0, y1 - name), pos + half, y1 - 1.0)
-    return pin, out, inn
+    return pin, out_w, inn
 
 
 def _in_win(cx: float, cy: float, win) -> bool:
@@ -515,7 +641,8 @@ def _in_win(cx: float, cy: float, win) -> bool:
 
 
 def _side_records(mask: np.ndarray, box: Sequence[float], side: str,
-                  texts: Sequence, cents: Sequence, cid: str) -> List[dict]:
+                  texts: Sequence, cents: Sequence, cid: str,
+                  legs: Sequence = None, segs=None) -> List[dict]:
     stubs = _stub_positions(mask, box, side)
     nums = _num_candidates(texts, box, side, stubs=stubs)
     npos = sorted(set(round(float(v), 3) for v in nums_pos(nums)))
@@ -529,8 +656,8 @@ def _side_records(mask: np.ndarray, box: Sequence[float], side: str,
     pitch = None
     _evs = [npos] + ([pos_all] if PITCH_FALLBACK else [])
     for ev in _evs:
-        if len(ev) >= 4:
-            pitch = _fit_pitch(ev)
+        if len(ev) >= max(3, PITCH_FIT_MIN):
+            pitch = _fit_pitch(ev, min_pts=PITCH_FIT_MIN)
             if pitch:
                 break
     # 【号码文字的内点数要够】实测几个小 IC（case 3 的框 118x97 只有 6 个脚、case 7 的
@@ -546,9 +673,42 @@ def _side_records(mask: np.ndarray, box: Sequence[float], side: str,
             _on = int(sum(1 for v in _np
                           if min((abs(v - w) for w in _lat0), default=1e9) <= SUP_TOL * pitch))
         if _on < NUM_MIN_EL:
-            pitch = None
-            if not PITCH_FALLBACK:
-                return []
+            # 【桩相位共证】只有 3 个号码的边（case 11 的 U1/U2 每边 3 个号、真 pitch=20）
+            # 拟合出的 pitch 没有冗余，但**墨迹桩的相位**是独立的第二条证据：真 pitch 下
+            # 引脚桩会落在同一个相位上（号码与桩差一个常数偏移），假 pitch 下相位散开。
+            # 要求 >= NUM_MIN_EL 个桩聚在同一相位（±max(2px, 0.12*pitch)）才采信。
+            _votes = 0
+            _run = 0
+            if STUB_PHASE and spos:
+                _anc = float(_snap_anchor(npos, pitch)) if npos else float(min(spos))
+                _ph = np.asarray([(s - _anc) % pitch for s in spos], dtype=float)
+                _ptol = max(2.0, 0.12 * pitch)
+                for _c in _ph:                      # 相位取「票数最多的那个」而不是中位数：
+                    _n = int(sum(1 for v in _ph       # 6 个桩分居两个相位时中位数落在空档里
+                                 if min(abs(v - _c), pitch - abs(v - _c)) <= _ptol))
+                    _votes = max(_votes, _n)
+                # ★ 光「聚在同一个相位」太弱：噪声桩凑巧落进 12% 的相位窗口就能过闸，
+                #   case 9/12/13 就是这么被喂了一整套假格点的。真正的引脚列必须是**连续
+                #   等距**的：相邻桩差恰好一个 pitch。这里数「最长的连续 1× 间距段」。
+                _sa = np.sort(np.asarray(spos, dtype=float))
+                _cur = 0
+                for _i in range(1, _sa.size):
+                    if abs(float(_sa[_i] - _sa[_i - 1]) - pitch) <= _ptol:
+                        _cur += 1
+                        _run = max(_run, _cur)
+                    else:
+                        _cur = 0
+            # 需要连续 STUB_RUN 段 1× 间距（默认 2 段 = 3 个桩连成一条等距列）
+            if _votes < max(3, NUM_MIN_EL - 1) or _run < STUB_RUN:
+                pitch = None
+                if _DBG:
+                    print("[pincol] %s %s npos=%d spos=%d on=%d votes=%d -> REJECT"
+                          % (cid, side, len(npos), len(spos), _on, _votes))
+                if not PITCH_FALLBACK:
+                    return []
+            elif _DBG:
+                print("[pincol] %s %s npos=%d spos=%d on=%d votes=%d -> ACCEPT(stub-phase)"
+                      % (cid, side, len(npos), len(spos), _on, _votes))
     if pitch is None:
         # 【没拟合出 pitch 就一个脚都不发】早期版本在这里退化成 `lat = pos_all`，
         # 等于把「墨迹桩 + 号码文字」的原始位置直接当引脚 —— 小 IC 的框边全是导线
@@ -556,7 +716,10 @@ def _side_records(mask: np.ndarray, box: Sequence[float], side: str,
         # 报了 19 个脚、GT 只有 6 个）。宁可一个不发。
         return []
     else:
-        anchor = _snap_anchor(npos if len(npos) >= 4 else pos_all, pitch)
+        # ★ 锚点用哪一组点，必须与「pitch 是从哪一组点拟合出来的」一致：`PITCH_FIT_MIN=3`
+        #   时 pitch 来自 3 个号，但这里老写死 `>= 4` ⇒ 3 个号的侧面把锚点让给桩，
+        #   等于「用号码定间距、用墨迹定相位」，两者不一致时整列偏一截（case11 U1 左列）。
+        anchor = _snap_anchor(npos if len(npos) >= max(3, PITCH_FIT_MIN) else pos_all, pitch)
         x0, y0, x1, y1 = [float(v) for v in box]
         # 格点铺满整条边（不是只铺证据之间）—— 实测（0143 的 U1）引脚精确落在
         # `[y0 + 1.0*pitch, y1 - 1.0*pitch]` 上，所以内缩半个 pitch 既不会漏掉
@@ -644,8 +807,40 @@ def _side_records(mask: np.ndarray, box: Sequence[float], side: str,
             if abs(_m) <= 0.5 * pitch:
                 _off = _m
     recs = []
+    _oi = {"L": 0, "R": 1, "T": 2, "B": 3}.get(side)
+    _out = None
+    if legs is not None and _oi is not None and float(legs[_oi] or 0) > 0:
+        _out = float(legs[_oi])
+        if PINC_LEG_MAX > 0:
+            _out = min(_out, PINC_LEG_MAX)
+        # ★ 「按导线投票」选腿长（`STAGE1_PINC_LEG_VOTE`，默认 1）：颜色量出来的腿长
+        #   在 case11 `U1` 是对的（18~19，GT 20），在 case10 却是错的（把整列推到导线
+        #   之外）。判据不用常数、也不用页：**哪条腿长能把这一列格点摆到真实导线上，
+        #   就用哪条** —— 在 {量测值, 常数 OUT_DIST} 两档里数「落点距最近导线 ≤ 6px」
+        #   的个数，取多者（平手用量测值）。
+        if PINC_LEG_VOTE and segs is not None and len(lat):
+            try:
+                _a = _leg_votes(box, side, lat, float(_out), segs)
+                _b = _leg_votes(box, side, lat, OUT_DIST, segs)
+                if _b > _a:
+                    _out = None
+                elif _b == _a:
+                    # 平手时看「哪条腿长让这一列更贴近导线」（中位距离小者胜）。
+                    _dm = _leg_votes(box, side, lat, float(_out), segs, ret_dmin=True)
+                    _dc = _leg_votes(box, side, lat, OUT_DIST, segs, ret_dmin=True)
+                    if _dc < _dm - 0.5:
+                        _out = None
+                if _DBG:
+                    _dm = _leg_votes(box, side, lat, float(_out), segs, ret_dmin=True)
+                    _dc = _leg_votes(box, side, lat, OUT_DIST, segs, ret_dmin=True)
+                    print("[pincol] %s %s leg vote meas=%.1f(%d p50=%.1f) const=%.1f(%d p50=%.1f) nseg=%d nlat=%d lat=%s -> %s"
+                          % (cid, side, float(legs[_oi]), _a, _dm, OUT_DIST, _b, _dc,
+                             len(segs or ()), len(lat), [round(float(v), 1) for v in lat[:6]],
+                             "const" if _out is None else "meas"))
+            except Exception:                             # pragma: no cover
+                pass
     for k, p in enumerate(lat):
-        pin, out_win, in_win = _windows(box, side, p, pitch)
+        pin, out_win, in_win = _windows(box, side, p, pitch, out=_out)
         # 引脚点 = 号码格点 + 该边的「号↔桩」偏移（见上）。`TIP_PAD>0` 时再做一次
         # 逐点微调（残余偏移 < 0.5*pitch，Voronoi 分界保证无歧义）。
         _pa = float(p) + _off
@@ -700,8 +895,12 @@ def nums_pos(nums) -> List[float]:
 
 
 def enumerate_component(mask: np.ndarray, box: Sequence[float],
-                        texts: Sequence = None, cid: str = "") -> List[dict]:
-    """枚举**一个**框元件的四条边的引脚列。返回该元件的引脚记录列表。"""
+                        texts: Sequence = None, cid: str = "",
+                        legs: Sequence = None, segs=None) -> List[dict]:
+    """枚举**一个**框元件的四条边的引脚列。返回该元件的引脚记录列表。
+
+    `legs`（可选，`(L,R,T,B)`）= 该件四侧的引线长度，`None` 的侧回退常数 `OUT_DIST`。
+    """
     cents: List[Tuple[float, float]] = []
     for b in (texts or ()):
         bb = b["bbox_img"] if isinstance(b, dict) else b
@@ -713,16 +912,19 @@ def enumerate_component(mask: np.ndarray, box: Sequence[float],
         cents.append(((bx1 + bx2) / 2.0, (by1 + by2) / 2.0))
     recs: List[dict] = []
     for side in ("L", "R", "T", "B"):
-        recs.extend(_side_records(mask, box, side, texts, cents, cid))
+        recs.extend(_side_records(mask, box, side, texts, cents, cid,
+                                  legs=legs, segs=segs))
     return recs
 
 
 def enumerate_pins(bgr: np.ndarray, comps: Sequence[dict], texts: Sequence = None,
-                   ink: np.ndarray = None, ink_thresh: int = 170) -> Dict[str, List[dict]]:
+                   ink: np.ndarray = None, ink_thresh: int = 170,
+                   sym: np.ndarray = None, segs=None) -> Dict[str, List[dict]]:
     """对每个 `box`/`bigic` 元件枚举引脚列。返回 `{cid: [记录, ...]}`。
 
     `texts` 是 `cvparts.textbox.detect_boxes` 的输出（图像坐标 `[x1,y1,x2,y2]`，
-    元素可以是 dict（带 `bbox_img`）也可以是裸列表）。
+    元素可以是 dict（带 `bbox_img`）也可以是裸列表）。`sym` 是符号色掩膜，
+    仅在 `STAGE1_PINC_LEG_COLOR=1` 时用来逐侧量引线长度（替代常数 `OUT_DIST`）。
     """
     if ink is None:
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
@@ -751,7 +953,9 @@ def enumerate_pins(bgr: np.ndarray, comps: Sequence[dict], texts: Sequence = Non
         w, h = abs(x1 - x0), abs(y1 - y0)
         if min(w, h) < MIN_SIDE or max(w, h) < MIN_SIDE:
             continue
-        recs = enumerate_component(mask, bb, texts, cid=str(c.get("id")))
+        recs = enumerate_component(mask, bb, texts, cid=str(c.get("id")),
+                                   legs=_legs_of(bb, sym) if (PINC_LEG_COLOR and sym is not None) else None,
+                                   segs=segs)
         # 还要有**真号码候选**兜底：一条边的号一个都没检到，那条边就是纯几何外推。
         if recs and sum(1 for r in recs if r.get("out_texts")) < MIN_NUM:
             # ★★ 「不删除，只削弱」：这里是**整颗 IC 被丢掉**的地方，而它以前是

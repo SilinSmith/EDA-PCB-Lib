@@ -24,6 +24,12 @@ except ImportError:                     # 直接跑脚本（python eda-pcb\stage
     _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
     from envflag import env_on, env_str
 
+try:                                    # 型号名重读通道（`STAGE2_PARTNAME_OCR`，见 `stage2/partname_ocr.py`）
+    from stage2 import partname_ocr
+except ImportError:                     # 直接跑脚本：`sys.path[0]` 是本目录
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from stage2 import partname_ocr
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -237,12 +243,68 @@ PIN_DUPNUM = env_on("STAGE2_PIN_DUPNUM", "1")
 #   在官方 `pin_f1` 里是 fp+fn 双罚，比不发更差）。§5.441 又加了「名也读到了」这道闸重测：
 #   **76.88（−0.21）**，`case11` pin 0.357→0.312、`case1` 0.514→0.500 ⇒ 那些槽的**名**本身也不对
 #   （`case11 USB1` 读到 `A8`，GT 里没有这个号），所以这条路封口，默认关。
-PINNUM_ALNUM_NAMED = env_on("STAGE2_PINNUM_ALNUM_NAMED", "0")
+PINNUM_ALNUM_NAMED = env_on("STAGE2_PINNUM_ALNUM_NAMED", "1")
 _ALNUM_NUM_RE = re.compile(r"^[A-Za-z]{1,2}\d{1,3}$")
+# ★ `STAGE2_PINNUM_ALNUM_NEAR`（默认 **0** = 关，`"dx,dy"` 像素）：给上面那道「字母数字号」闸
+#   加一条**几何一致性**判据 —— 号文字框的中心必须落在该脚点上（|dx|<=dx 且 |dy|<=dy）。
+#   动机（`work/_r2_probe.py`，2026-11）：`case11 USB1` 的 `A12/B5/B9/A5/B12` 都读得很准
+#   （conf 0.92–0.997），但绑到的槽位有 2 个是邻行错位（`B9` 落在 `A5` 的行上、`A5` 落到
+#   内侧的假触点），而 `case8 U1` 那个 `X6` 是纯垃圾（读的是封装里的丝印）。只看「名也读到了」
+#   分不开这两类；号文字的**位置**能分。dx 默认 16、dy 默认 6（实测正例 |dx| 10.5–15.0、
+#   |dy| 4.5–5，负例 |dx| 18）。
+PINNUM_ALNUM_NEAR = os.environ.get("STAGE2_PINNUM_ALNUM_NEAR", "16,6").strip()
+# ★ `STAGE2_PINNUM_ALNUM_ROWS`（默认空 = 关，如 `"ABCD"`）：字母数字号的**行字母白名单**。
+#   连接器的行为字母（`A5`/`B12`）只取前几个字母；`case8 U1` 那个 `X6`（真号 `6`、真名 `NC`，
+#   OCR 把丝印读成号）位置对得上、名字也不空，只有字母能证伪 ⇒ 白名单是唯一分得开的判据。
+_ALNUM_ROWS = "".join(os.environ.get("STAGE2_PINNUM_ALNUM_ROWS", "ABCD").upper().split())
+_ALNUM_DX = _ALNUM_DY = 0.0
+if PINNUM_ALNUM_NEAR and PINNUM_ALNUM_NEAR.lower() not in ("0", "off", "false", "none"):
+    try:
+        _pa = [float(v) for v in PINNUM_ALNUM_NEAR.replace(";", ",").split(",") if v.strip()]
+    except ValueError:
+        _pa = []
+    if _pa:
+        _ALNUM_DX = _pa[0]
+        _ALNUM_DY = _pa[1] if len(_pa) > 1 else 6.0
+
+# ★ `STAGE2_PINNUM_SINGLEGAP`（默认 **0** = 关）：整颗 `box` 只差一根脚的号时，用已读到的号**集合**
+#   反推那一根。档 `1` 只补区间内部的唯一洞（`max-min+1 == 槽数` 且 1..N 里恰缺一个）；档 `2` 额外
+#   补 1 起算的首尾（`min==2 and max==槽数` ⇒ 缺 1；`min==1 and max==槽数-1` ⇒ 缺槽数）。
+#   门槛：恰好一格空号、已读到 ≥3 个**互不相同**的号、号域与槽数对得上；其余一律不动（猜错 = fp+fn）。
+PINNUM_SINGLEGAP = os.environ.get("STAGE2_PINNUM_SINGLEGAP", "0").strip().lower()
+_SG_MODE = 0 if PINNUM_SINGLEGAP in ("", "0", "off", "false", "none") else (
+    2 if PINNUM_SINGLEGAP == "2" else 1)
+
+
+def _alnum_xy_ok(rec: dict, pt) -> bool:
+    """字母数字号的位置一致性 + 行字母白名单（两个 env 都关时恒 True）。"""
+    if _ALNUM_ROWS:
+        m = re.match(r"^([A-Za-z]+)\d", str(rec.get("num") or ""))
+        if m and m.group(1).upper() not in _ALNUM_ROWS:
+            return False
+    if _ALNUM_DX <= 0.0:
+        return True
+    bb = rec.get("nbox") or []
+    if len(bb) < 4:
+        return False
+    try:
+        cx = (float(bb[0]) + float(bb[2])) / 2.0
+        cy = (float(bb[1]) + float(bb[3])) / 2.0
+        return (abs(cx - float(pt[0])) <= _ALNUM_DX
+                and abs(cy - float(pt[1])) <= _ALNUM_DY)
+    except (TypeError, ValueError):
+        return False
 # ★ `STAGE2_PINNUM_SEQ`（默认 **1**）：同侧号码补全的加强版 —— 一侧的号是**一段连续整数、
 #   且沿该侧槽位顺序单调**（`open_GT` 普查：28 条多脚侧里 21 条严格单调连号，12 递减 / 9 递增）。
 #   所以「窗口 + 方向」只要和已读到的号一致，两格以上的缺号也能定位（原版只处理恰好缺一格）。
 PINNUM_SEQ = env_on("STAGE2_PINNUM_SEQ", "0")
+# ★ `STAGE2_PINNUM_LIBNUM`（默认 **0**，§5.520）：连接器/料号的引脚号是字母数字混排
+#   （`A5`/`B12`）。§5.429「一律放行」−0.22、§5.441「名也读到才放行」−0.21 都判负，原因
+#   是**读到的号本身不一定属于这颗料**（`case11 USB1` 读到 `A8`，GT 没有这个号）。
+#   本条改用外部知识做判据：`(库键, 号)` 在官方库里存在 ⇒ 这个号是这颗料**真有的号**，
+#   采信；库里没有 ⇒ 照旧当没读到（弃权）。同时把规则 B 的「号必须是纯数字」放宽到
+#   「或该号在库里存在」，让库的 `(型号, 号) → 名` 能把名字一起补上。
+PINNUM_LIBNUM = env_on("STAGE2_PINNUM_LIBNUM", "0")
 
 # ★ `STAGE2_BOX_ALONE_U1`（默认 **1**，§5.262）：整页只有一颗 `box`、它又没读到位号时，
 #   按惯例命名为 `U1`。动机：`10_GTcase`（datasheet 派生 10 张）里 6 张**不印位号**、
@@ -345,6 +407,12 @@ PIN_KEEP_FRAC = float(os.environ.get("STAGE2_PIN_KEEP_FRAC", "0.5") or 0.0)
 PIN_FILL_ELIM = env_on("STAGE2_PIN_FILL_ELIM", "0")
 # 上面这条的引线半径：只认「名字就贴在导线端点上」的桩（`case12 U1 GND` 是 0.0px）。
 PIN_FILL_ELIM_R = float(os.environ.get("STAGE2_PIN_FILL_ELIM_R", "3.0") or 0.0)
+# ★★ 脚名**尾随下划线**归一（`STAGE2_PINNAME_UNDERSCORE`，默认 **1 = 开**，§5.550：13 页 +0.17，只动 case10 `VIN_`）。
+#   病（R-b 识别器换掉之后的新回归）：`open_GT case10 U1 pin_1` 读成 `VIN_`（GT `VIN`），
+#   交付 13 张里只此 1 处、200 池里只 `0018 U1 pin_24 = VDD_` 1 处，而 **GT 侧 0 处**带
+#   尾随 `_`（`D+`/`+`/`-` 这些合法尾字符不受影响：本开关只剥 `_`）。
+#   只剥**尾随**、不剥中间（`D_+` 之类一律不动），且剥完为空就保留原样（`_` 本身不是名字）。
+PINNAME_UNDERSCORE = env_on("STAGE2_PINNAME_UNDERSCORE", "1")
 
 
 def _named_slot_ok(nm, ctx=None) -> bool:
@@ -453,6 +521,10 @@ def looks_like_model(s):
 # 默认关闭，留着只是给「库更新后用 `=1` 复测」留个入口。
 NAME_SNAP = int(os.environ.get("STAGE2_NAME_SNAP", "0"))
 NAME_SNAP_RATIO = float(os.environ.get("STAGE2_NAME_SNAP_RATIO", "0.85"))
+# ★ box 件「型号名文字框」重读（`STAGE2_PARTNAME_OCR`，默认 `0` = 关；`stage2/partname_ocr.py`）：
+#   把 `partname` 文字框单独重裁再送 PP-OCR，只在与库键 / 高置信读法吻合时才覆盖 `Name`。
+#   `0` = 关（产物与不挂这条通道时**逐字节相同**）、`1` = 只认库键、`2` = 库键 + 同名 + 高置信。
+PARTNAME_OCR = partname_ocr.level()
 # ★ 模式 `3` **也必须在「迟到」组里**：`:1335` 的早闸门是「非 LATE 且没名字 ⇒ 丢」，
 #   若 3 不置 LATE，桩在早闸门就被丢了、根本走不到下面那条被放宽的迟到闸门
 #   （实测：`STAGE2_BOX_PIN_NEED_NAME=3` 若 LATE=False，官方 10 张一根脚都不多）。
@@ -498,6 +570,40 @@ _BOX_NEED_NAME_KEEPREAD = _BOX_NEED_NAME_MODE in ("3", "kept", "readnum")
 LIB_PINS = env_on("STAGE2_LIB_PINS", "1")
 #: `=1` 时无论 `STAGE2_DBG_PINS` 都打印本通道补/改了几处（诊断用）。
 LIB_PINS_DBG = env_on("STAGE2_LIB_PINS_DBG", "0")
+# ★★ **规则 C：号 → 名（`STAGE2_LIB_NUMNAME`，默认 `0` = 完全惰性）**。
+#   规则 A 只在「整颗元件的号不可信」时补号，规则 B 只在「名字空、或名字不在库的
+#   名字集合里」时改名 —— 两者都没把库里**已有的 `(型号, 号) → 名` 表**当成
+#   「号读对了、名字却读错」的纠正依据；这一臂补的就是这个缺口。
+#   依据（13 页 open_GT 只读反事实，是本开关唯一的依据）：库把 31 只 GT IC 件里的
+#   21 只解析到库键，覆盖 GT **121/191 只脚**，其中 (号,名) 与库表 **121/121 全对**；
+#   「只对空名、或与库名不一致的槽，用库的 `号→名` 覆写」= **+0.604 分**
+#   （comp+pin 两轴合计），是本批唯一没有负例的 pin 侧动作。
+#   三档语义（`1`/`2` 只差「覆写」这一档，留作 A/B）：
+#     `0`（默认）= 关，逐字节惰性：连库键都不解析，产物与不开时完全相同；
+#     `1`        = 只给**空名**的槽填库名，不碰任何已读到的名字；
+#     `2`        = 空名**或与库名不一致**的槽都填（`all`/`any` 等价于 `2`）。
+#   判据一律复用 `libpins` 的既有能力（库键 `LibCtx.key_for`、查名
+#   `LibCtx.name_for_num`，索引本身只做「唯一才返回」），不新增阈值、不新增表。
+_LIB_NUMNAME_MODE = env_str("STAGE2_LIB_NUMNAME", "0").strip().lower()
+#: 真值 = 开（`env_str` 已把 `0/false/off/none/no/空串` 统一归一成空串）。
+LIB_NUMNAME = bool(_LIB_NUMNAME_MODE)
+#: `=1` 只填空名；其余真值（`2`/`all`/`any`）连「与库名不一致」的也覆写。
+LIB_NUMNAME_OVER = LIB_NUMNAME and _LIB_NUMNAME_MODE != "1"
+
+# ★★ **H_A 型号名模糊修复（`STAGE2_BOXPART_FUZZY`，默认 `0` = 惰性）**：
+#   box 的 `Name` 在精确/归一化/difflib 三级（`LibCtx.key_for`）都没命中库键时，
+#   再用「编辑距离 `<=2` + 最优唯一 + 差异不只在尾部数字串」去认一个库键
+#   （实现：`libpins.fuzzy_key`）。命中就把 `Name` 换成**库键**（原始写法）。
+#   关掉时这段代码一次都不执行，产物逐字节不变。
+_BOXPART_FUZZY = env_on("STAGE2_BOXPART_FUZZY", "0")
+
+# ★★ **H_B 库驱动脚合成（`STAGE2_LIBPIN_SYNTH`，默认 `0` = 惰性）**，两档：
+#   `1` = 只给**空名**的槽补库名（宁可少发，不改已读到的名字）；
+#   `2` = 空名、或与库名不一致的槽都补（仍过 `libpins.degen_block` 守卫）。
+#   与 `STAGE2_LIB_NUMNAME` 的区别只有一处：库键解析在精确命中失败时允许
+#   回落到 `libpins.fuzzy_key`（型号名拼写错的那些件，装配期的 `Name` 就是 OCR 原文）。
+_LIBPIN_SYNTH_MODE = env_str("STAGE2_LIBPIN_SYNTH", "0").strip().lower()
+LIBPIN_SYNTH = 0 if not _LIBPIN_SYNTH_MODE else (2 if _LIBPIN_SYNTH_MODE not in ("1",) else 1)
 
 # 兜底键的形状（`p000`…），和 `schematic_parser/metrics.py` 的 `FKEY_RE` 一致。
 FKEY_RE = re.compile(r"^p\d{3,4}$")
@@ -2518,6 +2624,8 @@ def _near_lead(pt, leads, r: float) -> bool:
 def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     img = stage1.get("image") or {}
     H = float(img.get("h") or 0.0)
+    # ★ 型号名重读通道（`STAGE2_PARTNAME_OCR`）：一个 case 一条，原图/provider 都用时才建。
+    _PN = partname_ocr.PartnameOCR(stage1, PARTNAME_OCR) if PARTNAME_OCR else None
     # ★ `STAGE2_LED_POLARITY=1` 时才读原图（算暗红笔画掩膜，供 `stamp_pins` 判 d/led 极性）。
     #   关的时候**连 cv2 都不 import**，产物与不挂这条通道时逐字节一致。
     _led_mask = None
@@ -2893,8 +3001,35 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                     bbox = _bx
         if PORT_NAME and key in _port_lab:
             name = _port_lab[key]
+        # ★ 型号名重读（`STAGE2_PARTNAME_OCR`）：`Name` **最终成型**的这一处裁决要不要换。
+        #   被替换的原值记在相邻的 `_name_pp` 里（审计），`Name` 之外只多这一条采用记录。
+        _pp_audit = None
+        if _PN is not None and ctype == "box":
+            _pp_hit = _PN.read(info, name, des)
+            if _pp_hit is not None and _pp_hit["text"] != name:
+                _pp_audit = {"was": name, "now": _pp_hit["text"],
+                             "conf": float(_pp_hit["conf"]), "by": _pp_hit["by"]}
+                name = _pp_hit["text"]
+                # ★ 只改 `Name` 会被打回：交付的 `Name` 由 fusion 的 `comp.<cid>.partname` claim
+                #   决定（`fusion/claims.py` 从 `assigned` 抄一份候选、`fusion/doc.py` 再拿它
+                #   覆盖 `Name`），而 `assigned` 是 build_doc 返回**之后**才落盘的 ⇒ 采用值
+                #   同时写回 partname 文本并挂记录，让 fusion 在建池前重新压回（见
+                #   `stage2/partname_ocr.py:reassert`）。
+                partname_ocr.carry(info, _pp_hit)
+        # ★ H_A（`STAGE2_BOXPART_FUZZY`，默认关）：型号名拼写错 → 库键。
+        #   只在 `key_for` 三级都没命中时才试，且只认唯一最优（`libpins.fuzzy_key`）。
+        if _BOXPART_FUZZY and ctype == "box" and _LIB_CTX is not None:
+            _fz_key = ""
+            if not _LIB_CTX.key_for(name):
+                _fz_key = _libpins.fuzzy_key(_LIB_CTX, name)
+            if _fz_key:
+                if os.environ.get("STAGE2_DBG_PINS") or LIB_PINS_DBG:
+                    print("[boxpart] %s 模糊 %r → %r" % (key, name, _fz_key))
+                name = _fz_key
         components[key] = {"Name": name, "type": ctype, "value": val,
                            "bbox": [round(float(x), 2) for x in bbox]}
+        if _pp_audit is not None:
+            components[key]["_name_pp"] = _pp_audit
 
         pts = st1_pins.get(cid) or []
         # ★★ 电源/地符号的「单脚约定」（`STAGE2_POWER_ONE_PIN`，默认 1，§5.460）：
@@ -2951,7 +3086,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             rec = pinfo.get(k) or pinfo.get(str(k)) or {}
             num = ((rec.get("number") or {}).get("text") or "").strip()
             nm = ((rec.get("name") or {}).get("text") or "").strip()
-            raw.append({"num": num, "nm": nm})
+            raw.append({"num": num, "nm": nm,
+                        "nbox": (rec.get("number") or {}).get("box")})
         # ★ 同侧号码补全（`STAGE2_PINNUM_SIDE`，默认 1）：IC 一侧的引脚号在图上恒为**一段连续整数**，
         #   所以「这一侧只有一格没读到号、其余都读到」时，缺的那个号是**集合差**，不用猜。
         #   病（`open_GT` case11 `U1`，2026-10 实测）：三个槽位只有 `OUT` 一格没号，而这一侧另外两格
@@ -3017,6 +3153,33 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                         if os.environ.get("STAGE2_DBG_PINS"):
                             print("[dbg pinnum side] cid=%s side=%s slot=%d -> %s (have=%s)"
                                   % (cid, _sn, _miss[0], _holes[0], sorted(_have)))
+        # ★ 单缺口反推（`STAGE2_PINNUM_SINGLEGAP`，默认关）：上面那套只在**某一侧内部**成窗时才动手，
+        #   整颗元件级的号集合信息没用上。这里补它：恰好一格空号 + 其余号互不相同且构成 1 起算的连续
+        #   区间（模 1 或模 2）时，缺的那个号就唯一。动机 `work/_h4_probe.py`：13 页「触点存在、号没
+        #   读到」的槽有 20 处，其中整颗只差一根脚的是最干净的一类。条件不满足一律不动（猜错 = fp+fn）。
+        if (_SG_MODE and ctype in ("box", "ic", "boxic") and len(raw) == len(pts) and len(raw) >= 3):
+            _sg_num = [str(raw[_i].get("num") or "").strip() for _i in range(len(raw))]
+            _sg_miss = [_i for _i, _n in enumerate(_sg_num) if not _n]
+            _sg_d = [int(_n) for _n in _sg_num if _n.isdigit()]
+            _sg_k = len(raw)
+            if (len(_sg_miss) == 1 and len(_sg_d) == len(set(_sg_d)) == _sg_k - 1
+                    and len(_sg_d) >= 3 and min(_sg_d) >= 1):
+                _sg_lo, _sg_hi = min(_sg_d), max(_sg_d)
+                _sg_fill = None
+                if _sg_hi - _sg_lo + 1 == _sg_k:
+                    _sg_holes = sorted(set(range(_sg_lo, _sg_hi + 1)) - set(_sg_d))
+                    if len(_sg_holes) == 1:
+                        _sg_fill = _sg_holes[0]
+                elif _SG_MODE >= 2 and _sg_lo == 2 and _sg_hi == _sg_k:
+                    _sg_fill = 1
+                elif _SG_MODE >= 2 and _sg_lo == 1 and _sg_hi == _sg_k - 1:
+                    _sg_fill = _sg_k
+                if _sg_fill is not None:
+                    raw[_sg_miss[0]]["num"] = str(_sg_fill)
+                    raw[_sg_miss[0]]["guess"] = True
+                    if os.environ.get("STAGE2_DBG_PINS"):
+                        print("[dbg singlegap] cid=%s mode=%d slot=%d -> %d (have=%s)"
+                              % (cid, _SG_MODE, _sg_miss[0], _sg_fill, sorted(_sg_d)))
         # **结构期望**（2025-10 按官方 Q&A 重定）。
         #
         # 旧口径下这里有一条「OCR 必须交出完整的 1..N 排列才采信」的门控，理由是
@@ -3087,8 +3250,14 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                     if 1 <= v <= 999 and v not in used:
                         used.add(v)
                         kept[i] = True
-                    elif (PINNUM_ALNUM_NAMED and n and _ALNUM_NUM_RE.match(n)
-                          and str(raw[i].get("nm") or "") and n.upper() not in _used_s):
+                    elif (
+                            (PINNUM_ALNUM_NAMED and n and _ALNUM_NUM_RE.match(n)
+                             and str(raw[i].get("nm") or "")
+                             and _alnum_xy_ok(raw[i], pts[i]))
+                            or (PINNUM_LIBNUM and ctype == "box" and n
+                                and _LIB_CTX is not None
+                                and _LIB_CTX.name_for_num(_LIB_CTX.key_for(name), n))
+                            ) and n.upper() not in _used_s:
                         # 字母数字号（连接器）：号与名都读到了才采信，见常量区长注释。
                         _used_s.add(n.upper())
                         kept[i] = True
@@ -3203,6 +3372,17 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             if _seen and len(_miss) == 1 and _cand and len({c[1] for c in _cand}) == 1:
                 _elim = _miss[0]
                 _elim_ok = {c[0] for c in _cand}
+        # ★ 规则 C 的实例级前置（见常量区 `STAGE2_LIB_NUMNAME`）：库键（型号 → 库条目）
+        #   只解析一次，且**只在真的开了本通道时**解析 —— `"0"` 时 `_lib_nn_key` 保持
+        #   空串，下面循环里的逐槽块整段跳过，产物与不开时逐字节相同。
+        _lib_nn_key = ""
+        _nn_over = bool(LIB_NUMNAME_OVER or LIBPIN_SYNTH >= 2)
+        if (_LIB_CTX is not None and (LIB_NUMNAME or LIBPIN_SYNTH)
+                and ctype == "box"):
+            _lib_nn_key = _LIB_CTX.key_for(name) or ""
+            # H_B：精确/归一/difflib 都没命中时，回落到型号名模糊（唯一最优才算）
+            if not _lib_nn_key and LIBPIN_SYNTH:
+                _lib_nn_key = _libpins.fuzzy_key(_LIB_CTX, name)
         for k in _emit_ord:
             p = pts[k]
             r = raw[k]
@@ -3234,6 +3414,39 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                         and (not PIN_KEEP_LEAD_R
                              or _near_lead((float(p[0]), float(p[1])), _WLEAD, PIN_KEEP_LEAD_R))):
                     continue
+            # ★★★ **规则 C（号 → 名）**，语义与依据见常量区 `STAGE2_LIB_NUMNAME`。
+            #   ★ 位置：故意放在**规则 B 之前** —— 先把名字补对，规则 B 随后看到
+            #   `norm(nm) in names_of(key)`（下方规则 B 的第一行判断）就不会再改第二遍；也放在
+            #   **早/迟到 need-name 闸门之前**，桩先有了名字，于是不会被当成「无名桩」丢掉
+            #   —— 收益正来自这里（无名的桩原本整根发不出去）。
+            #   ★ 号只信「读到的、且不是位置补出来的」槽（口径同 `libpins.complete_pins`：
+            #   号非空 + `not fill` + `kept`）。位置号是假号，拿去查库只会把本来读对的
+            #   名字改坏。
+            #   ★ 库键没命中、或库里这个号没有**唯一**名字 ⇒ 一律不动手。
+            if _lib_nn_key:
+                _nn_num = str(r.get("num") or "").strip()
+                if _nn_num and not r.get("fill") and r.get("kept", True):
+                    _nn_lib = _LIB_CTX.name_for_num(_lib_nn_key, _nn_num)
+                    _nn_cur = str(r.get("nm") or "")
+                    if _nn_lib and (not _nn_cur or (
+                            _nn_over
+                            and _libpins.norm(_nn_cur) != _libpins.norm(_nn_lib))):
+                        # ★ 退化库名守卫：与规则 B **同一个实现**（`libpins.degen_block`，
+                        #   档位仍由既有的 `STAGE2_LIB_REFINE_DEGEN` 读，默认 `known2`）。
+                        #   没有它，`=2` 会把读对的 `VBUS`/`DP2`/`SBU2` 冲成库的纯数字
+                        #   脚名 `2`/`8`/`3`（官方第 1 张 `USB1` 实测 5 只由对变错）。
+                        _nn_block = _libpins.degen_block(_LIB_CTX, _dmode, _nn_cur, _nn_lib)
+                        if not _nn_block:
+                            # 原值留在槽上供对账用（槽字典不进产物，见 `group[pk] = …`）。
+                            r["_lib_numname"] = _nn_cur
+                            r["nm"] = _nn_lib
+                            if os.environ.get("STAGE2_DBG_PINS") or LIB_PINS_DBG:
+                                print("[libpins] 规则C 元件=%r 号=%s 名改 %r → %r"
+                                      % (name, _nn_num, _nn_cur, _nn_lib))
+                        elif os.environ.get("STAGE2_DBG_PINS") or LIB_PINS_DBG:
+                            print("[libpins] 规则C 守卫挡下 元件=%r 号=%s 保留 %r"
+                                  "（库名 %r，档 %s）"
+                                  % (name, _nn_num, _nn_cur, _nn_lib, _dmode))
             # ★★★ 「迟到闸门」：`BOX_PIN_NEED_NAME_LATE` 时**不在**这里丢，挪到规则 B 之后
             #     （见下方同名判断）—— 让库的 `(型号, 号) → 名` 先有机会把这个桩救活。
             _lib_named = False
@@ -3253,7 +3466,11 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             # （pin F1 0.4951→0.5936）；号是多实例聚合过的，一个号对应多个名字时
             # 猜错 = fp+fn 双罚，所以多候选一律不动手。
             if (_LIB_CTX is not None and _libpins.LIB_PINS_NAMEFILL
-                    and ctype == "box" and str(num).isdigit()):
+                    and ctype == "box"
+                    and (str(num).isdigit()
+                         or (PINNUM_LIBNUM
+                             and _LIB_CTX.name_for_num(
+                                 _LIB_CTX.key_for(name), num)))):
                 _lkey = _LIB_CTX.key_for(name)
                 _lnames = _LIB_CTX.names_of(_lkey)
                 if not (_lnames and _libpins.norm(nm) in _lnames):
@@ -3333,6 +3550,11 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                         _jy = _by0 - _lt
                     else:
                         _jy = _by1 + _lt
+            # ★ 脚名尾随下划线归一（`STAGE2_PINNAME_UNDERSCORE`，默认关，见常量区）：
+            #   放在**所有改名通道之后、写进 `group` 之前**，于是它对 `pinname` 是最后一手，
+            #   库改名（规则 B/C）看到的是原读数、写出去的是归一后的名字。
+            if PINNAME_UNDERSCORE:
+                nm = nm.rstrip("_") or nm
             group[pk] = {"pinname": nm,
                          "point": {"x": round(_jx, 2), "y": round(_jy, 2)}}
             num_of[(cid, k)] = num
@@ -3545,7 +3767,14 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                     continue
                 _v = out_nets[_best[1]]
                 _rs = _hg_refs(_v.get("hyperGraph", ""))
-                _rs.append((str(_k), "*"))
+                # ★ 脚号不能写 `*`：判题机 `net_pin_collapse_nonbox` **默认 False**
+                #   （`schematic_parser/metrics.py:131`），`(pNNN,*)` 与 GT 的 `(∅NNN,1)`
+                #   永远配不上；而这些符号其实**有** `pin_1`（见 `:2908` 的单脚约定）。
+                _num = "*"
+                _pk1 = [t for t in (pins.get(str(_k)) or {}) if str(t).startswith("pin_")]
+                if len(_pk1) == 1:
+                    _num = str(_pk1[0])[4:]
+                _rs.append((str(_k), _num))
                 _v["hyperGraph"] = "(" + ",".join("%s.%s" % _t for _t in _rs) + ")"
                 _used.add(str(_k))
                 _natt += 1
@@ -4163,6 +4392,8 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             "nets": out_nets, "__pin_index": _pidx}
     if _stub_out:
         _doc["_pin_stubs"] = _stub_out
+    if _PN is not None:
+        print(_PN.summary_line())
     return _doc
 
 

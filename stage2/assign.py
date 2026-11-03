@@ -29,8 +29,12 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from . import structmatch
+from . import pin_solve
 from . import keyform as _keyform
 from .expect import expect as expect_kind, fragment_score, score_expect
+# 开关的**唯一定义**在 `text.PIN_NUM_ROT`（旋转补读发生在那边，见那里的长注释）。
+# `stage2/__init__` 先 import text 再 import assign，故这里不会成环。
+from .text import PIN_NUM_ROT
 
 # ---------------------------------------------------------------------------
 # ★ 来自队友分支 `origin/codex/improve-pin-network-parsing`（2026-10-15 并入）：
@@ -514,6 +518,28 @@ STEAL_R = float(os.environ.get("STAGE2_STEAL", "80"))
 # 自由文字也进抢读池（见下面那段长注释）。默认开；`STAGE2_FREE_STEAL=0` 关。
 FREE_STEAL = env_on("STAGE2_FREE_STEAL", "1")
 
+# ★★ **引脚号 / 名的全局一对一指派**（`STAGE2_PIN_SOLVE`，**默认 0 = 关**）。
+#
+# 病：下面两个角色轮（:2453-2455 的名轮、号轮）都是「一个角色 × 一排槽」的**局部**
+# 决策 —— 名轮先跑、把框占进 `taken_box`，号轮只能吃剩下的；每轮内部再按 `_score`
+# 逐槽贪心（号轮还压一层 `structmatch.rebind` 的单调对齐）。于是三类结构性错位：
+#   ① 一根脚的号与名来自**不同**框（号在框外、名在框内，是这本数据的常态）时，
+#      两轮各自最优 != 联合最优（case11 `U1`：`LED1` 被两块框分别绑到 slot0/slot9，
+#      而 GT 的 `1=OUT` 整根丢失；`USB1`/`USB2` 各只交出 2 根 / 1 根）；
+#   ② 幻影触点让整排号码错一格，逐槽路径没有回退；
+#   ③ 同一块框被两个角色轮看中时先到先得，而不是「谁的总增益大给谁」。
+#
+# 做（见 `stage2/pin_solve.py`）：把本元件的 `2*len(plist)` 个 (槽, 号|名) 当指派
+# 问题的行、把所有仍可用的候选框当列，权重**直接**用上面两轮已经算好的 `_score`
+# （`_pin_solve_weight` 逐条照抄那两轮的闸门），解一次最大权匹配 ⇒ 一个框只绑一处、
+# 同一槽的号与名可来自不同的框。总增益 <= 0 时**整段不落地**，所以关掉 = 逐字节不变。
+PIN_SOLVE = env_on("STAGE2_PIN_SOLVE", "0")
+# 三态：`"1"` = 上面这条的**后处理**档（两条角色轮之后，只填空、`pinned` 锁住既有绑定）；
+# `"2"` = **主绑定**档（`_pin_solve_main`，在 `pin_name` 轮**之前**做联合指派，贪心降级
+# 兜底）。`"2"` 时不再跑后处理档：主绑定已经把 number/name 定完，再跑一遍只会用
+# `pinned` 把刚写的结果锁住、白算一遍。`env_on("2")` 为真，所以两个开关是**包含**关系。
+PIN_SOLVE_MAIN = os.environ.get("STAGE2_PIN_SOLVE", "0").strip() == "2"
+
 # **值兜底**。和位号那条 STEAL 同一个病：阻容的「值」字离**邻居**的元件框更近时，
 # 归属判定把它划给邻居，这颗元件连候选都没有。`STAGE2_VALUE_STEAL > 0` 时，
 # 在自己名下找不到像值的框，就去 `d <= VALUE_STEAL_R` 的**任意**文字框里兜一个。
@@ -522,6 +548,20 @@ FREE_STEAL = env_on("STAGE2_FREE_STEAL", "1")
 # 默认 40：220 张实测 `STAGE2_VALUE_STEAL=0` → 15.4801，`=40` → **15.5567**
 # （component F1 0.1426→0.1451，tp 971→988，text_mismatch 948→931）。
 VALUE_STEAL_R = float(os.environ.get("STAGE2_VALUE_STEAL", "40"))
+
+# **同列值兜底**（`STAGE2_VALUE_COLUMN`，默认 0 = 关）。上面那条 STEAL 是靠**距离**兜值，
+# 半径一放大就会去别人的件边上抓（池案 0018 上 `STAGE2_VALUE_STEAL=60` 掉了 2.37）。
+# 这里换一个**不看元件距离**的判据：原理图上「位号 + 值」是**竖着堆在一起**的一组字，
+# 所以只要值框落在**本件已选位号框**的正上/正下方一列内，就归本件。
+# 实测（open_GT case13）：`C1` 位号框 `[956,551,979,566]`、值框 `[957,580,1013,595]`（中心 dy=29、dx=17.5），
+# `C7` 位号 `[826,204,851,219]`、值 `[826,233,867,248]`（dy=29、dx=8）—— 两个值框离**元件本体** 66/57.6px，
+# 离自己的位号却只有 29px。
+VALUE_COLUMN_ON = env_on("STAGE2_VALUE_COLUMN", "0")
+VALUE_COL_DY = float(os.environ.get("STAGE2_VALUE_COLUMN_DY", "34"))
+VALUE_COL_DX = float(os.environ.get("STAGE2_VALUE_COLUMN_DX", "90"))
+# 同列兜底还要「离本件位号最近」（`STAGE2_VALUE_COL_OWN`，默认 0）：§5.481.4 里池上
+# 0030/0018 的伤就是「值字属于隔壁件」，同列判据自己分不出来，但「谁离这个值框更近」能。
+VALUE_COL_OWN = env_on("STAGE2_VALUE_COL_OWN", "0")
 
 # **器件名兜底**（`STAGE2_PART_STEAL`，半径；0 = 关）。与上面两条 STEAL 同一个病，
 # 但更狠：IC 的型号字往往印在符号**外**、离邻居更近，于是被邻居的 slots 吃掉，这颗 IC
@@ -639,6 +679,17 @@ NAME_SHAPE_PEN = _name_shape_pen()
 #   （−0.038 vs 默认），所以 TRIM 仍保持 0（见下）。
 VALUE_UNIT_ON = env_on("STAGE2_VALUE_UNIT", "1")
 _UNIT_RE = re.compile(r"[A-Za-z\u03a9\u2126\u00b5\u03bc]")
+# ★ `STAGE2_VALUE_DIGITS=<n>`（默认 0 = 关；`=3` 是 RESULTS §5.482 测过的档）：`VALUE_UNIT_ON` 把**纯数字**值一律评 0，
+#   但 GT 里确实有纯数字的 r/c 值 —— `open_GT` case12 的 `R3`/`R4` 都是 `104`
+#   （`work/_compdecomp.py d476` 的 text_mismatch 对：`GT val='104' OURS val=None`）。
+#   把门槛改成「纯数字且位数 >= n」时给一个次满分（`STAGE2_VALUE_DIGIT_FIT`，默认 0.75）：
+#   引脚号框只有 1~2 个字符，3 位以上基本是值。
+#   实测（§5.482）：`=3` 主尺 +0.11（case12）、池 30 案 +0.044 但全落在批次噪声里 ⇒ 保持默认关。
+# §5.536：`STAGE2_VALUE_DIGITS` 默认 0 → 3。`VALUE_UNIT` 把纯数字值（`104`/`470`）一律评 0，
+#   放宽到「≤3 位纯数字也算值」后：13 页 82.3402→82.4556（+0.115，只动 case12 +1.50 /
+#   case13 +1.54，无一处变差）；池 28.5735→28.6184（+0.045，worst 0063 −0.67）。两把尺同号。
+VALUE_DIGITS_N = int(os.environ.get("STAGE2_VALUE_DIGITS", "3") or 0)
+VALUE_DIGIT_FIT = float(os.environ.get("STAGE2_VALUE_DIGIT_FIT", "0.75"))
 
 # 值串尾部削垃圾（`0.1uFLK` -> `0.1uF`）。理由见 `canon_value`。
 # **实测略负，默认关**（2025-10-04，官方口径 22.9068 的管线上四臂对照）：
@@ -675,9 +726,48 @@ VALUE_NETNAME_ON = env_on("STAGE2_VALUE_NETNAME", "0")
 #   距离项再大也改不了归属。**别在这条路上再花时间。** 开关留着只为记录这个负结果。
 VALUE_DISTW = float(os.environ.get("STAGE2_VALUE_DISTW", "0.035"))
 
+# ★ 值框在**位号正下方**时的兜底（`STAGE2_VALUE_STACK`，默认 0 = 关）。
+#   病：case13 的 `C1`/`C7` 值字（`100nF`/`22uF`）就在位号框正下方 14px，但离元件框
+#   57~66px，`VALUE_STEAL_R`(40) 够不着 ⇒ 值槽空着（GT 有值）。阻容的「位号 + 值」
+#   是同一列的上下两行，几何判据比距离更稳：左缘对齐 + 间隙 <= `VALUE_STACK_DY`。
+#   `STAGE2_VALUE_STACK_DX` 是左缘容差（另有「位号宽 35%」的相对上限）。
+# §5.544：`STAGE2_VALUE_STACK` 与 `STAGE2_VALUE_RANGE` 默认 0 -> 1。
+#   两臂 13 页 mean/official/judge：range +0.2308 / stack +0.1184 / 两条同开 **+0.3491**
+#   （82.4556 -> 82.8047，comp 0.8762 -> 0.888；只动 case12 +3.00 与 case13 +1.54，无一处变差）。
+#   池 30 案与不设 env 的对照跑**组件逐件相同**（score 只差 0063 +0.67，nets 轴）；
+#   不设 env 的 13 页产物与改前 13/13 sha256 相同（惰性）。
+VALUE_STACK_ON = env_on("STAGE2_VALUE_STACK", "1")
+VALUE_STACK_DY = float(os.environ.get("STAGE2_VALUE_STACK_DY", "20") or 0)
+VALUE_STACK_DX = float(os.environ.get("STAGE2_VALUE_STACK_DX", "4") or 0)
+
+# ★ 位号列**优先于距离**（`STAGE2_VALUE_STACKWIN`，默认 **1 = 开**，§5.548）。
+#   在 R-b 识别器（`weights/textrec_best.pt`，§5.548）下：13 页 +0.12（case13 80.31→81.85，
+#   无页下跌）、池边际 +0.077（27/30 案 0.00、0 案下跌：0011 +1.14 / 0148 +0.67 / 0181 +0.48）。
+#   病（case13，`realRB` 逐件取证）：`C2` 的位号框与本件值框同列（左缘 1086 == 1086，
+#   gap 14），但本列那个 `22uf` 的置信度只有 0.639 ⇒ `_score` 让**隔壁列**里置信度
+#   0.976 的 `100nF`（d=49.3）赢走，而那颗 `100nF` 正是邻居 `C1` 的值 —— `C1` 因此整条
+#   值空着（`_valpair` 的 `C1: 100nF -> None` / `C2: 22uf -> 100nF`）。
+#   `VALUE_STACK` 那条判据恰好认得出这种列，但它只在 `best is None` 时才跑，够不到
+#   「已经抓到别人的值」这一态。语义：本件已有 best、而那个 best **不在本件位号列里**
+#   时，让列候选无条件接管（列窗口/闸门全部沿用 `VALUE_STACK`，不新增判据与魔数）。
+VALUE_STACKWIN_ON = env_on("STAGE2_VALUE_STACKWIN", "1")
+
 DESIGNATOR_RE = re.compile(r"^[A-Za-z]{1,4}\d{1,4}[A-Za-z]?$")
 PINNUM_RE = re.compile(r"^[A-Za-z]{0,2}\d{1,3}[A-Za-z]?$")
-VALUE_RE = re.compile(r"^[+-]?(\d+(\.\d+)?|\.\d+)\s*[pnu\u00b5\u03bcmkKMGR]?[FHV\u03a9AWRJ]?$")
+# ★ `STAGE2_VALUE_TAILRE`（默认 **1 = 开**）把尾字母类放开到小写（`f`/`h`/`v`/`r`）：GT 里同一页上既有
+#   `100nF`（大写 F）也有 `22uf`（小写 f），只认大写会让后者被 `canon_value` 削回 `22u`。
+#   它和 `text.VALUE_TAIL` 是一对：单开本档只是「多认几种字符串」，不产生读数（逐位惰性，§5.491.5）。
+_VALUE_TAIL = "FHV\u03a9AWRJ"
+if os.environ.get("STAGE2_VALUE_TAILRE", "1") not in ("0", "", "off"):
+    _VALUE_TAIL += "fhvr"
+VALUE_RE = re.compile(r"^[+-]?(\d+(\.\d+)?|\.\d+)\s*[pnu\u00b5\u03bcmkKMGR]?[" + _VALUE_TAIL + r"]?$")
+# ★ 区间值（`STAGE2_VALUE_RANGE`，默认 0 = 关）：`10-100uF` 这类「下限-上限」写法在 GT 里
+#   确实存在（case12 的 `C2`/`C3` 都是 `10-100uF`），但 `VALUE_RE` 只认单个数 ⇒ 整条读法
+#   被评 0，值槽空着/被截断的 `100uF` 顶替。只加一条「区间形状」并给满分，不动其它分支。
+VALUE_RANGE_ON = env_on("STAGE2_VALUE_RANGE", "1")
+VALUE_RANGE_RE = re.compile(
+    r"^[+-]?(\d+(\.\d+)?|\.\d+)\s*-\s*[+-]?(\d+(\.\d+)?|\.\d+)\s*"
+    r"[pnu\u00b5\u03bcmkKMGR]?[" + _VALUE_TAIL + r"]?$")
 NETNAME_RE = re.compile(r"^[+\-]?[A-Za-z_][A-Za-z0-9_+\-\.]{0,14}$")
 PARTNAME_RE = re.compile(r"^(?=.*\d)[A-Za-z0-9][A-Za-z0-9_\-\./+]{3,30}$")
 # ★★ 器件名候选的**形态否决**（§5.465）：
@@ -1181,8 +1271,14 @@ def fit_value(text: str) -> float:
     这个角色 —— `_val_why.py` 的头号失配就是 `c: 100nF -> 1`(36)、`r: None -> 1`(18)。
     """
     if VALUE_UNIT_ON and not _UNIT_RE.search(text):
+        _s = (text or "").strip()
+        if VALUE_DIGITS_N and _s.isdigit() and len(_s) >= VALUE_DIGITS_N:
+            return VALUE_DIGIT_FIT
         return 0.0
     if VALUE_RE.match(text):
+        return 1.0
+    if VALUE_RANGE_ON and VALUE_RANGE_RE.match(text):
+        # 区间值（`10-100uF`）：GT 里它就是一个值串，给满分参与竞争。
         return 1.0
     if VALUE_TRIM_ON and canon_value(text):
         # 削过尾巴：比干净匹配略低，但**足以赢过远处那行耐压**。
@@ -1401,6 +1497,197 @@ def _best_read(reads: Dict[str, Tuple[str, float]], role: str,
                 conf0 = float(own[1] or 0.0)
                 return (f0 * (0.3 + 0.7 * max(0.0, min(1.0, conf0))), own[0], conf0, f0)
     return best
+
+
+def _pin_solve_weight(t: dict, slot: str, spx: float = 1.0):
+    """`STAGE2_PIN_SOLVE` 的**单框 × 单字段**权重（不可用返回 `None`）。
+
+    闸门与打分**逐条**照抄逐槽贪心（`assign.py:2456-2519` 的号 / 名两轮），
+    系数一个不新造：宽高比 `MAX_BOX_W`(:230) / `PINNAME_MAXW`(:358)、有色墨迹
+    `PINNAME_CFRAC`(:368)、号距离 `PINNUM_NEAR`(:239)、打分 `_score`(:1359)。
+    唯一的差别是**不看 `taken_box`** —— 候选框的占用由调用方按「本件已绑 = 可用、
+    他人已绑 = 不可用」判过一次（逐槽贪心那边是 `take()` + `id(t) in taken_box`，
+    见 :2475，同样是调用方的事）。
+    """
+    role, fit_fn = (("pin_number", fit_pinnum) if slot == "number"
+                    else ("pin_name", fit_pinname))
+    wlim = MAX_BOX_W if slot == "number" else PINNAME_MAXW
+    dlim = (PINNUM_NEAR if slot == "number" else NEAR) * spx
+    dw = PINNUM_DISTW if slot == "number" else 0.035
+    if t.get("wide") and (t.get("wratio") or 0.0) > wlim:
+        return None
+    if slot == "name" and t.get("cfrac", 0.0) > PINNAME_CFRAC:
+        return None
+    if slot == "number" and PINNUM_PXC > 0:
+        _nr = (t.get("reads") or {}).get("pin_number")
+        _txt = str(_nr[0]) if _nr else ""
+        _dig = "".join(ch for ch in _txt if ch.isdigit())
+        _bb = t.get("bbox") or []
+        if _dig and len(_bb) == 4:
+            if (float(_bb[2]) - float(_bb[0])) / float(len(_dig)) > PINNUM_PXC:
+                return None
+    _pdig = (_pure_digit_read(t) if (PINNUM_INSIDE or PINNAME_NODIGIT) else None)
+    if slot == "name" and not t["inside"]:
+        return None
+    if slot == "number" and t["inside"] and not (PINNUM_INSIDE and _pdig):
+        return None
+    if slot == "number" and t["d"] > dlim:
+        return None
+    got = (_best_number_read(t["reads"]) if (slot == "number" and PINNUM_CONSENSUS)
+           else _best_read(t["reads"], role, fit_fn))
+    if (not got) and slot == "number" and PIN_NUM_ROT:
+        _rot = t.get("pin_number_rot")
+        if _rot:
+            got = _best_read({**t["reads"], "pin_number": _rot}, role, fit_fn)
+    if not got:
+        return None
+    if slot == "name" and PINNAME_NODIGIT and _pdig:
+        return None
+    s, txt, conf, _f = got
+    s = _score(s, conf, t["d"], t["inside"], dist_w=dw)
+    if s <= 0:
+        return None
+    return (txt, float(conf), float(s))
+
+
+def _pin_solve_main(cid, cbbox, plist, cands, take, spx: float = 1.0):
+    """`STAGE2_PIN_SOLVE=2` 的**主绑定**：两条角色轮**之前**的一次联合指派。
+
+    行 = 本件每个 `(槽, number|name)`，列 = 本件附近仍可用的候选文字框。权重不新造：
+
+      * 读法与闸门 = `_pin_solve_weight`（逐条照抄 :2456-2519 的两个角色轮）；
+      * 槽相关项 = 逐槽贪心**自己的**逐对分数 `score_of`（:2671-2701）的形状
+        `score / (1 + d / _dec)`：`_dec` 是 `PINNUM_DECAY`(:257)（号）或字面
+        `20.0`（名，:2672 的默认参数）；`PIN_ALONG`(:471) 为真时 `d` 取 `structmatch`
+        的**沿边**距离（:2694-2696），否则取 2D 距离（:2698-2700）；
+      * 名候选再套 `PINNAME_ROWNEAR`(:422) 那条「只归 2D 最近那根脚 ×
+        `PINNAME_ROWTIE`(:423)」的闸门（:2673-2684）。
+
+    返回 `(binds, pool, bw, stats)`；`binds = {(slot, f): ci}`。
+
+    ★ 去重口径（上一轮的跌分入口）：**号按文本唯一**（GT 普查：346 个元件里同件内
+    号重复 0 个），重复时丢权重低的那条、把槽留给贪心兜底 —— `assemble.PIN_DUPNUM`
+    会把重复号里后到的整根丢掉，等于白送一个 `missing`。**名不按文本唯一**（GT 里
+    `GND`/`VBUS`/`SHELL` 在同一件内合法重名，6 个元件如此），只保证「一框一槽」——
+    后者由匈牙利按列互斥天然满足，`stats["dup_box"]` 只统计不断言。
+    """
+    stats = {"dup_box": 0, "dup_num": 0, "dup_name": 0, "bound": 0}
+    if len(plist) < 2:
+        return {}, [], [], stats
+
+    def _bk(bx):
+        try:
+            if not bx or len(bx) < 4:
+                return None
+            return tuple(round(float(v), 2) for v in list(bx)[:4])
+        except Exception:                                       # noqa: BLE001
+            return None
+
+    pool, _seen = [], set()
+    for t in cands:
+        k = _bk(t.get("bbox") or t.get("box"))
+        if k is None or k in _seen:
+            continue
+        if not take(t):          # 位号/值/型号名已认领的框在这里被排除（:2496）
+            continue
+        _seen.add(k)
+        pool.append(t)
+    if not pool:
+        return {}, pool, [], stats
+
+    bw = [{"number": _pin_solve_weight(t, "number", spx),
+           "name": _pin_solve_weight(t, "name", spx)} for t in pool]
+
+    # 每根脚的边与沿边坐标：只跟 (元件框, 槽点) 有关，先算一次（:2694-2696）。
+    _pin_edge = []
+    for p in plist:
+        px, py = float(p[0]), float(p[1])
+        e = None
+        try:
+            e = structmatch.edge_of_point(cbbox, px, py)
+        except Exception:                                       # noqa: BLE001
+            e = None
+        _pin_edge.append((e, structmatch.along(cbbox, e, px, py) if e is not None else None))
+    # ★ **几何锚定**（本轮实测的救火点）：一个候选只允许落到它 **2D 最近的那一根槽**
+    #   上（同一距离取编号小的）。没有这条，纯几何指派会把「孪生槽」互换：stage1 的
+    #   幻影触点与真触点可以只差 3.5px（case 1 `U2` 的 slot4 `(1664.4,897.0)` 与
+    #   slot5 `(1661.0,895.9)`），2D 距离对此**没有分辨力**，能分辨的只有槽的**编号
+    #   顺序**（`structmatch` 的单调对齐用的就是它）。放开这一条时 13 页 mean
+    #   82.4556 → 74.72（pin 0.7857 → 0.551，case 1 `tp=0`）。
+    w = {}
+    for f, slot in ((pin_solve.NUM, "number"), (pin_solve.NAME, "name")):
+        _dec = PINNUM_DECAY if slot == "number" else 20.0
+        _nat = {}
+        for ci, t in enumerate(pool):
+            if bw[ci][slot] is None:
+                continue
+            cx, cy = t["center"]
+            _nat[ci] = min(range(len(plist)),
+                           key=lambda j: ((float(plist[j][0]) - cx) ** 2
+                                          + (float(plist[j][1]) - cy) ** 2, j))
+        for i in range(len(plist)):
+            px, py = float(plist[i][0]), float(plist[i][1])
+            e, along_i = _pin_edge[i]
+            wx = {}
+            for ci, t in enumerate(pool):
+                b = bw[ci][slot]
+                if b is None or _nat.get(ci) != i:
+                    continue
+                cx, cy = t["center"]
+                if PIN_ALONG and e is not None:
+                    dp = abs(along_i - structmatch.along(cbbox, e, cx, cy))
+                else:
+                    dp = ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
+                wx[ci] = b[2] / (1.0 + dp / _dec)
+            if wx:
+                w[(i, f)] = wx
+    if not w:
+        return {}, pool, bw, stats
+
+    got, _gain = pin_solve.solve(len(plist), w, {})
+    if not got:
+        return {}, pool, bw, stats
+
+    # 一框一槽：匈牙利按列互斥，这里只是把结构性保证查一遍（应为 0）。
+    _cols = list(got.values())
+    stats["dup_box"] = len(_cols) - len(set(_cols))
+
+    # 号按文本唯一：同文本只留权重最高的一条（见 docstring）。
+    _nums = sorted((((w[(i, f)].get(ci, 0.0)), str(bw[ci]["number"][0]), (i, f), ci)
+                    for (i, f), ci in got.items() if f == pin_solve.NUM),
+                   key=lambda x: -x[0])
+    _kept = set()
+    for _wt, _txt, _key, _ci in _nums:
+        if _txt in _kept:
+            stats["dup_num"] += 1
+            del got[_key]
+            continue
+        _kept.add(_txt)
+
+    # 名重名是 GT 的常态（见 docstring），只统计不丢。
+    _names = [str(bw[ci]["name"][0]) for (i, f), ci in got.items()
+              if f == pin_solve.NAME]
+    stats["dup_name"] = len(_names) - len(set(_names))
+    stats["bound"] = len(got)
+    return got, pool, bw, stats
+
+
+def _bbox_key(bx):
+    """文字框的**几何**身份（bbox 四位 round2）：用于「2」档挡住同框的重复检测对象。
+
+    `taken_box` 认的是对象 `id`（:2650/:2732），但 OCR 会把同一块物理文字吐两次
+    （两个对象、bbox 完全相同）：case 8 `U1` 的 `(1174,482,1181,492)` 被槽 9 与槽 13
+    共用、`(1174,739,1181,749)` 被槽 10 与槽 16 共用，两次都读成 `7`/`8`。求解器内部
+    已按 bbox 去重（`_pin_solve_main` 的 `_bk`），但随后贪心兜底会拿到被丢掉的那个
+    **兄弟对象**，于是同一个号在两根脚上出现 ⇒ `assemble.PIN_DUPNUM`(:3128) 丢掉后到
+    的那根 ⇒ 白送 `missing`。
+    """
+    try:
+        if not bx or len(bx) < 4:
+            return None
+        return tuple(round(float(v), 2) for v in list(bx)[:4])
+    except Exception:                                           # noqa: BLE001
+        return None
 
 
 def _box_key(info: dict):
@@ -2160,12 +2447,17 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         del LAST_CONFORM_EXTRA[CONFORM_AUDIT_MAX:]
     # 已被选中的位号框：值兜底时必须绕开（`fit_value` 对 `C5` 这种会经 NETNAME 支给 0.6）。
     _desig_boxes = {tuple(info["box"]) for _cid, info in picked}
+    # 位号框 → 归属件（`STAGE2_VALUE_COL_OWN` 用：「这个值框离谁的位号最近」）。
+    _desig_own = [(str(_cid), list(info["box"])) for _cid, info in picked
+                  if info.get("box") and len(list(info["box"])) == 4]
 
     # 结构化重绑定留下的「两种方案打架」的引脚（用户 m06470 要的**阶段三 LLM 接口**）。
     # 每条 = {"cid","role","pin","pins","cand","alt"}，`cand`/`alt` 都是候选文字。
     struct_slots: List[dict] = []
 
     # 参数 / 器件名 / 引脚号 / 引脚名
+    # 「2」档主绑定的逐页账（`STAGE2_PIN_SOLVE=2` 的违规计数自查，见 `_pin_solve_main`）。
+    _ps2_tot = {"comp": 0, "bound": 0, "dup_box": 0, "dup_num": 0, "dup_name": 0}
     for c in comps:
         # ★ `ctype_of` 取内涵回收改写后的类型（`d` -> `led`）：`led` 的参数槽是
         #   「器件名」而不是「值」，引脚通道的期望角色与图章也随类型变。
@@ -2252,6 +2544,86 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                 sc = _score(s, conf, d, inside(_tcx, _tcy, c["bbox"]))
                 if best is None or sc > best[0]:
                     best = (sc, txt, conf, dict(t, d=d))
+        if best is None and want == "value" and VALUE_COLUMN_ON and rec["designator"]:
+            # **同列值兜底**（`STAGE2_VALUE_COLUMN`）：不看到元件本体的距离，只要求值框
+            # 与本件已选中的位号框「同一列」（dy <= VALUE_COL_DY、dx <= VALUE_COL_DX）。
+            _db = list(rec["designator"].get("box") or [])
+            if len(_db) == 4:
+                _dcx, _dcy = (_db[0] + _db[2]) / 2.0, (_db[1] + _db[3]) / 2.0
+                for t in texts:
+                    tb = t.get("bbox")
+                    if not tb or len(tb) != 4:
+                        continue
+                    if tuple(tb) in _desig_boxes:
+                        continue
+                    _tcx, _tcy = (tb[0] + tb[2]) / 2.0, (tb[1] + tb[3]) / 2.0
+                    if abs(_tcy - _dcy) > VALUE_COL_DY or abs(_tcx - _dcx) > VALUE_COL_DX:
+                        continue
+                    if VALUE_COL_OWN:
+                        # 「同列」还不够：这个值框必须离**本件**的位号框最近，
+                        # 否则它是隔壁件那一对（位号+值）里的值（§5.481.4 的池上伤害）。
+                        _mine = abs(_tcy - _dcy) + abs(_tcx - _dcx)
+                        _othr = None
+                        for _c2, _b2 in _desig_own:
+                            if _b2 == _db:
+                                continue
+                            _d2 = (abs(_tcy - (_b2[1] + _b2[3]) / 2.0)
+                                   + abs(_tcx - (_b2[0] + _b2[2]) / 2.0))
+                            if _othr is None or _d2 < _othr:
+                                _othr = _d2
+                        if _othr is not None and _mine > _othr + 0.5:
+                            continue
+                    got = _best_read(t["reads"], "value",
+                                     lambda _t: fit_value_unitx(_t, ctype))
+                    if not got or got[3] < 1.0:
+                        continue
+                    s, txt, conf, f = got
+                    _bx = c["bbox"]
+                    _ccx, _ccy = (_bx[0] + _bx[2]) / 2.0, (_bx[1] + _bx[3]) / 2.0
+                    sc = _score(s, conf, dist_to_rect(_ccx, _ccy, tb),
+                                inside(_tcx, _tcy, _bx))
+                    if best is None or sc > best[0]:
+                        best = (sc, txt, conf, dict(t, d=dist_to_rect(_ccx, _ccy, tb)))
+        _db = list(rec["designator"].get("box") or []) if rec["designator"] else []
+        _dxmax = max(VALUE_STACK_DX, 0.35 * (_db[2] - _db[0])) if len(_db) == 4 else 0.0
+        # `STAGE2_VALUE_STACKWIN`（默认 0）：已有 best 但**不在本件位号列里** ⇒ 允许接管。
+        _colwin = bool(best is not None and VALUE_STACKWIN_ON and len(_db) == 4
+                       and abs(float(best[3]["bbox"][0]) - _db[0]) > _dxmax)
+        if want == "value" and VALUE_STACK_ON and (best is None or _colwin) and len(_db) == 4:
+            # **位号正下方同列**兜底（`STAGE2_VALUE_STACK`）：判据见 `VALUE_STACK_ON` 的注释。
+            # 只在该框没被别的件当值/位号用时才出手。
+            _used_v = set()
+            for _r2 in out.values():
+                _v2 = (_r2 or {}).get("value") or {}
+                if _v2.get("box"):
+                    _used_v.add(tuple(_v2["box"]))
+            _cb = None
+            _bx = c["bbox"]
+            _ccx, _ccy = (_bx[0] + _bx[2]) / 2.0, (_bx[1] + _bx[3]) / 2.0
+            for t in texts:
+                tb = t.get("bbox")
+                if not tb or len(tb) != 4:
+                    continue
+                if tuple(tb) in _desig_boxes or tuple(tb) in _used_v:
+                    continue
+                if abs(tb[0] - _db[0]) > _dxmax:
+                    continue
+                _gap = tb[1] - _db[3]
+                if _gap < -1.0 or _gap > VALUE_STACK_DY:
+                    continue
+                got = _best_read(t["reads"], "value",
+                                 lambda _t: fit_value_unitx(_t, ctype))
+                if not got or got[3] < 1.0:
+                    continue
+                s, txt, conf, f = got
+                if is_foreign_value(txt, ctype):
+                    continue
+                _d = dist_to_rect(_ccx, _ccy, tb)
+                sc = _score(s, conf, _d, False)
+                if _cb is None or sc > _cb[0]:
+                    _cb = (sc, txt, conf, dict(t, d=_d))
+            if _cb is not None and (best is None or _colwin):
+                best = _cb
         if want == "value" and VAL_DBG:
             _rej = {"nodesig": 0, "far": 0, "noread": 0, "fit<1": 0, "ok": 0}
             _bx = c["bbox"]
@@ -2370,6 +2742,41 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     return False
             return True
         taken_box: set = set()      # 同一块文字只能当一次引脚名或引脚号
+        # 「2」档主绑定已消费的框：它们仍留在贪心候选池里（`structmatch` 的单调对齐
+        # 需要完整的几何序列，挖洞会让剩下的整排错位），但写入侧仍被 `taken_box` 挡住
+        # 复用（:2732）。其它档位恒为空集 ⇒ 候选池行为逐字节不变。
+        _ps_used: set = set()
+        # 「2」档主绑定消费掉的框的**几何**身份（见 `_bbox_key`）：贪心兜底即使拿到
+        # 同框的兄弟检测对象也不能再用，否则同号/同名上两根脚。其它档位恒为空集。
+        _ps_bk: set = set()
+        if PIN_SOLVE_MAIN and ctype in pin_solve.PIN_TYPES:
+            try:
+                _binds, _ppool, _pbw, _pst = _pin_solve_main(
+                    cid, c.get("bbox"), plist, cands, take, _spx)
+                _ps2_tot["comp"] += 1 if _pst["bound"] else 0
+                _ps2_tot["bound"] += _pst["bound"]
+                _ps2_tot["dup_box"] += _pst["dup_box"]
+                _ps2_tot["dup_num"] += _pst["dup_num"]
+                _ps2_tot["dup_name"] += _pst["dup_name"]
+                for (_i, _f), _ci in sorted(_binds.items()):
+                    _sl = pin_solve.FIELD_ROLE[_f]
+                    _v = _pbw[_ci][_sl]
+                    pinfo[_i][_sl] = {"text": _v[0], "conf": _v[1],
+                                      "box": list(_ppool[_ci]["bbox"]),
+                                      "d": float(_ppool[_ci]["d"]),
+                                      "pin_solve": 2}
+                    taken_box.add(id(_ppool[_ci]))
+                    _ps_used.add(id(_ppool[_ci]))
+                    _pbk = _bbox_key(_ppool[_ci].get("bbox"))
+                    if _pbk is not None:
+                        _ps_bk.add(_pbk)
+                if _dbg_want(cid):
+                    print("[dbg] cid=%s pin_solve2: bound=%d dup_box=%d dup_num=%d"
+                          " dup_name=%d（池 %d，槽 %d）"
+                          % (cid, _pst["bound"], _pst["dup_box"], _pst["dup_num"],
+                             _pst["dup_name"], len(_ppool), len(plist)))
+            except Exception as _exc:                           # noqa: BLE001
+                print("[warn] pin_solve2 cid=%s: %r" % (cid, _exc))
         for role, want_inside, fit_fn, slot in (
                 ("pin_name", True, fit_pinname, "name"),
                 ("pin_number", False, fit_pinnum, "number")):
@@ -2392,7 +2799,13 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     _t["_steal"] = True
                     _src.append(_t)
             for t in _src:
-                if not take(t) or id(t) in taken_box:
+                # 「2」档：主绑定消费掉的框仍进池（对齐要完整序列，见 `_ps_used`），
+                # 写入侧由 `taken_box` 挡住复用；同框的兄弟检测对象由 `_ps_bk` 挡住
+                # （见 `_bbox_key`）。其它档位两个集合都为空 ⇒ 原判定。
+                if (not take(t)
+                        or (id(t) in taken_box and id(t) not in _ps_used)
+                        or (_ps_bk and id(t) not in _ps_used
+                            and _bbox_key(t.get("bbox") or t.get("box")) in _ps_bk)):
                     continue
                 if t.get("wide") and (t.get("wratio") or 0.0) > _wlim:
                     continue
@@ -2422,6 +2835,13 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                     continue
                 got = (_best_number_read(t["reads"]) if (slot == "number" and PINNUM_CONSENSUS)
                        else _best_read(t["reads"], role, fit_fn))
+                if (not got) and slot == "number" and PIN_NUM_ROT:
+                    # `text.PIN_NUM_ROT`：直立读全废时的补救 —— 把「同一框旋转 90°/270° 的那次
+                    # 补读」当作**同一角色**的又一个候选塞回既有的 `_best_read`。接受条件仍是
+                    # 既有 `PINNUM_RE`（`fit_pinnum`）、打分仍是既有 `_score`，这里不设任何阈值。
+                    _rot = t.get("pin_number_rot")
+                    if _rot:
+                        got = _best_read({**t["reads"], "pin_number": _rot}, role, fit_fn)
                 if not got:
                     continue
                 if slot == "name" and PINNAME_NODIGIT and _pdig:
@@ -2646,6 +3066,111 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                           % (cid, _n_late, len(_pool),
                              sum(1 for i in range(len(plist)) if pinfo[i]["name"] is None)))
 
+        # ★★ **引脚号 / 名的全局一对一指派**（`STAGE2_PIN_SOLVE`，默认 0 = 关闭）。
+        #    病与做法见 `stage2/pin_solve.py` 的模块注释和 `PIN_SOLVE` 常量处的长注释。
+        #    位置：两条角色轮 + 框外补名**之后**（本段的候选池与基线 `_cur` 就是它们
+        #    的结果），幻影槽合并**之前**（那一轮还能再救「号与名落在两个幻影触点上」
+        #    的槽，与本段不冲突）。开关关时整段不进入 ⇒ 零开销、输出逐字节不变。
+        if PIN_SOLVE and not PIN_SOLVE_MAIN and plist and ctype in pin_solve.PIN_TYPES:
+            try:
+                def _bk(bx):
+                    try:
+                        if not bx or len(bx) < 4:
+                            return None
+                        return tuple(round(float(v), 2) for v in list(bx)[:4])
+                    except Exception:                               # noqa: BLE001
+                        return None
+
+                # 本件**已绑**的框：身份按 `bbox` 认（`pinfo` 里只存了框，没有 rec 对象），
+                # 它们即便在 `taken_box` 里也必须进池 —— 否则基线权重缺项，求解会「赢」在
+                # 一个看不见的对手上。
+                _mine = {}
+                for _i, _p in pinfo.items():
+                    for _f, _sl in ((0, "number"), (1, "name")):
+                        _e = _p.get(_sl)
+                        if _e and _e.get("box"):
+                            _k = _bk(_e["box"])
+                            if _k is not None:
+                                _mine[(_k, _f)] = _i
+                _pool, _b2i = [], {}
+                for t in cands:
+                    _k = _bk(t.get("bbox") or t.get("box"))
+                    if _k is None or _k in _b2i:
+                        continue
+                    # 「本件已绑」= 可用（跳过 `take`/`taken_box`，与逐槽贪心 :2475 的分工一致）
+                    if not ((_k, 0) in _mine or (_k, 1) in _mine):
+                        if not take(t) or id(t) in taken_box:
+                            continue
+                    _b2i[_k] = len(_pool)
+                    _pool.append(t)
+                if _pool:
+                    # 每候选每字段的**槽无关**基础权（闸门 + `_score`，逐条照抄两轮贪心）。
+                    _bw = [{"number": _pin_solve_weight(t, "number", _spx),
+                            "name": _pin_solve_weight(t, "name", _spx)}
+                           for t in _pool]
+                    # 槽相关项：候选中心到**槽点**的距离。不新造任何系数 ——
+                    # `_score(0.0, 0.0, dp, False)` 就是 `_score` 自己那条
+                    # `- dist_w * min(d, FAR)`（`dist_w` 默认 0.035，:1361），也正是
+                    # 框外补名在 :2717-2719 手写的 `score - 0.035 * dp`。没有这一项
+                    # 目标函数对槽是退化的，求解器会任意置换号码（实测 pin f1 0.786→0.036）。
+                    _w = {}
+                    for _f, _sl in ((0, "number"), (1, "name")):
+                        for _i in range(len(plist)):
+                            _wx = {}
+                            for _ci, _t in enumerate(_pool):
+                                _b = _bw[_ci][_sl]
+                                if _b is None:
+                                    continue
+                                _cx, _cy = _t["center"]
+                                _dp = ((plist[_i][0] - _cx) ** 2
+                                       + (plist[_i][1] - _cy) ** 2) ** 0.5
+                                _wx[_ci] = _b[2] + _score(0.0, 0.0, _dp, False)
+                            _w[(_i, _f)] = _wx
+                    _cur, _lock, _n_miss = {}, set(), 0
+                    for _i, _p in pinfo.items():
+                        for _f, _sl in ((0, "number"), (1, "name")):
+                            _e = _p.get(_sl)
+                            if not _e or not _e.get("box"):
+                                continue
+                            _ci = _b2i.get(_bk(_e["box"]))
+                            if _ci is None:
+                                # 已有值、但框不在本件候选池（被 `take()` 拒 / 不在
+                                # `cands`）：认不出候选 ⇒ 不能进矩阵，也**不许被填**，
+                                # 否则就是「换」而不是「只填空」。
+                                _lock.add((_i, _f))
+                                _n_miss += 1
+                                continue
+                            # 不筛权重正负：pin 的作用是「这个字段一律不动」，
+                            # 而不是「这个字段还有效」。同一块框被两只槽同时引用
+                            # （重复检出）也照样 pin 住，两边都不写，保持贪心原样。
+                            _cur[(_i, _f)] = _ci
+                    # 保守档：既有绑定全部 pin 住（`pinned`），求解器**只填空字段**。
+                    # 实测（13 页）自由重排档 mean 82.4556 → 81.99、pin f1 0.7857 → 0.7718：
+                    # `_score` 的槽相关项压不住 `structmatch` 的顺序先验，换号即随机置换。
+                    _got, _gain = pin_solve.solve(len(plist), _w, _cur,
+                                                  pinned=set(_cur) | _lock)
+
+                    if _gain > 0.0:
+                        _n_set = 0
+                        for (_i, _f), _ci in sorted(_got.items()):
+                            if _cur.get((_i, _f)) == _ci:
+                                continue                            # 与贪心一致，不重写
+                            _sl = pin_solve.FIELD_ROLE[_f]
+                            _v = _bw[_ci][_sl]
+                            pinfo[_i][_sl] = {"text": _v[0], "conf": _v[1],
+                                              "box": list(_pool[_ci]["bbox"]),
+                                              "d": float(_pool[_ci]["d"]),
+                                              "pin_solve": 1}
+                            taken_box.add(id(_pool[_ci]))
+                            _n_set += 1
+                        if _dbg_want(cid):
+                            print("[dbg] cid=%s pin_solve: +%d gain=%.3f"
+                                  "（池 %d，槽 %d，pin %d，lock %d）"
+                                  % (cid, _n_set, _gain, len(_pool),
+                                     len(plist), len(_cur), _n_miss))
+            except Exception as _exc:                               # noqa: BLE001
+                print("[warn] pin_solve cid=%s: %r" % (cid, _exc))
+
         # ★★ 幻影脚点槽合并（`STAGE2_PIN_STUB_MERGE`，默认关）：见常量处的长注释。
         # 两槽「一槽只有号、另一槽只有名」且两点近到像同一根脚时，把号搬进有名字
         # 的那一槽（被搬空的那一槽本来就会被 `BOX_PIN_NEED_NAME` 丢掉 ⇒ 只增不减）。
@@ -2684,6 +3209,10 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                               % (cid, _keep, pinfo[_keep]["number"]["text"], _drop, _dd))
 
     # ---- 网络标签：离所有元件都远、且不在元件框里的文字 ----
+    if PIN_SOLVE_MAIN:
+        print("[pin_solve2] comps=%d bound=%d dup_box=%d dup_num=%d dup_name=%d"
+              % (_ps2_tot["comp"], _ps2_tot["bound"], _ps2_tot["dup_box"],
+                 _ps2_tot["dup_num"], _ps2_tot["dup_name"]))
     net_labels = []
     for t in free:
         if t.get("wide"):
@@ -2826,11 +3355,19 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
         # ★ 落盘（`STAGE2_DUMP_READS=1` 时）：`LAST_TEXT_READS` 原来只活在进程内，取不了证。
         # 写 JSONL 而不是 print —— `Tee-Object` 会吞掉子进程的 stdout。
         try:
+            _bb = {str(c.get("id")): [round(float(x), 1) for x in (c.get("bbox") or [])]
+                   for c in components}
             _p = os.environ.get("STAGE2_DUMP_PATH") or os.path.join("work", "_reads_dump.jsonl")
             with io.open(_p, "a", encoding="utf-8") as _f:
                 _f.write(json.dumps({"case": os.environ.get("STAGE2_DUMP_CASE", ""),
                                      "n": len(LAST_TEXT_READS),
-                                     "reads": LAST_TEXT_READS},
+                                     "reads": LAST_TEXT_READS,
+                                     "comps": {cid: {"bbox": _bb.get(str(cid)),
+                                                     "type": (rec or {}).get("type"),
+                                                     "designator": (rec or {}).get("designator"),
+                                                     "value": (rec or {}).get("value"),
+                                                     "partname": (rec or {}).get("partname")}
+                                               for cid, rec in (out or {}).items()}},
                                     ensure_ascii=False) + "\n")
         except Exception:
             pass

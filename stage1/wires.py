@@ -34,6 +34,12 @@ import numpy as np
 
 DEFAULT_MAX_PIXELS = 2_500_000
 
+# ★ `STAGE1_ERASE_GLYPH`（§5.504）：擦文字时只涂字形，保留穿过文本框的导线。
+#   `0`（默认）= 旧行为：整个矩形涂掉 ⇒ 13 页统计 261 个框被横向切断、408 个框被纵向切断；
+#   `1` = 框内连通域看「跨 ≥70% 框宽/框高」→ 实测整尺 **−2.60**（放大字本身跨框 ⇒ 字被留下）；
+#   `2` = 全局连通域看「整体比框大 3 倍」才保留（字形即使跨满框也照样涂掉）。
+_ERASE_GLYPH = int(os.environ.get("STAGE1_ERASE_GLYPH", "0") or 0)
+
 
 def _use_scale(w: int, h: int, max_pixels: int) -> float:
     px = float(w) * float(h)
@@ -102,6 +108,68 @@ def occlude_boxes(bgr: np.ndarray, boxes, pad: float = 2.0) -> np.ndarray:
                     if keep.sum() >= 8:
                         fill = np.median(ring[keep], axis=0)
             out[y1:y2, x1:x2] = fill
+    return out
+
+
+def erase_glyphs(bgr: np.ndarray, boxes, pad: float = 1.0, mode: int = 1) -> np.ndarray:
+    """只涂**字形**、留下穿过文本框的导线（`STAGE1_ERASE_GLYPH`）。
+
+    病（§5.504）：`occlude_boxes` 把整个文字框矩形涂成背景色，压在文字上的导线**连同导线像素**
+    一起被抹掉，于是导线在框两侧各留一截。13 页统计（`work/_erasesplit.py`）：**261 个框被横向
+    切断、408 个框被纵向切断**。
+
+    `mode=1`（默认）：框内连通域「跨 ≥70% 框宽/框高」就保留。**实测整尺 −2.60**：放大字（`1`/`0`）
+    本身也跨框高，于是字形墨被留下 ⇒ 骨架长出假分支、假引脚（pin 轴 6.32→6.91、netH 4.39→5.71）。
+
+    `mode=2`：改用**全局连通域**判据 —— 在整页墨迹上做连通域，只有「整体 bbox 明显比文本框大」
+    （长 ≥ 3× 框对角线）的连通域才保留。字形即使跨满框，其全局连通域也只有框那么大，仍被涂掉。
+    """
+    out = bgr.copy()
+    if not boxes:
+        return out
+    h, w = out.shape[:2]
+    bg = _background_colour(bgr)
+    lab_all = None
+    if int(mode) >= 2:
+        ink_all = (np.abs(bgr.astype(np.int16) - bg.reshape(1, 1, 3).astype(np.int16)).sum(2) > 60)
+        _n, lab_all, stats_all, _ = cv2.connectedComponentsWithStats(ink_all.astype(np.uint8), 8)
+    for b in boxes:
+        try:
+            x1, y1, x2, y2 = (float(v) for v in b[:4])
+        except (TypeError, ValueError):
+            continue
+        _bx1, _by1, _bx2, _by2 = x1, y1, x2, y2
+        x1 = int(max(0, math.floor(x1 - pad)))
+        y1 = int(max(0, math.floor(y1 - pad)))
+        x2 = int(min(w, math.ceil(x2 + pad)))
+        y2 = int(min(h, math.ceil(y2 + pad)))
+        if x2 <= x1 or y2 <= y1:
+            continue
+        sub = out[y1:y2, x1:x2]
+        ink = (np.abs(sub.astype(np.int16) - bg.reshape(1, 1, 3).astype(np.int16)).sum(2) > 60)
+        if not ink.any():
+            continue
+        bw, bh = x2 - x1, y2 - y1
+        if lab_all is not None:
+            diag = math.hypot(_bx2 - _bx1, _by2 - _by1)
+            keep_ids = set()
+            for k in np.unique(lab_all[y1:y2, x1:x2][ink]):
+                if k <= 0:
+                    continue
+                cw, ch = stats_all[k, cv2.CC_STAT_WIDTH], stats_all[k, cv2.CC_STAT_HEIGHT]
+                if math.hypot(cw, ch) >= 3.0 * max(8.0, diag):
+                    keep_ids.add(int(k))
+            fill = ink & ~np.isin(lab_all[y1:y2, x1:x2], list(keep_ids)) if keep_ids else ink
+        else:
+            n, lab, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), 8)
+            fill = np.zeros(ink.shape, bool)
+            for k in range(1, n):
+                cw, ch = stats[k, cv2.CC_STAT_WIDTH], stats[k, cv2.CC_STAT_HEIGHT]
+                if cw >= 0.7 * bw or ch >= 0.7 * bh:      # 跨框 ⇒ 可能是导线，留着
+                    continue
+                fill |= (lab == k)
+        if fill.any():
+            sub[fill] = bg
     return out
 
 
@@ -565,6 +633,10 @@ def _hint_wire_hue(bgr: np.ndarray, occlude=None) -> None:
             return
     except Exception:
         pass
+    if os.environ.get("STAGE1_WIRE_DEBUG"):
+        print("  [hint] enter: mode=%s fail_off=%s local_mode=%s"
+              % (os.environ.get("STAGE1_WIRE_COLOUR", "confirm"), _HUE_FAIL["off"],
+                 os.environ.get("STAGE1_WIRE_HUE_LOCAL", "fallback")), flush=True)
     # ★ 2026-10-23：**本地色相判定**（`STAGE1_WIRE_HUE_LOCAL`），替代/兜底每页一次的颜色问话。
     #   判据：元件框内已被涂掉的细笔画长直线，剩下的色相直方图里长直线最多的那个色桶
     #   （`pipeline/pskel.py:local_wire_hue`）。口径与 VLM 那条完全一致 —— 都只是往
@@ -582,6 +654,9 @@ def _hint_wire_hue(bgr: np.ndarray, occlude=None) -> None:
             _h0 = pskel.local_wire_hue(bgr, ink=pskel.ink_mask(bgr), occlude=occlude)
         except Exception:                              # noqa: BLE001
             _h0 = None
+        if os.environ.get("STAGE1_WIRE_DEBUG"):
+            print("  [hint] local: occlude=%s -> hue=%s (lmid=%s)"
+                  % (0 if not occlude else len(occlude), _h0, _LMODE), flush=True)
         if _h0 is None:
             return False
         pskel.HINT_HUE = float(_h0)
@@ -666,7 +741,10 @@ def extract_wires(bgr: np.ndarray, max_pixels: int = DEFAULT_MAX_PIXELS,
     if occlude:
         work = occlude_boxes(work, occlude, pad=occ_pad)
     if erase:
-        work = occlude_boxes(work, erase, pad=erase_pad)
+        if _ERASE_GLYPH:
+            work = erase_glyphs(work, erase, pad=erase_pad, mode=_ERASE_GLYPH)
+        else:
+            work = occlude_boxes(work, erase, pad=erase_pad)
     src = work
     if s != 1.0:
         src = cv2.resize(work, (max(8, int(round(W * s))), max(8, int(round(H * s)))),

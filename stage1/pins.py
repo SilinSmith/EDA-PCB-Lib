@@ -101,6 +101,13 @@ PIN_WIRE_END_IC = int(os.environ.get("STAGE1_PIN_WIRE_END_IC", "1"))
 PIN_WIRE_MIN = float(os.environ.get("STAGE1_PIN_WIRE_MIN", "5"))
 # 候选端点必须来自「够长」的线段（真导线）才允许吸；符号自身的小笔画都短于这个值。
 PIN_WIRE_SEGLEN = float(os.environ.get("STAGE1_PIN_WIRE_SEGLEN", "25"))
+# ★ 本级新加：不许吸「符号自身引线的外端」（`STAGE1_PIN_WIRE_SELF`，默认 0 = 老行为）。
+#   判据只看几何：候选端点的**另一端**落在这颗元件的框内（外扩 `_PAD` px）⇒ 这条线段是从
+#   本体长出来的引线，它的外端点不是「别处来的导线端点」，吸过去等于把脚推到引线长度上。
+#   证据（RESULTS §5.485）：case11 `U1` 右列的 `[[1079,399],[1128,400]]` 就是本件的引线，
+#   吸它的外端 1128 使脚比 GT（1095）偏 33px。
+PIN_WIRE_SELF = int(os.environ.get("STAGE1_PIN_WIRE_SELF", "0"))
+PIN_WIRE_SELF_PAD = float(os.environ.get("STAGE1_PIN_WIRE_SELF_PAD", "4"))
 # 只收「度 1」端点（两条线段的交点不是引线端）。new2026 的干净页里 GT 脚点也常常
 # 落在「导线与导线相接」的端点上 ⇒ 放宽到全部端点（`STAGE1_PIN_WIRE_FREE=0`）更好。
 PIN_WIRE_FREE = int(os.environ.get("STAGE1_PIN_WIRE_FREE", "0"))
@@ -128,9 +135,18 @@ PIN_WIRE_N = {"n": 0, "miss": 0}         # 诊断计数：改到的引脚数 / �
 PIN_LEG_COLOR = int(os.environ.get("STAGE1_PIN_LEG_COLOR", "1"))
 PIN_LEG_COLOR_MAX = float(os.environ.get("STAGE1_PIN_LEG_COLOR_MAX", "46"))
 PIN_LEG_COLOR_GAP = int(os.environ.get("STAGE1_PIN_LEG_COLOR_GAP", "2"))
+# 逐侧腿长的**唯一性**约束（`STAGE1_PIN_LEG_UNI`）：一颗符号的四侧腿长是同一个数（符号
+# 库按统一单位画引线），所以「量到饱和（= 探到窗边仍连续墨，说明撞上了别的笔画）或量不到」
+# 的那一侧不该用自己那个假数，而应弃权、取本件各侧有效量值的中位数。
+PIN_LEG_UNI = int(os.environ.get("STAGE1_PIN_LEG_UNI", "0"))
 PIN_LEG_COLOR_N = {"n": 0, "empty": 0}
 # 「触到框边」的判定半径
 TOUCH_TOL = 6.0
+# ★ 本级新加：`box`/`bigic` 单独的触摸半径（`STAGE1_PIN_TOUCH_IC`，默认 0 = 用 `TOUCH_TOL`）。
+#   动机（RESULTS §5.485.9）：DC/DC 这类 IC 的脚画在引线外端，引线本身 20~40px，
+#   导线是从引线末端接出去的 ⇒ 导线起点离框边 20~40px，`TOUCH_TOL=6` 根本看不见它，
+#   于是这个脚只能靠「桩 / 颜色腿长 / 导线端点吸附」猜位置。放宽后它变成一次真触摸。
+TOUCH_TOL_IC = float(os.environ.get("STAGE1_PIN_TOUCH_IC", "0") or 0)
 # 同一引脚上多个接触点的合并半径（沿框边弧长）
 CLUSTER_R = 12.0
 # ★ IC（`box`）单独用更小的合并半径。
@@ -842,6 +858,12 @@ def _color_leg_box(bb, sym):
                 if L >= 2:
                     lens.append(float(L))
         out.append(float(np.median(lens)) if len(lens) >= 2 else None)
+    if PIN_LEG_UNI:
+        sat = R - 0.5
+        ok = [v for v in out if v is not None and v < sat]
+        if ok and any(v is None or v >= sat for v in out):
+            med = float(np.median(ok))
+            out = [v if (v is not None and v < sat) else med for v in out]
     if all(v is None for v in out):
         PIN_LEG_COLOR_N["empty"] += 1
         return None
@@ -878,22 +900,30 @@ def _leg_fill(pins, bb):
     return out, moved
 
 
-def _snap_to_wire_end(pins, bb, ends, free=None):
+def _snap_to_wire_end(pins, bb, ends, free=None, other=None):
     """把两脚件的引脚点挪到「朝外的、度 1 的导线端点」上（`STAGE1_PIN_WIRE_END`）。
 
     `pins` 是 `(x, y)` 列表（框边 + 常数腿长）；对每个点，向元件中心的反方向看
     `PIN_WIRE_R` 以内，只在「切向偏移 ≤ `PIN_WIRE_TAN`」的端点里取最近的一个：
     同一颗元件上的两个引脚各自找自己的端点，绝不抢（一对一）。
+
+    `other`（可选，与 `ends` 逐位对齐）= 每个候选端点所在线段的**另一端**；
+    `PIN_WIRE_SELF=1` 时，另一端落在这颗元件框内（外扩 `PIN_WIRE_SELF_PAD`）的候选
+    直接排除 —— 那是本件自己的引线，它的外端不是导线端点。
     """
     cx, cy = (bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0
     if free is not None and len(free) and bool(np.any(free)):
-        cand = ends[free]
+        idxs = np.nonzero(free)[0]
     elif free is not None and len(free) and PIN_WIRE_SEGLEN > 0:
-        cand = ends[:0]                       # 没有真导线端点 ⇒ 一个都不吸
+        idxs = np.zeros(0, int)               # 没有真导线端点 ⇒ 一个都不吸
     else:
-        cand = ends
-    if not len(cand) and PIN_WIRE_SEGLEN <= 0:
-        cand = ends
+        idxs = np.arange(len(ends), dtype=int)
+    if not len(idxs) and PIN_WIRE_SEGLEN <= 0:
+        idxs = np.arange(len(ends), dtype=int)
+    cand = ends[idxs] if len(idxs) else ends[:0]
+    own = None
+    if PIN_WIRE_SELF and other is not None and len(idxs) and len(other) == len(ends):
+        own = np.asarray(other, np.float64)[idxs]
     used = set()
     out = []
     for p in pins:
@@ -907,6 +937,11 @@ def _snap_to_wire_end(pins, bb, ends, free=None):
         for i, e in enumerate(map(tuple, cand)):
             if i in used:
                 continue
+            if own is not None:
+                ox, oy = float(own[i][0]), float(own[i][1])
+                if (bb[0] - PIN_WIRE_SELF_PAD <= ox <= bb[2] + PIN_WIRE_SELF_PAD and
+                        bb[1] - PIN_WIRE_SELF_PAD <= oy <= bb[3] + PIN_WIRE_SELF_PAD):
+                    continue
             dx, dy = e[0] - p[0], e[1] - p[1]
             d = math.hypot(dx, dy)
             if d > bd or d < PIN_WIRE_MIN:
@@ -949,11 +984,15 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
             pass
     pts = sample_segments(segments, sample_step)
     # ★ 两脚元件「引脚点落到导线端点」的候选端点（`STAGE1_PIN_WIRE_END`）。
-    _we_pos = _we_free = None
+    _we_pos = _we_free = _we_other = None
     if (PIN_WIRE_END or PIN_WIRE_END_IC) and len(segments):
         _ends = np.asarray(
             [[float(s[0][0]), float(s[0][1])] for s in segments] +
             [[float(s[-1][0]), float(s[-1][1])] for s in segments], np.float64)
+        # 与 `_ends` 逐位对齐的「另一端」（前半是起点 ⇒ 另一端是终点，反之亦然）。
+        _others = np.asarray(
+            [[float(s[-1][0]), float(s[-1][1])] for s in segments] +
+            [[float(s[0][0]), float(s[0][1])] for s in segments], np.float64)
         if len(_ends):
             _d2 = ((_ends[:, None, :] - _ends[None, :, :]) ** 2).sum(-1)
             # 只留「真导线」的端点：线段够长（符号里的小笔画都短），
@@ -965,6 +1004,7 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
             _glen = np.asarray(_glen, np.float64)
             _ok = _glen >= PIN_WIRE_SEGLEN
             _we_pos = _ends
+            _we_other = _others
             _deg1 = (_d2 <= 4.0).sum(1) == 1
             _we_free = (_deg1 if PIN_WIRE_FREE else np.ones(len(_ends), bool)) & \
                 np.concatenate([_ok, _ok])
@@ -1011,7 +1051,8 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
                 PIN_LEG_COLOR_N["n"] += 1
         # IC 的引脚间距只有 ~10px，不能用 12px 的合并半径（会把邻脚并掉）
         _cr = CLUSTER_IC if _is_ic else cluster_r
-        pins = pins_from_touch(bb, pts, touch_tol, _cr, _leg)
+        _tt = TOUCH_TOL_IC if (_is_ic and TOUCH_TOL_IC > 0) else touch_tol
+        pins = pins_from_touch(bb, pts, _tt, _cr, _leg)
         _ev = {"touch": len(pins), "prior": 0, "stub": 0}
         if not pins and use_prior:
             pins = pins_from_prior(bb, c.get("type") or "")
@@ -1048,8 +1089,14 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
                     pins = _merge_stubs(pins, bb, _ink_s, _od)
                     _ev["stub"] = max(0, len(pins) - _b4)
         # 逐侧腿长收尾（§5.340.3）：stub/merge 补出的点仍按标量腿长摆，这里统一重摆。
-        if PIN_LEG_SNAP and _is_ic and PIN_LEG_BOX:
-            pins = _snap_leg(pins, bb, PIN_LEG_BOX)
+        if PIN_LEG_SNAP and _is_ic:
+            # `=1` 用常数 4 元组；`=2` 用逐侧**量得**的腿长（`_leg`）。同一侧只可能有一个
+            # 腿长（物理事实），所以重摆后再按 3px 去重会把「同一行两个槽」并成一个。
+            _lgS = _leg if PIN_LEG_SNAP >= 2 else PIN_LEG_BOX
+            if _lgS:
+                if not isinstance(_lgS, (tuple, list)) or len(_lgS) != 4:
+                    _lgS = (_lgS,) * 4
+                pins = _snap_leg(pins, bb, _lgS)
         # 去重（同一位置只留一个），再截断
         dedup: List[Tuple[float, float]] = []
         for p in pins:
@@ -1104,7 +1151,7 @@ def find_pins(components, segments, texts=None, touch_tol: float = TOUCH_TOL,
                     dedup = _snapped
                     _ev["lead"] = _nsnap
         if PIN_WIRE_END and (not _is_ic or PIN_WIRE_END_IC) and _we_pos is not None and dedup:
-            dedup = _snap_to_wire_end(dedup, bb, _we_pos, _we_free)
+            dedup = _snap_to_wire_end(dedup, bb, _we_pos, _we_free, _we_other)
             _ev["wire_end"] = len(dedup)
         # ★ IC 脚的「腿长补齐」：没挂到导线端点的脚只有常数腿长（10~12px），而 new2026
         #   的 GT 把脚点画在框边外 19~20px ⇒ 沿所在边外法线推出去（`STAGE1_PIN_LEG_FILL`）。

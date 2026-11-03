@@ -28,11 +28,11 @@ import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 try:                                    # 作为包导入（python -m stage1 / submission\run.py）
-    from envflag import env_on      # 「假值词表」唯一实现，见 eda-pcb/envflag.py
+    from envflag import env_on, env_raw, FALSE_WORDS   # 假值词表唯一实现，见 eda-pcb/envflag.py
 except ImportError:                     # 直接跑脚本（python eda-pcb\stage1\pipeline.py 自检）：
     import sys as _sys, os as _os       # `sys.path[0]` 是本目录，得把 eda-pcb\ 补上
     _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-    from envflag import env_on
+    from envflag import env_on, env_raw, FALSE_WORDS
 
 import cv2
 import numpy as np
@@ -81,6 +81,20 @@ def _no_delete_dump() -> dict:
 # 全部引脚 —— 引脚权重 0.25，一张图直接从 25 分掉到 0。实测代价 0.02 s/张。
 BIGIC_ON = env_on("STAGE1_BIGIC", "1")
 
+# ★★ sym16 小符号检测器（`stage1/sym16.py`）。**两条臂都默认关**，等 A/B 定档：
+#   `STAGE1_SYM16`     = S1 新增提案（只追加「与既有件都不重复」的无名新件）
+#   `STAGE1_SYM16_FIX` = S2 已有件精修（用同位置的 sym16 同型框换 `bbox_img`/`bbox_json`）
+#   §5.532: `STAGE1_SYM16_FIX` 默认已翻 1 —— 13 页 82.2543 -> 82.3402 (+0.0859)，
+#   池 28.5735 -> 28.6670 (+0.0934, 5 升/1 降/24 平)，comp 轴 3.9109 -> 3.8292。
+#   只改已有件的 bbox（不动 key/Name/value、不增删件）；`STAGE1_SYM16` 仍默认 0
+#   （13 页 -0.25 / 加件这条路历史上每次都是负的）。
+# 为什么值得接：判分机 `metrics.py:351` 的坐标匹配只让 GT 的 `∅NNN` 件参与，
+# 所以「多找的符号」只在 gnd/v/端口族上有收益（详见 `stage1/sym16.py` 顶注）；
+# 而 `bbox_mismatch` 那部分分只能靠「改已有件的框」拿到。两个开关都不设时本模块
+# 连 import 都不会发生 ⇒ 13 页产物逐位不变。
+SYM16_ON = env_on("STAGE1_SYM16", "0")
+SYM16_FIX_ON = env_on("STAGE1_SYM16_FIX", "1")
+
 # ★★ 引脚**列枚举**（`stage1/pincol.py`）。默认 **on**。
 # 为什么必须有：`pins.build_pins` 的主判据是「上游导线触到框边」，所以**没接线
 # 的引脚一个都看不见**；官方 `pin_f1` 占 25%，220 张实测只拿到 0.92 分
@@ -121,6 +135,109 @@ PIN_COLOR_KEEP_MISS = env_on("STAGE1_PIN_COLOR_KEEP_MISS", "0")
 MONO_FRAME_PINS_ON = env_on("STAGE1_MONO_FRAME_PINS", "0")
 PIN_DIRECTION_GUARD = env_on("STAGE1_PIN_DIRECTION_GUARD", "0")
 PIN_ATTACHMENT_GUARD = env_on("STAGE1_PIN_ATTACHMENT_GUARD", "0")
+# ★★ 逐脚证据判决的**消费端**（两个门控、默认都 0 = 逐位历史行为）。
+#   `stage1/pin_evidence.py` 只判决、不动引脚表（模块头一句就是
+#   "it never moves or removes an output pin"），所以「筛掉它判不过的槽点」这件事
+#   必须由 `prune_pin_evidence` 在这里做。**只筛不搬**：一个坐标都不改
+#   （§5.508 实测把点重摆到腿长/关掉导线端点吸附/腿长唯一化，case11 掉 4.5~7.3 分）。
+#   13 页离线实测（`work\_pev.py`，位置口径 pin F1）：
+#     R0 现状 412 槽点 → 0.4478；只留 `trust=="trusted"` 306 槽点 → 0.5433
+#     （`trust!="trusted"` 的 169 条里 5px 命中 **0** 条 = 全是外推/导线端点吸附）。
+PINEV_TRUST_ON = env_on("STAGE1_PINEV_TRUST", "1")
+#   在 A 之上再做「同侧同行去重」：同一 cid、同一 `edge`、切向落进同一
+#   `pincol.MERGE_SNAP` 桶的多条槽点只留 `normal_ink_hits` 最大的一条
+#   （相等留先出现者）。桶宽直接复用 `MERGE_SNAP`，不引入新常数。
+PINEV_ROW_ON = env_on("STAGE1_PINEV_ROW", "0")
+# ★★ 孪生槽点合并（`STAGE1_TWIN_MERGE`，默认 `"0"` = 关）：stage1 会给同一 `cid`
+#   产出两个几乎重合的槽点（13 页 35 对，其中 3 对距离恰好 0.0；`work\_twins.py <tag> 4.0`）。
+#   孪生槽让「号↔槽」失去 2D 分辨力（§5.540：全局指派被这件事拖回最近邻贪心）。
+#   档位：
+#     1 = 只合并**坐标完全相同**（距离恰好 0.0）的对 —— 不引入任何新常数、零风险；
+#     2 = 合并同一 `cid` 内**任意两侧**、距离 < `pincol.MERGE_SNAP` 的对
+#         （桶宽复用既有常数，`STAGE1_PINC_SNAP`，默认 5.0；不新增数值常数）。
+#   保留 `(trust 等级, confidence, normal_ink_hits)` 字典序高者，同分留下标小者；
+#   锁步删 `comp_pins[cid]` 与 `pin_evidence[cid]`，并由 `prune_pin_evidence` 重编号 nets。
+#   ⚠️ 同族先例 `STAGE1_PINEV_ROW=1`（同 edge 切向 5px 桶）13 页 **−1.67** ⇒ 必须默认关、
+#   且两档分开测（`work\_cv.py tw1/tw2 --env STAGE1_TWIN_MERGE=n`）。
+_twin_raw = env_raw("STAGE1_TWIN_MERGE", "0").lower()
+TWIN_MERGE = 0 if _twin_raw in FALSE_WORDS else (2 if _twin_raw == "2" else 1)
+# ★★ 环境门控臂 A1/A2（两个都默认关 ⇒ 不设 env 时逐位等于现状）。
+#   池（`200_train_cases` 30 案池）上 `std::type=box` 的 IC 件**一个引脚都不交付**，
+#   根因是 `pintrace.py:42 INK = 170` 是**绝对**灰度阈值：池里 KiCad 风格渲染的图形层
+#   （本体矩形灰 171、引脚腿 175/189）刚好被它挡在门外（纸底 243），只有文字能看见；
+#   于是 `pin_evidence._frame_edge` 四侧 `cov=0.000` ⇒ `calibrated=False` ⇒ `_one_pin`
+#   落到 `actual_frame_unconfirmed` ⇒ trust 恒 `uncertain` ⇒ 上面默认开的
+#   `prune_pin_evidence`（`STAGE1_PINEV_TRUST=1`）把该件全部引脚删光。
+#   A1：墨迹阈值改成**页面自适应** `max(pintrace.INK, Otsu)` —— 只放宽不收紧，
+#   所以 13 页这类「Otsu < 170」的页面构造上与历史逐位相同。
+INK_ADAPT_ON = env_on("STAGE1_INK_ADAPT", "0")
+#   A2：在**证据层**做单调并集（严格掩膜 + 自适应掩膜各算一次逐脚证据，逐脚取
+#   trust 更高的一条）。取高是单调算子 ⇒ 当前 trusted 的脚结构上不可能被降级。
+#   A2 用的两个掩膜都从原图现算，**不依赖 A1**（两臂解耦）。
+PINEV_UNION_ON = env_on("STAGE1_PINEV_UNION", "0")
+# `build_pin_evidence` 的 trust 取值只有这三个（见 `pin_evidence._one_pin`）：
+# 并集按这个偏序取高，同级再比 confidence。
+_TRUST_RANK = {"trusted": 2, "uncertain": 1, "rejected": 0}
+
+
+def _otsu_ink_threshold(gray):
+    """`max(pintrace.INK, Otsu)`；退化图退回 `pintrace.INK`（常数，即历史行为）。
+
+    `max` 保证**只放宽不收紧**：Otsu 低于常数的页面（13 页那批）阈值原样 170，
+    产物与历史逐位相同。`0.5` 是**退化守卫不是调参**：墨迹占比过半说明这张图
+    不是「纸底 + 墨」的两峰分布，Otsu 的谷已经失去意义，此时退回常数阈值。
+    """
+    base = int(ray_mod.INK)
+    try:
+        otsu = float(cv2.threshold(gray, 0, 255,
+                                   cv2.THRESH_BINARY + cv2.THRESH_OTSU)[0])
+    except Exception:                                  # noqa: BLE001
+        return base
+    if not math.isfinite(otsu):
+        return base
+    threshold = max(base, int(otsu))
+    if float((gray < threshold).mean()) > 0.5:         # 退化守卫：墨迹占比过半
+        return base
+    return threshold
+
+
+def _ink_mask(gray, adapt=None):
+    """灰度 → 二维墨迹掩膜；`adapt=None` 时取门控 `STAGE1_INK_ADAPT`。
+
+    门控关闭时 `(gray < int(pintrace.INK))` 就是历史那一行，逐位不变。
+    """
+    enabled = INK_ADAPT_ON if adapt is None else bool(adapt)
+    threshold = _otsu_ink_threshold(gray) if enabled else int(ray_mod.INK)
+    return (gray < threshold).astype(np.uint8)
+
+
+def _union_pin_evidence(strict_records, adapt_records):
+    """逐脚取 trust 更高的一条记录（同级取 confidence 高）。
+
+    **不增删条目、不改坐标**：返回的每个 cid 的列表长度、顺序与 `point_img` 都与
+    输入一致（`prune_pin_evidence` 靠这个下标与 `comp_pins` 锁步删）。两个掩膜
+    看见的是同一份 `comp_pins`，所以 `point_img` 必然相同；其余字段（`frame_coverage`
+    / `normal_ink_hits` / `reason`）取自**胜出的那一条整条记录**，不跨记录拼接。
+    """
+    merged = {}
+    for cid, records in (strict_records or {}).items():
+        other = (adapt_records or {}).get(cid)
+        if (not isinstance(records, list) or not isinstance(other, list)
+                or len(other) != len(records)):
+            merged[cid] = records          # 对不齐就原样退回：宁可不动，不许错位
+            continue
+        picked = []
+        for strict_rec, adapt_rec in zip(records, other):
+            if not isinstance(strict_rec, dict) or not isinstance(adapt_rec, dict):
+                picked.append(strict_rec)
+                continue
+            strict_key = (_TRUST_RANK.get(str(strict_rec.get("trust")), -1),
+                          float(strict_rec.get("confidence") or 0.0))
+            adapt_key = (_TRUST_RANK.get(str(adapt_rec.get("trust")), -1),
+                         float(adapt_rec.get("confidence") or 0.0))
+            picked.append(adapt_rec if adapt_key > strict_key else strict_rec)
+        merged[cid] = picked
+    return merged
 
 
 def apply_color_pins(components, pins, pin_synth, color_records):
@@ -324,6 +441,139 @@ def overlay_mono_evidence(evidence, audit, pins):
     return result
 
 
+def prune_pin_evidence(pins, evidence, nets, trust_only=False, row_dedup=False,
+                       twin_merge=0):
+    """用逐脚证据判决**筛掉**引脚槽点，并把它在下游的三张表同步过滤。
+
+    `pins` 与 `evidence` 逐位对齐（`build_pin_evidence` 是
+    `[_one_pin(point) for point in pins[cid]]`，两个 overlay 也都按 index 写回），
+    所以这里**只按下标同步过滤，绝不按坐标猜**。删脚会让下标整体前移，因此
+    `nets[*]["pins"]` 里的 `[comp_id, pin_index]` 必须跟着**重编号**
+    （`stage2/assemble.py` 拿它当 `num_of`/`pin_pk` 的键，不重编号就指到隔壁脚上）。
+    删脚不改其余脚的键（脚号来自每脚读数，不是序号）。
+
+    **只作用于 `evidence` 里有键的 cid**，其余元件逐位不变；长度对不齐的 cid
+    一律跳过 = 退回历史行为（宁可不动，也不许把两张表错位）。
+
+    `trust_only`：丢掉 `trust != "trusted"` 的槽点。
+    `row_dedup`：同一 cid、同一 `edge`、切向落进同一 `pincol.MERGE_SNAP` 桶的
+    槽点只留 `normal_ink_hits` 最大的一条（相等留先出现者）。
+    `twin_merge`：同一 cid 内几乎重合的「孪生槽点」只留一条。`1` = 只合并**距离恰好
+    0.0**（同一坐标，不可能合并掉两只真脚）；`2` = 合并**任意两侧**、距离
+    < `pincol.MERGE_SNAP` 的对。保留 `(_TRUST_RANK[trust], confidence,
+    normal_ink_hits)` 字典序最大者，同分留下标小的；坐标取 `pins` 的原值
+    （`evidence.point_img` 只有 1 位小数）。
+
+    返回 `(pins, evidence, nets, stat)`；`stat` 只用于打点（`trust`/`row`/`twin`
+    条数、`comps` 件）。
+    """
+    if not (trust_only or row_dedup or twin_merge):
+        return pins, evidence, nets, {}
+    snap = float(getattr(pincol_mod, "MERGE_SNAP", 0.0) or 0.0)
+    twin_level = 0 if not twin_merge else (1 if int(twin_merge) <= 1 else 2)
+    keep_at = {}                       # cid -> {旧下标: 新下标}（只收真被筛过的件）
+    stat = {"trust": 0, "row": 0, "twin": 0, "comps": 0}
+    for cid, records in (evidence or {}).items():
+        point_list = (pins or {}).get(cid)
+        if not isinstance(point_list, list) or not isinstance(records, list):
+            continue
+        if len(records) != len(point_list):
+            continue
+        keep = [True] * len(records)
+        if trust_only:
+            for i, rec in enumerate(records):
+                if isinstance(rec, dict) and rec.get("trust") != "trusted":
+                    keep[i] = False
+                    stat["trust"] += 1
+        if row_dedup and snap > 0.0:
+            winner = {}                # (edge, 桶号) -> (normal_ink_hits, 先出现的下标)
+            for i, rec in enumerate(records):
+                point = rec.get("point_img") or [] if isinstance(rec, dict) else []
+                if not keep[i] or len(point) != 2:
+                    continue
+                edge = rec.get("edge")
+                tangent = point[1] if edge in ("left", "right") else point[0]
+                key = (edge, int(round(float(tangent) / snap)))
+                hits = int(rec.get("normal_ink_hits") or 0)
+                if key not in winner or hits > winner[key][0]:
+                    winner[key] = (hits, i)
+            best = {i for _hits, i in winner.values()}
+            for i in range(len(records)):
+                if keep[i] and i not in best:
+                    keep[i] = False
+                    stat["row"] += 1
+        if twin_level and (twin_level == 1 or snap > 0.0):
+            # 档 1 的判据是「恰好 0.0」，不是「小于某个小常数」⇒ 不新增阈值。
+            limit = snap if twin_level == 2 else 0.0
+            inclusive = twin_level == 1
+            order = []                 # 按「该留下的优先」排序: (排名键, 下标, 坐标)
+            for i, rec in enumerate(records):
+                if not keep[i] or not isinstance(rec, dict):
+                    continue
+                point = point_list[i]
+                if not (isinstance(point, (list, tuple)) and len(point) == 2):
+                    point = rec.get("point_img") or []
+                if len(point) != 2:
+                    continue
+                try:
+                    point = (float(point[0]), float(point[1]))
+                    key = (-_TRUST_RANK.get(str(rec.get("trust")), -1),
+                           -float(rec.get("confidence") or 0.0),
+                           -float(rec.get("normal_ink_hits") or 0.0), i)
+                except (TypeError, ValueError):
+                    continue
+                order.append((key, i, point))
+            order.sort()
+            survivors = []
+            for _key, i, point in order:
+                twin = False
+                for kept_point in survivors:
+                    d = math.hypot(point[0] - kept_point[0], point[1] - kept_point[1])
+                    if d < limit or (inclusive and d <= limit):
+                        twin = True
+                        break
+                if twin:
+                    keep[i] = False
+                    stat["twin"] += 1
+                else:
+                    survivors.append(point)
+        if all(keep):
+            continue
+        index_map, kept_points = {}, []
+        for i, ok in enumerate(keep):
+            if ok:
+                index_map[i] = len(kept_points)
+                kept_points.append(point_list[i])
+        keep_at[cid] = index_map
+        pins[cid] = kept_points
+        evidence[cid] = [records[i] for i, ok in enumerate(keep) if ok]
+        stat["comps"] += 1
+    if not keep_at:
+        return pins, evidence, nets, stat
+    new_nets = []
+    for net in nets or []:
+        refs = net.get("pins") if isinstance(net, dict) else None
+        if not refs:
+            new_nets.append(net)       # 没有引脚引用的 net 一个字节都不动
+            continue
+        kept_refs = []
+        for ref in refs:
+            try:
+                cid, old_index = ref[0], int(ref[1])
+            except (TypeError, ValueError, IndexError):
+                kept_refs.append(ref)
+                continue
+            index_map = keep_at.get(cid)
+            if index_map is None:
+                kept_refs.append([cid, old_index])
+            elif old_index in index_map:
+                kept_refs.append([cid, index_map[old_index]])
+        # 即使一条引用都没被删，下标也可能整体前移 ⇒ 一律用重编号后的新列表
+        shaped = dict(net)
+        shaped["pins"] = kept_refs
+        new_nets.append(shaped)
+    return pins, evidence, new_nets, stat
+
 def _pt_seg_dist(p, a, b) -> float:
     px, py = p
     ax, ay = a
@@ -502,8 +752,15 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
             # 只在第二遍出现、和第一遍配不上的框：补进来（保住 2560 掉的召回）
             for _c in _c2:
                 _bb = _c.get("bbox_img")
-                if not _bb or any(_iou(_bb, comps[_j].get("bbox_img") or [0, 0, 0, 0]) >= _dual_new_lo
-                                  for _j in range(len(comps))):
+                _ious = [(_j, _iou(_bb, comps[_j].get("bbox_img") or [0, 0, 0, 0]))
+                         for _j in range(len(comps))] if _bb else []
+                if os.environ.get("STAGE1_DUAL_DBG2"):
+                    _mx = max(_ious, key=lambda t: t[1]) if _ious else (-1, 0.0)
+                    print("[dbg dual2] %s %s iou_max=%.3f vs %s (n=%d)"
+                          % (_c.get("id"), _c.get("type") or _c.get("name"), _mx[1],
+                             (comps[_mx[0]].get("id"), comps[_mx[0]].get("type"))
+                             if _mx[0] >= 0 else None, len(comps)), flush=True)
+                if not _bb or any(v >= _dual_new_lo for _, v in _ious):
                     continue
                 _new = dict(_c)
                 _new["id"] = "d%04d" % n_dual_new
@@ -532,6 +789,61 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
             traceback.print_exc()
             errs.append(f"bigic: {type(e).__name__}: {e}")
             n_big = 0
+
+    # ---- S1 `STAGE1_SYM16`（默认关）：sym16 检出的**无名新件**追加（add-only）----
+    # 落点与上面 bigic 完全相同（在 `extract_wires` / `pintrace.trace_from_boxes` 之前，
+    # 新件才会被涂掉、才会自己长出引脚射线）。只追加，绝不改任何既有件。
+    sym16_stat = {}
+    _s16_dets = None
+    if SYM16_ON or SYM16_FIX_ON:
+        # 两臂共用一次推理：S2 在 `symbox.grow` 之后才跑，但检测结果与那一步无关，
+        # 所以这里算一次、把 `dets` 传下去（否则同一页要跑两遍 1280 的权重）。
+        try:
+            from stage1 import sym16 as sym16_mod
+            _s16_dets = sym16_mod.raw_dets(bgr, conf)
+        except Exception as e:                                     # noqa: BLE001
+            traceback.print_exc()
+            errs.append(f"sym16.det: {type(e).__name__}: {e}")
+    if SYM16_ON and _s16_dets is not None:
+        try:
+            sym16_stat = sym16_mod.add_components(bgr, comps, hyps, conf=conf, dets=_s16_dets)
+        except Exception as e:                                     # noqa: BLE001
+            traceback.print_exc()
+            errs.append(f"sym16: {type(e).__name__}: {e}")
+            sym16_stat = {}
+
+    # ★ `STAGE1_SYMBOX_EARLY`（§5.503，默认 `port`）：把 `symbox.grow` 提到**引脚/网络装配之前**。
+    #   历史上它在文档构建前才跑，于是 `pins` 是按**小框**摆的；`grow` 把符号框撑到整颗之后，
+    #   13 页 131 对端口符号里 **63% 的脚落进了框内**（GT 是 **0%**，中位在框外 5.3px）。
+    #   提前跑 = 引脚从一开始就按长过的框摆（也顺带改了 `occlude` 的框，会动导线骨架）。
+    #   档位证据（13 页，基线 `chk501` 81.05 / 79.82 / judge 77.43）：
+    #     `port`（默认）= 只提前 `PORT_TYPES`（net_input/net_output/net_short/net_bidirection）
+    #        ⇒ 81.17 / 79.94（**+0.12**）/ judge 77.57（**+0.14**），PASS，逐页仅 case1 +0.71、
+    #        case12 +1.14，其余 11 页 +0.00；池 30 案 Δ +0.06（扣 0091 抖动后 ≈0）。
+    #     `1`（全部符号）= 80.07（+0.25）/ judge 77.71（+0.28），但 case12 −0.75、case2 −0.43
+    #        ⇒ 收益来自 `gnd`/`v` 也提前长框且**导线侧**的框一起变（WARN）。
+    #     `1 + PREOCC + PRERAY`（导线侧冻结在长框之前）= 81.05 / 79.82（+0.01）⇒ 那部分收益全在导线侧。
+    _sym_early = False
+    _pre_bb = {}
+    from . import symbox as _symbox                                  # noqa: PLC0415
+    _sym_mode = str(os.environ.get("STAGE1_SYMBOX_EARLY", "port") or "port")
+    if _sym_mode not in ("0", "", "off"):
+        _only_port = _sym_mode.lower().startswith("port")
+        # `STAGE1_EARLY_PREOCC` / `_PRERAY`：把长框之前的 bbox 存一份，供导线遮挡/射线继续用
+        # （= 只让引脚看到长过的框，导线侧行为逐位不变）。`all` 档当年在 case12 掉 0.75 分
+        # 就是导线侧被改了框，这条开关用来把两件事拆开。
+        if (str(os.environ.get("STAGE1_EARLY_PREOCC", "0")) not in ("0", "")
+                or str(os.environ.get("STAGE1_EARLY_PRERAY", "0")) not in ("0", "")):
+            _pre_bb = {str(c.get("id")): list(c.get("bbox_img"))
+                       for c in comps if c.get("bbox_img")}
+        try:
+            _sub = ([c for c in comps
+                     if str(c.get("type") or "").strip().lower() in _symbox.PORT_TYPES]
+                    if _only_port else comps)
+            _sb0 = _symbox.grow(bgr, _sub)
+            _sym_early = not _only_port
+        except Exception as _e:                                      # noqa: BLE001
+            errs.append(f"symbox_early: {type(_e).__name__}: {_e}")
 
     # 文字**定位**属第一阶段（用户 m03802 第三条指令），内容识别才属第二阶段。
     # 两个用途：①涂掉再跑骨架 —— 文字是导线假阳性的最大来源；②给导线端点当锚点，
@@ -601,6 +913,8 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         #   恒为 17/662，`min_extent`/`max_axis_dev`/`_is_frame` 一条框内边都没吃掉）。
         _occ_mode = os.environ.get("STAGE1_OCC_MODE", "all").strip().lower()
         _occ_boxes = [c["bbox_img"] for c in comps]
+        if _pre_bb and str(os.environ.get("STAGE1_EARLY_PREOCC", "0")) not in ("0", ""):
+            _occ_boxes = [_pre_bb.get(str(c.get("id"))) or c["bbox_img"] for c in comps]
         if _occ_mode in ("keep", "none", "off", "0", ""):
             _occ_boxes = []
         elif _occ_mode == "big":
@@ -637,8 +951,11 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         if do_rays and do_wires:
             t1 = time.time()
             gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-            ink = (gray < ray_mod.INK).astype(np.uint8)
+            # 墨迹掩膜：门控 `STAGE1_INK_ADAPT` 关着时就是历史那一行 `gray < INK`。
+            ink = _ink_mask(gray)
             cboxes = [c["bbox_img"] for c in comps]
+            if _pre_bb and str(os.environ.get("STAGE1_EARLY_PRERAY", "0")) not in ("0", ""):
+                cboxes = [_pre_bb.get(str(c.get("id"))) or c["bbox_img"] for c in comps]
             # **不要加 anchors / clip_anchors / require_anchor**：修好连通性评测器之后
             # 重测，锚点截断在两个尺子上都是净亏 ——
             #   臂                覆盖 F1   连通 R   连通 F1
@@ -674,7 +991,7 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
             # ★ 墨迹掩膜同时喂给「引脚提取」：`STAGE1_PIN_STUB=1` 时用它补几何引脚桩，
             # 因为「导线触到框边」这条主判据看不见**没接线**的引脚（220 张实测
             # 覆盖率只有 0.45、`point@5px` 仅 16.8%）。
-            _ink = (cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) < ray_mod.INK).astype(np.uint8)
+            _ink = _ink_mask(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY))
             # ★ 符号色掩膜（`STAGE1_PIN_LEG_COLOR`）：引线是暗红、导线是绿色，颜色能
             #   把两者分开，用来逐元件量引线长度（见 `stage1/pins.py::_color_leg_box`）。
             _sym = None
@@ -691,7 +1008,8 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
             if PINC_ON:
                 try:
                     pincol_cols = pincol_mod.enumerate_pins(
-                        bgr, comps, texts, ink=_ink)
+                        bgr, comps, texts, ink=_ink, sym=_sym,
+                        segs=w.get("segments"))
                     comp_pins, pin_synth, pincol_stat = pincol_mod.merge_into(
                         comp_pins, pincol_cols)
                 except Exception as e:
@@ -772,7 +1090,11 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                 # 抬全局容差会把电容两块极板并成一坨（见 `stage1\labels.py` 注释）。
                 bridges=([(t.get("bbox_img") if isinstance(t, dict) else t)
                           for t in (texts or [])
-                          if (t.get("bbox_img") if isinstance(t, dict) else t)] or None))
+                          if (t.get("bbox_img") if isinstance(t, dict) else t)] or None),
+                # ★ 放宽半径时的方向判据（`STAGE1_JOIN_NRM`）需要每个元件的外框，
+                #   用来算「引脚的外法向」。默认不传也能跑（该判据默认关）。
+                boxes={c.get("id"): c.get("bbox_img") for c in (comps or [])
+                       if c.get("id") and c.get("bbox_img")})
         except Exception as e:
             traceback.print_exc()
             # ★ 审计项②：这一条是**最贵**的吞异常 —— 它把 pin(0.25)+net(0.35)
@@ -787,8 +1109,18 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
         #   `ink` 用二维墨迹掩膜（`_ink`），`texts` 只当**软证据**（文字掩膜），
         #   绝不擦像素；最后用 `overlay_color_evidence` 把彩色那批记录对齐回来。
         try:
-            pin_evidence = evidence_mod.build_pin_evidence(
-                comps, comp_pins, _ink, texts)
+            if PINEV_UNION_ON:
+                # 两个掩膜都**从原图现算**，不借用 `_ink`：严格掩膜恒为
+                # `pintrace.INK`，自适应掩膜按 Otsu 现算 ⇒ A2 与 A1 完全解耦。
+                _ev_gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+                pin_evidence = _union_pin_evidence(
+                    evidence_mod.build_pin_evidence(
+                        comps, comp_pins, _ink_mask(_ev_gray, adapt=False), texts),
+                    evidence_mod.build_pin_evidence(
+                        comps, comp_pins, _ink_mask(_ev_gray, adapt=True), texts))
+            else:
+                pin_evidence = evidence_mod.build_pin_evidence(
+                    comps, comp_pins, _ink, texts)
         except Exception as e:
             traceback.print_exc()
             errs.append(f"pin_evidence: {type(e).__name__}: {e}")
@@ -803,6 +1135,17 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                 traceback.print_exc()
                 errs.append(f"pin_mono_overlay: {type(e).__name__}: {e}")
         pin_evidence = overlay_color_evidence(pin_evidence, color_overlays)
+        # ★★ 证据判决**反哺引脚表**（两个门控臂，默认全关 ⇒ 这一段整体不执行，
+        #   产物与历史逐位相同）。放在三个 overlay **之后**：证据与 `comp_pins`
+        #   的逐位对齐到这一行才定稿。只筛不搬 —— 坐标一个都不动。
+        if PINEV_TRUST_ON or PINEV_ROW_ON or TWIN_MERGE:
+            comp_pins, pin_evidence, nets, _pinev = prune_pin_evidence(
+                comp_pins, pin_evidence, nets,
+                trust_only=PINEV_TRUST_ON, row_dedup=PINEV_ROW_ON,
+                twin_merge=TWIN_MERGE)
+            print("[pinev] trust=%d row=%d twin=%d comps=%d pins=%d"
+                  % (_pinev["trust"], _pinev["row"], _pinev["twin"], _pinev["comps"],
+                     sum(len(v) for v in comp_pins.values())))
 
     tm = dict(tm)
     tm["wires_s"] = round(t_w, 2)
@@ -816,14 +1159,115 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
     #   20~33px ⇒ 元件通道直接判错（case1 配上对的 47 组里 15 组死在框）。
     #   用符号色连通块在窄窗口（14px）内补齐：13 张 131 个符号的合格率 89% → 98%。
     #   落在 stage1 是因为 `fusion/run.py::_assemble` 会用原始 s1_doc 重新 build_doc。
-    try:
-        from . import symbox as _symbox
-        _sb = _symbox.grow(bgr, comps)
-    except Exception as _e:                                          # noqa: BLE001
-        _sb = {"on": False, "error": f"{type(_e).__name__}: {_e}"}
+    if _sym_early:
+        _sb = {"on": True, "n": 0, "grew": 0, "early": True}
+    else:
+        try:
+            from . import symbox as _symbox
+            _sb = _symbox.grow(bgr, comps)
+        except Exception as _e:                                      # noqa: BLE001
+            _sb = {"on": False, "error": f"{type(_e).__name__}: {_e}"}
+    # ---- S2 `STAGE1_SYM16_FIX`（默认关）：已有件的框精修 ----
+    # 落点在 `symbox.grow` **之后**：`pins`（`comp_pins`）与导线骨架都已定稿，本步只改
+    # **交付框** ⇒ 影响面锁在元件通道，不动引脚/网络。合并规则见 `stage1/sym16.py`。
+    sym16_fix = {}
+    if SYM16_FIX_ON:
+        try:
+            sym16_fix = sym16_mod.refine_components(bgr, comps, conf=conf, dets=_s16_dets)
+        except Exception as _e:                                      # noqa: BLE001
+            traceback.print_exc()
+            errs.append(f"sym16_fix: {type(_e).__name__}: {_e}")
+            sym16_fix = {}
     if os.environ.get("STAGE1_SYM_BOX_DBG"):
         print("[symbox doc] %s" % [(c.get("id"), c.get("type"), c.get("bbox_img"))
                                    for c in comps if str(c.get("type") or "") in _symbox.PORT_TYPES])
+    # ★ 端口符号的脚位同样死在「`symbox.grow` 之前」（§5.503）：`pins` 是按**小框**的法向
+    #   `PIN_OUT_BOX` 摆的，`grow` 把框撑到整颗之后，脚就落进了框内（实测 13 页 131 对端口
+    #   符号：我们的脚 **63% 在框内**，GT **0% 在框内**、中位在框外 5.3px）⇒ 导线端点与端口
+    #   脚对不上，端口被挂到错的网/挂不上。这里把单脚端口符号的脚重新贴到**长过之后**的框边
+    #   外 `STAGE1_PORT_PIN_OUT` px（只改位置，不改成员关系）。`0` = 关（默认）。
+    if int(os.environ.get("STAGE1_PORT_PIN_FIX", "0") or 0) and comp_pins:
+        _pout = float(os.environ.get("STAGE1_PORT_PIN_OUT", "6") or 6.0)
+        _nfix = 0
+        for _c in comps:
+            _ct = str(_c.get("type") or "").strip().lower()
+            if _ct not in _symbox.PORT_TYPES:
+                continue
+            _pl = comp_pins.get(str(_c.get("id")))
+            _bb = _c.get("bbox_img")
+            if not _pl or len(_pl) != 1 or not _bb or len(_bb) != 4:
+                continue
+            _px, _py = float(_pl[0][0]), float(_pl[0][1])
+            _cx, _cy = (_bb[0] + _bb[2]) / 2.0, (_bb[1] + _bb[3]) / 2.0
+            _hw, _hh = max(1.0, (_bb[2] - _bb[0]) / 2.0), max(1.0, (_bb[3] - _bb[1]) / 2.0)
+            if abs(_px - _cx) / _hw >= abs(_py - _cy) / _hh:
+                _nx = (_bb[0] - _pout) if _px < _cx else (_bb[2] + _pout)
+                _ny = min(max(_py, _bb[1]), _bb[3])
+            else:
+                _ny = (_bb[1] - _pout) if _py < _cy else (_bb[3] + _pout)
+                _nx = min(max(_px, _bb[0]), _bb[2])
+            if abs(_nx - _px) + abs(_ny - _py) < 0.5:
+                continue
+            comp_pins[str(_c.get("id"))] = [[round(_nx, 1), round(_ny, 1)]]
+            _nfix += 1
+        if os.environ.get("STAGE1_PORTFIX_DBG"):
+            print("[dbg portfix] 重贴 %d 个端口的脚（外扩 %.1fpx）" % (_nfix, _pout))
+    # ★ 双尺度补检的重复件（§5.502）：`yolo_dual` 的框在**补检当时**与主检框比 IoU 只有
+    #   0.29（补检循环比较的是 `symbox.grow` 之前的小框），`symbox` 把主检的符号框长到整颗
+    #   之后两个框就几乎重合了（case12 两对 gnd，最终 IoU 0.52）⇒ 同一个符号在交付里发两颗。
+    #   所以去重必须放在 `symbox.grow` **之后**：同类型 + 至少一颗来自 `yolo_dual` +
+    #   IoU ≥ `STAGE1_DUP_IOU` 判同，留分数高的那颗（分数接近时优先留主检）。
+    #   `0` = 关（默认，逐位等于历史行为）。
+    #   `0.45` 已落默认（§5.502）：13 页上只命中 case12 的两对 gnd（各 +1.68 页分 /
+    #   official +0.13 / 判题机 +0.09），池上无可复现影响（`STAGE1_DUAL_MIN_SIDE=1400`
+    #   让补检在池的小图上根本不跑）。`0` = 关。
+    _dup_iou = float(os.environ.get("STAGE1_DUP_IOU", "0.45") or 0.0)
+    if _dup_iou > 0 and len(comps) > 1:
+        def _dup_ov(a, b):
+            ix0, iy0 = max(a[0], b[0]), max(a[1], b[1])
+            ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
+            if ix1 <= ix0 or iy1 <= iy0:
+                return 0.0
+            inter = (ix1 - ix0) * (iy1 - iy0)
+            ua = ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter)
+            return inter / ua if ua > 0 else 0.0
+
+        _dead, _ndup = set(), 0
+        for _i in range(len(comps)):
+            if _i in _dead:
+                continue
+            for _j in range(_i + 1, len(comps)):
+                if _j in _dead:
+                    continue
+                _a, _b = comps[_i], comps[_j]
+                if str(_a.get("type")) != str(_b.get("type")):
+                    continue
+                if "yolo_dual" not in (str(_a.get("source")), str(_b.get("source"))):
+                    continue
+                _ba, _bc = _a.get("bbox_img"), _b.get("bbox_img")
+                if not (_ba and _bc) or _dup_ov(_ba, _bc) < _dup_iou:
+                    continue
+                _sa = float(_a.get("score") or 0) - (0.02 if _a.get("source") == "yolo_dual" else 0)
+                _sc = float(_b.get("score") or 0) - (0.02 if _b.get("source") == "yolo_dual" else 0)
+                # 默认「留主检、丢补检」：补检的用途是补召回（`_dual_new_lo` 之上多出来的框），
+                # 坐标精化已经由 `_dual_fine_hi` 那一遍做过；两颗重合时主检的框更贴近本体。
+                if os.environ.get("STAGE1_DUP_MODE", "main") != "score":
+                    if (_a.get("source") == "yolo_dual") != (_b.get("source") == "yolo_dual"):
+                        _loser = _j if _a.get("source") != "yolo_dual" else _i
+                    else:
+                        _loser = _j if _sa >= _sc else _i
+                else:
+                    _loser = _j if _sa >= _sc else _i
+                _dead.add(_loser)
+                _ndup += 1
+                if _loser == _i:
+                    break
+        if _dead:
+            for _k in sorted(_dead):
+                comp_pins.pop(str(comps[_k].get("id")), None)
+            comps[:] = [c for _k, c in enumerate(comps) if _k not in _dead]
+        if os.environ.get("STAGE1_DUP_DBG"):
+            print("[dbg dup] 去重 %d 颗（阈值 %.2f，剩 %d 件）" % (_ndup, _dup_iou, len(comps)))
     doc = {
         "case": case.case_id,
         "image": {"path": str(case.png_path), "w": W, "h": H},
@@ -893,6 +1337,9 @@ def run_case(case, weights: str, imgsz: int = 1024, conf: float = 0.25,
                   "n_nets": len(nets),
                   "n_pins_in_nets": sum(len(n["pins"]) for n in nets),
                   "n_bigic": n_big,
+                  "n_sym16": int(sym16_stat.get("n") or 0),
+                  "sym16": sym16_stat,
+                  "sym16_fix": sym16_fix,
                   "n_errors": len(errs),
                   "auto_resolve": cnt},
     }

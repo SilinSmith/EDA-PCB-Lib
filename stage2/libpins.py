@@ -279,6 +279,18 @@ def lib_path() -> Path:
 
 # ── 惰性加载的库上下文 ────────────────────────────────────────────────────
 
+def key_uniq(ctx, comp_name: str) -> Optional[str]:
+    """`LibCtx.key_for_uniq` 的鸭子类型入口。
+
+    自检/探针里的假 ctx 只实现 `key_for`（`pinlib._selftest` 的精确档桩就是这样），
+    没有这个方法就退化成 `key_for` —— 保证「关档逐位等于原行为」在所有 ctx 上都成立。
+    """
+    fn = getattr(ctx, "key_for_uniq", None)
+    if callable(fn):
+        return fn(comp_name)
+    return ctx.key_for(comp_name)
+
+
 class LibCtx:
     """库的**惰性**句柄：`STAGE2_LIB_PINS=0` 时永远不会真的读文件。
 
@@ -348,6 +360,42 @@ class LibCtx:
         if not hits:
             return None
         return (self._index or {})["by_norm"][hits[0]][0]
+
+    def key_for_uniq(self, comp_name: str) -> Optional[str]:
+        """`key_for` 的**唯一性复核版**（`STAGE2_PINLIB_KEY_UNIQ`，默认 **1 = 开**，§5.550）。
+
+        与 `key_for` 的唯一区别：模糊档命中时要求「最优明显优于次优」，否则当作认不出。
+        阈值直接复用 `stage2/pinlib.py` 的 `FUZZY`/`FUZZY_MARGIN`（同一对常量，来源是
+        同名组模糊匹配），不新造数；关档时**逐位等于 `key_for`**。
+
+        病（R-b 识别器回归，`open_GT case6 U1`）：图上印 `78M12`，读出 `789M12`，
+        `difflib` 在 `78M12` / `79M12` 上**同分 0.909**（打平）且取了 `79M12`；两颗的
+        引脚表正好相反（`78M12=IN1/GND2/OUT3` vs `79M12=GND1/IN2/OUT3`）⇒ 下游所有
+        「按库改号/改名」的通道都会把本来读对的 `GND=2` 改坏。
+        """
+        _on = (os.environ.get("STAGE2_PINLIB_KEY_UNIQ", "1") or "0").strip().lower()
+        if _on in ("", "0", "false", "off", "none"):
+            return self.key_for(comp_name)
+        k = self.key_for(comp_name)
+        if not k or not self.load():
+            return k
+        t = str(comp_name or "").strip()
+        if t == k or norm(t) == norm(k):
+            return k                                     # 精确/归一化档：天然唯一
+        from . import pinlib as _PB                          # 延迟 import：避免环形依赖
+        import difflib
+        nt = norm(t)
+        best, second = 0.0, 0.0
+        for kk in (self._raw or {}):
+            r = difflib.SequenceMatcher(None, nt, norm(kk)).ratio()
+            if r > best:
+                best, second = r, best
+            elif r > second:
+                second = r
+        if best >= _PB.FUZZY and (best - second) >= _PB.FUZZY_MARGIN:
+            return k
+        self.stats["key_ambig"] = self.stats.get("key_ambig", 0) + 1
+        return None
 
     # -- 两条规则 --------------------------------------------------------
     def key_for_names(self, names: Sequence[str], min_hit: int = 3) -> Optional[str]:
@@ -634,6 +682,64 @@ def names_for(comp_name, num, ctx: Optional[LibCtx] = None) -> Optional[str]:
     if not key:
         return None
     return ctx.name_for_num(key, num)
+
+
+def _lev(a: str, b: str, cap: int = 3) -> int:
+    """带截断的编辑距离（只用来判 ``<= cap``，超过就以 ``cap+1`` 收工）。"""
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1
+    prev = list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        cur = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1,
+                         prev[j - 1] + (0 if a[i - 1] == b[j - 1] else 1))
+        prev = cur
+    return prev[len(b)]
+
+
+def fuzzy_key(ctx: LibCtx, comp_name, maxd: int = 2, minlen: int = 6, minpre: int = 3) -> str:
+    """**型号名模糊修复**：把 ``comp_name`` 归一到**唯一**一个库键（编辑距离 ``<= maxd``）。
+
+    五条闸（缺一即返回 ``""``，宁可不改）：
+      * ``norm(comp_name)`` 长度 ``>= minlen``（``AF 90``/``TL431`` 这种短名不做模糊）；
+      * 与库键的公共前缀 ``>= minpre``（挡住 ``AF90``→``SG90``、``TP433``→``TL431``
+        这类「长度短、距离恰好 2」的跨型号误配）；
+      * 最优距离**唯一**（并列 ⇒ 例如 ``789M12`` 对 ``78M12``/``79M12`` 同分 ⇒ 不动手）；
+      * 差异**不能只落在尾部的数字串里**（``78M12`` vs ``78M05`` 是不同型号，不是拼写错）；
+      * 只认库键本身（``ctx._raw`` 的键），不认引脚名。
+    """
+    if not LIB_PINS:
+        return ""
+    ctx.load()
+    raw = getattr(ctx, "_raw", None) or {}
+    a = norm(comp_name)
+    if len(a) < minlen or not raw:
+        return ""
+    hits = []
+    for k in raw:
+        b = norm(k)
+        if not b or len(b) < minlen:
+            continue
+        pre = 0
+        for x, y in zip(a, b):
+            if x != y:
+                break
+            pre += 1
+        if pre < minpre:
+            continue
+        d = _lev(a, b, maxd)
+        if d <= maxd:
+            hits.append((d, k))
+    if not hits:
+        return ""
+    hits.sort()
+    if len(hits) > 1 and hits[0][0] == hits[1][0]:
+        return ""
+    best = hits[0][1]
+    if a.rstrip("0123456789") == norm(best).rstrip("0123456789"):
+        return ""
+    return best
 
 
 def new_ctx(path=None) -> LibCtx:
