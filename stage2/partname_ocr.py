@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""box 件「型号名文字框」重读通道（`STAGE2_PARTNAME_OCR`，默认 `"0"` = 关）。
+"""box 件「型号名文字框」重读通道（`STAGE2_PARTNAME_OCR`，默认 `"1"` = 档 1）。
 
 **病**：型号名（`partname` 文字框的 `text`）在管线里只被读一次。`fusion` 那边的两档
 吸附（`modelset` 用引脚名集合反推、`namefix` 编辑距离 ≤2 的近失串）都只在「已经读到的
@@ -16,7 +16,9 @@
 
 **档位**（`STAGE2_PARTNAME_OCR`）：
 
-  0 —— 关（默认）。连 `cv2` 都不 import，产物与不挂这条通道时**逐字节相同**。
+  0 —— 关。连 `cv2` 都不 import，产物与不挂这条通道时**逐字节相同**。
+     （2026-11-03 扫荡翻默认：13 页 84.4791→84.5203（+0.0412，只页1 +0.54）、
+      池 29.0887→29.1158（+0.027）；单独一节记录见 `docs/RESULTS.md` §5.564。）
   1 —— 保守：只有当 `libpins.norm(PP 文本)` **精确等于**某个「形态良好」的库键时才采用，
        采用的是 **PP 读出的原字符串**（judge 比的是原串，库键可能带 `_` / 大小写差异）。
   2 —— 进取：`1` 之外再加「PP 文本与现名相同」或「`conf >= PP_CONF_HIGH` 且纯可打印
@@ -85,7 +87,7 @@ _LIB_KEYS: Optional[dict] = None
 
 def level() -> int:
     """`STAGE2_PARTNAME_OCR` 的档位；空值/非法值一律按 `0`（关）处理。"""
-    raw = os.environ.get("STAGE2_PARTNAME_OCR", "0").strip().lower()
+    raw = os.environ.get("STAGE2_PARTNAME_OCR", "1").strip().lower()
     if raw == "1":
         return 1
     if raw == "2":

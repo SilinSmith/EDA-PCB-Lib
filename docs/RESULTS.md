@@ -41945,3 +41945,78 @@ python -X utf8 work\_cv.py rereadShip --run                     # 84.4791 / 83.4
 python -X utf8 work\_cv.py rereadOff --run --env STAGE2_PARTNAME_REREAD=0   # 13/13 = stitchShip
 python -X utf8 work\_poolgate.py cvpool_reread1 --pool-ref pnDef STAGE2_PARTNAME_REREAD=1  # 29.0887
 ```
+
+## 5.564 默认关开关全量扫荡（161 个）+ `PARTNAME_OCR`/`PREFIX_SKEL` 翻默认
+
+### 5.564.1 口径
+
+§5.563 的开关普查给出 529 个唯一环境名（合并 `env_on` 路径 674），其中「默认关且无明确结论」≈112。
+按「stage2/submission/fusion + 默认 `0`/`None`/空 + 排除 DBG/PATH/DIR/OUT/CKPT/MODEL…」筛出 **161 个**候选
+（`work/_swsweep_list.json`；分布 `stage2/assemble.py` 64、`stage2/assign.py` 53、`stage2/run.py` 15、`stage2/text.py` 8…）。
+
+逐个 `--env NAME=1` 跑 **4 页子集**（`work/_cv.py <tag> --run --cases 1,11,12,13`，≈33 s/次），
+与 `swBase` 比 **交付物 sha256**（比分数更灵敏：能区分「激活了但分数没动」与「压根没走」）：
+`work/_swsweep_drive.py` + `work/_swsweep_report.py`，结果 `work/_swsweep_results.jsonl`、`work/_swsweep_sha.json`。
+
+### 5.564.2 扫荡结果（161/161，0 报错、0 超时）
+
+| 分类 | 数量 |
+|---|---|
+| 真激活（任意一页交付物 sha 变化） | **55** |
+| 完全 no-op（4 页逐字节不变） | **106** |
+| 报错 / 超时 | **0** |
+
+页命中：页1 49、页12 30、页13 30、页11 27。4 页正收益（Δ>+0.02）6 个；4 页负收益 43 个。
+**106 个死开关**名单见 `work/_deadsw106.md`（按文件分组，可直接进删除队列）。
+
+### 5.564.3 六个 4 页正收益者，逐个上 13 页
+
+| 开关 | 4 页 Δ | 13 页 Δ | 判定 |
+|---|---|---|---|
+| `STAGE2_EDGE_MERGE`（≡ `STAGE2_EDGE_UNION`，交付物逐字节同） | +1.1057 | **−0.7544** | ✗ |
+| `STAGE2_PARTNAME_OCR` | +0.1339 | **+0.0412** | ✓ 只页1 +0.54 |
+| `STAGE2_NET_PAIR_AXIS` | +0.1079 | +0.0332 | ✗ 页11 +1.55 / 页13 −1.01（churn） |
+| `STAGE2_PREFIX_SKEL` | +0.0726 | **+0.0224** | ✓ 只页1 +0.29 |
+| `STAGE2_EDGE_SPLIT_PIN` | +0.0275 | −0.0666 | ✗ |
+| （`EDGE_UNION` 与 `EDGE_MERGE` 同一收益，不可叠加） | | | |
+
+`EDGE_MERGE` 是本节最重要的反面证据：它就是 `assemble.py:796-820` 那个「共线碎边焊接」，
+注释里早写着「10GT 上是正的，但 19 张快测上是平的且多爆两个零」。13 页实测把这条警告坐实：
+页12 **+3.20**、页2 +1.44、页11 +0.89、页9 +0.89，但页7 **−9.13**、页5 −4.22、页6 −1.96；
+netH 轴损 3.814→4.653（line 4.224→4.139）。⇒ **一页爆零换几页小涨，保持默认关**。
+
+### 5.564.4 两个小正项合跑并翻默认
+
+`STAGE2_PARTNAME_OCR=1` + `STAGE2_PREFIX_SKEL=1`（tag `swCombo1`）：
+
+| 档 | mean | official | judge | comp | pin | netH | line |
+|---|---|---|---|---|---|---|---|
+| `rereadShip`（5.563 交付档） | 84.4791 | 83.4257 | 80.8125 | 3.096 | 4.387 | 3.814 | 4.224 |
+| **`sweepShip`（本节）** | **84.5427** | **83.4893** | **80.9083** | **3.055** | 4.387 | **3.792** | 4.224 |
+
+- Δ **+0.0636**；逐案只有 page1 变（65.19→66.02，+0.83），其余 **12/13 逐字节相同**。
+- 池门禁（`work/_poolgate.py swCombo1 --pool-ref pnDef STAGE2_PARTNAME_OCR=1 STAGE2_PREFIX_SKEL=1`）：
+  **29.1158**（vs `rereadShip` 29.0887 **+0.027**；vs `pnDef` 29.0966 **+0.019**），30 案全非空。
+- 翻默认后无 env 复跑 `sweepShip`：**84.5427 / 83.4893 / 80.9083**，
+  `final_results` 与 `swCombo1` **13/13 逐字节相同**。
+- 改动：`stage2/partname_ocr.py:88` 默认 `"0"`→`"1"`（档 1 保守）、
+  `stage2/assign.py:173` `env_on("STAGE2_PREFIX_SKEL", "0")`→`"1"`。
+
+### 5.564.5 跨开关同交付物（说明这些开关背后是同一段代码的两个入口）
+
+`EDGE_MERGE ≡ EDGE_UNION`、`BOXIC_LIB ≡ CPNT_LIB`、`GLOBAL_MATCH ≡ OWN_MATCH`、
+`KEEP_UNKEYED_POWER ≡ PIN_DROP_UNKEYED`。
+
+### 5.564.6 纯 churn（改了交付物、分数一毫不差）
+
+`FUSION_SYM_YSHIFT`（四页 sha 全变）、`STAGE2_PINNUM_INSIDE`（页1）、
+`STAGE2_VALUE_COLUMN` / `STAGE2_VALUE_NETNAME`（页12）—— 这类"开了只有风险"。
+
+### 5.564.7 复现
+```
+python -X utf8 work\_swsweep_drive.py                 # 161 个开关 × 4 页（断点可续）
+python -X utf8 work\_swsweep_report.py                # -> work/_swsweep_summary.md
+python -X utf8 work\_cv.py swEdgeMerge --run --env STAGE2_EDGE_MERGE=1      # 83.7247（−0.7544）
+python -X utf8 work\_cv.py sweepShip --run                                  # 84.5427 / 83.4893 / 80.9083
+python -X utf8 work\_poolgate.py swCombo1 --pool-ref pnDef STAGE2_PARTNAME_OCR=1 STAGE2_PREFIX_SKEL=1  # 29.1158
+```

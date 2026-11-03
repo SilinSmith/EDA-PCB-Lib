@@ -162,7 +162,7 @@ def _target_index(text, cid, pins, evidence):
 #   force  字母不在预期集合里也强行换成首选前缀（readability 最高，但会造键）
 PREFIX_MODE = os.environ.get("STAGE2_PREFIX", "strict")
 
-# ★ 前缀「首字母被 CRNN 吃掉」的补救（默认 **off**，`STAGE2_PREFIX_SKEL=1` 打开）。
+# ★ 前缀「首字母被 CRNN 吃掉」的补救（**默认开**，`STAGE2_PREFIX_SKEL=0` 关闭）。
 # 实测（`work\_tpA_dbg`，0050 的 `v0010` = GT `TP21` @图内(3888,1864)）：
 # 文字框 `[3888,940,3927,962]` 的位号读数是 **`P21`（conf 0.926）** —— 首字母 `T`
 # 被吃掉。`canon_designator("P21","testpoint")` 在 `strict` 下三道全过不去
@@ -170,7 +170,9 @@ PREFIX_MODE = os.environ.get("STAGE2_PREFIX", "strict")
 # ⇒ 0050 的 20 个 testpoint **全部 nameless** ⇒ key 落到 `pNNN`、与 GT 的
 # `TPn` 键交集 = 0 ⇒ 每个检出的 testpoint 都是纯 fp。
 # 打开后：读出的字母若是某个允许前缀的**后缀**（`P` ⊂ `TP`）就补回完整前缀。
-PREFIX_SKEL = env_on("STAGE2_PREFIX_SKEL", "0")
+# 2026-11-03 扫荡翻默认（`0`→`1`）：13 页 84.4791→84.5015（+0.0224，只页1 +0.29）；
+# 与 `STAGE2_PARTNAME_OCR=1` 合跑 84.5427（+0.0636）/ 池 29.1158（+0.027），见 §5.564。
+PREFIX_SKEL = env_on("STAGE2_PREFIX_SKEL", "1")
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
