@@ -41775,3 +41775,130 @@ python -X utf8 work\_textsplit_look.py "1:677,458,709,468;1:730,458,764,468"
 python -X utf8 work\_desigread.py shipAlnum 60 0.45            # 重绑 2 件，Δ0
 python -X utf8 work\_numsnap.py shipAlnum 8 16                 # 9 个「触点+文字框」在场
 ```
+
+## 5.561 符号体内脚名 → 引脚（+0.33，已翻默认）+ 引脚槽去重（8 档全负）
+
+### 5.561.1 出发点：脚名是印在图上的
+
+`work/_pinprinted.py shipAlnum 2`：GT box 脚 **191** 根，其中 **144 根（75%）的脚名既印在符号体内、也能被现管线 OCR 精确读出**（case11 `USB1` 读出 `GND/VBUS/CC2/CC1/VBUS/GND/SHELL`，`USB2` 读出 `VCC/D-/D+/GND`；case1 `USB1` 14 个名字中 13 个对）。
+`eda-pcb/data/BoxICLibrary_200cases.json` 里「名字唯一」的脚 **85 根，按名查号 85/85 全对**；当前 33 根 missing 脚里 **16 根可被唯一名查找命名**。
+
+之前「触点旁没有印脚名」的结论只对**触点旁边**成立：名字印在符号**体内**、离边上的脚点几十像素，而既有 `libpins.py` 的名字填充走「脚点附近」关联，抓不到。
+
+### 5.561.2 实现与护栏（`STAGE2_PINNAME_INBOX`，默认已改 `"1"`）
+
+`stage2/assemble.py`：常量块 `:278+`、辅助函数 `_near_lead` 之后 `:2657+`、应用块 `:3442+`（在 `STAGE2_PINNUM_SINGLEGAP` 之后、`nums=` 结构闸之前，只写 `raw[_i]["nm"]`）。
+档位：`1` = 只填空名槽；`2` = 连「已有名但与体内读数不同」也覆盖。
+子旋钮：`_TOL=3`（bbox 外扩）、`_ROW=10`（同名行带；7 会漏 7.0–7.5px 的行心差）、`_CONF=0.5`、`_MAXLEN=12`、`_ROLE=pin_name`、`_STRICT=1`（同侧同带恰好一个槽才贴）、`_GUARD=visa`（已带号的槽必须被库「号→名」唯一解正面确认）。
+调试：`STAGE2_DBG_INBOX=1/2`（`=2` 打 `[inbox-dump]`）。
+
+**无护栏版本是负的**：`case11 52.94→51.07`、`case1 65.19→64.70`，唯一改动是把 `USB2 pin_2` 贴成 `D+`（GT 是 `D-`）——贴错名 = fp+fn 双罚。三个护栏承重。
+
+### 5.561.3 结果（默认已翻，无 env 复跑 `pnameShip`）
+
+| | mean | official | judge | comp | pin | netH | line |
+|---|---|---|---|---|---|---|---|
+| `shipAlnum` | 83.8454 | 82.7920 | 80.0508 | 3.412 | 4.626 | 3.904 | 4.213 |
+| `pnameShip` | **84.1735** | **83.1201** | **80.3865** | 3.412 | **4.435** | **3.771** | 4.209 |
+
+逐案只有 case4 **+2.55**、case11 **+1.72**，其余 11 页 0.00；contract 13/13 clean。逐脚 diff 只有两根、纯加：`case4 U1 pin_1 VSS`、`case11 USB1 pin_B12 GND`；微观 +2 tp / +0 fp / −2 fn。
+`STAGE2_PINNUM_BYNAME`（名字→号）与 `STAGE2_PINNAME_FIXLIB`（库名纠正）在 13 页**逐字节 no-op**：前者因为既有规则 A `_libpins.complete_pins` 本来就是「名→号唯一映射」，后者因为命中的件名字本来就读对。
+
+### 5.561.4 引脚槽去重（`STAGE2_PIN_SLOTDEDUP`）：8 档全负，保持默认 `0`
+
+动机：case11 `USB2` 同一根脚被记成体内外两槽（`(737,370)` 与 `(712,370)` 同 y、相距 25px），`_STRICT` 因此弃权。
+
+| 档 | mean | Δ | 说明 |
+|---|---|---|---|
+| `pnameShip` | 84.1735 | — | 基线 |
+| `DEDUP=1`（SAME20/NOLIB8） | 83.7273 | **−0.4462** | 并掉相邻真脚 |
+| `DEDUP=1 SAME=3` | 83.9780 | −0.1955 | 仍丢 tp |
+| `DEDUP=2`（跨侧 8px） | 83.7273 | −0.4462 | 与 `DEDUP=1` 每位相同 ⇒ 无跨侧对 |
+| `DEDUP=1 APPLY=name` | 84.0092 | −0.1643 | case11 −2.14 |
+| `DEDUP=1 SAME=3 APPLY=name` | 84.1735 | ±0.0000 | 零收益（Pred 仍有 8/13 字节不同） |
+| `DEDUP=1 SAME=3` 证据优先 | 84.0330 | −0.1405 | pin 轴回到 4.435，损失全在网段（case2 −1.98） |
+| `PINNUM_BYNAME=2` | 84.1735 | ±0.0000 | 既有 H3，0 触发 |
+
+三条根因：① `|dy| ≤ 20` **正好等于这批图的脚距 18–20px**，先并真脚再坏名坏点；② 即使 `SAME=3`，首版「离 bbox 最远 / 行心最近」判据会搬走基线本来选对的点（13 页每页 1–4 处 tp→fp，如 `case1 U3 VDD +31px`）；③ `APPLY=name` 能消掉搬点损失，但收益同时归零。
+**修好 0 处**。`work/_sd_cmp.py` / `_sd_pindiff.py` 留档。
+
+### 5.561.5 case11 `USB2` 的真卡点：件名融合 + 库键错配
+
+该件最终 `Name` 被融合成 `SG90`，而 `SG90` 命中库里**另一颗只有 3 个脚**的件（`nums_all=3`，USB2 是 5 脚）⇒ `INBOX_GUARD='visa'` 仍拒绝给无号槽贴名/补号，只兑现了一根错号脚。
+⇒ 想再往前，必须先解「件名融合 / 库键错配」（`AF 90° WJDG` 才对得上 5 脚库），否则体内脚名永远变不成号。
+
+### 5.561.6 复现
+```
+python -X utf8 work\_pinprinted.py shipAlnum 2                  # 144/191 = 75% 印且读对
+python -X utf8 work\_cv.py pnameShip --run                      # 84.1735 / 83.1201 / 80.3865（默认档）
+python -X utf8 work\_cv.py pname1 --run --env STAGE2_PINNAME_INBOX=1
+python -X utf8 work\_cv.py pdedup5 --run --env STAGE2_PIN_SLOTDEDUP=1 --env STAGE2_PIN_SLOTDEDUP_SAME=3 --env STAGE2_PIN_SLOTDEDUP_APPLY=name
+python -X utf8 work\_pname_micro.py pnameShip pname1            # 136/26/55 vs 136/26/55 … 口径见脚本
+python -X utf8 work\_sd_pindiff.py pnameShip pdedup1            # 逐脚 修好 0 / 弄坏 N
+```
+
+## 5.562 型号名「同行多框拼接」（+0.1674，已翻默认）+ 死开关清理
+
+### 5.562.1 病：一整行型号被切成三个框，读半截串命中错库键
+
+case11 `USB2`（GT `Name` = `AF 90° WJDG`，box，5 脚）。页面图像坐标 `[615,450,720,475]` 处印的是**一整行** `AF 90° WJDG`，而 stage1 把它切成三个框：
+
+| 框 | OCR | 备注 |
+|---|---|---|
+| `[622,457,659,467]` | `AF-90` (0.66) | 真实 `AF 90` |
+| `[661,457,665,461]` | `0` (0.64) | 4×4 像素，其实是被切下来的 `°` |
+| `[670,457,710,467]` | `WMDG` (0.59) | 真实 `WJDG` |
+
+stage2 的 `partname` 取了第一个框 ⇒ `"AF 90"`；`libpins.key_for("AF 90")` → **None**。随后 fusion 的 solve 通道（记录 `_by: "solve:stage2:partname"`、`_old_text: "AF 90"`）把它改写成 **`SG90`**（conf 0.803），而 `SG90` 命中的是库里**另一颗只有 3 个脚**的伺服件 ⇒ `STAGE2_PINNAME_INBOX` 的护栏 `INBOX_GUARD='visa'` 因「3 脚库 ≠ 5 脚件」拒绝贴名/补号，`USB2` 全页只兑现 1 根脚。
+
+实测：`key_for("AF 90")` = `None`、`key_for("AF 90° WJDG")` = **精确命中**（5 脚 `1:VCC,2:D-,3:D+,4:GND,5:SHLD`）。
+
+### 5.562.2 药：同行邻居取并集框、在原图上重读一次（`STAGE2_PARTNAME_STITCH`，默认已翻 `"1"`）
+
+`stage2/partname_ocr.py` +370 行：
+- `_row()` 选同行邻居（`|cy 差| ≤ 0.6×行高`、水平间隙 `≤ 1.5×行高`、含自身 `≤ 4` 框、并集宽 `≤ 10×行高`）；
+- `_read_union()` 取**并集框**在原图上重读**一次**（不是分别 OCR 再拼串）；
+- 采用条件两条同时成立：① 读串在 **norm 级**命中库键（不走 `key_for` 的模糊档）；② 该库键脚数与触点估计（stage1 `pins[cid]` 的**原始点数** / 这些点所属**不同网络数**，两口径任一）差 ≤ `STITCH_TOL=1`；
+- 写回时优先用**库键原串**（`AF 90° WJDG` 与 GT 逐字符相同），并 `partname_ocr.carry()`，否则被 fusion 的 `comp.<cid>.partname` claim 冲掉（`assemble.py:3462-3467` 解释了原因）。
+- `_ready()` 拆成 `_img_ready()` / `_provider_ready()`：拼接通道不需要 PP provider。
+
+同批还加了通用护栏 `STAGE2_PARTNAME_LIBGUARD`（默认 `"0"`，`guard(old,new,pair)`；含 `LIBGUARD_ORPHAN=1`「原串压根没有库键时也拦」）。**实测与不开逐字节相同**（stage2 已把名字改对，fusion 侧的 `solve:stage2:partname` 走 `namefix` 的 `norm(txt) in _NORMK` 分支跳过），因此保持默认关。
+
+### 5.562.3 结果
+
+| tag | mean | official | judge | comp | pin | netH | line |
+|---|---|---|---|---|---|---|---|
+| `pnameShip`（5.561 交付档） | 84.1735 | 83.1201 | 80.3865 | 3.412 | 4.435 | 3.771 | 4.209 |
+| `stitchShip`（默认档） | **84.3409** | **83.2876** | **80.6743** | **3.234** | **4.387** | 3.814 | 4.224 |
+
+- Δ **+0.1674**；逐案只有 **case11 +2.18**（54.65→56.83：comp 0.6154→**0.6923**、pin 0.375→0.400，netH −0.016、line −0.019），其余 12 页 **逐字节相同**。
+- `USB2` 交付结果：`Name = AF 90° WJDG`（= GT），脚从 1 根变 **4 根**：`pin_1 VCC`、`pin_2 D-`、`pin_3 D+`、`pin_4 GND`（GT 的 `5:SHLD` 那个触点旁没印名字，仍缺）。
+- laziness：`STAGE2_PARTNAME_STITCH=0` 时 13/13 `_Pred.json` sha256 与 `pnameShip` 全等。
+- **池门禁**（`work/_poolgate.py stitchShip --pool-ref pnDef`）：**29.0663** vs 29.0966（Δ −0.0303）。逐案拆开：**30 案里只有 `0091` 变了（−1.72），其余 29 案逐字节相同**；`0091` 是已知的 stage1 非确定页（`runs/stage1/0091.stage1.json` 每次 run 都不同，历史抖动 ±2.24）⇒ 池上的真实影响 = **0**。
+
+### 5.562.4 死开关清理（「本质啥也没干」的模块）
+
+删掉 6 族、全部默认关且实测零/负收益的开关及其专属代码（只改 2 个文件）：
+
+| 开关 | 曾经的实测 |
+|---|---|
+| `STAGE2_PINNUM_SINGLEGAP` | 13 页 0.0000（档 1 零触发） |
+| `STAGE2_PINNUM_BYNAME` | 逐字节 no-op（规则 A 已覆盖） |
+| `STAGE2_PINNAME_FIXLIB` | 逐字节 no-op |
+| `STAGE2_PIN_SLOTDEDUP`（+4 子开关） | 8 档全负或 ±0，修好 0 处 |
+| `STAGE2_BOXPART_FUZZY` | 与基线数值完全一致 |
+| `STAGE2_LIBPIN_SYNTH` | 档 2 83.7172 < 基线 |
+
+连带删除只被它们调用的 `_slot_dedup`（167 行）、`_inbox_fixlib`、`_inbox_lev`、`libpins._lev`/`fuzzy_key`/`name_list`/`nums_of_name`。`stage2/assemble.py` **6163 → 5773 行**、`stage2/libpins.py` **1032 → 937 行**。
+等价性：`dswOff`（无 env）13/13 sha256 = `pnameShip`；`dswStitch`（`STITCH=1`）13/13 = `pnStitch1`。
+报告：`work/_deadsw_report.md`（删除清单 / grep 唯一性证明 / compile+import 输出 / 开关普查）。
+
+**开关普查**：`os.environ.get("STAGE…"/"FUSION…"/"SUBMISSION…")` 共 **529 个唯一名**（显式默认开 392 / 关 137，32 个 `*_DBG` 全关；另有 145 个经 `env_on`/`env_str` 读取，合并去重 **674**）。文档证据三分：正收益 45 / 零或负 19 / 无明确结论 455。**默认关且从未被提及 33**、**默认关且无明确结论 112**（排除 32 个 DBG 后 ≈80 个是下一轮清理候选）。
+
+### 5.562.5 复现
+```
+python -X utf8 work\_pn_stitch_probe.py                      # 13 页缓存离线表：拼接 1 颗、新增命中 9（8 颗单框）、不自洽 1
+python -X utf8 work\_cv.py stitchShip --run                  # 84.3409 / 83.2876 / 80.6743
+python -X utf8 work\_cv.py dswOff --run                      # 等价性：13/13 = pnameShip
+python -X utf8 work\_poolgate.py stitchShip --pool-ref pnDef  # 29.0663（只有 0091 变，非确定页）
+```

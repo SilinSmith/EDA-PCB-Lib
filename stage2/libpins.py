@@ -503,6 +503,75 @@ class LibCtx:
         m = (self._index or {}).get("name_by_num", {}).get(key) or {}
         return m.get(norm(num))
 
+    def key_by_nums(self, nums: Sequence) -> Optional[str]:
+        """按**已读脚号集合**反查库键：只有唯一一个库键把这些号全包含时才返回。
+
+        动机：`key_for(partname)` 只认名字，partname 被 OCR 读坏（case11 `TYPE-C 6P(073)`
+        读成 `TYPE-C-SPIO73`、`AF 90° WJDG` 读成 `AF 90`）就整颗查不到库，H1 的
+        「号→名」确认随之失效。而脚号本身常常已经读出来了（`A5/A12/B5/B9/B12/7`），
+        用它们反查是**不依赖名字**的第二条路。要求 `len(nums) >= 3` 由调用方把关。
+        """
+        if not nums or not self.load():
+            return None
+        want = set()
+        for n in nums:
+            t = str(n or "").strip()
+            if t:
+                want.add(t.upper())
+        if not want:
+            return None
+        hit = None
+        cands = []
+        for key, body in (self._raw or {}).items():
+            have = set()
+            for p in (body or {}).get("pins") or []:
+                t = str((p or {}).get("number") or "").strip().upper()
+                if t:
+                    have.add(t)
+            if want <= have:
+                cands.append((len(have), key))
+        if not cands:
+            return None
+        cands.sort()
+        # 最小超集若并列（同一个连接器的两条别名，如 `TYPE-C 6P(073)` / `tpyec母头`），
+        # 只要它们在这些号上的**号→名映射完全一致**就等价，取第一个；否则不给答案。
+        if len(want) < 4:
+            return None                     # 号太少时最小超集必然乱中（实测 2 个号就能撞上）
+        best = cands[0][0]
+        tied = [k for n, k in cands if n == best]
+        if len(tied) == 1:
+            return tied[0]
+        # 最小超集并列（同一连接器的别名条目，如 `TYPE-C 6P(073)` / `tpyec母头`）：
+        # 用「号→名唯一解」逐号表决，`None`（该键里这个号多名歧义）当通配；有冲突就放弃。
+        agg = {}
+        for key in tied:
+            for num in want:
+                v = self.name_for_num(key, num)
+                if v is None:
+                    continue
+                cur = agg.get(num)
+                if cur is None:
+                    agg[num] = v
+                elif norm(cur) != norm(v):
+                    return None
+        if not agg:
+            return None
+        score = {}
+        for key in tied:
+            score[key] = sum(1 for num in want if self.name_for_num(key, num) is not None)
+        return max(tied, key=lambda k: (score[k], -tied.index(k)))
+
+    def nums_all(self, key: str) -> List[str]:
+        """该库键下**全部引脚号**（保序、去重）。"""
+        if not key or not self.load():
+            return []
+        out = []
+        for p in ((self._raw or {}).get(key) or {}).get("pins") or []:
+            num = str((p or {}).get("number") or "").strip()
+            if num and num not in out:
+                out.append(num)
+        return out
+
     def names_of(self, key: str) -> Dict[str, int]:
         """库键下**全部**引脚名的 `norm()` 集合（规则 B 判「这个名字库里有没有」）。"""
         if not key:
@@ -682,64 +751,6 @@ def names_for(comp_name, num, ctx: Optional[LibCtx] = None) -> Optional[str]:
     if not key:
         return None
     return ctx.name_for_num(key, num)
-
-
-def _lev(a: str, b: str, cap: int = 3) -> int:
-    """带截断的编辑距离（只用来判 ``<= cap``，超过就以 ``cap+1`` 收工）。"""
-    if abs(len(a) - len(b)) > cap:
-        return cap + 1
-    prev = list(range(len(b) + 1))
-    for i in range(1, len(a) + 1):
-        cur = [i] + [0] * len(b)
-        for j in range(1, len(b) + 1):
-            cur[j] = min(prev[j] + 1, cur[j - 1] + 1,
-                         prev[j - 1] + (0 if a[i - 1] == b[j - 1] else 1))
-        prev = cur
-    return prev[len(b)]
-
-
-def fuzzy_key(ctx: LibCtx, comp_name, maxd: int = 2, minlen: int = 6, minpre: int = 3) -> str:
-    """**型号名模糊修复**：把 ``comp_name`` 归一到**唯一**一个库键（编辑距离 ``<= maxd``）。
-
-    五条闸（缺一即返回 ``""``，宁可不改）：
-      * ``norm(comp_name)`` 长度 ``>= minlen``（``AF 90``/``TL431`` 这种短名不做模糊）；
-      * 与库键的公共前缀 ``>= minpre``（挡住 ``AF90``→``SG90``、``TP433``→``TL431``
-        这类「长度短、距离恰好 2」的跨型号误配）；
-      * 最优距离**唯一**（并列 ⇒ 例如 ``789M12`` 对 ``78M12``/``79M12`` 同分 ⇒ 不动手）；
-      * 差异**不能只落在尾部的数字串里**（``78M12`` vs ``78M05`` 是不同型号，不是拼写错）；
-      * 只认库键本身（``ctx._raw`` 的键），不认引脚名。
-    """
-    if not LIB_PINS:
-        return ""
-    ctx.load()
-    raw = getattr(ctx, "_raw", None) or {}
-    a = norm(comp_name)
-    if len(a) < minlen or not raw:
-        return ""
-    hits = []
-    for k in raw:
-        b = norm(k)
-        if not b or len(b) < minlen:
-            continue
-        pre = 0
-        for x, y in zip(a, b):
-            if x != y:
-                break
-            pre += 1
-        if pre < minpre:
-            continue
-        d = _lev(a, b, maxd)
-        if d <= maxd:
-            hits.append((d, k))
-    if not hits:
-        return ""
-    hits.sort()
-    if len(hits) > 1 and hits[0][0] == hits[1][0]:
-        return ""
-    best = hits[0][1]
-    if a.rstrip("0123456789") == norm(best).rstrip("0123456789"):
-        return ""
-    return best
 
 
 def new_ctx(path=None) -> LibCtx:
