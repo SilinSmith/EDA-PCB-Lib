@@ -42053,6 +42053,7 @@ python -X utf8 work\_poolgate.py swCombo1 --pool-ref pnDef STAGE2_PARTNAME_OCR=1
 | 13 页 `_Pred.json` sha256 | **13/13 与 `sweepShip` 全等** |
 | `compileall stage2 submission stage1` | rc=0 |
 | 106 名残留 | 4 名 / 6 文件 / 22 处，全在保留清单 |
+| 池门禁（30 案 protocol4） | **29.1209**（vs swCombo1 29.1158 **+0.005**；vs pnDef 29.0966 **+0.024**），empty [] |
 
 ### 5.565.4 代码量
 
