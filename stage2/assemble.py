@@ -286,6 +286,15 @@ INBOX_GUARD = (os.environ.get("STAGE2_PINNAME_INBOX_GUARD", "visa") or "visa").s
 #   （库里唯一：`A5`/`B5`）永远进不来；而规则 A 恰恰只吃 `fill=True` 的槽、用
 #   `名字→号` 反推真号 —— 两道闸互为前提，谁也过不去。本开关只松开第一道。
 INBOX_FILL = env_on("STAGE2_PINNAME_INBOX_FILL", "0")
+# ★ `STAGE2_PIN_EDGE_SNAP`（默认 `0`）：交付前把**同一条框边上的脚**的法向坐标统一到该侧
+#   中位值（用「点到框边线段」的最近距离分边，不是 |y-y0| 这类轴距 —— 脚悬在框外 40px 时
+#   轴距会把左右脚误判成上下脚，§5.567 的头一版就是这么掉 −1.95 的）。
+#   动机：stage1 给出的脚点偶尔一根悬得特别远（`case9 U2` 右列 `pin_6` x=1018.9，同列其余
+#   两根 998~999），`pin_tol=5` 直接判 fp+fn。**沿边方向不动**（沿边吸附 ±2/±5 实测与不动
+#   逐位相同）、**不补脚**（补号实测 0 收益且易造 fp）。离线只改 Pred json：13 页
+#   84.9945 → **85.4800（+0.4855）**，只有 case4 +2.08（pin 0.917→1.000）、case9 +4.17
+#   （0.833→1.000），无页下跌。
+PIN_EDGE_SNAP = env_on("STAGE2_PIN_EDGE_SNAP", "1")
 
 
 
@@ -2807,6 +2816,63 @@ def _inbox_norm(s) -> str:
     return "".join(ch for ch in str(s or "").lower() if ch.isalnum())
 
 
+def _pt_seg_dist(px, py, x0, y0, x1, y1) -> float:
+    dx, dy = x1 - x0, y1 - y0
+    L = dx * dx + dy * dy
+    t = 0.0 if L == 0.0 else max(0.0, min(1.0, ((px - x0) * dx + (py - y0) * dy) / L))
+    return ((px - (x0 + t * dx)) ** 2 + (py - (y0 + t * dy)) ** 2) ** 0.5
+
+
+def _pin_edge_of(px, py, bb) -> str:
+    """脚点贴着 bbox 的哪条边（`b`/`t`/`l`/`r`）—— 按**点到线段**距离，框外 40px 也判得对。"""
+    x0, y0, x1, y1 = float(bb[0]), float(bb[1]), float(bb[2]), float(bb[3])
+    cand = [(_pt_seg_dist(px, py, x0, y0, x1, y0), "b"),
+            (_pt_seg_dist(px, py, x0, y1, x1, y1), "t"),
+            (_pt_seg_dist(px, py, x0, y0, x0, y1), "l"),
+            (_pt_seg_dist(px, py, x1, y0, x1, y1), "r")]
+    return min(cand)[1]
+
+
+def edge_align_pins(components: Dict[str, dict], pins: Dict[str, dict]) -> int:
+    """`STAGE2_PIN_EDGE_SNAP`：同侧脚的法向坐标归位到该侧中位值，返回改了几根。"""
+    n = 0
+    for ck, c in (components or {}).items():
+        if str((c or {}).get("type") or "").strip().lower() not in ("box", "ic", "boxic"):
+            continue
+        bb = (c or {}).get("bbox")
+        if not bb or len(bb) < 4:
+            continue
+        grp = pins.get(ck)
+        if not isinstance(grp, dict) or len(grp) < 2:
+            continue
+        rows: Dict[str, list] = {}
+        for pk, pv in grp.items():
+            pt = (pv or {}).get("point") or {}
+            if pt.get("x") is None or pt.get("y") is None:
+                continue
+            rows.setdefault(_pin_edge_of(float(pt["x"]), float(pt["y"]), bb), []).append((pk, pt))
+        for side, arr in rows.items():
+            # 一列至少 3 根才有「列」的证据：两根时中位值就是中点，会把两根都往中间挪
+            # （`_selftest` 的「边首点」正是这么坏的）；离线 13 页 60→50 根、分数逐位相同。
+            if len(arr) < 3:
+                continue
+            horiz = side in ("t", "b")
+            perp = [float(pt["y"] if horiz else pt["x"]) for _pk, pt in arr]
+            perp_sorted = sorted(perp)
+            m = len(perp_sorted)
+            med = (perp_sorted[m // 2] if m % 2 else
+                   0.5 * (perp_sorted[m // 2 - 1] + perp_sorted[m // 2]))
+            for (pk, pt), v in zip(arr, perp):
+                if abs(v - med) <= 0.5:
+                    continue
+                if horiz:
+                    pt["y"] = round(med, 2)
+                else:
+                    pt["x"] = round(med, 2)
+                n += 1
+    return n
+
+
 def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
     img = stage1.get("image") or {}
     H = float(img.get("h") or 0.0)
@@ -4594,6 +4660,10 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                 if os.environ.get("STAGE2_POWER_VALUE_DBG"):
                     print("[dbg pwr_value] case=%s %s <- pin name %r"
                           % (case_id, _ck, _best))
+    if PIN_EDGE_SNAP:
+        _n_edge = edge_align_pins(components, pins)
+        if os.environ.get("STAGE2_PIN_EDGE_SNAP_DBG"):
+            print("[dbg pin_edge_snap] case=%s 归位 %d 根" % (case_id, _n_edge))
     _doc = {"case": case_id, "components": components, "pins": pins,
             "nets": out_nets, "__pin_index": _pidx}
     if _stub_out:

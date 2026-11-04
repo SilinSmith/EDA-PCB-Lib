@@ -170,6 +170,23 @@ ENS_ROLES = tuple(r.strip() for r in
                   if r.strip())
 ENS_DBG = os.environ.get("STAGE2_ENS_DBG", "0") not in ("0", "", "off")
 _ENS: List[Tuple[str, str, float, float]] = []
+# ★★ 第三识别通道：通用 OCR（PP-OCR 识别头，`stage2/genocr.py`；`STAGE2_GEN_OCR`，默认
+#   **"2"**，§5.567 起翻默认；"0" = 完全不加载、不调用）。两套模型的置信度**不同尺度，
+#   禁止直接比数字**，判据全部落在字符串形状上：
+#     `=1` 保守：我方读法**不合该角色语法**而通用读法合 ⇒ 换；
+#     `=2` 再加「双方都合语法、通用读法更长更完整」（`04`→`104`），增量必须 <= 2 字（防粘连邻框）。
+#   角色只到 `designator/value/partname/pin_name`：`pin_number` 那一路有自己的切描边与
+#   旋转补读（`TIGHT_ROLES` / `PIN_NUM_ROT`），换读数会打乱那套量过的几何判据。
+#   13 页 84.5427 → **84.9945（+0.4518）**（case1 +0.54 / case5 +3.03 / case11 +2.31，
+#   其余 10 页逐字节不变，FIX 5 / BREAK 0）；池 29.1209 → **29.8722（+0.7513）**。
+GEN_OCR_LEVEL = 0 if (os.environ.get("STAGE2_GEN_OCR", "2").strip()
+                      in ("", "0", "off", "False", "false")) else (
+    2 if os.environ.get("STAGE2_GEN_OCR", "2").strip().startswith("2") else 1)
+GEN_OCR_ROLES = ("designator", "value", "partname", "pin_name")
+GEN_OCR_DBG = os.environ.get("STAGE2_DBG_GENOCR", "0") not in ("0", "", "off")
+#: `STAGE2_DBG_GENOCR=1` 时把替换记录另存一份 JSONL（`_cv.py` 会吞掉子进程 stdout，
+#: 出「逐条修复/弄坏清单」要靠这个文件；不在 DBG 档时一个字节都不写）。
+GEN_OCR_LOG = (os.environ.get("STAGE2_GENOCR_LOG") or "").strip()
 GLYPH_VOTE_MIN = int(os.environ.get("STAGE2_GLYPH_VOTE_MIN", "3") or 3)
 GLYPH_VOTE_TAU = float(os.environ.get("STAGE2_GLYPH_VOTE_TAU", "3") or 3)
 GLYPH_VOTE_PURITY = float(os.environ.get("STAGE2_GLYPH_VOTE_PURITY", "0.6") or 0.6)
@@ -194,6 +211,28 @@ LENFIX_K = int(os.environ.get("STAGE2_READ_LENFIX_K", "10") or 10)
 LENFIX_BEAM = int(os.environ.get("STAGE2_READ_LENFIX_BEAM", "24") or 24)
 LENFIX_DBG = os.environ.get("STAGE2_READ_LENFIX_DBG", "0") not in ("0", "", "off")
 LENFIX_MARGIN = float(os.environ.get("STAGE2_READ_LENFIX_MARGIN", "3.0") or 0.0)
+
+
+# ---------------------------------------------------------------------------
+def _role_fit(role: str, text: str) -> float:
+    """该角色下的**语法**适配度（只用既有判据，不看置信度 —— 两套模型的分数不可比）。"""
+    if not text:
+        return 0.0
+    # ⚠ 不能写 `from . import assign`：`stage2/__init__` 的 `from .assign import assign`
+    #   把包属性 `stage2.assign` 遮蔽成**函数**（`run.py:776` 记过同一个坑）。
+    if role == "value":
+        from .assign import fit_value
+        return fit_value(text)
+    if role == "designator":
+        # 读文字时还不知道器件类型：空 type 走 `canon_designator` 的通用形态分支。
+        from .assign import fit_designator
+        return fit_designator(text, "")
+    if role == "partname":
+        return 1.0 if (len(text) >= 4 and re.search(r"[A-Za-z]", text)) else 0.0
+    if role == "pin_name":
+        from .assign import fit_pinname
+        return fit_pinname(text)
+    return 0.0
 
 
 def _beam_rank(tc: Tuple[str, float]) -> float:
@@ -886,6 +925,52 @@ class TextEngine:
         return out
 
     # ------------------------------------------------------------------
+    def _gen_ocr(self, gray: np.ndarray, boxes: Sequence[Box],
+                 keys: Sequence[Tuple[int, str]], reads: List[Dict]) -> None:
+        """`STAGE2_GEN_OCR`：通用 OCR 第三通道，逐 `(框, 角色)` 决定是否替换 CRNN 读法。
+
+        同一张裁片只送一次（PP-OCR 识别与角色无关），归一化与语法判据按角色各做一遍。
+        只改 `reads`，不碰框与几何；`STAGE2_DBG_GENOCR=1` 时打印并落 JSONL。
+        """
+        try:
+            from . import genocr
+        except Exception:                                      # noqa: BLE001
+            return
+        want = [k for k in keys if k[1] in GEN_OCR_ROLES]
+        if not want or not genocr.available():
+            return
+        idx = sorted({i for i, _r in want})
+        got = genocr.read_many(gray, [(boxes[i], "gen") for i in idx])
+        by = dict(zip(idx, got))
+        for i, r in want:
+            cur = reads[i].get(r)
+            old = (cur[0] if cur else "") or ""
+            txt, conf = by.get(i, ("", 0.0))
+            new = genocr.fix_confusions(txt, r)
+            if not new or new == old:
+                continue
+            fit_old = _role_fit(r, old)
+            if fit_old <= 0.0:
+                if _role_fit(r, new) <= 0.0:
+                    continue
+            elif GEN_OCR_LEVEL < 2 or len(new) <= len(old) or len(new) > len(old) + 2:
+                continue
+            reads[i][r] = (new, float(conf))
+            if GEN_OCR_DBG:
+                print("[genocr] %-10s %r -> %r (conf %.3f)" % (r, old, new, float(conf)))
+                if GEN_OCR_LOG:
+                    try:
+                        import json
+                        with open(GEN_OCR_LOG, "a", encoding="utf-8") as fh:
+                            fh.write(json.dumps(
+                                {"role": r, "old": old, "new": new,
+                                 "conf": round(float(conf), 4),
+                                 "box": [float(v) for v in boxes[i]]},
+                                ensure_ascii=False) + "\n")
+                    except Exception:                      # noqa: BLE001
+                        pass
+
+    # ------------------------------------------------------------------
     def read(self, bgr: np.ndarray, boxes: Sequence[Box],
              roles: Sequence[str] = ROLES) -> List[Dict]:
         """-> [{"bbox": Box, "reads": {role: (text, conf)}}, ...]"""
@@ -956,6 +1041,8 @@ class TextEngine:
                         if ENS_DBG:
                             _ENS.append((cur[0], txt, cur[1], float(conf)))
                         reads[i][r] = (txt, float(conf))
+        if GEN_OCR_LEVEL > 0:
+            self._gen_ocr(gray, boxes, keys, reads)
         if VALUE_DOT:
             self._fix_dot(gray, boxes, roles, reads)
         if VALUE_TAIL:

@@ -42144,3 +42144,83 @@ python -X utf8 work\_dupclaim.py deadsw2          # 一框多主 59 组（多为
 python -X utf8 work\_cv.py tagTb1 --run --env STAGE2_TEXTBOX_DEDUP=1   # 84.0901（已回退，需从 _tbdedup_report.md 复原）
 ```
 报告：`work/_bindoracle_report.md`、`work/_tbdedup_report.md`；读法缓存 `work/_oracle_reads2.json`。
+
+## 5.567 通用 OCR 第三识别通道（+0.4518 / 池 +0.7513）+ 框边法向归位（+0.4808）
+
+本节两条改动都**翻成默认开**，13 页交付基线第一次越过 M3 85 线：
+
+| tag | 13 页 mean | official | judge | comp | pin | netH | line | 池 |
+|---|---|---|---|---|---|---|---|---|
+| `deadsw2`（§5.565 收口） | 84.5427 | 83.4893 | 80.9083 | 3.055 | 4.387 | 3.792 | 4.224 | 29.1209 |
+| `genocr2`（+通用 OCR） | 84.9945 | 83.9411 | 81.2479 | 2.836 | 4.154 | 3.792 | 4.224 | 29.8722 |
+| `ship3`（+框边归位，**新交付**） | **85.4753** | **84.4219** | **81.7287** | 2.836 | **3.673** | 3.792 | 4.224 | 29.9200 |
+
+### 5.567.1 动机：池子的 pin 轴整轴归零
+`work/_poolpin_audit.py`（用真 keymap 复算）给出池 29.12 的轴分解：comp 0.5174、**pin 0.0756**、
+netH 0.3090、line 0.0895（×权重 = 15.52 / 1.89 / 10.82 / 0.89）。**27/30 案的 pin F1 精确为 0**；
+GT 在册脚（box/ic 类）1508 根，我方在匹配件上只发 229 根（15%）。两个卡点：① box 的型号串读错
+⇒ 库键匹配不上（`XC4005-PQ180-4`→`4C4001`、`TPS7A4701RGWR`→`2N_2`、`RP2350B`→`LEea1`）；
+② 键匹配上也发不出脚。用户由此提出「直接用通用识别器扫文本，而不是靠字体特化/型号匹配」。
+
+### 5.567.2 通用 OCR 通道（`STAGE2_GEN_OCR`，默认 **2**）
+- 环境：`rapidocr_onnxruntime`（PaddleOCR 的 ONNX 版，纯 CPU、离线；`paddleocr/easyocr/pytesseract/mmocr` 都没装）。
+- **必须只用识别头**：`engine(img, use_det=False, use_cls=False, use_rec=True)`；裁片 = stage1 框
+  外扩 3px、`Image.LANCZOS` 放大 3× ⇒ **≈10 ms/框**。全页检测版 29.7 s/页，且小裁片上先检测再识别只有 15/82。
+- 读数对照（同一批候选框）：池 82 件「全页没读到」的，我方 CRNN exact **20/82**（CER 0.3586）
+  → PP-OCR **52/82**（CER 0.1514）；13 页 21 条文本错配，PP-OCR **精确读对 12/21**
+  （`SX1308`/`XB7608A`/`5k1`/`1k`/`H1`/`NCD0603Y2`/`GL0603UG01`×2/`MP2236CGJ-Z`/`TP4333`/`22uf`/`LED1`），
+  近失手 `1N4007→iN4007`、`104→04`、`4.7K→4.`（裁片截断/粘连邻框）。
+- 离线 oracle：把那 12 条改写成 GT 后重算 = **+0.5156**（⇒ 85.06）。
+- 实现：新文件 `stage2/genocr.py`（`PAD=3`/`UP=3`、`_engine()` 懒加载单例、`available()`、
+  `read_many(gray, items)`、`fix_confusions(text, role)`）；`stage2/text.py` 纯新增 86 行 ——
+  常量 `:173-188`、`_role_fit:216`、`TextEngine._gen_ocr:927`、调用点 `:1043-1044`（ENS 合并块之后、
+  `VALUE_DOT`/`_fix_tail`/`_length_fix`/`_fix_units`/`_pin_num_rot` 之前）。
+  两套模型的置信度尺度不同，**判据只用字符串形状**：`=1` 只在我方读法不合角色语法而通用读法合时替换；
+  `=2`（默认）再加「双方都合语法、通用读法更长更完整（≤2 字）」。角色限 `designator/value/partname/pin_name`，
+  **`pin_number` 不动**（那一路有自己的切描边与旋转补读）。
+- 结果：`genocr1` = 84.5427（逐位同基线，30 处替换全是 pin_name 填空）；**`genocr2` = 84.9945（+0.4518）**，
+  逐案 case1 +0.536 / case5 +3.030 / case11 +2.308，**其余 10 页逐字节不变**；FIX 5 / BREAK 0：
+  `case1 U3 XBP760A→XB7608A`、`case5 U3.pin_1 ADIGND→ADJ(GND)`、`.pin_2 VOUTABD→VOUT(TAB)`、
+  `case6 LED1 GL0603LG01→GL0603UG01`、`case11 U1 TL431→TP4333`（含 LED1/LED2 归属重挂）。
+  仍错：`1N4007` 三例（designator 不做归一化）、`case13 C3 220n→22f`。
+- **池 29.1209 → 29.8722（+0.7513）**、`empty []`。
+- 代价：13 页墙钟 75.5 s → 195.6 s（+6.9 s/张）。
+- 坑：`from . import assign` 会被 `stage2/__init__` 的同名函数遮蔽（`AttributeError: 'function'
+  object has no attribute 'fit_pinname'`，第一版 13 张全是空壳），必须 `from .assign import fit_*`。
+
+### 5.567.3 框边法向归位（`STAGE2_PIN_EDGE_SNAP`，默认 **1**）
+用户指令（m22039）：「IC脚点根据YOLO逆向修改一部分，从而精确匹配到理想的位置」。
+- 病根：stage1 的脚点偶尔一根悬得特别远（`case9 U2` 右列 `pin_6` x=1018.9，同列其余两根 998~999），
+  `pin_tol=5` 直接判 fp+fn。
+- 判据：**点到框边线段**最近距离分边（top/bot/left/right），同侧脚的法向坐标归位到该侧**中位值**；
+  **沿边不动**、**不补脚**、**一列至少 3 根**（两根时中位=中点，会把两根都往中间挪）。
+- 失败变体（都在 `work/_pinlattice.py` 里留了模式）：
+
+| 变体 | mean | Δ | 结论 |
+|---|---|---|---|
+| 轴距分边 + 全格点重排 + 补号 | 82.27 | −2.72 | 分边错（脚悬在框外 40px 时 `abs(y-y0)` 把左右脚判成上下脚），case9 −12.5 / case12 −8.14 全是补号造出来的 fp |
+| 轴距分边 + 只吸不补 | 83.04 | −1.95 | 同上 |
+| 修正分边 + 沿边吸附 | 85.21 | +0.22 | 有效，但 case8 −3.45 |
+| 法向一律放到「框边外 20px」 | 78.70 | −6.29 | 我们的 bbox 比 GT 紧，脚本来就在框外 40px，硬挪到 20 全错 |
+| 沿边吸附 ±2 / ±5 / 不动 | 85.48 | 0.00 | 三档**逐位相同** ⇒ 沿边方向已经是格点，不用动 |
+| **只做法向归位（最终）** | **85.48** | **+0.4855** | 只动 50 根（≥3 根的一列），只有 case4 +2.08（pin 0.917→1.000）、case9 +4.17（0.833→1.000），无页下跌 |
+
+- 实现：`stage2/assemble.py` 新增 `_pt_seg_dist` / `_pin_edge_of` / `edge_align_pins`，在 `build_doc`
+  组装 `_doc` 之前调用（`STAGE2_PIN_EDGE_SNAP_DBG=1` 打印每页归位根数）。管线内实测 **+0.4808**（85.4753），
+  与离线只改 Pred json 的 +0.4855 一致（差值是法向坐标 round 到 2 位）。
+- 惰性：`STAGE2_PIN_EDGE_SNAP=0` 时 13/13 `_Pred.json` sha256 与 `genocr2` **全等**（mean 84.9945）；
+  两个开关都翻默认后无 env 复跑 `ship3` 与 `STAGE2_GEN_OCR=2 PIN_EDGE_SNAP=1` 的 `edgesnap1` **13/13 全等**。
+- 已知既有问题（本节未触碰）：`assemble._selftest()` 的「边首点」一项在**默认配置下本来就失败**
+  （`{'x': 11.0}` vs 期望 `-20.0`；把 `STAGE2_PIN_EDGE_SNAP` 关掉同样失败 ⇒ 与本节改动无关）。
+
+### 5.567.4 复现
+```
+python -X utf8 work\_cv.py genocr0 --run                                      # 默认关：84.5427
+python -X utf8 work\_cv.py genocr2 --run --env STAGE2_GEN_OCR=2                # 84.9945
+python -X utf8 work\_cv.py edgesnap0 --run --env STAGE2_GEN_OCR=2              # 惰性：13/13 sha 全等
+python -X utf8 work\_cv.py edgesnap1 --run --env STAGE2_GEN_OCR=2 --env STAGE2_PIN_EDGE_SNAP=1   # 85.4753
+python -X utf8 work\_cv.py ship3 --run                                        # 两条默认开：85.4753
+python -X utf8 work\_poolgate.py ship3 --pool-ref deadsw2                      # 池 29.9200
+python -X utf8 work\_pinlattice.py genocr2 pl_perp perp && python -X utf8 work\_cv.py pl_perp   # 离线上限
+```
+探针：`work/_genocr_pool.py`、`_genocr_boxes.py`、`_genocr13b.py`、`_genocr_oracle13.py`、`_poolpin_audit.py`、`_pinlattice.py`。
