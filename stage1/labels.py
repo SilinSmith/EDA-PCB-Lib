@@ -179,6 +179,10 @@ CROSS_COS = float(os.environ.get("STAGE1_CROSS_COS", "-0.85"))
 CROSS_DOT_R = float(os.environ.get("STAGE1_CROSS_DOT_R", "3.0"))
 CROSS_DOT_NEED = int(os.environ.get("STAGE1_CROSS_DOT_NEED", "3"))
 CROSS_WIDE = env_on("STAGE1_CROSS_WIDE", "0")
+# ★ 2026-11-04 曾翻默认 1 → 0（13 页 +0.0439，全在 case 1 的 +0.57）。但池侧单案复现
+#   （`fast.py --cases 0058`）：关掉后 `nets` **19 → 11**、最大的网 **118 → 275** 个成员 ——
+#   没有交叉标签，两条只是「画着交叉」的线被并成同一个网。池门禁四个开关合跑
+#   29.9200 → 29.6782（−0.24），`0058` 一页就占 −4.39。⇒ 已回退到 1。
 CROSS_TAGS = env_on("STAGE1_CROSS_TAGS", "1")
 CROSS_WIDE_MAX = int(os.environ.get("STAGE1_CROSS_WIDE_MAX", "96"))
 # ★ `STAGE1_CROSS_GAP`（默认 0 = 关）：**起簇**半径。骨架在无圆点的十字交叉处给出的

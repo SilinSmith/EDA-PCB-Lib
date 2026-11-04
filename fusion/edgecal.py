@@ -58,7 +58,11 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-ON = _env_on("FUSION_EDGECAL", "1")          # ★ 默认 1：官方 10 张 83.03 → 83.23（+0.20）
+# ★ 2026-11-04 曾翻默认 1 → 0：13 页合跑 **+0.0828**（2 +0.71 / 9 +0.63 / 12 +0.24 / 13 +0.19），
+#   但同一次里 **case 5 −0.68**、case 4 −0.17、case 10 −0.08 —— 单页跌幅是增益页的 10 倍，
+#   属「按页换分」而非机制改进。按「无单页 −>0.05」的纪律**回退到 1**；本轮的正式交付只留
+#   `STAGE2_PIN_NUMBER_REPAIR=0`（只有 case 11 +1.34，其余 12 页逐位不动）。
+ON = _env_on("FUSION_EDGECAL", "1")
 TRIM = _env_float("FUSION_EDGECAL_TRIM", 1.0)          # 普通端点内收 px
 TRIM_NEAR = _env_float("FUSION_EDGECAL_TRIM_NEAR", 4.0)  # 贴着同网他边的端点内收 px
 NEAR2 = _env_float("FUSION_EDGECAL_NEAR", 3.5)          # 「贴着」判定半径 px

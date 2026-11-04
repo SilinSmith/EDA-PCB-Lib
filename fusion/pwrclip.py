@@ -71,6 +71,10 @@ from pathlib import Path
 
 from envflag import env_on
 
+# ★ 2026-11-04 曾翻默认 1 → 0（13 页 +0.2110：2 +1.88 / 5 +1.27 / 8 −0.81 / 3 −0.42）。
+#   池侧只值 −0.09（`onoffShip3` 29.5856 → `onoffShip4` 29.6782），收益比不划算 ⇒ 回退到 1。
+#   注：`0058` 那个 118 → 275 成员的巨型网**不是它**造成的（单案复现证明是 `STAGE1_CROSS_TAGS`），
+#   别把那条证据记到这里。
 ON = env_on("FUSION_PWRCLIP", "1")
 
 PWR_TYPES = ("v", "gnd", "ground", "power", "earth")

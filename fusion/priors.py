@@ -119,6 +119,9 @@ DESIG_RAW_MAX = 8
 # 形状闸开关（默认开）。关掉 = 回到「`canon_designator` 说什么就是什么」。
 from envflag import env_on                       # noqa: E402  (唯一权威假值词表)
 # ★ 手写短词表 ⇒ `FUSION_SHAPE_GATE=off` 被当成开。统一。
+# ★ 2026-11-04 曾翻成 0：13 页 +0.0793（全部落在 case 1 的 +1.03）。但六个开关合跑后
+#   池门禁 **29.9200 → 28.9585（−0.96）**，它是池侧首要嫌疑（放行假位号 ⇒ 池整片按键匹配崩），
+#   已回退到 1。13 页这点收益不值得用池的位号匹配去换。
 SHAPE_GATE = env_on("FUSION_SHAPE_GATE", "1")
 # 形状闸命中时给的分（默认直接**丢掉候选**；置成数字则改成**压分**保留）。
 SHAPE_SCORE = os.environ.get("FUSION_SHAPE_SCORE", "").strip()

@@ -42224,3 +42224,173 @@ python -X utf8 work\_poolgate.py ship3 --pool-ref deadsw2                      #
 python -X utf8 work\_pinlattice.py genocr2 pl_perp perp && python -X utf8 work\_cv.py pl_perp   # 离线上限
 ```
 探针：`work/_genocr_pool.py`、`_genocr_boxes.py`、`_genocr13b.py`、`_genocr_oracle13.py`、`_poolpin_audit.py`、`_pinlattice.py`。
+
+## 5.568 池分第二把尺与四轴归因（净诊断，无代码改动）
+
+日期：2026-11-04。本节不改变任何交付行为：13 页仍是 **85.4753 / 84.4219 / 81.7287**、池仍是 **29.9200**
+（tag `ship3`，commit `68d5aa2`）。记录两件事：① 用户口径「位号没印在图上就按得分处理」下的池上限；
+② netH / line / comp / pin 四条轴各自到底卡在哪。
+
+### 5.568.1 第二把尺 `work/_deanno.py`：池 29.9492 → 36.1765
+
+口径：整页 OCR 文本（`work/_desig_scan.json`，30 页 det+rec 缓存）里**找不到**的 GT 键，改写成 `∅9NN`
+（连同 `pins` 键与 `nets[*].hyperGraph` 的 `KEY.pin` 一起改），其余判分完全不动（protocol4）。GT 侧共改名 **359** 件。
+
+| 轴 | 官方口径 | 未标注按得分 | Δ |
+|---|---|---|---|
+| comp | 0.5348 | 0.6515 | +0.1167 |
+| pin | 0.0764 | 0.0767 | +0.0003 |
+| netH | 0.3175 | 0.3922 | +0.0746 |
+| line | 0.0880 | 0.0988 | +0.0108 |
+| **池分** | **29.9492** | **36.1765** | **+6.2273** |
+
+逐案大赢：`0123 +18.91`、`0005 +18.77`、`0097 +17.93`、`0063 +16.94`、`0084 +16.87`、`0132 +12.60`、
+`0004 +10.78`、`0025 +10.36`、`0072 +10.33`、`0093 +9.44`。
+
+**pin 轴纹丝不动**（+0.0003）。逐层拆开：匹配件上 GT box 脚 **1093** 根 / 我方 **388** 根（0.355）；
+同件同脚号 **710** 根（24.5%），这 710 根的点对点距离 **p25 19.7 / 中位 20.1 / p75 22.8**，**≤5px 只有 2.1%**；
+同件同脚号且同脚名 629 根，中位仍 20.1、≤5px 1.9%。再给两个理想 oracle：
+按边序重编号并抄 GT 脚名 ⇒ pin 0.0767→**0.0776**；按自身 bbox 做常数法向平移 k=8/12/20 ⇒ 0.0911/0.0886/0.0893。
+`pin_tol` 放宽扫描（deanno 口径）：5→0.0767、8→0.0832、12→0.0995、20→0.1207（池 36.18→37.28）。
+⇒ 池 pin 轴是「脚号/脚名覆盖率 × 20px 级位置误差」双卡，**不是编号错位，也不是整体约定差**。
+
+### 5.568.2 line 轴：D 类只有 25 条，且不是「没画线」
+
+`work/_dclass.py`（按「stage1 `wire_detail.segments` 覆盖率」与「最近预测边距离」重算 D 类）：
+D 类 **25 条**（`_linediag.py` 报的 130 把「部分覆盖但接力 <0.8」也算进去了）。这 25 条里
+**骨架已画出的 0 条（0.0%）**；预测边 **15px 内 44% / 60px 内 92%**。
+⇒ 线是画了的，缺的是**端点/切点对齐**：`net_line_f1`（`metrics.py:596-634`）是一对一边匹配、两端 5px 容差，
+而 A 类 110 条端点偏 5~40px（中位 9.0）。事后补切/合并已三连负（T 形 −0.061、X −0.008、节点门控 −0.008），
+`_branchcut2.py` 实测**切 0 条边**（我们的段本来就断在分支点）。
+
+### 5.568.3 netH 轴：36.8% 的 GT 网被判 merge
+
+`work/_nethdiag.py`（复用 `assign_components`→`rewrite_keys`→`net_hypergraph_f1`）：13 页 **231 个 GT 网** →
+ok **125（54.1%）**、merge **85（36.8%）**、miss 15（6.5%）、split 6（2.6%）；miss 类缺脚合计 46。
+逐页 merge：1 **26**、11 **12**、9 8、8 7、12 7、5/6/7/10 各 4。
+merge 里混着「脚被绑到别的网」：extra pin 121 个，集中在 `SW2 17`、`R2 9`、`C3 8`、`C9 6`、`R1 6`、`U1 6`、`C2 6`；
+按类型 c 50 / r 21 / switch 17 / box 15 / led 6 / gnd 4。因为 protocol4 的 `net_pin_collapse_nonbox=True`，
+c/r 的脚号在 netH 里折成 `*`，所以 c/r 的 extra 是「件挂错网」而不是脚号错位。
+`case11`（最差页 59.14）实况：GT net_1 = U1.1 + USB2.1，我们 `net_3 = USB2.1 + p010.1`（**U1 的 pin_1 根本没发出来**）；
+GT net_6 = C2 + U1.6 + USB1.A9 + B9，我们 `net_1 = U1.6 + C2.2`（A9/B9 触点 stage1 没检出）。
+共成员口径的网聚类 F1 = **0.636**（tp 543 / fp 249 / fn 373），最差 case1 0.306 / case9 0.355 / case12 0.392 / case11 0.464。
+
+### 5.568.4 comp 轴：13 页只缺 16 件，但缺的都在关键位置
+
+`work/_missprof.py`（官方 `assign_components` 的 keymap 反查未匹配 GT 件，按 type 聚合）：
+
+| type | GT | 缺 | 率 | 样例 |
+|---|---|---|---|---|
+| gnd | 83 | 5 | 0.060 | c1 `∅323/∅458/∅193`、c11 `∅346/∅695` |
+| led | 12 | 3 | 0.250 | c1 `LED2`、c11 `LED1`、c12 `LED1` |
+| r | 61 | 2 | 0.033 | c1 `R13`、`R19` |
+| net_input | 8 | 2 | 0.250 | c12 `VIN_3`、`VIN_4` |
+| l | 11 | 1 | 0.091 | c1 `L2` |
+| switch | 2 | 1 | 0.500 | c11 `SW1` |
+| net_output | 1 | 1 | 1.000 | c12 `VOUT` |
+| v | 51 | 1 | 0.020 | c13 `∅899` |
+
+c/r/box 三种大类的缺件率是 0.000 / 0.033 / 0.000 —— **检测本身很稳**，缺的是「位号/网络标签这类小符号」。
+
+### 5.568.5 pin 轴：27 个缺脚里 21 个在端部（无证据，补不了）
+
+`work/_pinfill.py`（13 页，同键 box 件，按 GT bbox 分边）：GT IC 脚 **191** 根 → 我方有对应编号 **164**、其中 ≤5px **142**。
+缺的 27 根按「同侧已检出脚的坐标区间」分类：**内部空档 6 根、端部外延 21 根**。
+端部那 21 根在 `pincol.py` 里既没有桩也没有号码证据（`:736-738` 的格点只铺到 `ev.max()+0.6*pitch`，
+`:743-763` 的 `FILL_MISSING` 只做「被两个有据格点夹住」的纯插值），盲外推等于造脚 ⇒ 保持现状。
+
+### 5.568.6 复现
+```
+python -X utf8 work\_deanno.py            # 池 29.9492 -> 36.1765（第二把尺，官方门禁不变）
+python -X utf8 work\_dclass.py            # line 轴 D 类 25 条 / 骨架覆盖 0 条
+python -X utf8 work\_nethdiag.py          # netH：ok 125 / merge 85 / miss 15 / split 6
+python -X utf8 work\_missprof.py          # comp 轴缺件画像（16 件 / 13 页）
+python -X utf8 work\_pinfill.py - 1       # pin 轴缺脚：内部空档 6 / 端部 21
+```
+探针：`work/_deanno.py`、`_desig_scan.json`、`_desig_order.py`、`_dclass.py`、`_nethdiag.py`、`_missprof.py`、`_pinfill.py`。
+
+## 5.569 默认开开关反扫：45 个逐个关掉，13 页 +0.4840 被池门禁否掉四个，只留一个（+0.1033）
+
+日期：2026-11-04。此前所有扫荡都只扫**默认关**的开关（§5.564 的 161 个），**默认开的从来没被反扫过** ——
+这轮把它们逐个用 `=0` 关掉，先在 4 页（case 1/11/12/13，基线 mean4 = **69.6849**）快筛，再上 13 页，
+最后**每一个都要过池门禁**。结论：13 页上看着成立的六个里，**四个在池上是负的或零**，只有
+`STAGE2_PIN_NUMBER_REPAIR=0` 活下来。
+
+交付档：**85.4753 / 84.4219 / 81.7287 → 85.5786 / 84.53 / 81.83（+0.1033）**，池 **29.8482**。
+
+### 5.569.1 名单与口径
+
+`work/_onsw_bool.py` 用正则 `(?:env_on|_env_on)\(\s*["']NAME["']\s*,\s*["'](1|true|on|yes)["']` 扫全仓
+（排除 DBG / 路径 / 模型类），得到**布尔型默认开 45 个**（落 `work/_onsw_bool.json`），其中线/网/脚相关 19 个。
+逐个跑 `work\_cv.py onoff<i> --run --cases 1,11,12,13 --env NAME=0`，**45/45 全 ok、0 超时、每轮约 78 s**
+（驱动 `work/_onsw_scan.py`，断点续跑；结果 `work/_onsw_off.jsonl`、`work/_onsw_off.md`）。
+
+### 5.569.2 4 页快筛：7 个正收益、若干重伤、23 个死开关
+
+| 开关（=0） | Δ4页 | 说明 |
+|---|---|---|
+| `STAGE1_PIN_XSTUB` | **+0.510** | 关掉「引脚必须有引线桩支撑」闸门 |
+| `STAGE2_PIN_NUMBER_REPAIR` | **+0.336** | 关掉脚号几何修复 |
+| `FUSION_SHAPE_GATE` | **+0.258** | 关掉位号形状闸 |
+| `STAGE1_CROSS_TAGS` | +0.143 | 关掉交叉根级标签 |
+| `FUSION_EDGECAL` | +0.121 | 关掉端点内收校正 |
+| `STAGE2_DESIG_DIGITS` | +0.116 | 关掉「位号只有数字」补读 |
+| `FUSION_PWRCLIP` | +0.023 | 只有 churn |
+
+重伤（默认开是必要的，留作反面证据）：`STAGE2_MS_TEXT_KEYS −4.196`、`STAGE1_CROSS_SPLIT −3.138`、
+`STAGE1_WIRE_INK −3.138`、`BIGIC_REJECT_WIRE −2.483`（case 1 单页 −9.93）、`STAGE1_PINEV_TRUST −2.407`、
+`STAGE2_PORT_KEY/PORT_NAME 各 −1.479`、`STAGE1_WIRE_SNAP_GAPS −1.087`。
+**死开关 23 个**（4 页 sha 与基线逐字节相同）。注意 `FUSION_LLM` 是**空转测试**：`work/_cv.py:264-265`
+在非 `--vlm` 时强制 `FUSION_LLM=0/FUSION_ITERATE=0`，`FUSION_JUDGE*` 一组同受此影响，**它们「无效果」不代表真的没用**。
+
+### 5.569.3 13 页复核与池门禁（四轮归因全记录）
+
+| tag | `=0` 的开关 | 13 页 mean | Δ13 | 池 | Δ池 | 结论 |
+|---|---|---|---|---|---|---|
+| `xstub0` | `STAGE1_PIN_XSTUB` | 83.9857 | **−1.4896** | — | — | 4 页 +0.51、13 页 −1.49，**反号**（case9 −10.19、case5 −8.48） |
+| `onoffShip` | 六个一起关 | 85.9593 | +0.4840 | **28.9585** | **−0.9615** | **池门禁不通过** |
+| `onoffShip2` | 五个（shape 已回退） | 85.9593 | +0.4840 | 28.9198 | −1.0002 | 与 `onoffShip` 逐案相同 ⇒ `SHAPE_GATE` 在 13 页上**零贡献**，池也不是它 |
+| `onoffShip3` | 五个（digits 回退） | 85.88 | +0.4047 | 29.5856 | −0.3344 | 键被降级的元凶确认 |
+| `onoffShip4` | 四个（pwrclip 回退） | 85.71 | +0.2347 | 29.6782 | −0.2418 | 只回了 +0.09，`0058` 仍 19→11 |
+| `onoffShip5` | 两个（xtags 回退） | 85.6615 | +0.1862 | 29.8685 | **−0.0515** | 池回到噪声带 |
+| `onoffShip6` | **一个（只留 pinrep）** | **85.5786** | **+0.1033** | **29.8482** | — | **正式交付** |
+
+逐案归因的关键证据（每条都是可复现的）：
+
+1. **`STAGE2_DESIG_DIGITS=0`（`stage2/assign.py:1076`）**：池预测逐案 diff 显示 `Q1`/`U8`/`C680`/`D1`/`C6` 这类键
+   被降级成 `pNNN`（无键）⇒ 池是**按键精确匹配**的（`metrics.py:335`），成片元件连同脚、网一起作废。
+   轴差：comp −0.0062、netH −0.007。这个通道的注释里原本就写着「池 1147 个真位号里 513 个（44.7%）整页读不到」——
+   它就是为池而生的。**13 页 +0.0356 是假象**。
+2. **`FUSION_PWRCLIP=0`（`fusion/pwrclip.py:76`）**：13 页 +0.2110，池只 −0.09（`onoffShip3` 29.5856 → `onoffShip4` 29.6782），
+   收益比不划算 ⇒ 回退。（**更正**：`0058` 那个 118 → 275 成员的巨型网不是它造成的，单案复现证明是 `STAGE1_CROSS_TAGS`，见下条。）
+3. **`STAGE1_CROSS_TAGS=0`（`stage1/labels.py:183`）**：单案复现（`fast.py --cases 0058`）——
+   关掉后 `nets` **19 → 11**、最大网 **118 → 275**；单独把这一项打开就精确回到 19/118。
+   机理：没有交叉标签，两条「只是画着交叉」的线被并成同一个网。单这一页就占池 −4.39 分。
+4. **`FUSION_EDGECAL=0`（`fusion/edgecal.py:61`）**：13 页合跑 +0.0828（2 +0.71 / 9 +0.63 / 12 +0.24 / 13 +0.19），
+   但同一次里 **case 5 −0.68**、case 4 −0.17、case 10 −0.08 —— 单页跌幅是增益页的 10 倍，属「按页换分」，
+   按「无单页 −>0.05」的纪律回退。
+5. **`FUSION_SHAPE_GATE=0`（`fusion/priors.py:121`）**：13 页 +0.0793（单独跑），但与其余五个合跑后
+   **逐案与不回退完全一致**（零贡献），池也不动 ⇒ 回退无代价。
+
+最终只把 `stage2/run.py:86` 的 `PIN_NUMBER_REPAIR` 从 `1` 改成 `0`：13 页**只有 case 11 +1.34**，
+其余 12 页逐位不动；惰性验证 `FUSION_EDGECAL=1 STAGE2_PIN_NUMBER_REPAIR=1` 复跑（tag `onoffBack`）
+13/13 `_Pred.json` sha256 与 `ship3` **全等**、mean 85.4753。
+
+### 5.569.4 三条流程教训
+
+1. **4 页只筛「有没有效果」，正负必须 13 页定**（`XSTUB` +0.51 → −1.49；`PWRCLIP` +0.02 → +0.21）。
+2. **13 页正收益 ≠ 可交付**：本轮六个正收益里四个在池上是负的或零。池门禁不是形式，它是**位号/网络口径的另一把尺**。
+3. **池归因的快速路径**（把 30 分钟的整池门禁压到 2 分钟）：先离线按轴 + 逐案 diff 已有预测（秒级）
+   → 再用 `fast.py --cases <cid>` 跑单案单开关复现（约 70 s）→ 确认机理后才付整池门禁的钱。
+
+### 5.569.5 复现
+```
+python -X utf8 work\_onsw_bool.py                                  # 45 个布尔默认开名单
+python -X utf8 work\_onsw_scan.py 60                                # 4 页快筛（断点续跑）
+python -X utf8 work\_onoff13.py "pinrep0=STAGE2_PIN_NUMBER_REPAIR=0"
+python -X utf8 work\_onoff13.py "onoffBack=FUSION_EDGECAL=1,STAGE2_PIN_NUMBER_REPAIR=1"   # 惰性（应与 ship3 逐字节同）
+python -X utf8 eda-pcb\tools\eval\fast.py --cases 0058 --engine protocol4 --out t58xtags --no-vlm --extra "-device cpu"
+python -X utf8 work\_poolgate.py onoffShip6 --pool-ref ship3       # 池门禁（≈30 min）
+```
+注：本机的 CPU 大核亲和（`ProcessorAffinity=65535`）只是**本地测量**的跑法，**不写进任何提交物**——
+评测服务器环境不认这套，也不需要。

@@ -83,7 +83,10 @@ PINCOL_WIN_KEYS = tuple(k.strip() for k in
 PIN_LANE_CLEANUP = os.environ.get("STAGE2_PIN_LANE_CLEANUP", "light").strip().lower()
 PIN_NAME_OCR = os.environ.get("STAGE2_PIN_NAME_OCR", "auto").strip().lower()
 MONO_PIN_OCR = PIN_NAME_OCR
-PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "1")
+# ★ 2026-11-04 翻默认 1 → 0（关）：13 页单独关掉 **+0.1033**（85.5786，全部落在 case 11 的 +1.34）。
+#   四页快筛 +0.336（case 11）与之同向。这条「几何保守修复」是 2026-10 为缺号件补的，
+#   现在 `STAGE2_PIN_NAME_OCR=auto` + 通用 OCR 通道已经把号读全，修复反而会把号改错。
+PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "0")
 # ★ 同槽双通道联合断言（§5.515 起默认**开**；`stage2/pin_ocr_join.py`）：
 #   `STAGE2_PIN_NUMBER_REPAIR`（号）与 `STAGE2_PIN_NAME_OCR`（名）是两条独立外部通道，
 #   但读数进 `assign` 后按**槽**分配：号与名落到相邻的两个槽上时，两个槽各自缺一半，

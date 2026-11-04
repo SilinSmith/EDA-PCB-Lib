@@ -1071,6 +1071,10 @@ def _digitize(tail: str) -> str:
 #   · 置信度地板 `DIGITS_MINCONF`；
 #   · 分数带罚 `DIGITS_PEN`（数字证据弱于完整读法）。
 # 前缀取该类型最短的允许前缀（`TYPE_PREFIX`），与 `canon_designator` 同一套语义。
+# ★ 2026-11-04 曾翻默认 1 → 0（13 页 +0.0356），但六个开关合跑后池门禁 **29.9200 → 28.9585**：
+#   逐案比对发现 `Q1`/`U8`/`C680`/`D1` 这类键被降级成 `pNNN`（无键）⇒ 池的按键匹配成片作废，
+#   comp −0.0062、netH −0.0195。本注释上方那段「池 1147 个真位号里 513 个整页读不到」
+#   就是它存在的理由 —— 池侧这条通道不能关。已回退到 1。
 DESIG_DIGITS = env_on("STAGE2_DESIG_DIGITS", "1")
 DIGITS_MAXD = float(os.environ.get("STAGE2_DIGITS_MAXD", "60") or 60)
 DIGITS_MINCONF = float(os.environ.get("STAGE2_DIGITS_MINCONF", "0.80") or 0.80)
