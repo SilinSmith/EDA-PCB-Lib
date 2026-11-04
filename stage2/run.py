@@ -97,6 +97,21 @@ PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "0")
 #   打开后只做一件事：两条通道**对同一 `(component_id, pin_index)` 都接受**的槽，
 #   用缺的那一半补齐（不覆盖已有值、不新增槽、不删任何读数、不引入任何阈值）。
 #   必须与上面两个开关同时开：任一通道关掉 ⇒ 该通道无读数 ⇒ 自然弃权。
+# ★ 号通道「只喂 JOIN、不进通用读数池」（`STAGE2_PIN_NUMBER_JOIN_ONLY`，默认 **0=关**）：
+#   上面那条联合断言要 `pin_number_repair` 的读数进 `_ocr_ch`；但同一批读数若同时并进
+#   `reads`（`assign` 的通用池，见下面 `if _extra:` 那段），会去抢槽 / 触发 `PIN_DUPNUM`
+#   让位 —— `STAGE2_PIN_NUMBER_REPAIR` 2026-11-04 翻 0（13 页 +0.1033、case11 +1.34）
+#   关的是**这两件事一起**，于是联合断言的号半边也一起废了（`case11 U1` 丢 6 根脚）。
+#   开着 ⇒ 两件事分开：`_ocr_ch` 照样拿到号读数（断言可用），通用池不收（不抢槽）。
+#   关掉 ⇒ 旧行为（两处都收）。默认关，使下游逐位不变；与 `PIN_NUMBER_REPAIR=1` 一起开才生效。
+#   ★ 2026-11-04 实测（`work/_cv/pnjoin1.json`）：`REPAIR=1 JOIN_ONLY=1` ⇒ 13 页 **85.4753
+#     （−0.1033）**，与翻默认前的 `ship3` 逐位相同 ⇒ **掉分全在 JOIN 这条路上、通用池贡献 0**
+#     （原假设被推翻）。日志：11 页有断言，只有 case11 真补（补号 2、补名 2），而它正是 −1.34
+#     的那页；补进去的 `pin_6=VDD`、`pin_8=LED1` 位置都对，但同件里 `pin_7` 已带着 `LED1`
+#     （左排还整体错一槽：我们的 `pin_2` 带着 GT `pin_1` 的 `OUT`）⇒ 新增正确名与既有错名
+#     并存，多出来的那根算 fp。根因是**箱体脚名按行从下往上绑定**时与降序脚号错位，不是
+#     通道缺证据，详见 `docs/RESULTS.md` §5.570。
+PIN_NUMBER_JOIN_ONLY = env_on("STAGE2_PIN_NUMBER_JOIN_ONLY", "0")
 # ★ 整颗元件「引脚号 ↔ 引脚名」抄表（`STAGE2_PIN_TABLE`，默认 **0=关**；
 #   `stage2/pin_table_vlm.py`）：上面那条联合断言要求**两条单脚通道对同一个槽都接受**
 #   才补缺的那一半；这里换一个证据源——把**整颗元件的符号裁片**（外扩
@@ -108,6 +123,19 @@ PIN_NUMBER_REPAIR = env_on("STAGE2_PIN_NUMBER_REPAIR", "0")
 #   0.5343 → 0.5781、13 页无一处变差（详见模块文件头）。
 #   关 ⇒ 连 import 都不做，下游逐位不变。
 PIN_TABLE = env_on("STAGE2_PIN_TABLE", "0")
+# ★ 缺口首位的整侧脚名重绑（`STAGE2_PIN_NAME_REBIND`，默认 **0=关**；
+#   `stage2/pin_rebind.py`）：一行的名与号是**分别裁片**的，号那张丢了（细 `1`、
+#   导线压字）以后，名字仍按它自己那一行绑定，而号槽从此整体上移一格 —— slot `2`
+#   于是顶着的名字其实是 pin 1 的名。本通道只认一种签名（该侧名比号多一个、号是
+#   连续升序、多出的那个名在号序起点外侧）才动手，其余一律不碰。
+#   2026-11-04 实测（`work/_rebind_orc.py` + `work/_rebind_hand.py`）：13 页只命中
+#   `case11 U1` 左排一次（`pin_2` 的 `OUT` → `BAT`），该页 **+1.5152**、均值
+#   **+0.1166**，其余 12 页逐位不变。放量到「所有侧按行重配」实测 **−9.5 均值**
+#   （两侧混组、共线平移不可判），所以这里刻意只做这一种可判的形态。
+#   2026-11-05 管线内复核（`work/_cv/rebind1.json`、`work/_cv/rebind0.json`）：
+#   =1 ⇒ **85.6952 / 84.6418 / 81.9486**（+0.1166，只 case11 +1.52）；
+#   =0 ⇒ 85.5786 / 84.5252 / 81.8320，与交付档 `onoffShip6` 逐位相同。
+PIN_NAME_REBIND = env_on("STAGE2_PIN_NAME_REBIND", "1")
 # ★ box 件「型号名文字框」重读（`STAGE2_PARTNAME_OCR`，§本次，默认 **0=关**；
 #   `stage2/partname_ocr.py`）：把 `partname.box` 那颗文字框单独重裁一次送 PP-OCR，
 #   在 `assemble.build_doc` 的 `Name` 最终成型处按档位覆盖：
@@ -631,7 +659,7 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                           for r in _extra if any(k in r.get("reads", {}) for k in roles)]
             if _name in ("pin_number_repair", "pin_name_ocr"):
                 _ocr_ch[_name] = list(_extra)
-            if _extra:
+            if _extra and not (_name == "pin_number_repair" and PIN_NUMBER_JOIN_ONLY):
                 reads = list(reads) + _extra
 
     t2 = time.time()
@@ -751,6 +779,20 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                      ("；错误 %s" % _pt["error"]) if _pt.get("error") else ""))
         except Exception as _e:                      # noqa: BLE001
             print("[stage2] 整颗元件抄表失败：%s" % (_e,))
+    # ★ 缺口首位的整侧脚名重绑（见文件头常量处注释）：只改已有槽的**名字**，
+    #   不动坐标、不动号、不增删槽；签名不成立 ⇒ no-op。
+    if PIN_NAME_REBIND:
+        try:
+            from . import pin_rebind as _prb
+            _rb = _prb.rebind(a)
+            if _rb["changed"]:
+                print("[stage2] 缺口首位重绑：%d 处（%s）"
+                      % (_rb["changed"], "；".join("%s.pin_%s %s->%s"
+                                                   % (d["component"], d["number"],
+                                                      d["old"], d["new"])
+                                                   for d in _rb["details"])))
+        except Exception as _e:                      # noqa: BLE001
+            print("[stage2] 缺口首位重绑失败：%s" % (_e,))
     pred = build_doc(doc, a, case)
     pin_index = pred.pop("__pin_index", None)
     t3 = time.time()
