@@ -128,3 +128,62 @@ def rebind(assigned):
                 changed.append({"component": designator, "number": target[2],
                                 "old": old, "new": name["text"]})
     return {"changed": len(changed), "details": changed}
+
+
+def _pin_number(key):
+    tail = str(key).split("_")[-1]
+    return int(tail) if tail.isdigit() else 0
+
+
+def dedupe_coincident(pred, tol=3.0):
+    """Drop pins that repeat a name at the same point; keep the lower number.
+
+    A lane box sometimes yields two slots for one row (``pin_5`` and ``pin_7``
+    both ``VM`` at the same point).  Only the higher number is bogus -- the
+    scoring key is ``(component, number)``, so the duplicate scores as a false
+    positive while the real pin still matches.  Nets are rewritten to the kept
+    pin so membership does not change.
+    """
+    pins = pred.get("pins") or {}
+    alias = {}
+    for comp, table in pins.items():
+        if not isinstance(table, dict):
+            continue
+        keep = {}
+        for key in sorted(table, key=_pin_number):
+            value = table[key]
+            point = value.get("point") or {}
+            hit = None
+            for other, kept in keep.items():
+                spot = kept.get("point") or {}
+                if (value.get("pinname") == kept.get("pinname")
+                        and math.dist((point.get("x", 1e9), point.get("y", 1e9)),
+                                      (spot.get("x", 1e9), spot.get("y", 1e9))) <= tol):
+                    hit = other
+                    break
+            if hit is None:
+                keep[key] = value
+            else:
+                alias["%s.%s" % (comp, str(key)[4:])] = "%s.%s" % (comp, str(hit)[4:])
+        pins[comp] = keep
+    if not alias:
+        return {"dropped": 0, "alias": {}}
+    for net in (pred.get("nets") or {}).values():
+        refs = net.get("_refs") or []
+        merged = []
+        for comp, number in refs:
+            target = alias.get("%s.%s" % (comp, number), "%s.%s" % (comp, number))
+            pair = target.split(".", 1)
+            if pair not in merged:
+                merged.append(pair)
+        net["_refs"] = merged
+        graph = net.get("hyperGraph")
+        if isinstance(graph, str) and graph.startswith("("):
+            items = [x.strip() for x in graph.strip("()").split(",") if x.strip()]
+            seen = []
+            for item in items:
+                target = alias.get(item, item)
+                if target not in seen:
+                    seen.append(target)
+            net["hyperGraph"] = "(" + ",".join(seen) + ")"
+    return {"dropped": len(alias), "alias": alias}

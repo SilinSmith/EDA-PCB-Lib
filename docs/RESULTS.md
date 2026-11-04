@@ -42539,3 +42539,87 @@ conf≥0.25 → 83 检 / 74 中（0.892）；**≥0.12 → 105 检 / 81 中（0.
   池里没触发）。
 - 复现：`python -X utf8 work\_cv.py rebind1 --run --env STAGE2_PIN_NAME_REBIND=1`；
   上限：`python -X utf8 work\_pinbind_orc.py pnjoinBase 30`；窄规则：`python -X utf8 work\_rebind_orc.py`。
+
+## 5.572 case 1 的 +1.43 残值拆解：0.71 是 OCR 单字误读、0.71 依赖 bbox 约定、去重 +0.0227 池里反被扣回
+
+日期：2026-11-05。§5.571 只拿到 `work/_pinbind_orc.py` 上限（+0.3430）里的 case 11 那 3.03 分；
+用户点名「那先解决一下那个」，即 case 1 剩余的 **+1.43**。本节把它拆成三块，逐块量上限、判可落地性，
+最终结论是**三块都不该进交付**（去重代码与开关保留，默认 0）。
+
+### 5.572.1 逐项估值（`work/_case1_orc.py`，改 `_Pred.json` 再打分；基线 66.5534 / pin 0.6286）
+
+| 改动 | Δscore | 判定 |
+|---|---|---|
+| 同件同名、点距 <3px 去重（保留号小的那颗） | **+0.2277** | 13 页可落地，但池里净 −0.0129（见 5.572.5） |
+| U3 删 `pin_7`（等价于上一行） | +0.2277 | 同上 |
+| U3 `pin_2` → `pin_1` | **+0.7143** | 判死：是 OCR 把 `1` 读成 `2`，不是绑定错 |
+| U3 删 `pin_7` + 号归位 | +0.9524 | 判死（含上一条） |
+| U1 `pin_9 EP` 位置抄 GT | **+0.7143** | 判死：GT 把 EP 放在框外底缘，我们放在框内 21px，取决于 bbox 约定 |
+| 全部 | **+1.6770** | 上限来源 |
+
+### 5.572.2 图证：U3 的号是**单字误读**，不是绑定错位
+
+`work/_c1_u3num.png`（crop 1430,554–1485,609，scale 8；GT 的 y-up 由 `work/_g1crop.py` 自动翻转）：
+该侧自上而下是 `0`/`0`（`GND` 名的尾字）、`2`、`1`，**最下方还有引脚 1 的实心圆点标记**。
+我们读到的号框 `[1446,563]` 正好压在 **`1` 那一行**，却识别成 `2`。
+
+也就是说：`pin_2 VDD@(1463.1,568.6)` 的**位置与名字都是对的**（GT 就是 `pin_1 VDD@(1463,569)`），
+只有号错了 —— 「`1`→`2` 的单字误读」，绑定的槽位没有问题，§5.571 的整侧重绑规则救不了它。
+
+要修只能另开一路：`eda-pcb/pinmarkers.py` 已有 `hollow_marker_bands(mask, box, edge, frame, *,
+ink_threshold=230)`（:8）与 `valid_hollow_marker_evidence(rec)`（:116），唯一使用者是
+`eda-pcb/pin_evidence.py:466`（`from pinmarkers import hollow_marker_bands`，受 `STAGE1_MONO_FRAME_PINS`
+默认 0 控制）⇒ **引脚 1 圆点检测能力已存在**，可用来把「带标记那一行的号强制为 1」。
+但那是一条新的视觉环节（要在融合末尾拿图、逐件框找标记），风险中等、收益 ≤ +0.71（仅 case 1）。
+
+`U1.pin_9 EP` 同理判死：GT 的 EP 点在 `(1009,984)`、我们在 `(1009.0,963.2)`，相差 20.8px > tol 5，
+而我们的 bbox 本来就比 GT 紧（既有已知偏差），没有无 GT 的安全规则。
+
+### 5.572.3 去重的关键：必须做在**融合之后**
+
+新函数 `stage2/pin_rebind.py:dedupe_coincident(pred, tol=3.0)`：同件、同 `pinname`、点距 ≤3px ⇒
+丢**号更大**的那颗，并把网里的 `_refs`（`[["U3","7"], ...]`）与 `hyperGraph` 字符串
+（`(U3.5,U3.7,C12.1,...)`）同步改写到留下的那颗；不碰坐标、不碰号、不新增槽。
+`work/_dup13.py` 先量两种保留策略：**保留号小的 +0.0175**、保留号大的 **−0.0382** ⇒ 取前者。
+
+踩的坑：第一版把去重放在 `stage2/run.py` 的 `pred = build_doc(...)` 之后 —— 日志里确实打了
+「同点同名脚去重：1 个（U3.7 -> U3.5）」，`runs/stage2/1.json` 里也确实只剩 `pin_2`/`pin_5`，
+但最终 `final_results/1_Pred.json` 里 `pin_7` **又回来了**、13 页分数与 `rebind1` 逐位相同。
+原因：融合层的 `fusion/doc.py:DC.apply` 会按 `assigned`/`pin_index` **把脚重新补出来**
+（调用点 `fusion/run.py:302`）。所以去重挂在 **`fusion/run.py:_assemble` 的 `return out` 之前**
+（`_DEDUP = env_on("STAGE2_PIN_DEDUP", "0")`，:125），stage2 那一处保留但实际是 no-op。
+
+### 5.572.4 13 页实测
+
+| tag | 13 页 | 说明 |
+|---|---|---|
+| `ship3`（§5.568 交付） | 85.4753 / 84.4219 / 81.7287 | 本节基线 |
+| `rebind1`（§5.571 交付） | 85.6952 / 84.6418 / 81.9486 | 当前默认档 |
+| `dedup1` | 85.6952 / 84.6418 / 81.9486 | 去重放在 stage2 ⇒ **零增益**（被融合重补盖掉） |
+| `dedup2` | **85.7179 / 84.6645 / 81.9692** | 去重放在融合末尾 ⇒ 相对 `rebind1` **+0.0227**，只 case 1 **+0.30** |
+| `dedup0`（开关 =0） | 85.6952 / 84.6418 / 81.9486 | **13/13 `_Pred.json` sha256 与 `rebind1` 全等**（惰性通过） |
+
+`work/_dedupe13.py`（直调模块改 `_Pred.json`）预测 case 1 **+0.2957**、均值 +0.0227，管线实测 +0.30/+0.0227，逐位吻合。
+
+### 5.572.5 池门禁把这条规则否掉了
+
+- 池门禁（`python -X utf8 work\_poolgate.py dedupShip --pool-ref ship3`）：**29.8353**、30 案、`empty []`
+  （`ship3` = 29.8482 ⇒ 净 **−0.0129**）。
+- 池里这条规则共触发 **5 次**：`U8.2 → U8.1`、`H5.18 → H5.8`、`H8.18 → H8.8`、`U2.14 → U2.13`、
+  `U5.40 → U5.14`。后四个正是**连接器壳脚**：GT 本来就有两根同点同名的脚（`SHELL`/`GND`），
+  我们删掉的那颗是**真阳性**。
+- 判据本身分不清「我们多切了一个槽」和「GT 本来就在同一位置有两根脚」，13 页只靠 case 1 一个样本
+  支撑（+0.30），池里立刻被扣回。⇒ **默认关（`STAGE2_PIN_DEDUP=0`）**，代码与开关保留，
+  等有了「同点同名 ⇒ 只在元件脚数 ≥ 该号时才可能是真脚」这类结构证据再启用。
+
+### 5.572.6 复现
+
+```
+python -X utf8 work\_pin1.py 1                       # case1 逐件脚对照
+python -X utf8 work\_case1_orc.py                    # 逐项估值（本节 5.572.1 表）
+python -X utf8 work\_slots.py 1 U2,U3                # 槽记录（号/名框坐标）
+python -X utf8 work\_dup13.py                        # 保留号小 vs 号大两种策略
+python -X utf8 work\_dedupe13.py                     # 直调 dedupe_coincident 的 13 页口径
+python -X utf8 work\_onoff13.py "dedup2=STAGE2_PIN_DEDUP=1" "dedup0="
+python -X utf8 work\_poolgate.py dedupShip --pool-ref ship3
+```

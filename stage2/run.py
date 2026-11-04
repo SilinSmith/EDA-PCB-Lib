@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """第二阶段端到端 CLI：stage1 产物 -> 文字识别 -> 角色分配 -> 官方格式 JSON。
 
     cd Y:\\workspace\\EDA\\eda-pcb
@@ -136,6 +136,14 @@ PIN_TABLE = env_on("STAGE2_PIN_TABLE", "0")
 #   =1 ⇒ **85.6952 / 84.6418 / 81.9486**（+0.1166，只 case11 +1.52）；
 #   =0 ⇒ 85.5786 / 84.5252 / 81.8320，与交付档 `onoffShip6` 逐位相同。
 PIN_NAME_REBIND = env_on("STAGE2_PIN_NAME_REBIND", "1")
+# ★ 同点同名重复脚去重（`STAGE2_PIN_DEDUP`，默认 **0=关**；`stage2/pin_rebind.py`
+#   的 `dedupe_coincident`）：同一行偶尔被裁出两个槽（`pin_5` 与 `pin_7` 都叫 `VM`、
+#   点差 <3px）。判分键是 `(元件, 号)`，多出来的那颗永远算 fp，而真脚照样能配上。
+#   规则：同件、同名、点距 ≤3px ⇒ 丢号更大的那颗，并把网里的引用改到留下的那颗。
+#   2026-11-05 实测（`work/_dedupe13.py` 直调模块）：13 页只命中 `case1 U3.pin_7 →
+#   U3.pin_5`，该页 **+0.2957**（不改网引用是 +0.2277）、均值 **+0.0227**，其余 12 页
+#   逐位不变。默认关，先离线口径。
+PIN_DEDUP = env_on("STAGE2_PIN_DEDUP", "0")
 # ★ box 件「型号名文字框」重读（`STAGE2_PARTNAME_OCR`，§本次，默认 **0=关**；
 #   `stage2/partname_ocr.py`）：把 `partname.box` 那颗文字框单独重裁一次送 PP-OCR，
 #   在 `assemble.build_doc` 的 `Name` 最终成型处按档位覆盖：
@@ -795,6 +803,17 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
             print("[stage2] 缺口首位重绑失败：%s" % (_e,))
     pred = build_doc(doc, a, case)
     pin_index = pred.pop("__pin_index", None)
+    # ★ 同点同名重复脚去重（见文件头常量处注释）：只丢号更大的那颗，网引用同步改写。
+    if PIN_DEDUP:
+        try:
+            from . import pin_rebind as _prb2
+            _dd = _prb2.dedupe_coincident(pred)
+            if _dd["dropped"]:
+                print("[stage2] 同点同名脚去重：%d 个（%s）"
+                      % (_dd["dropped"], "；".join("%s -> %s" % kv
+                                                   for kv in sorted(_dd["alias"].items()))))
+        except Exception as _e:                      # noqa: BLE001
+            print("[stage2] 同点同名脚去重失败：%s" % (_e,))
     t3 = time.time()
 
     out_dir.mkdir(parents=True, exist_ok=True)

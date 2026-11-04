@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """融合与仲裁的总装 —— workflow.html 右侧那一列的入口。
 
 **为什么要有这个文件。** 现状是：`stage1\\detect.py` 写 `components[i].type`、
@@ -117,6 +117,12 @@ CONV_EXACT = env_on("FUSION_CONV_EXACT", "1")
 # `cvparts.hypo.LEDGER`（`prune_ref` 事件），并汇总进本 case 的报告 `ref_prune`。
 REF_PRUNE = env_on("FUSION_REF_PRUNE", "1")
 REF_PRUNE_DESIG = env_on("FUSION_REF_PRUNE_DESIG", "1")   # 具名键的悬空引用也摘（见 `_prune_orphan_refs`）
+# 同点同名重复脚去重（`stage2/pin_rebind.py:dedupe_coincident`）。必须在**融合之后**做：
+# 融合的 `doc.apply` 会按 `assigned`/`pin_index` 把脚重新补出来（stage2 里删掉的
+# `U3.pin_7` 会复活，实测 `work/_cv_run_dedup1` 与 `rebind1` 逐位同分）。
+# 2026-11-05 离线口径（`work/_dedupe13.py`，直调模块改 `_Pred.json`）：13 页只命中
+# `case1 U3.pin_7 -> U3.pin_5`，该页 +0.2957、均值 +0.0227，其余 12 页逐位不变。
+_DEDUP = env_on("STAGE2_PIN_DEDUP", "0")
 _FKEY_RE = re.compile(r"^p\d{3,4}$")          # 形状同 `stage2/assemble.py:305`
 
 
@@ -301,6 +307,16 @@ def _assemble(s1_doc: dict, assigned: dict, case: str, vlm_doc: Optional[dict],
         base = _merge_vlm(base, vlm_doc)
     out, _rep = DC.apply(base, s1_doc, assigned0 or assigned, sol,
                          pin_index=pin_index)
+    if _DEDUP:
+        try:
+            from stage2 import pin_rebind as _prb
+            _dd = _prb.dedupe_coincident(out)
+            if _dd["dropped"]:
+                print("[fusion] 同点同名脚去重：%d 个（%s）"
+                      % (_dd["dropped"],
+                         "；".join("%s -> %s" % kv for kv in sorted(_dd["alias"].items()))))
+        except Exception as _e:                      # noqa: BLE001
+            print("[fusion] 同点同名脚去重失败：%s" % (_e,))
     if os.environ.get("FUSION_DBG_NET"):
         _nm = out.get("nets") or {}
         with open(os.environ["FUSION_DBG_NET"], "a", encoding="utf-8") as _fh:
