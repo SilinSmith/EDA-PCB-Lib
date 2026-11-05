@@ -43156,3 +43156,48 @@ python -X utf8 work\_poolgate.py mergeline --pool-ref holine STAGE2_LINE_MERGE=1
 python -X utf8 work\_poolscore.py work\_fast_out_cvpool_mergeline\final_results
 ```
 
+
+## 5.579 第三十二次官方提交 81.6913：包是旧代码；v6 平衡训练判否（2026-11-05）
+
+### 5.579.1 官方结果（`Y:\workspace\EDA\261105\提交第三十二次\scoring_result (25).zip`）
+
+| 轴 | 官方值 | 权重 | 折分 |
+|---|---:|---:|---:|
+| CompF1 | 0.865393 | 0.30 | 25.96 |
+| PinF1 | 0.854946 | 0.25 | 21.37 |
+| ConnF1 | 0.821941 | 0.35 | 28.77 |
+| WireF1 | 0.558788 | 0.10 | 5.59 |
+| **FinalScore** | — | — | **81.6913** |
+
+- 逐案：1 **59.53**、2 82.13、3 96.76、4 87.61、5 82.29、6 89.61、7 96.05、8 79.77、9 88.18、10 91.30、11 **56.91**、12 71.92、13 79.94。
+- 容器：`torch 2.5.1+cu121`、CUDA 不可用 ⇒ CPU；`-lean` 档 + 端点探不通自动切离线档；4 lane 扇出，**墙钟 45.1 s**（3.47 s/张，13 张）；依赖自检 18/18。时间余量极大。
+- 弱项与本地区间一致：1 / 11 的 ConnF1（0.633 / 0.488）与 PinF1（0.629 / 0.545）；12 / 13 的 WireF1（0.213 / 0.224）。
+
+### 5.579.2 打包陈旧：本次提交不含当天三档改进（本轮最重要发现）
+
+- `prediction_result (27).zip` 里 `eda-pcb-main/submission/run.py` 只有 **102,882 字符**（仓库现为 147,062）；`compbox / STAGE2_COMP_BOX / STAGE2_HOLE_TYPE / STAGE2_LINE_FIX / STAGE2_LINE_MERGE / STAGE2_GND_FILL / SYM16 / ROW_KEYGUARD / PIN_NUMBER_REPAIR` 出现次数**全为 0**；`eda-pcb-main/stage2/compbox.py` **不在包内**；`eda-pcb-main/stage2/run.py` 48,344 字符、`STAGE2_DESIG_ROWS` 0 次。
+- ⇒ 包与 `origin/main = 5f0796c` 对齐。当天三档（compbox 占位框→字形模板 +0.7097、H* 尺寸闸门 + 线段修正 +0.0489、共线合并 +0.0869；本地 86.4049 → **86.6369**）**全部没进这次提交**。
+- 新工具 `work/_pkgcheck.py`：检查包里必须存在 `eda-pcb-main/stage2/compbox.py`、`eda-pcb-main/stage2/desig_rows.py`，且 `submission/run.py` 必须含四个开关名；对本次包输出 `VERDICT: STALE (6 gap)`、rc=1。**每次上传前先跑它。**
+
+### 5.579.3 判题尺标定（本地 judge vs 官方）
+
+- 用 `_cv.JCFG = M.EvalConfig()` 重打提交包里的 13 份 pred（解包到 `work/_sub32`）：**均值 81.3629 vs 官方 81.6913（−0.33）**。
+- 逐案偏差：1 −2.59、2 +7.43、3 +1.15、4 +3.51、5 +2.02、6 +3.32、7 −2.79、8 +3.06、9 **−9.21**、10 **−8.54**、11 +0.35、12 −3.83、13 +1.84。
+- ⇒ 本地 `judge` 尺作为**总体**代理可信（差 0.33），**单案不可用**（±9）。当前本地 judge 82.8675 ⇒ 官方口径预期 ≈82.5–82.9。
+
+### 5.579.4 v6 平衡训练判否（训练线收口）
+
+- v6 = v2 权重 + `trainset_v3/data_bal.yaml`（稀有类复制：led/switch/net_output/pin/l ×3、net_input ×2；train 4270 张 = 2.63×）+ `--epochs 8 --imgsz 1536 --batch 4 --optimizer AdamW --lr0 0.0001 --save-period 1`，8/8 跑完（`epoch0..7.pt` 各 161 MB，`best.pt`/`last.pt` 各 40.8 MB）。
+- 自有检测尺（`work/_ws6.py`，conf 0.25 / 20px 一对一）：v2 **0.9135（tp317 fp31 fn29）**、e0 **0.9157（315/27/31）**、e3 0.9155、e1 0.9151、e6 0.9131、其余 ≤0.9051 ⇒ 最好的 e0 只比 v2 高 **+0.0022**，在噪声内。
+- 管线（13 页）：v2 **86.6369**（交付档）vs e0 **83.7619（−2.88）**、e3 **84.3770（−2.26）**。轴：e0 comp 2.527 / pin 5.143 / netH 4.339 / line 4.230；e3 2.254 / 3.969 / 4.918 / 4.482。
+- 逐类（v2 → e0/e1/e4）：`gnd` tp74/fn9 → 73/10、69/14、66/17；`net_input` tp1 → 0；`c`/`r`/`box` 基本不动；`led` 6~8。
+- ⇒ **YOLO 的 mAP 提升与我们的目标无关**：v5 是 mAP50-95 +0.018 而管线 −3.17；v6 是检测 F1 +0.002 而管线 −2.3~−2.9。训练线到此收口，不再投入；若再训，先改数据契约（评测 GT 是「符号 ∪ 位号 ∪ 值」的宽框，训练标签是紧框），而不是加样本权重。
+
+### 5.579.5 复现命令
+
+```bat
+python -X utf8 work\_pkgcheck.py "261105\提交第三十二次\prediction_result (27).zip"
+python -X utf8 work\_ws6.py
+$env:YOLO_WEIGHTS="...\runs\detect\pcb43_v6_bal\weights\epoch0.pt"; python -X utf8 work\_onoff13.py "v6e0="
+```
+
