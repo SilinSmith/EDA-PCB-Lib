@@ -177,7 +177,6 @@ def rescue(doc, a, reads, bgr, *, gap=30.0, min_conf=0.80, win=140.0,
         if ty is None:
             out["no_type"] += 1
             continue
-        ty, wd = hit
         if conf < min_conf:
             out["low_conf"] += 1
             continue
@@ -252,11 +251,13 @@ def rescue(doc, a, reads, bgr, *, gap=30.0, min_conf=0.80, win=140.0,
 # 位号锚定靠「文字周围的红色墨迹」定框，这里必须换锚点：实测最近悬空导线末端会把框放到
 # 21.5px 外（`work/_wireorc.py`，case11 −0.95），所以取「导线末端 → 附近暗墨迹块 → 按类型
 # 先验取并集」，并要求文字与既有件 ≥30px（否则那是连接器里的引脚名，池 0050 的 `SW1`）。
+# 只收「GT 那边也是无名件」的类型：`gnd`(83) / `v`(51) 在 13 页 GT 里全是 `∅NNN`，
+# 判分器能把它们按坐标配上；`net_input`(8) / `net_output`(1) 的 GT 全是具名
+# （`VIN`/`VOUT`/`BAT`…），而无名合成件在 `unkeyed_match='gt'` 口径下永远配不上，
+# 补一颗就是 +1 fp（case12 实测 −0.51，即使轮廓框已压在 GT `VIN_4 [456,293,484,374]` 上）。
 WORD_TYPES = (
-    ("VOUT", "net_output"),
     ("GND", "gnd"),
     ("VSS", "gnd"),
-    ("VIN", "net_input"),
     ("VCC", "v"),
     ("VDD", "v"),
     ("3V3", "v"),
@@ -294,14 +295,60 @@ def _seg_ends(doc):
     return out
 
 
-def anchor_box(doc, box, kind, mask, *, win=45.0, lim=45.0, min_area=60):
+def _contour_box(mask, pt, prior, boxes=None, *, rad=90, tol=45.0, min_side=12.0,
+                 max_side=140.0, min_area=300.0, aspect_tol=1.8):
+    """闭合外框优先：GND/VIN 这类符号画成闭合轮廓时，先验尺寸会框歪。
+
+    case12 `VIN_4` 的箭头五边形是 25x75 的闭合轮廓，而 `net_input` 先验是 54x20；
+    只按先验框出来是底下那根横条，中心差 37px ⇒ fp（−0.51）。轮廓还要求尺寸/面积/
+    长宽比与类型先验（或其转置）相容，挡掉文字笔画与小方块；与既有件重叠的轮廓也丢掉——
+    那说明这个符号已经被检出了（case11 会选中 LED2 的外框 109x65，挡住它才回落到先验框）。
+    """
+    if mask is None:
+        return None
+    pw, ph = prior
+    asp = pw / max(ph, 1e-6)
+    x0, y0 = max(0, int(pt[0] - rad)), max(0, int(pt[1] - rad))
+    x1, y1 = int(pt[0] + rad), int(pt[1] + rad)
+    crop = mask[y0:y1, x0:x1]
+    if crop.size == 0:
+        return None
+    cnts, _h = cv2.findContours(crop, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    best = None
+    for c in cnts:
+        bx, by, bw, bh = cv2.boundingRect(c)
+        if bw < min_side or bh < min_side or bw > max_side or bh > max_side:
+            continue
+        if cv2.contourArea(c) < min_area:
+            continue
+        cx, cy = x0 + bx + bw / 2.0, y0 + by + bh / 2.0
+        d = ((cx - pt[0]) ** 2 + (cy - pt[1]) ** 2) ** 0.5
+        if d > tol:
+            continue
+        r = bw / float(bh)
+        if not (asp / aspect_tol <= r <= asp * aspect_tol or
+                1.0 / (asp * aspect_tol) <= r <= aspect_tol / asp):
+            continue
+        cand = [x0 + bx, y0 + by, x0 + bx + bw, y0 + by + bh]
+        if boxes and any(_overlap(cand, cbb) > 0.25 for cbb in boxes):
+            continue
+        if best is None or d < best[0]:
+            best = (d, cand)
+    return best
+
+
+def anchor_box(doc, box, kind, mask, *, win=45.0, lim=45.0, min_area=60, boxes=None):
     """文字框 → 锚点 → 按类型先验定框。
 
-    顺序是**墨迹优先、导线末端兜底**（实测：反过来的话 case11 会落到 21.5px 外的
-    悬空末端上，框中心离 GT 33px，只算 fp，−0.95）。符号的笔画常常是一根细杆
-    （GND 的竖杆 2x49），所以细杆只取它的中心、尺寸用类型先验；块状墨迹才直接用外框。
+    顺序是**闭合轮廓 > 墨迹 > 导线末端**（实测：导线末端优先时 case11 会落到 21.5px
+    外的悬空末端上，框中心离 GT 33px，只算 fp，−0.95）。符号的笔画常常是一根细杆
+    （GND 的竖杆 2x49），所以细杆只取它的中心、尺寸用类型先验；闭合轮廓则直接用轮廓外框。
+    竖排文字读出来的（`vert=True`）符号多是转 90° 的，先验尺寸要跟着转置。
     """
     cx, cy = (box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0
+    # 先验不跟着文字方向转置：case11 那两颗 GND 的文字是竖排、符号却是正立（19x42），
+    # 转置后框成 34x26、中心差 12px（实测 case11 −1.29）。转 90° 的符号（case12 `VIN_4`
+    # 是 25x75 的箭头）由 `_contour_box` 的闭合轮廓兜住。
     w, hh = WORD_SIZE.get(kind, (26.0, 30.0))
     # 文字本身也是墨迹：先把文字框从掩膜里挖掉，否则最近的"墨迹块"就是这行字自己
     # （case11 实测会得到 d=0.5 的自命中，框把文字和符号一起圈进去）。
@@ -312,6 +359,10 @@ def anchor_box(doc, box, kind, mask, *, win=45.0, lim=45.0, min_area=60):
         m[max(0, ty0 - 1):ty1 + 2, max(0, tx0 - 1):tx1 + 2] = 0
     ink = _ink_box(m, cx, cy, win, min_area=min_area)
     if ink and ink[0] <= win:
+        cb = _contour_box(m, ((ink[1][0] + ink[1][2]) / 2.0, (ink[1][1] + ink[1][3]) / 2.0),
+                          (w, hh), boxes)
+        if cb is not None:
+            return cb[1], cb[0], "contour"
         d, ib, _a = ink
         gx, gy = (ib[0] + ib[2]) / 2.0, (ib[1] + ib[3]) / 2.0
         bw, bh = ib[2] - ib[0], ib[3] - ib[1]
@@ -331,8 +382,12 @@ def anchor_box(doc, box, kind, mask, *, win=45.0, lim=45.0, min_area=60):
 
 
 def rescue_words(doc, a, reads, bgr, *, gap=30.0, min_conf=0.60, lim=45.0,
-                 pad=2.0, max_side=260.0, min_side=8.0):
-    """网标词（GND/VCC/VIN/VOUT/3V3）→ 类型 → 导线末端锚定补件。键用 `p9NN`（判题按几何配）。"""
+                 pad=2.0, max_side=260.0, min_side=8.0, carry_value=False):
+    """网标词（GND/VCC/VIN/VOUT/3V3）→ 类型 → 就近锚定补件。键用 `p9NN`（判题按几何配）。
+
+    `carry_value` 默认关：GT 的 gnd `value` 确实是 `"GND"`，但抄上去会被文本比对
+    配到别的 GT 上（实测 case11 +1.19 → −1.28）。
+    """
     out = {"added": [], "near": 0, "low_conf": 0, "no_wire": 0, "bad_size": 0,
            "overlap": 0, "no_type": 0}
     comps = doc.get("components") or []
@@ -360,7 +415,7 @@ def rescue_words(doc, a, reads, bgr, *, gap=30.0, min_conf=0.60, lim=45.0,
             continue
         if mask is None:
             mask = _dark_mask(bgr)
-        bb, dw, how = anchor_box(doc, box, ty, mask, lim=lim)
+        bb, dw, how = anchor_box(doc, box, ty, mask, lim=lim, boxes=boxes)
         if bb is None:
             out["no_wire"] += 1
             continue
@@ -387,7 +442,8 @@ def rescue_words(doc, a, reads, bgr, *, gap=30.0, min_conf=0.60, lim=45.0,
             "key": key, "n_alts": 1, "pending": False, "dual_fine": 0.0,
         })
         a.setdefault("comps", {})[cid] = {"designator": None, "partname": None,
-                                          "value": {"text": wd, "conf": round(conf, 4)},
+                                          "value": ({"text": wd, "conf": round(conf, 4)}
+                                                    if carry_value else None),
                                           "pins": {}}
         doc.setdefault("pins", {})[cid] = []
         boxes.append([float(bb[0] - pad), float(bb[1] - pad),

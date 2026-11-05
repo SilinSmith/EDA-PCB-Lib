@@ -178,12 +178,15 @@ DESIG_ROWS = env_on("STAGE2_DESIG_ROWS", "0")
 #   （0001 五颗 `TP*` −0.55、0011 三颗 `D*` −0.44）⇒ 交付层只放 `l/switch`。
 TEXT_ANCHOR = env_on("STAGE2_TEXT_ANCHOR", "1")
 TEXT_WORDS = env_on("STAGE2_TEXT_WORDS", "0")
-#   实测（13 页，STAGE2_VTEXT=1 STAGE2_TEXT_WORDS=1）：local 87.294 / official 85.605 /
-#   judge 83.543（基线 87.2413 / 85.7086 / 83.4913）；逐案只 case11 **+1.19**
-#   （竖排 GNDGND → 暗墨迹细杆定位，框中心离 GT ∅695 7.5px ⇒ tp）、case12 **−0.51**
-#   （VIN/GND 竖排网标锚到的墨迹是导线端头，多一颗 fp）。把词写进 alue 后 case11 反而
-#   −1.28（文本比对把件配到别的 GT 上）⇒ 先不带 value。净收益在噪声内，默认仍关，
-#   待「只补该页确实缺的符号」的判别再开。
+#   实测（13 页，STAGE2_VTEXT=1 STAGE2_TEXT_WORDS=1）：local **87.3329** / official
+#   **85.8063** / judge **83.5829**（基线 87.2413 / 85.7086 / 83.4913）；逐案只 case11
+#   **+1.19**（竖排 `NDGND` → 暗墨迹细杆定位，框中心离 GT ∅695 7.5px ⇒ tp），其余 12 页逐位不变。
+#   三条判据都是实测买来的：① 只补「GT 那边也是无名件」的类型（`gnd` 83 颗、`v` 51 颗全是
+#   `∅NNN`）——`net_input`/`net_output` 的 GT 全是具名（`VIN`/`VOUT`/`BAT`），无名合成件在
+#   `unkeyed_match='gt'` 下配不上、只会 +1 fp（case12 即使轮廓框已压在 GT `VIN_4` 上也 −0.51）；
+#   ② 闭合轮廓优先（case12 的箭头是 25x75，先验 54x20 只会框到下面那根横条，中心差 37px）；
+#   ③ 与既有件重叠的轮廓丢掉（否则 case11 会选中 LED2 的外框 109x65）。把词写进 `value` 后
+#   case11 反而 −1.28（文本比对把件配到别的 GT 上）⇒ 不带 value。
 # ★ 网标词锚定（`STAGE2_TEXT_WORDS`，默认 **0=关**；`stage2/text_anchor.py: rescue_words`）：
 #   「文字 → 类型 → 导线末端/暗墨迹 → 按类型先验补件」，覆盖**没有位号**的符号（GND/VCC/
 #   VIN/VOUT/3V3）。动机：case11 的两颗竖排 GND（`('GNDGND', 0.994)`、离最近元件 96px）
