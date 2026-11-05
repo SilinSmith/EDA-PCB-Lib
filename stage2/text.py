@@ -797,6 +797,79 @@ def detect_texts(bgr: np.ndarray, min_h: int = 4, max_h: int = 34,
             for b in textseg.detect_boxes(bgr)]
 
 
+def vcolumns(boxes, *, gap: float = 8.0, min_h: float = 24.0,
+             ratio: float = 1.6, overlap: float = 0.5):
+    """把**叠成一列**的小框聚成合并框 → [(union_box, [成员框...]), ...]。
+
+    竖排文字被检测成一个个近方形单字（case11 的 `GND GND` 是 x≈1219 的一列单字），
+    所以先按「x 重叠 ≥50% 且竖向间隙 ≤8px」聚列，再要求**合并后**高 ≥24px 且 ≥1.6×宽。
+    """
+    cand = [tuple(float(v) for v in b) for b in boxes]
+    cand.sort(key=lambda r: ((r[0] + r[2]) / 2.0, r[1]))
+    cols: List[Dict] = []
+    for r in cand:
+        w = r[2] - r[0]
+        placed = False
+        for c in cols:
+            u = c["u"]
+            ov = min(u[2], r[2]) - max(u[0], r[0])
+            if ov <= 0 or ov < overlap * min(w, u[2] - u[0]):
+                continue
+            if r[1] > u[3] + gap or r[3] < u[1] - gap:
+                continue
+            c["u"] = (min(u[0], r[0]), min(u[1], r[1]),
+                      max(u[2], r[2]), max(u[3], r[3]))
+            c["m"].append(r)
+            placed = True
+            break
+        if not placed:
+            cols.append({"u": r, "m": [r]})
+    out = []
+    for c in cols:
+        u = c["u"]
+        uw, uh = u[2] - u[0], u[3] - u[1]
+        if len(c["m"]) >= 2 and uh >= min_h and uh >= ratio * max(uw, 1.0):
+            out.append((u, c["m"]))
+    return out
+
+
+def read_vertical(bgr: np.ndarray, engine: "TextEngine", boxes: Sequence[Box],
+                  roles: Sequence[str] = ("net_label", "value")) -> List[Dict]:
+    """竖排文字列补一遍旋转读数，返回可并入 `reads` 的条目。
+
+    识别端与检测端都只处理正立文字，竖排串会被切成单字：case11 那串 `GND GND`
+    在 reads 里是 x≈1219 的一列 `C/2/Q/D`。把这一条竖列整体转 90° 后能读出
+    `('GND GND', 0.93)`；反向对照横排 `GND` 正读 0.9996、转 90° 读空 ⇒ 只在竖长框上补试。
+    """
+    out: List[Dict] = []
+    for u, mem in vcolumns(boxes):
+        x0, y0, x1, y1 = [int(round(v)) for v in u]
+        pad = 3
+        crop = bgr[max(0, y0 - pad):y1 + pad, max(0, x0 - pad):x1 + pad]
+        if crop is None or crop.size == 0 or crop.shape[0] < 12 or crop.shape[1] < 6:
+            continue
+        rot = cv2.rotate(crop, cv2.ROTATE_90_CLOCKWISE)
+        try:
+            rr = engine.read(rot, [(0, 0, rot.shape[1], rot.shape[0])], roles)
+        except Exception:
+            continue
+        rd = (rr[0].get("reads") or {}) if rr else {}
+        best = None
+        for role, tv in rd.items():
+            if not tv or len(tv) < 2:
+                continue
+            t = (tv[0] or "").strip()
+            if len(t) < 2:
+                continue
+            if best is None or float(tv[1]) > best[2]:
+                best = (t, role, float(tv[1]))
+        if best is None or best[2] < 0.5:
+            continue
+        out.append({"bbox": u, "reads": {best[1]: (best[0], best[2])},
+                    "vertical": True, "ncol": len(mem)})
+    return out
+
+
 class TextEngine:
     """懒加载的 CRNN 包装。`ckpt=None` 或权重不存在时退化为「只定位不识别」。"""
 

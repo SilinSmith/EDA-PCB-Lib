@@ -29,7 +29,7 @@ except ImportError:                     # 直接跑脚本时 `sys.path[0]` 是�
     from envflag import env_on
 
 from .text import (DEFAULT_CKPT, LINESPLIT, TextEngine, detect_texts, imread_unicode,
-                   read_stage1_texts)
+                   read_stage1_texts, read_vertical)
 from .assign import assign, dist_to_rect, page_scale_from_heights, set_page_scale
 from .assemble import build_doc
 from . import partname_ocr
@@ -184,6 +184,12 @@ TEXT_ANCHOR = env_on("STAGE2_TEXT_ANCHOR", "1")
 #   （文字距离 0.0px、conf 0.947）⇒ 该案 +0.52；池门禁 `dfill` = **29.6510**，与 `shape1`
 #   逐位相同（池上没有可回填的候选）⇒ 默认 1。
 DESIG_FILL = env_on("STAGE2_DESIG_FILL", "1")
+# ★ 竖排文字列补读（`STAGE2_VTEXT`，默认 **0=关**；`stage2/text.py: read_vertical`）：
+#   识别端与检测端都只处理正立文字，竖排串会被切成单字（case11 那串 `GND GND` 在 reads
+#   里是 x≈1219 的一列 `C/2/Q/D`）。把竖长框聚成一列、整体转 90° 再读：`('GND GND', 0.93)`；
+#   反向对照横排 `GND` 正读 0.9996、转 90° 读空 ⇒ 只在竖长框上补试旋转是安全的。
+#   case12 顺带量到 6 条竖排网标全丢（`VIN`×2、`GND`×4，conf 0.99~1.00，见 `work/_vcol_audit.py`）。
+VTEXT = env_on("STAGE2_VTEXT", "0")
 # ★ box 件「型号名文字框」重读（`STAGE2_PARTNAME_OCR`，§本次，默认 **0=关**；
 #   `stage2/partname_ocr.py`）：把 `partname.box` 那颗文字框单独重裁一次送 PP-OCR，
 #   在 `assemble.build_doc` 的 `Name` 最终成型处按档位覆盖：
@@ -491,6 +497,16 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         reads = engine.read(bgr, boxes) if roles is None else engine.read(bgr, boxes, roles)
     else:
         reads = [{"bbox": b, "reads": {}} for b in boxes]
+
+    # ★ 竖排文字列补读（`STAGE2_VTEXT`，默认关）：见 `stage2/text.py: read_vertical`。
+    _vreads: List[Dict] = []
+    if do_ocr and VTEXT:
+        try:
+            _vreads = read_vertical(bgr, engine, boxes)
+        except Exception:
+            _vreads = []
+        if _vreads:
+            reads = list(reads) + list(_vreads)
 
     # ★ 小字放大重读（`STAGE2_ZOOM_READ`，默认关）：见文件头该开关的注释。
     #   只对**已检出的元件**做局部放大，把新增读数并入候选池；坐标一律除回原尺度，
