@@ -2181,7 +2181,7 @@ def _run(a) -> int:
         "", "0", "off", "false")
     _lm_perp, _lm_jun = 2.0, 5.0
 
-    def _linemerge_step(cid):
+    def _linemerge_step(cid, _depth=0):
         if not _line_merge:
             return
         dst_j = final_dir / ("%s_Pred.json" % cid)
@@ -2269,6 +2269,104 @@ def _run(a) -> int:
             return
         _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
         _log(fp, "  %-28s 共线合并 %d" % (cid, n_merge))
+        if _depth < 2:
+            # 单遍合并不收敛：第一遍并完会再暴露出可并的相邻段（离线实测 42->40）。
+            _linemerge_step(cid, _depth + 1)
+
+    # ★ `STAGE2_LINE_JOIN`（默认 1 = 开）：把**悬空端点**接到同网另一条边上，接完再清一次残段。
+    #   病（case13 `PR net_3`）：GT 竖线 `(607,560)-(607,328)`，我们的竖线停在 y=356，
+    #   与上方横线差 28px ⇒ 两端都不在 5px 内，整条边配不上。
+    #   判据：端点 3px 内没有别的端点（悬空）+ 到同网另一条边的垂足 <= 12px（垂足须落段内）。
+    #   读数（`work\_line_join.py lmIter`，base 86.8286 / line 4.020）：只接边 L=6 +0.0505、
+    #   L=10/16 **+0.0671**（逐案 1+0.31 3+0.22 7+0.15 9+0.24 11−0.34 12+0.29）、L=24 +0.0192；
+    #   接边后再清残段（tol6/40）**+0.1046**、tol8/40 +0.1066 ⇒ 默认 12px + tol6/40。
+    _line_join = os.environ.get("STAGE2_LINE_JOIN", "1").strip().lower() not in (
+        "", "0", "off", "false")
+    _lj_lim, _lj_free = 12.0, 3.0
+
+    def _lj_foot(pt, a, b):
+        ax, ay = a
+        bx, by = b
+        dx, dy = bx - ax, by - ay
+        ln2 = dx * dx + dy * dy
+        if ln2 < 1e-9:
+            return None
+        t = ((pt[0] - ax) * dx + (pt[1] - ay) * dy) / ln2
+        if t < -1e-6 or t > 1 + 1e-6:
+            return None
+        return ax + t * dx, ay + t * dy
+
+    def _linejoin_step(cid):
+        if not _line_join:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            doc = json.loads(dst_j.read_text(encoding="utf-8"))
+        except Exception:                                       # noqa: BLE001
+            return
+        n_move = n_stub = 0
+        for net in (doc.get("nets") or {}).values():
+            segs = {}
+            for k, v in (net.get("edges") or {}).items():
+                try:
+                    segs[k] = [(float(v[0]["x"]), float(v[0]["y"])),
+                               (float(v[1]["x"]), float(v[1]["y"]))]
+                except (KeyError, IndexError, TypeError, ValueError):
+                    continue
+            if len(segs) < 2:
+                continue
+            ends = []
+            for k, sg in segs.items():
+                ends.append((k, sg[0]))
+                ends.append((k, sg[1]))
+            for k, sg in segs.items():
+                for i in (0, 1):
+                    pt = sg[i]
+                    if any(k2 != k and math.hypot(e[0] - pt[0], e[1] - pt[1]) <= _lj_free
+                           for k2, e in ends):
+                        continue
+                    best = None
+                    for k2, s2 in segs.items():
+                        if k2 == k:
+                            continue
+                        f = _lj_foot(pt, s2[0], s2[1])
+                        if f is None:
+                            continue
+                        d = math.hypot(f[0] - pt[0], f[1] - pt[1])
+                        if d <= 0.5 or d > _lj_lim:
+                            continue
+                        if best is None or d < best[0]:
+                            best = (d, f)
+                    if best is None:
+                        continue
+                    sg[i] = best[1]
+                    n_move += 1
+            drop = []
+            for k, sg in segs.items():
+                ln = math.hypot(sg[1][0] - sg[0][0], sg[1][1] - sg[0][1])
+                if ln >= _lf_maxlen:
+                    continue
+                for k2, s2 in segs.items():
+                    if k2 == k:
+                        continue
+                    if math.hypot(s2[1][0] - s2[0][0], s2[1][1] - s2[0][1]) <= ln:
+                        continue
+                    if (_pt_seg(sg[0], s2[0], s2[1]) <= _lf_tol and
+                            _pt_seg(sg[1], s2[0], s2[1]) <= _lf_tol):
+                        drop.append(k)
+                        break
+            for k in drop:
+                segs.pop(k, None)
+            n_stub += len(drop)
+            if n_move or drop:
+                net["edges"] = {"edge_%d" % (i + 1): [
+                    {"x": round(a[0], 2), "y": round(a[1], 2)},
+                    {"x": round(b[0], 2), "y": round(b[1], 2)}]
+                    for i, (a, b) in enumerate(segs.values())}
+        if not (n_move or n_stub):
+            return
+        _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
+        _log(fp, "  %-28s 端点接边 %d、残段 %d" % (cid, n_move, n_stub))
 
     def _pinname_step(cid, png):
         """在**已经落盘**的 `<cid>_Pred.json` 上补一层引脚名复读；失败一律不影响导出。"""
@@ -2402,6 +2500,7 @@ def _run(a) -> int:
                     _linefix_step(cid)
                     _degeom_step(cid)
                     _linemerge_step(cid)
+                    _linejoin_step(cid)
                     continue
             except Exception as exc:                        # noqa: BLE001
                 _log(fp, "  ⚠️ %s 引脚名重读失败：%s: %s" % (cid, type(exc).__name__, exc))
@@ -2421,6 +2520,7 @@ def _run(a) -> int:
         _linefix_step(cid)
         _degeom_step(cid)
         _linemerge_step(cid)
+        _linejoin_step(cid)
         if _broke and not (_valread_on or _pinname_on):
             _reread_skipped.append((cid, _p))
     _log(fp, "导出 %d 份 <case>_Pred.json%s"
