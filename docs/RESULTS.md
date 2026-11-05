@@ -43412,3 +43412,76 @@ python -X utf8 work\_onoff13.py "gnd1=STAGE2_GND_FILL=1"       # 13 页单臂
 python -X utf8 work\_poolgate.py lmJoinG --pool-ref lmJoin    # 池门禁（POOL_DEVICE=cuda）
 ```
 
+## 5.584 形状闸门挡住假补件，位号回填兜住「件在、号没读到」
+
+### 5.584.1 交付档读数
+
+| 档 | 13 页 mean | official | judge | 说明 |
+|---|---:|---:|---:|---|
+| `shape1`（形状闸门） | 87.2015 | 85.6688 | 83.4515 | 与 `axis1`/`isect2` 逐位相同 |
+| `dfill7`（+ 位号回填） | **87.2413** | **85.7086** | **83.4913** | 只 case1 +0.52 |
+
+池门禁：`shape1` = **29.6510**（ref `lmJoinG` 29.6406，+0.0104）；
+`dfill`（位号回填）= **29.6510**（ref shape1 29.6510（逐位相同））。
+
+### 5.584.2 形状尺寸闸门（`stage2/text_anchor.py` 的 `MIN_LONG`）
+
+用户提的「文字在、符号不在」判据此前只靠「孤立文字 + 墨迹框」，池 0050 因此补出两颗假
+`switch`（`SW1`/`SW2` 是连接器引脚名，文字旁根本没有开关符号）。证据（侧车
+`work\_fast_out_cvpool_lmJoinG\runs\stage2\0050.anchor.json`）：
+
+| 例 | 文字到件距 | 墨迹框 | 真/假 |
+|---|---:|---|---|
+| 池 0050 `SW2` | 62.6px | 25x18 | 假 |
+| 池 0050 `SW1` | 80.7px | 25x18 | 假 |
+| 池 0050 `D2` | 35.9px | 63x33 | 假 |
+| case1 `L2` | 35.8px | 77x11 | 真 |
+| case11 `SW1` | 56.1px | 28x113 | 真 |
+
+判据：按类型给「墨迹框长边」下限 —— `switch`/`l` 40px、`led`/`d` 30px、`testpoint` 20px
+（`MIN_LONG`），不足即计入 `bad_size`。13 页两颗真例都保留，池上假件全被挡掉。
+
+同类负证据（顺带判否）：把 43 类检测器在 ±80px 裁片上重跑（imgsz 1280、conf 0.02），
+**真例反而分更低**（case11 真 `SW1` 只有 `other 0.026`，池 0050 假 SW 文字处反而
+`other 0.743`）⇒ 局部 YOLO 命中不能当类型验证。
+
+### 5.584.3 位号回填（`STAGE2_DESIG_FILL`，默认 0 = 关）
+
+容灾：`件在、位号没读到` 时不要把整颗丢成兜底键，把邻近的**孤立位号文字**回填上去。
+
+- stage2 侧：`text_anchor.desig_candidates()` 把「像位号」的读法（`conf>=0.80`、`DESIG_RE`、
+  类型前缀可解析）连同**图像坐标框**写进 `<case>.desig.json`；**不按文本去重**——同一串
+  （如 `LED2`）会在多处出现，只有最近的那一处才是它的本体（实测 case1 有两处 `LED2`，
+  去重后只剩远处那颗，回填因此恒为 0）。
+- 交付层：`submission/run.py` 的 `_desigfill_step()` 调 `stage2/desig_fill.rename_components()`，
+  三道闸：① 文字到件框 ≤ 12px（判距离用 **compbox 换过的模板框**，占位框 `led` 14x20 离位号
+  文字常有 30~40px ⇒ 用占位框会恒不命中）；② 类型前缀一致（`R/C/L/D/LED/SW/TP`）；③ 一对一
+  （已被别的键占用的文字不再用）。只改键名与 `_refs`/`hyperGraph` 引用，不增删元件、不动几何。
+- 读数：13 页 87.2015 → **87.2413（+0.0398）**，只改 1 件 `case1 p029 led → LED2`（文字距离
+  0.0px、conf 0.947）⇒ 该案 +0.52；其余 12 页逐位不变。
+
+### 5.584.4 case11 `U1` 三根缺脚的逐根死因（用户点名要的解释）
+
+stage1 给 `U1`（`c0002`，bbox_img `[956.95,360.15,1075.02,458.63]`）**11 个 trusted 证据点**：
+右列 `(1143.3,379.5)/(1128,400)/(1147,418)/(1115.3,378.5)/(1087,439)`，左列
+`(938,439)/(936,440)/(938,418)/(936,418)/(938,398.5)/(945,399)` ⇒ **左列没有 y≈379 那一行**。
+
+| 缺的脚 | 死因 |
+|---|---|
+| `pin_1 OUT` | **左列顶行的脚点根本没检出** ⇒ 连编号的对象都没有 |
+| `pin_6 VDD` | 右列 `(1147,418)` 有脚点，但**号与名都没读出来** |
+| `pin_8 LED1` | 号 `8` 读到了（框 `[1077,368]` 正对 y≈379 行），但**名字被配到另一个槽**（`LED1` 落在 `slot9`、配号 7），`8` 那个槽没有名字 ⇒ 被 `assemble` 的迟到 need-name 闸门整条丢掉 |
+
+⇒ 结论：三根分别是「点没检出 / 读数没有 / 名配错槽」三种病，**不是同一个 bug**；
+这也解释了为什么「按格点重编号」（`_pinord.py` −0.4671）和「补无名脚」（`_pinmirror_orc.py`
+−0.9104）都判否 —— 前者改错列，后者在 `pin_f1` 里 fp+fn 双扣。
+
+### 5.584.5 复现命令
+
+```
+python -X utf8 work\_cv.py shape1 --run --device cuda
+python -X utf8 work\_cv.py dfill7 --run --device cuda --env STAGE2_DESIG_FILL=1
+python -X utf8 work\_poolgate.py dfill --pool-ref shape1 STAGE2_DESIG_FILL=1
+python -X utf8 work\_desigfill_orc.py shape1 12 0.8      # 上限 oracle（+0.0398）
+```
+

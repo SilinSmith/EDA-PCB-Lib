@@ -32,6 +32,9 @@ PREFIX_TYPES = (
     ("C", "c"),
     ("D", "d"),
 )
+MIN_LONG = {"switch": 40.0, "l": 40.0, "led": 30.0, "d": 30.0,
+            "testpoint": 20.0}
+
 DESIG_RE = re.compile(r"^([A-Za-z]{1,3})(\d{1,4})$")
 # 值文字：必须带单位字母（`4.7uH`/`20k`/`22uf`）或带小数点的长串，避免把脚号 `1`/`2`
 # 当成值抄上去（GT 的 `r/c/l` 都带 value，抄错一个字符 = 该件 fp+fn）。
@@ -130,6 +133,23 @@ def _overlap(a, b):
     return (inter / m) if m > 0 else 0.0
 
 
+def desig_candidates(reads, *, min_conf=0.80):
+    """收集「像位号」的文字读法，交给交付层做 `pNNN` 回填（图像坐标）。"""
+    out = []
+    for rec in reads:
+        box = rec.get("bbox")
+        if not box or len(box) != 4:
+            continue
+        t, c, ch = _pick_read(rec.get("reads") or {})
+        if not t or c < min_conf or not DESIG_RE.match(t):
+            continue
+        if _type_of(t) is None:
+            continue
+        out.append({"text": t, "conf": round(c, 4),
+                    "box": [float(v) for v in box], "channel": ch})
+    return out
+
+
 def rescue(doc, a, reads, bgr, *, gap=30.0, min_conf=0.80, win=140.0,
            pad=2.0, max_side=260.0, min_side=8.0):
     """Returns {"added": [{key,type,box,d}], "skipped_*": int}. 纯追加。"""
@@ -178,6 +198,13 @@ def rescue(doc, a, reads, bgr, *, gap=30.0, min_conf=0.80, win=140.0,
         _d, bb, _area = ink
         bw, bh = bb[2] - bb[0], bb[3] - bb[1]
         if bw < min_side or bh < min_side or bw > max_side or bh > max_side:
+            out["bad_size"] += 1
+            continue
+        # 形状最小尺寸（按类型）：已知类型就该像那个符号，不能拿一小块墨迹充数。
+        # 池 0050 把连接器引脚名 `SW1`/`SW2` 补成两颗 25x18 的 switch（各 −0.08），
+        # 而真 switch（case11 SW1）是 28x113、真电感（case1 L2）是 77x11 ⇒ 加类型闸门。
+        _ml = MIN_LONG.get(ty, 0.0)
+        if _ml and max(bw, bh) < _ml:
             out["bad_size"] += 1
             continue
         # 墨迹和任何既有件重叠 ⇒ 那个符号已经被检出了，补上去只会多一颗错键

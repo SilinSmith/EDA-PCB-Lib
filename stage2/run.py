@@ -177,6 +177,13 @@ DESIG_ROWS = env_on("STAGE2_DESIG_ROWS", "0")
 #   （mergeline 29.6381，差 −0.0036 在噪声 0.0072 内）；全类型版 `anchor` 是 29.5997
 #   （0001 五颗 `TP*` −0.55、0011 三颗 `D*` −0.44）⇒ 交付层只放 `l/switch`。
 TEXT_ANCHOR = env_on("STAGE2_TEXT_ANCHOR", "1")
+# ★ 位号回填（`STAGE2_DESIG_FILL`，默认 **0=关**；`stage2/text_anchor.fill_designators`）：
+#   容灾——「件在、位号没读到」时不要整颗丢键，把 12px 内、类型前缀一致的**孤立位号文字**
+#   回填成 `designator`。只改 `a["comps"][cid]["designator"]`，不动几何、不增删件。
+#   实测：13 页 87.2015 → **87.2413（+0.0398）**，只改 1 件 case1 `p029 led → LED2`
+#   （文字距离 0.0px、conf 0.947）⇒ 该案 +0.52；池门禁 `dfill` = **29.6510**，与 `shape1`
+#   逐位相同（池上没有可回填的候选）⇒ 默认 1。
+DESIG_FILL = env_on("STAGE2_DESIG_FILL", "1")
 # ★ box 件「型号名文字框」重读（`STAGE2_PARTNAME_OCR`，§本次，默认 **0=关**；
 #   `stage2/partname_ocr.py`）：把 `partname.box` 那颗文字框单独重裁一次送 PP-OCR，
 #   在 `assemble.build_doc` 的 `Name` 最终成型处按档位覆盖：
@@ -866,6 +873,17 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                           for d in _tres["added"])))
         except Exception as _e:                      # noqa: BLE001
             print("[stage2] 文字锚定补件失败：%s" % (_e,))
+    # ★ 位号回填（见文件头 `DESIG_FILL` 注释）：候选文字写侧车，交付层再改名。
+    if DESIG_FILL:
+        try:
+            from . import text_anchor as _ta2
+            _dc = _ta2.desig_candidates(reads)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / ("%s.desig.json" % case)).write_text(
+                json.dumps({"reads": _dc}, ensure_ascii=False), encoding="utf-8")
+            print("[stage2] 位号回填候选：%d 条" % len(_dc))
+        except Exception as _e:                      # noqa: BLE001
+            print("[stage2] 位号回填候选失败：%s" % (_e,))
     pred = build_doc(doc, a, case)
     pin_index = pred.pop("__pin_index", None)
     # ★ 同点同名重复脚去重（见文件头常量处注释）：只丢号更大的那颗，网引用同步改写。

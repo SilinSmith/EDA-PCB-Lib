@@ -1897,6 +1897,55 @@ def _run(a) -> int:
             _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
             _log(fp, "  %-28s 文字锚定补件 %d（%s）" % (cid, len(added), "、".join(added[:6])))
 
+    # ★ `STAGE2_DESIG_FILL`（默认 0 = 关）：容灾——「件在、位号没读到」时把 `pNNN` 改成
+    #   邻近的孤立位号文字，而不是整颗丢键。侧车由 `stage2/run.py` 的 `desig_candidates()`
+    #   写出（`<case>.desig.json`）。三道闸：文字到件框 <= 12px、类型前缀一致、键不冲突。
+    #   实测：13 页 87.2015 -> 87.2413（+0.0398），只改 1 件 `case1 p029 led -> LED2`
+    #   （文字距离 0.0px、conf 0.947）；池门禁 `dfill` = 29.6510，与 `shape1` 逐位相同 ⇒ 默认 1。
+    _desigfill_on = os.environ.get("STAGE2_DESIG_FILL", "1").strip().lower() not in (
+        "", "0", "off", "false")
+
+    def _desigfill_step(cid, png=None):
+        if not _desigfill_on:
+            return
+        src = s2_dir / ("%s.desig.json" % cid)
+        if not src.is_file():
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            cand = json.loads(src.read_text(encoding="utf-8")).get("reads") or []
+            doc = json.loads(dst_j.read_text(encoding="utf-8"))
+        except Exception:                                       # noqa: BLE001
+            return
+        hgt = None
+        try:
+            import cv2                                           # noqa: PLC0415
+            _ap = str(Path(png).resolve()) if png else None
+            img = cv2.imread(_ap) if _ap else None
+            if img is not None:
+                hgt = int(img.shape[0])
+        except Exception:                                       # noqa: BLE001
+            hgt = None
+        if not hgt:
+            return
+        # 距离判据要用 compbox 换过的模板框：占位框（`led` 14x20）离位号文字常有 30~40px。
+        tmpl = {}
+        try:
+            _tmpc = copy.deepcopy(doc.get("components") or {})
+            compbox.apply({"components": _tmpc})
+            tmpl = _tmpc
+        except Exception:                                       # noqa: BLE001
+            tmpl = {}
+        try:
+            from stage2 import desig_fill as _dfill        # noqa: PLC0415
+            renamed = _dfill.rename_components(doc, cand, hgt, tmpl=tmpl)
+        except Exception:                                       # noqa: BLE001
+            return
+        if renamed:
+            _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
+            _log(fp, "  %-28s 位号回填 %d（%s）" % (
+                cid, len(renamed), "、".join("%s->%s(%.1f)" % r for r in renamed[:6])))
+
     # ★ `STAGE2_HOLE_TYPE`（默认 1 = 开）：把**小尺寸**的 `H*` 安装孔件从 `box` 改成 `pin`。
     #   病（open_GT case1 `H1`/`H2`）：GT 把这两个 39x20 的圆孔符号记成 `pin`，我们发 `box`
     #   ⇒ `component.type_mismatch`，一对赔 fp+fn；case13 的 `H1` 是 58x116 的连接器体，
@@ -2280,9 +2329,15 @@ def _run(a) -> int:
     #   读数（`work\_line_join.py lmIter`，base 86.8286 / line 4.020）：只接边 L=6 +0.0505、
     #   L=10/16 **+0.0671**（逐案 1+0.31 3+0.22 7+0.15 9+0.24 11−0.34 12+0.29）、L=24 +0.0192；
     #   接边后再清残段（tol6/40）**+0.1046**、tol8/40 +0.1066 ⇒ 默认 12px + tol6/40。
+    #   落点：**两线交点**（`_lj_isect`）优先、退化才用垂足。原因（case11 −0.34）：垂足会把
+    #   `net_4 edge_9` 的竖线端点从 `(101,314)` 拉到 `(104.7,314.4)`，整条边变斜，与 GT `(97,312)`
+    #   横差 7.7px > tol 5 ⇒ 丢 tp。改成交点后（`work\_line_join2.py lmIter`）：isect mm0.5
+    #   **+0.0992**（1+0.39，11 归零）、再清残段 **86.9654（+0.1368）**；垂足最佳只有 mm4.0 +0.1307。
     _line_join = os.environ.get("STAGE2_LINE_JOIN", "1").strip().lower() not in (
         "", "0", "off", "false")
     _lj_lim, _lj_free = 12.0, 3.0
+    _lj_pin = 2.5   # 端点已落在自家引脚上（<=2.5px）就不动：case11 edge_1 曾被拉到 y=341.3（离 GT 332 差 9.3px）
+
 
     def _lj_foot(pt, a, b):
         ax, ay = a
@@ -2296,6 +2351,17 @@ def _run(a) -> int:
             return None
         return ax + t * dx, ay + t * dy
 
+    def _lj_isect(a1, a2, b1, b2):
+        x1, y1 = a1
+        x2, y2 = a2
+        x3, y3 = b1
+        x4, y4 = b2
+        den = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3)
+        if abs(den) < 1e-9:
+            return None
+        t = ((x3 - x1) * (y4 - y3) - (y3 - y1) * (x4 - x3)) / den
+        return x1 + t * (x2 - x1), y1 + t * (y2 - y1)
+
     def _linejoin_step(cid):
         if not _line_join:
             return
@@ -2305,6 +2371,12 @@ def _run(a) -> int:
         except Exception:                                       # noqa: BLE001
             return
         n_move = n_stub = 0
+        _pins = []
+        for _c in (doc.get("pins") or {}).values():
+            for _p in _c.values():
+                _pt = _p.get("point") if isinstance(_p, dict) else None
+                if _pt:
+                    _pins.append((float(_pt["x"]), float(_pt["y"])))
         for net in (doc.get("nets") or {}).values():
             segs = {}
             for k, v in (net.get("edges") or {}).items():
@@ -2325,13 +2397,23 @@ def _run(a) -> int:
                     if any(k2 != k and math.hypot(e[0] - pt[0], e[1] - pt[1]) <= _lj_free
                            for k2, e in ends):
                         continue
+                    if _lj_pin and any(math.hypot(p[0] - pt[0], p[1] - pt[1]) <= _lj_pin
+                                       for p in _pins):
+                        continue
                     best = None
                     for k2, s2 in segs.items():
                         if k2 == k:
                             continue
-                        f = _lj_foot(pt, s2[0], s2[1])
+                        f = _lj_isect(sg[0], sg[1], s2[0], s2[1])
+                        if f is None:
+                            f = _lj_foot(pt, s2[0], s2[1])
                         if f is None:
                             continue
+                        # 横平竖直：只许沿自身方向延长到交点（水平边只动 x、垂直边只动 y）
+                        if abs(sg[1][1] - sg[0][1]) <= 1.5:
+                            f = (f[0], sg[0][1])
+                        elif abs(sg[1][0] - sg[0][0]) <= 1.5:
+                            f = (sg[0][0], f[1])
                         d = math.hypot(f[0] - pt[0], f[1] - pt[1])
                         if d <= 0.5 or d > _lj_lim:
                             continue
@@ -2496,6 +2578,7 @@ def _run(a) -> int:
                     _symshift_step(cid)
                     _gndfill_step(cid, _p)
                     _anchor_step(cid)
+                    _desigfill_step(cid, _p)
                     _holetype_step(cid)
                     _linefix_step(cid)
                     _degeom_step(cid)
@@ -2516,6 +2599,7 @@ def _run(a) -> int:
         _symshift_step(cid)
         _gndfill_step(cid, _p)
         _anchor_step(cid)
+        _desigfill_step(cid, _p)
         _holetype_step(cid)
         _linefix_step(cid)
         _degeom_step(cid)
