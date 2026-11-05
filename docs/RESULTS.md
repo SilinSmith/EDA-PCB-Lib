@@ -43265,3 +43265,33 @@ python -X utf8 work\_poolgate.py anchor5 --pool-ref mergeline STAGE2_TEXT_ANCHOR
 ```
 
 
+
+## 5.581 引脚读数缺口审计：号缺 26、名错 8，join 通道复测仍为负（2026-11-05）
+
+### 5.581.1 审计口径与结果（`work/_pinnum_gap.py taDef`）
+
+- 口径：`M.assign_components(gt, pr, _cv.CFG)` 配对后，逐 GT 脚号比 `pinname`；只看 `canon_type ∈ IC_TYPES`（`pin_f1` 只统计 `box/ic/boxic`）。
+- 13 页合计 **GT 533 根脚：ok 485 / 号缺 28 / 号有但名缺 0 / 名错 20**；其中 **名错 20 里有 8 根是 LED 的 A/K**——LED 不是 `IC_TYPES`，`pin_f1` 根本不比，故真正可动的只有 **26 根号缺 + 8 根名错**。
+- 逐件（box 类，`work/_pinnum_gap.py` 同口径逐件版）：
+  `c1 USB1 miss4/wrong1(14)`、`c1 USB2 3/2(6)`、`c1 U3 3/1(5)`、`c1 U2 1/2(6)`、`c5 U1 1/0`、`c5 U2 1/0`、`c5 U3 1/0`、`c6 U1 1/0`、`c6 U3 1/0`、`c8 U1 3/0(16)`、`c10 U2 1/1`、`c11 U1 3/1(8)`、`c11 USB2 1/0`、`c12 U1 1/0`、`c13 U1 1/0`。
+- 结论：缺口高度集中在**连接器与小数脚 IC**（`USB1` 14 根缺 4、`USB2` 6 根缺 3、`U3` 5 根缺 3），且「号有但名缺」恒为 **0**——因为 `assemble` 的迟到 need-name 闸门会把只有号/只有名的槽整条丢掉（§5.571 的机理）。
+
+### 5.581.2 join 通道复测（当前基线 86.7607）
+
+- `work/_onoff13.py "join1=STAGE2_PIN_NUMBER_REPAIR=1,STAGE2_PIN_NUMBER_JOIN_ONLY=1"` ⇒ **86.6507（−0.1100）**，逐案**只有 case11 −1.43**（其余 12 页逐位不变）。
+- 即 `STAGE2_PIN_NAME_REBIND` 修好整侧平移之后，join 仍然把 case11 `U1` 的 `pin_7/pin_8` 撞成同一行（补进来的 `LED1` 与已占位的 `LED1` 重复）⇒ **保持默认 0**。
+
+### 5.581.3 两条已判否的写法
+
+- **LED A/K 极性纠正**（`work/_ledpol_orc.py`，把 `led` 件的 `pin_1=A / pin_2=K` 强制对齐）：13 页 **86.7607 → 86.7607（+0.0000）**——LED 不在 `IC_TYPES`，`pin_f1` 不比名，改了也不进分。
+- **名→号反查补号**（`work/_pinnumfill_orc.py`，同页/全局 `partname` 的名→号表）：**+0.0000**——最终 pred 里根本没有「有名无号」的槽（都被 need-name 闸门丢掉），可行面只在 stage2 内部，而 stage2 里同名的槽往往是相邻列的重复名（case11 `U1` slot6 的 `BAT`），补号会造出重复脚。
+
+### 5.581.4 复现命令
+
+```
+python -X utf8 work\_pinnum_gap.py taDef
+python -X utf8 work\_onoff13.py "join1=STAGE2_PIN_NUMBER_REPAIR=1,STAGE2_PIN_NUMBER_JOIN_ONLY=1"
+python -X utf8 work\_ledpol_orc.py taDef
+python -X utf8 work\_pinnumfill_orc.py taDef --global
+```
+
