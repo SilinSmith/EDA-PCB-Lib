@@ -982,8 +982,10 @@ LAST_CONFORM_EXTRA: List[dict] = []
 # ★ 逐框读法全量导出（该分支，默认关）：把每个文字框的**所有角色读法**
 #   落到 `_assigned/<case>.json` 的 `no_delete.text_reads`。用于回答「位号读不出来」
 #   到底是检测没出框、还是出了框但读错 —— 只写旁路，交付物字节不变。
-DUMP_READS = False
+DUMP_READS = os.environ.get("STAGE2_DUMP_READS", "0").strip().lower() not in (
+    "", "0", "off", "false", "no")
 LAST_TEXT_READS: List[dict] = []
+LAST_FREE: List[dict] = []
 # ★ 远处位号认领（见 `assign()` 里同名注释块）：半径像素，0=关。
 _FAR_KEY = float("0" or 0.0)
 _FAR_CONF = float(os.environ.get("STAGE2_FAR_CONF", "0.50") or 0.50)
@@ -1982,6 +1984,8 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             owned[comps[j]["id"]].append(rec)
         else:
             free.append(rec)
+    if DUMP_READS:
+        LAST_FREE[:] = list(free)
 
     # ---- 「抢读」名单：别人名下、但离自己 <= STEAL_R 的框（只给位号用） ----
     steal: Dict[str, List[dict]] = {c["id"]: [] for c in comps}
@@ -3375,6 +3379,14 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
                                                      "partname": (rec or {}).get("partname")}
                                                for cid, rec in (out or {}).items()}},
                                     ensure_ascii=False) + "\n")
+                _f.write(json.dumps({"case": "", "free": [
+                    {"box": [round(float(x), 1) for x in (t.get("bbox") or [])],
+                     "d": round(float(t.get("d") or 0.0), 1),
+                     "own": round(float(t.get("own") or 0.0), 1),
+                     "reads": {r: [str(v[0]), round(float(v[1] or 0.0), 3)]
+                               for r, v in (t.get("reads") or {}).items()
+                               if isinstance(v, (tuple, list)) and v and v[0]}}
+                    for t in LAST_FREE]}, ensure_ascii=False) + "\n")
         except Exception:
             pass
 

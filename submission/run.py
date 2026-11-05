@@ -44,6 +44,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import os
@@ -1813,6 +1814,89 @@ def _run(a) -> int:
             _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
             _log(fp, "  %-28s gnd 补充 %d（%s）" % (cid, len(added), "、".join(added[:6])))
 
+    # ★ `STAGE2_TEXT_ANCHOR`（默认 1）：把「位号文字读到了、附近没有元件」的地方补成一颗件。
+    #   病：检测器对电感（四段半圆）、轻触开关、输出端口（五边形箭头）三族字形系统性失明，
+    #   而它们的位号/标签读得很准 —— case1 `L2` 位号 0.99 距最近件 35.8px（GT 就在旁 7px）、
+    #   case11 `SW1` 1.00 / 45.8px、case12 `VOUT` 0.75 / 96px。
+    #   做法：候选在 `stage2/text_anchor.py` 里挑（那时手里有全部文字读数），但它进不了最终
+    #   文档 —— 融合层会按同框消重吃掉合成件（`_cv_run_ta2` 的 stage2 有 L2、final 没有），
+    #   所以 stage2 把候选写到 `runs/stage2/<case>.anchor.json`，由这里在**融合之后**补进去。
+    #   上限（`work/_rescueorc.py`，GT 框口径）：三页合计 +2.56（均值 +0.197）；墨迹框 +1.10
+    #   —— 差在 case12 的端口墨迹连着导线（121 vs GT 82 ⇒ −0.51），故不补 `net_output`。
+    _anchor_on = os.environ.get("STAGE2_TEXT_ANCHOR", "1").strip().lower() not in (
+        "", "0", "off", "false")
+    #   只放 `l` / `switch` 两类：13 页的上限里它们分别值 +0.33 / +1.27；其余类型在池门禁上
+    #   是负的（`anchor` 全开 = 29.5997，逐案 0001 −0.55 全是 5 颗 `TP*`、0011 −0.44 是 3 颗 `D*`；
+    #   离线摘掉非 `l/switch` 后回到 29.6344，与 `mergeline` 29.6381 的差在噪声内）。
+    _anchor_types = ("l", "switch")
+
+    def _anchor_step(cid):
+        if not _anchor_on:
+            return
+        src = s2_dir / ("%s.anchor.json" % cid)
+        if not src.is_file():
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            cand = json.loads(src.read_text(encoding="utf-8")).get("added") or []
+            doc = json.loads(dst_j.read_text(encoding="utf-8"))
+        except Exception:                                       # noqa: BLE001
+            return
+        comps = doc.get("components")
+        if not isinstance(comps, dict):
+            return
+        have = set()
+        for k, v in comps.items():
+            have.add(str(k))
+            if isinstance(v, dict) and v.get("Name"):
+                have.add(str(v["Name"]))
+        # 交付档的框已经被 compbox 换成字形模板（`led` 14x20 → 53x51），stage2 时算过的
+        # 重叠在这里可能才出现（case11 `LED1` 20x20 就压在放大后的 `LED2` 上，−0.95）。
+        def _ov(a, b):
+            w = min(a[2], b[2]) - max(a[0], b[0])
+            h = min(a[3], b[3]) - max(a[1], b[1])
+            if w <= 0 or h <= 0:
+                return 0.0
+            m = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+            return (w * h / m) if m > 0 else 0.0
+
+        boxes = [list(v["bbox"]) for v in comps.values()
+                 if isinstance(v, dict) and isinstance(v.get("bbox"), (list, tuple))
+                 and len(v["bbox"]) == 4]
+        # 真正写盘前 compbox 还会把占位框换成字形模板（`led` 14x20 → 53x51）。先把那一版
+        # 算出来再比重叠，否则 case11 `LED1` 20x20 会压在放大后的 `LED2` 上（实测 −0.95）。
+        try:
+            _tmp = copy.deepcopy(comps)
+            compbox.apply({"components": _tmp})
+            boxes = [list(v["bbox"]) for v in _tmp.values()
+                     if isinstance(v, dict) and isinstance(v.get("bbox"), (list, tuple))
+                     and len(v["bbox"]) == 4]
+        except Exception:                                       # noqa: BLE001
+            pass
+        added = []
+        for c in cand:
+            key, ty = str(c.get("key") or ""), str(c.get("type") or "")
+            bb = c.get("bbox")
+            if not key or ty not in _anchor_types:
+                continue
+            if not isinstance(bb, (list, tuple)) or len(bb) != 4:
+                continue
+            if key in have:
+                continue
+            if any(_ov(bb, x) > 0.25 for x in boxes):
+                continue
+            have.add(key)
+            boxes.append(bb)
+            comps[key] = {"Name": key, "type": ty, "value": c.get("value"),
+                          "bbox": [round(float(v), 2) for v in bb],
+                          "score": float(c.get("score") or 0.0),
+                          "source": "textanchor"}
+            added.append(key)
+        if added:
+            doc["components"] = comps
+            _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
+            _log(fp, "  %-28s 文字锚定补件 %d（%s）" % (cid, len(added), "、".join(added[:6])))
+
     # ★ `STAGE2_HOLE_TYPE`（默认 1 = 开）：把**小尺寸**的 `H*` 安装孔件从 `box` 改成 `pin`。
     #   病（open_GT case1 `H1`/`H2`）：GT 把这两个 39x20 的圆孔符号记成 `pin`，我们发 `box`
     #   ⇒ `component.type_mismatch`，一对赔 fp+fn；case13 的 `H1` 是 58x116 的连接器体，
@@ -2313,6 +2397,7 @@ def _run(a) -> int:
                     _pinkey_step(cid)
                     _symshift_step(cid)
                     _gndfill_step(cid, _p)
+                    _anchor_step(cid)
                     _holetype_step(cid)
                     _linefix_step(cid)
                     _degeom_step(cid)
@@ -2331,6 +2416,7 @@ def _run(a) -> int:
         _pinkey_step(cid)
         _symshift_step(cid)
         _gndfill_step(cid, _p)
+        _anchor_step(cid)
         _holetype_step(cid)
         _linefix_step(cid)
         _degeom_step(cid)

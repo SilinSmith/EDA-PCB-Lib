@@ -162,6 +162,21 @@ PIN_DEDUP = env_on("STAGE2_PIN_DEDUP", "0")
 #   `0005` −1.56、`0091` −1.37。池页的「一排同 type 元件」常是**同值不同位号**的
 #   电阻阵列，按 x 序重配会把本来对的位号打乱 ⇒ **默认回 0**，代码保留给 13 页档用。
 DESIG_ROWS = env_on("STAGE2_DESIG_ROWS", "0")
+# ★ 文字锚定的补件（`STAGE2_TEXT_ANCHOR`，默认 **1=开**；`stage2/text_anchor.py`）：
+#   位号文字读到了、附近（默认 30px 内）却没有任何元件时，按**红色墨迹连通域**就地补一颗。
+#   动机（`work/_textanchor.py`，13 页）：缺的 16 个 GT 件里有 3 个是「文字读得很准、
+#   元件根本没检出」——case1 `L2`（位号 0.99 / 距最近元件 35.8px）、case11 `SW1`
+#   （1.00 / 45.8px）、case12 `VOUT`（`VOUT` 0.75 / 96px）：四段半圆的电感、双触点
+#   轻触开关、五边形输出端口这三族字形检测器系统性失明（`work/_hunt2.py` 在 ±130px
+#   裁片、imgsz 640/1280、conf 0.01 下也一个都不吐）。
+#   离线上界（`work/_rescueorc.py`）：补 GT 框 +1.97 / 补墨迹框 +1.61（三页合计，
+#   均值 +0.15 / +0.12）；端口因墨迹连着导线（框宽 121 vs GT 82）暂不启用。
+#   2026-11-05 管线 A/B（`work/_onoff13.py`）：13 页 86.6369 → **86.7607 / 85.2248 / 82.9913
+#   （+0.1238）**，逐案只有 case1 **+0.33**（`L2`）、case11 **+1.29**（`SW1`），其余 11 页逐位不变。
+#   池门禁：`work/_poolgate.py anchor5 --pool-ref mergeline STAGE2_TEXT_ANCHOR=1` ⇒ **29.6345**
+#   （mergeline 29.6381，差 −0.0036 在噪声 0.0072 内）；全类型版 `anchor` 是 29.5997
+#   （0001 五颗 `TP*` −0.55、0011 三颗 `D*` −0.44）⇒ 交付层只放 `l/switch`。
+TEXT_ANCHOR = env_on("STAGE2_TEXT_ANCHOR", "1")
 # ★ box 件「型号名文字框」重读（`STAGE2_PARTNAME_OCR`，§本次，默认 **0=关**；
 #   `stage2/partname_ocr.py`）：把 `partname.box` 那颗文字框单独重裁一次送 PP-OCR，
 #   在 `assemble.build_doc` 的 `Name` 最终成型处按档位覆盖：
@@ -831,6 +846,26 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                                    for g in _rs["details"] for d in g["fix"])))
         except Exception as _e:                       # noqa: BLE001
             print("[stage2] 行内位号重配失败：%s" % (_e,))
+    # ★ 文字锚定的补件（见文件头 `TEXT_ANCHOR` 注释）：只追加合成元件，不改既有件。
+    if TEXT_ANCHOR:
+        try:
+            from . import text_anchor as _ta
+            _tres = _ta.rescue(doc, a, reads, bgr)
+            print("[stage2] 文字锚定：补 %d 颗 / 近距跳过 %d、低置信 %d、无墨迹 %d、尺寸 %d、重键 %d、非位号 %d"
+                  % (len(_tres["added"]), _tres["near"], _tres["low_conf"], _tres["no_ink"],
+                     _tres["bad_size"], _tres["dup"], _tres["no_type"]))
+            # 旁路文件交给交付层补（融合会把合成件按同框消重吃掉，见 `text_anchor` 头注释）。
+            if _tres["added"]:
+                out_dir.mkdir(parents=True, exist_ok=True)
+                (out_dir / ("%s.anchor.json" % case)).write_text(
+                    json.dumps({"added": _tres["added"]}, ensure_ascii=False), encoding="utf-8")
+            if _tres["added"]:
+                print("[stage2] 文字锚定补件：%d 颗（%s）"
+                      % (len(_tres["added"]), "；".join(
+                          "%s/%s d=%.0f" % (d["key"], d["type"], d["d"])
+                          for d in _tres["added"])))
+        except Exception as _e:                      # noqa: BLE001
+            print("[stage2] 文字锚定补件失败：%s" % (_e,))
     pred = build_doc(doc, a, case)
     pin_index = pred.pop("__pin_index", None)
     # ★ 同点同名重复脚去重（见文件头常量处注释）：只丢号更大的那颗，网引用同步改写。

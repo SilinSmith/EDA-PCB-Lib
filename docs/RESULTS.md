@@ -43201,3 +43201,67 @@ python -X utf8 work\_ws6.py
 $env:YOLO_WEIGHTS="...\runs\detect\pcb43_v6_bal\weights\epoch0.pt"; python -X utf8 work\_onoff13.py "v6e0="
 ```
 
+
+## 5.580 文字锚定补件：位号读到了、元件没检出时就地补一颗（2026-11-05）
+
+### 5.580.1 病因与证据
+
+- 16 个缺键里有 3 个是「文字读得很准、元件根本没检出」（`work/_textanchor.py`，到最近 pred 元件的矩形距离）：
+  case1 `L2` 位号 **0.99 / 35.8px**（GT 那一颗就在文字旁 7px）、case11 `SW1` **1.00 / 45.8px**（GT 10px）、case12 `VOUT` 标签 0.75 / **96px**（GT 压在文字上）。
+- 图证：`work/_hunt_L2.png`（四段半圆的电感 + `4.7uH` + `L2`）、`work/_hunt_VOUT.png`（五边形输出端口 ~120x45 + 蓝字 `VOUT`）。
+- 就地重跑检测器（`work/_hunt2.py`，裁 ±80px，`imgsz` 640/1280，conf 0.01）在 L2 处**吐不出 `l`**（最好只有上方 IC 的 `box 0.965`、`switch 0.034`）⇒ 这三族字形对该检测器系统性失明，只能靠「文字锚点 + 红色墨迹几何」补。
+- 位号离元件的距离本身不是错配证据（`work/_desigdist.py`，198 个位号里 30 个 >25px，但 case13 整页 C\* 一律 ~49px、R\* 38~41px 是统一定偏移）。
+
+### 5.580.2 上限 oracle（`work/_rescueorc.py`，基线 `dfltLM` 86.6369）
+
+| case | key/type | 该页基线 | GT 框 | 墨迹框 |
+|---|---|---:|---:|---:|
+| 1 | `L2`/`l` | 69.09 | **+0.33** | **+0.33** |
+| 11 | `SW1`/`switch` | 64.30 | **+1.28** | **+1.28** |
+| 12 | `VOUT`/`net_output` | 73.13 | **+0.95** | **−0.51**（墨迹连左侧导线，框 121 vs GT 82） |
+
+合计：GT 框 **+2.56（均值 +0.197）**、墨迹框 **+1.10（+0.084）**。
+`l/r/c` 的 `value` 必须一起抄对（`component_text_ok` 对 `VALUE_TYPES = {'r','c'}` 比 value；`l` 不计，但 official 尺比 ⇒ 一律抄）。
+
+### 5.580.3 落地（两段式：stage2 出候选、交付层补件）
+
+- `eda-pcb/stage2/text_anchor.py`（新模块）：`PREFIX_TYPES`（`LED→led`、`SW→switch`、`TP→testpoint`、`L→l`、`R→r`、`C→c`、`D→d`）、`VALUE_RE`、`_sym_mask`（HSV 红掩迹）、`_ink_box`（连通域最近块）、`_value_near`（墨迹 60px 内捞一条带单位的值文字）、`rescue()`。
+- 为什么不在 stage2 直接补进文档：合成件会被**融合层按同框消重吃掉**（`_cv_run_ta2` 的 `runs/stage2/1.json` 有 `L2`/`C1`，`final_results/1_Pred.json` 没有）—— 与 §5.572 的去重同型。故 stage2 只写旁路 `runs/stage2/<case>.anchor.json`（`STAGE2_TEXT_ANCHOR`，默认 1）。
+- `eda-pcb/submission/run.py:1829 _anchor_step(cid)`：读旁路文件，在**融合之后**把候选写进 `final_results/<case>_Pred.json`（`{"Name": key, "type": ty, "value": ..., "bbox": ..., "source": "textanchor"}`），两处调用点（`:2370`、`:2389`，紧跟 `_gndfill_step`）。
+- 两条去重闸门（都是实测买来的）：
+  1. stage2 侧：墨迹框与**任何既有件**重叠 >0.25 就丢（case1 `C1` 164x145 压着 U1 ⇒ −0.2049）；
+  2. 交付层：比之前先把 `compbox.apply` 的模板版算出来（`led` 占位 14x20 → 字形 53x51），否则 case11 `LED1` 20x20 会压进放大后的 `LED2`（−0.9524）。
+- 逐颗边际（`work/_anchormarg.py anchor1`，含=该页分、摘掉=摘掉这一颗）：case1 `L2` **+0.3260** / `C1` −0.2049；case11 `SW1` **+1.2698** / `LED1` −0.9524；case13 `C4` +0.8907（后被重叠闸门挡掉，页面分不变）。
+
+### 5.580.4 13 页读数（`work/_onoff13.py`）
+
+| tag | 配置 | local | official | judge | 相对 `dfltLM` |
+|---|---|---:|---:|---:|---:|
+| `dfltLM` | 上一档（`STAGE2_LINE_MERGE=1`） | 86.6369 | 85.2709 | 82.8675 | — |
+| `anchor1` | 无重叠闸门 | 86.6717 | 85.1430 | 82.9022 | +0.0348 |
+| `anchor2` | stage2 侧重叠闸门 | 86.6874 | 85.1577 | 82.9180 | +0.0505 |
+| `anchor4` | 再加交付层（compbox 版）重叠闸门 | **86.7607** | **85.2248** | **82.9913** | **+0.1238** |
+| `anchor5` | 再把交付层类型收成 `l/switch` | **86.7607** | **85.2248** | **82.9913** | 与 `anchor4` 逐位相同 |
+
+- 逐案（`anchor4`）：1 69.42（+0.33）、11 65.59（+1.29），其余 11 页逐位不变 ⇒ **没有任何一页被改坏**。
+- 四轴：comp 1.9204（−0.0886）、pin 3.3932 / netH 3.8379 / line 4.0878 逐位不变。
+- 池（GPU，30 案，`--pool-ref` = `mergeline` 29.6381）：**29.6345**。
+- 全类型版 `anchor`（`l/r/c/d/led/switch/testpoint`）池上 **29.5997**（−0.0384），逐案只有三页变化且全负：`0001 −0.55`（五颗 `TP*`）、`0011 −0.44`（三颗 `D*`）、`0050 −0.16`（`SW1/SW2/D2`）。离线 A/B（`work/_anchorpool_ab.py`，直接摘 `source=="textanchor"` 的件再打分）：只留 `l/switch` 时 `0001`/`0011` 回到 **±0.00**、`0050` **−0.11** ⇒ 平均增量 −0.0353，折算池 29.6344（与复跑 29.6345 一致） ⇒ `submission/run.py` 的 `_anchor_types` 收成 `("l", "switch")`。
+
+### 5.580.5 判否清单
+
+- **`net_output`（case12 `VOUT`）不补**：墨迹框把左侧导线连进来（121 宽 vs GT 82），补上去 −0.51；要补得先做端口几何（五边形 + 箭头）而不是连通域。
+- **按格点顺序重编脚号**（`work/_pinord.py`，同件按主轴排序后重编 1..n）：13 页 **86.6369 → 86.1698（−0.4671）**，case8 −1.72、case10 −4.35。原因：`_assigned` 里脚的 `point` 与号框中心不是同一点（号印在框外 ~10~20px），最近点配对本身就错；且多列元件被当成一列。⇒ 脚号问题不能靠「重排」绕过，得靠读数本身。
+- `work/_hunt.py` / `_rescueaudit.py` 早期把页高硬编码 1149（只对 case1 成立，case11 是 770x1469、case12 是 752x1658）⇒ 依赖页高的探针一律 `cv2.imread(...).shape[0]`。
+
+### 5.580.6 复现命令
+
+```
+python -X utf8 work\_onoff13.py "taDef="          # 默认档（两个开关都 1）
+python -X utf8 work\_onoff13.py "taOff=STAGE2_TEXT_ANCHOR=0"
+python -X utf8 work\_anchormarg.py anchor1          # 逐颗边际
+python -X utf8 work\_rescueorc.py gt                # 上限 oracle
+python -X utf8 work\_poolgate.py anchor5 --pool-ref mergeline STAGE2_TEXT_ANCHOR=1
+```
+
+
