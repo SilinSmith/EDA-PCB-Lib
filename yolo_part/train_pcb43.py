@@ -290,6 +290,8 @@ def main() -> int:
                     help="--cache 或 --cache ram 塞内存，--cache disk 写盘；3624 张 @1024 约 11GB，"
                          "内存不够就用 disk（第一次慢，之后快）")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--save-period", type=int, default=-1,
+                    help="每 N 个 epoch 存一次 checkpoint（-1 只存 last/best）；按我们的指标选模型时用 1")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--smoke", action="store_true", help="1 epoch / 5%% 数据 / imgsz 640，只验证管线通不通")
     args = ap.parse_args()
@@ -321,6 +323,7 @@ def main() -> int:
             project=args.project,
             name=name,
             resume=args.resume,
+            save_period=args.save_period,
             amp=True,
             rect=False,
             mosaic=args.mosaic,

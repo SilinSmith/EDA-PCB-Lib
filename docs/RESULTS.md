@@ -42899,3 +42899,189 @@ python -X utf8 work\_onoff13.py "gndfill=STAGE2_GND_FILL=1"      # 86.4735（池
 python -X utf8 work\_offline 2>nul || python -X utf8 work\_compbox_chk2.py --q 0.5   # 离线上限 86.2883
 python -X utf8 work\_poolgate.py final3 --pool-ref ship3
 ```
+
+## 5.576 池基线不可复现；v5 续训在「我们的尺子」下全面退步；选模型改用自己的指标
+
+日期：2026-11-05。本节三件事都不改交付默认值：① 查清池门禁 29.8482 → 29.63 的缺口不是本轮改动；
+② 记下 v5 续训失败（YOLO 指标涨、我们的分数跌）；③ 立一条方法：**模型只按我们自己的指标选**。
+
+### 5.576.1 池基线 29.8482 不可复现（决定性证据）
+
+- 逐案 diff（`final3` − `rebindShip`，`work\_poolscore.py` 离线复算，数与门禁逐位一致）：
+  `0042 −5.34`、`0005 −1.56`、`0114 −0.72`、`0003 −0.71`、`0018 −0.51`、`0011 −0.50`、`0084 −0.49`；
+  反向 `0148 +1.60`、`0181 +1.14`、`0091 +0.32`、`0001 +0.29`。
+- 差异不在 comps（`0042` 两边 15 个件、键完全相同），而在 **stage1 的导线抽取**：
+  `0091`：rebindShip `groups 93 / junc 0 / attached 18` vs final3 `194 / 43 / 29`；
+  `0042`：`184 / 23` vs `89 / 13` —— **方向相反**，不是单向改动。
+- 决定性反证：`git worktree add Y:\workspace\EDA\wt487 487a475`（rebindShip 自己的 commit），
+  用同一张图（`work\_fast_in\0091.png`，1170×827，mtime 2026-10-12）跑同一 case ⇒ **194 / 43 / 29**
+  （今天的行为）；连跑 7 次（cpu/cuda、关 compbox、关 fusion 后处理、关 name-rebind）逐字节相同。
+  ⇒ 当年存下的 93 / 0 / 18 用**它自己的 commit** 复现不出来。
+- 结论：`29.8482` 那条基线不可作为 ±0.2 级比较的参照；当前同码三次跑 **29.6292 / 29.6292 / 29.6364**，
+  真值按 **29.63** 记。今后池门禁只在**同一批次内**比较（同一晚连跑、同一份输入目录）。
+- 顺带记录两条踩坑：`tools\eval\fast.py --cases` 会把 `0042,0005` 去前导零成 `42,5`（池 id 是四位，
+  必须走 `_poolgate.py` → `_cv.stage_pool`）；直接调 `fast.py` 不设 `FUSION_LLM=0` 会挂在融合层 LLM 超时上。
+
+### 5.576.2 v5 续训：YOLO 指标涨，我们的分数跌 3.17
+
+- 配置：`train_pcb43.py --model weights\pcb43_v2_from_best.pt --data trainset_v3/data.yaml
+  --epochs 40 --batch 4 --imgsz 1536 --optimizer AdamW --lr0 0.0002 --cache disk --patience 12
+  --name pcb43_v5_im1536`（中途被叫停后续训到 40/40）。
+- YOLO 侧：`mAP50-95` 0.353（v2 峰值）→ **0.371**；`val/box_loss` 2.39（与 v2 的 2.37~2.44 同平）。
+- 我们的尺子（13 页，同码换权重）：**83.2384**，比现役 v2 的 **86.4049** 低 **3.17**；
+  逐案 `12 −11.18`、`5 −6.77`、`4 −4.00`、`13 −3.64`，只有 `6 +1.96`、`2 +1.07`。
+- 逐类召回（13 页，conf 0.25 / 20px，`work\_weightsweep.py`）：
+
+  | 类 | GT | v2 | v5 |
+  |---|---:|---:|---:|
+  | gnd | 83 | 74 | 71 |
+  | led | 12 | 8 | 3 |
+  | l | 11 | 10 | 8 |
+  | v | 51 | 50 | 49 |
+  | net_input | 8 | 1 | 0 |
+  | c / r / box / d | 80/61/31/4 | 满分 | 满分 |
+
+  **没有任何一类变好**。合计数 tp 317 → 305、fn 29 → 41。
+- 归因：val 只有 77 张、与 train 同源（且训练标签是紧框而评测 GT 是宽框），
+  「接着训」的 mAP 只说明它没被训坏，**不能证明泛化**；本轮的 +0.018 mAP 是记忆，不是能力。
+
+### 5.576.3 方法：模型只按我们自己的指标选
+
+- 新工具 `work\_weightsweep.py`：给定若干权重，导出 13 页原始检测（conf 0.02，GPU），
+  按 20px 中心距与 GT 一对一贪心匹配，输出逐类 tp/fp/fn 与合计 F1。它就是「我们的尺子」的检测层版本，
+  与管线分数同向（v2 0.9135 > v5 0.9024，管线 86.40 > 83.24）。
+- 训练侧加 `--save-period N`（`train_pcb43.py:293`，默认 -1），按轮存 checkpoint，
+  之后逐轮用 `_weightsweep.py` 排序，**取我们指标最高的那个**，而不是 ultralytics 按 mAP 选的 `best.pt`。
+- 已确认的历史权重都不如 v2：`wv3` 82.0534（−3.42）、`wv4m42` 77.6041（−7.87）、`wv5` 83.2384（−3.17）。
+
+### 5.576.4 针对漏检的数据侧准备（为下一轮训练）
+
+- 现有漏检结构（13 页，conf 0.25 / 20px）：gnd fn9、net_input fn7、led fn5、switch fn2、pin fn2、
+  net_output fn1、l fn1、r fn1、v fn1。
+- `work\_mkbal.py` + `work\_mkbaldir.py`：按「含稀有类的图复制多份」造平衡清单
+  （`led/switch/net_output/pin/l` 3×、`net_input` 2×、其余 1×）⇒ `trainset_v3/train_bal.txt` 4270 行（**2.63×**）、
+  并落成硬链接目录 `images/train_bal` / `labels/train_bal` 与 `data_bal.yaml`
+  （`train_pcb43.py` 的 preflight 只接受目录形式，且 ultralytics 按 `images/`→`labels/` 映射，必须两边都建）。
+- 已知但未做的两件数据活：`pin` 类漏标（`0087` 两颗 IC 284 脚只标 68）、训练标签与评测 GT 的框约定差
+  （`r 8×20` vs `16×40`，已在 §5.575 用 compbox 后处理绕过，训练侧未改）。
+
+### 5.576.5 复现命令
+
+```
+python -X utf8 work\_poolscore.py work\_fast_out_cvpool_final3
+python -X utf8 work\_weightsweep.py --weights eda-pcb\weights\pcb43_v2_from_best.pt eda-pcb\yolo_part\runs\detect\pcb43_v5_im1536\weights\best.pt --device cuda
+python -X utf8 work\_mkbal.py && python -X utf8 work\_mkbaldir.py
+```
+
+## 5.577 安装孔类型闸门 + 线段端点/残段修正：13 页 86.5500（+1.0748 vs ship3），池 29.6346
+
+日期：2026-11-05。本节两处落地都在 `submission/run.py` 的导出后处理里，默认已翻 1：
+`STAGE2_HOLE_TYPE`（把**小尺寸**的 `H*` 从 `box` 改成 `pin`）与 `STAGE2_LINE_FIX`
+（线段端点吸附到自家引脚 + 删被同网更长边覆盖的残段）。
+
+### 5.577.1 交付默认档（13 页 = 内部尺 / official / judge）
+
+| tag | 配置 | mean | official | judge | Δ vs ship3 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `ship3` | 交付出货档（commit 487a475） | 85.4753 | — | — | — |
+| `final3` | compbox=median，其余全关 | 86.4049 | 85.0800 | 82.6583 | +0.9296 |
+| `hole1` | final3 + `STAGE2_HOLE_TYPE=1` | 86.5011 | 85.1350 | 82.7407 | +1.0258 |
+| `holine2` | hole1 + `STAGE2_LINE_FIX=1` | **86.5500** | **85.1840** | **82.7880** | **+1.0748** |
+
+- 惰性双向验证：`defLT`（不带任何 env，默认已翻 1）= **86.5500 / 85.1840 / 82.7880**，与 `holine2` 逐位相同；
+  `offLT`（`STAGE2_HOLE_TYPE=0,STAGE2_LINE_FIX=0`）= **86.4049 / 85.0800 / 82.6583**，与 `final3` 逐位相同。
+- 池门禁 `holine`（`POOL_DEVICE=cuda`，30 案）= **29.6346**，参照 `final3` GPU 的 **29.6292**
+  ⇒ +0.0054，落在 GPU/CPU 固有噪声（0.0072）内，不算回退。
+
+### 5.577.2 H* 安装孔：判据是尺寸，不是键名（`STAGE2_HOLE_TYPE`，默认 1）
+
+- 病：case1 的两个圆孔被 GT 记成 `pin`、我们发 `box` ⇒ `component.type_mismatch`，一对赔 fp+fn。
+  实测三件（`work\_hcmp.py final3`）：
+
+  | case | 键 | 我们 | GT |
+  | --- | --- | --- | --- |
+  | 1 | `H1` | `box 'BAT+' 38.1x20.3` | `pin 'H1' 39x20` |
+  | 1 | `H2` | `box 'H2' 34.5x20.7` | `pin 'H2' 39x20` |
+  | 13 | `H1` | `box 'H1' 58.5x115.8` | `box 'H1' 58x116` |
+
+- oracle（`work\_typefix_orc.py final3`）：只按键名把 3 件全改 ⇒ case1 +1.25、**case13 −1.97**，均值 −0.0556；
+  加尺寸闸门（`h<=40 且 w<=60`）后只剩 case1 两件 ⇒ **+0.0963**，case13 不动。
+- 落地：`submission/run.py` 的 `_holetype_step(cid)`，两处调用点都注册在 `_gndfill_step` 之后、`_degeom_step` 之前；
+  13 页实测 **86.5011（+0.0962）**。
+
+### 5.577.3 线段：端点必须两端都对上（`STAGE2_LINE_FIX`，默认 1）
+
+判据（`eda-pcb/schematic_parser/metrics.py:596` `net_line_f1`）：只对 `net_hypergraph_f1` 给出的配对网比较，
+逐边用 `_seg_distance` 建代价矩阵，**取两端距离的最大值**、`<= line_tol(5)` 才可配；未配对网的全部边计入 fp+fn。
+⇒ 任一端差 13px，整条边就不算 tp；合并同向共线两段也会丢 tp。
+
+实测形态：
+
+- case12：netH tp/fp/fn = 9/4/6，line = **8/39/20**（F1 0.213）；同一网我们 7 条边 vs GT 4 条，
+  端点停在 `(365,412)`（GT `(365,399)`，差 13px）。
+- GT 端点 p10~p50 距引脚 **0.0px**（一半端点正落在引脚上）；我们 p10 ≈ 2~3px、p50 20~50px。
+- 几何覆盖上限（忽略一一配对）：GT 741 边只有 **455（61.4%）** 有 5px 内的 pred 边；
+  pred 849 条只有 457（53.8%）被覆盖 ⇒ 我们的损失是**几何/切分本身**，不是配对算法。
+  逐案 GT 覆盖率最差：case12 0.29、case13 0.24、case1 0.42、case11 0.46。
+
+oracle 扫描（`work\_line_orc.py` / `work\_line_sweep.py`，base `hole1` 86.5011）：
+
+| 方案 | 13 页 Δ | 备注 |
+| --- | ---: | --- |
+| 只吸附（R=4px） | +0.0279 | line 轴 4.224→4.196 |
+| 只吸附 R=8 / 12 / 16 / 20 | −0.022 / −0.085 / −0.215 / −0.422 | 会把端点吸到隔壁脚上 |
+| 按长度丢残段 8 / 12 / 16 / 20 / 24px | +0.0335 / +0.0617 / +0.0717 / +0.0754 / +0.0434 | 一刀切 |
+| **吸附 R=2 + 丢「被同网更长边覆盖」的残段** | **+0.0971** | **逐案无任何页变差** |
+| 吸附 R=2 + 按长度丢 <20px | +0.1113 | case8 **−0.23**（GT 有 33 条 <20px 的真短边） |
+
+落地规则（`_linefix_step(cid)`，`_lf_r=2.0 / _lf_tol=6.0 / _lf_maxlen=40.0`）：
+
+1. 把每条边的两个端点吸附到 **2px 内我们自己的引脚点**（不改拓扑、不增删节点）；
+2. 删掉完全重复的边（无序端点 0.5px 内）；
+3. 长度 <40px 且**两端都落在同网另一条更长边的 6px 内**的残段删除（`_pt_seg` 判垂足）。
+   第 3 条与「按长度一刀切」的差别就是它只删被覆盖的碎片，GT 那种独立短边不属于任何更长边的覆盖范围。
+
+- 管线内实测 `holine2` = **86.5500**（比 `hole1` +0.0489）：逐案 `1 +0.02`、`5 +0.10`、`9 +0.48`、`10 +0.04`，其余 0，**无变差**。
+- 与既有两步的分工：`FUSION_PWRCLIP`（默认 1）把端点吸到**电源/地符号的连接点**、`FUSION_EDGECAL`（默认 1）
+  把两端沿轴内收 `TRIM=1.0px`；本步排在它们之后（`_pwrclip_step` → `_edgecal_step` → `_pinkey_step` →
+  `_symshift_step` → `_gndfill_step` → `_holetype_step` → **`_linefix_step`** → `_degeom_step`），
+  只补「引脚锚点」与「覆盖残段」两件事。
+
+### 5.577.4 判否与踩坑
+
+- 按长度丢残段（+0.1113）判否：case8 −0.23，原因是 GT 744 条边里有 20 条 <16px、33 条 <20px（case8 独占 9 条 <20px）。
+- 端点吸附半径 ≥8px 判否：会把端点吸到隔壁脚上（R=8 起全线转负，R=20 到 −0.42）。
+- 值文字路线仍判否：case12 `R4`/`R2` 的 value 框其实被读到（`[298,376,318,390]` → `'04'`），
+  但挂到了 `comps/<cid>/pins/0/number`（当成脚号）⇒ 要动「值 vs 脚号」的角色判定，属 OCR 层（此前「长串覆盖」修 1 坏 5）。
+- **测量纪律两条**（本轮都踩到）：
+  ① `work\_onoff13.py` 的 env 分隔符是**逗号**（`tag=K1=V1,K2=V2`）；写成空格会被当成一个值
+  （`STAGE2_HOLE_TYPE=1 STAGE2_LINE_FIX=1` ⇒ 只有前者生效，实测两臂逐位相同才发现）；
+  ② **测量跑着的时候不要改管线代码**：本轮池门禁 `hole1` 首跑得 19.4659、30 案里 11 个 `empty`
+  （`扇出 lane 未产出，空壳兜底`），正是改 `submission/run.py` 的时间窗；清场后重跑才有效。
+
+### 5.577.5 附：v6 平衡清单训练在第 4 轮崩溃
+
+- `train_pcb43.py --model ..\weights\pcb43_v2_from_best.pt --data trainset_v3\data_bal.yaml --epochs 8
+  --batch 4 --imgsz 1536 --optimizer AdamW --lr0 0.0001 --cache disk --patience 8 --workers 4
+  --save-period 1 --name pcb43_v6_bal`（`data_bal` = 稀有类 3× / `net_input` 2× 的 4270 张硬链接清单）。
+- `results.csv` 到第 4 轮，随后 `RuntimeError: cuDNN error: CUDNN_STATUS_EXECUTION_FAILED_CUDART`
+  崩溃（`work\_train_v6.err`）；`epoch0..3.pt` 已落盘，可按「我们的指标」逐轮排序（`work\_weightsweep.py`）。
+- 结论：训练线暂按「每轮存档 + 自有指标选点」继续，不再看 ultralytics 的 `best.pt`。
+
+### 5.577.6 复现命令
+
+```powershell
+# 13 页（默认档 / 两开关关）
+python -X utf8 work\_onoff13.py "defLT=" "offLT=STAGE2_HOLE_TYPE=0,STAGE2_LINE_FIX=0"
+# 单开关
+python -X utf8 work\_onoff13.py "hole1=STAGE2_HOLE_TYPE=1"
+python -X utf8 work\_onoff13.py "holine2=STAGE2_HOLE_TYPE=1,STAGE2_LINE_FIX=1"
+# 池门禁（GPU，30 案 × 6 族 ≈ 25 min）
+$env:POOL_DEVICE="cuda"
+python -X utf8 work\_poolgate.py holine --pool-ref final3 STAGE2_HOLE_TYPE=1 STAGE2_LINE_FIX=1
+# 线段 oracle 与保守残段规则
+python -X utf8 work\_line_orc.py hole1
+python -X utf8 work\_line_sweep.py hole1
+python -X utf8 work\_line_stub2.py hole1
+```
+

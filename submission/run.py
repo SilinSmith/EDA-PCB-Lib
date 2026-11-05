@@ -1813,6 +1813,44 @@ def _run(a) -> int:
             _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
             _log(fp, "  %-28s gnd 补充 %d（%s）" % (cid, len(added), "、".join(added[:6])))
 
+    # ★ `STAGE2_HOLE_TYPE`（默认 1 = 开）：把**小尺寸**的 `H*` 安装孔件从 `box` 改成 `pin`。
+    #   病（open_GT case1 `H1`/`H2`）：GT 把这两个 39x20 的圆孔符号记成 `pin`，我们发 `box`
+    #   ⇒ `component.type_mismatch`，一对赔 fp+fn；case13 的 `H1` 是 58x116 的连接器体，
+    #   GT 记 `box` ⇒ 判据必须看尺寸，只认键名会把 case13 改坏。
+    #   读数（final3 基座 86.4049、work\_typefix_orc.py）：无闸门改 3 件 → case1 +1.25 /
+    #   case13 −1.97；加尺寸闸门（h<=40 且 w<=60）后只剩 case1 两件 ⇒ **+0.0963**，case13 不动。
+    #   13 页实测 `hole1` = 86.5011 / 85.1350 / 82.7407（+0.0962）；池门禁 `holine`（含 LINE_FIX）
+    #   = 29.6346 vs final3 29.6292（+0.0054，GPU 噪声 ±0.007 内）⇒ 默认翻 1。
+    _hole_type = os.environ.get("STAGE2_HOLE_TYPE", "1").strip().lower() not in (
+        "", "0", "off", "false")
+    _hole_h, _hole_w = 40.0, 60.0
+
+    def _holetype_step(cid):
+        if not _hole_type:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            doc = json.loads(dst_j.read_text(encoding="utf-8"))
+        except Exception:                                       # noqa: BLE001
+            return
+        comps = doc.get("components") or {}
+        n = 0
+        for k, c in comps.items():
+            if not isinstance(c, dict) or c.get("type") != "box":
+                continue
+            if not re.fullmatch(r"H\d+", str(k)):
+                continue
+            b = c.get("bbox")
+            if not b or len(b) < 4:
+                continue
+            if (float(b[3]) - float(b[1])) <= _hole_h and (float(b[2]) - float(b[0])) <= _hole_w:
+                c["type"] = "pin"
+                n += 1
+        if n:
+            doc["components"] = comps
+            _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
+            _log(fp, "  %-28s 安装孔类型 %d" % (cid, n))
+
     def _degeom_step(cid):
         """线段层两步清理（§5.283）：去掉「来回重描」、在真结点处把长线切开。"""
         if not _geo_on:
@@ -1930,6 +1968,118 @@ def _run(a) -> int:
             return
         _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
         _log(fp, "  %-28s 线段清理：去重描 %d、切结点 %d" % (cid, n_dup, n_split))
+
+    # ★ `STAGE2_LINE_FIX`（默认 1 = 开）：线段层两个小动作——把端点吸附到 2px 内**我们自己的**
+    #   引脚点、删掉「两端都落在同网另一条更长边 6px 内」的残段（长度 <40px）。
+    #   病（net_line_f1 只认两端都 ≤5px 的一一配对）：我们的网线不以引脚为锚（端点 p50 距引脚
+    #   20~50px，GT 一半端点正好在引脚上）、且常多出 10~40px 的残段 ⇒ 只要端点差 13px 就整条不算 tp。
+    #   读数（`work\_line_stub2.py hole1`，base 86.5011，line 轴 4.224→4.127）：**+0.0971**，
+    #   逐案 1+0.02 4+0.06 5+0.15 6+0.08 7+0.12 9+0.56 10+0.26，**无任何页变差**；
+    #   对照甲：按长度一刀切（stub20 + snap2）= +0.1113 但 case8 −0.23（GT 有 33 条 <20px 的真短边）；
+    #   对照乙：吸附半径 8/12/16/20px = −0.02/−0.08/−0.21/−0.42（会把端点吸到隔壁脚上）。
+    #   管线内实测 `holine2`（HOLE_TYPE=1 + LINE_FIX=1）= **86.5500 / 85.1840 / 82.7880**
+    #   （比 hole1 的 86.5011 +0.0489，逐案 1+0.02 5+0.10 9+0.48 10+0.04，无变差）；
+    #   池门禁 `holine` = 29.6346 vs final3 29.6292 ⇒ 默认翻 1。
+    _line_fix = os.environ.get("STAGE2_LINE_FIX", "1").strip().lower() not in (
+        "", "0", "off", "false")
+    _lf_r, _lf_tol, _lf_maxlen = 2.0, 6.0, 40.0
+
+    def _pt_seg(pt, a, b):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        L2 = dx * dx + dy * dy
+        if L2 <= 1e-9:
+            return math.hypot(pt[0] - a[0], pt[1] - a[1])
+        t = max(0.0, min(1.0, ((pt[0] - a[0]) * dx + (pt[1] - a[1]) * dy) / L2))
+        return math.hypot(pt[0] - (a[0] + t * dx), pt[1] - (a[1] + t * dy))
+
+    def _linefix_step(cid):
+        if not _line_fix:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            doc = json.loads(dst_j.read_text(encoding="utf-8"))
+        except Exception:                                       # noqa: BLE001
+            return
+        pts = []
+        for comp in (doc.get("pins") or {}).values():
+            for pin in (comp or {}).values():
+                p = (pin or {}).get("point")
+                if isinstance(p, dict):
+                    try:
+                        pts.append((float(p["x"]), float(p["y"])))
+                    except (KeyError, TypeError, ValueError):
+                        pass
+        n_snap = n_dup = n_stub = 0
+        for net in (doc.get("nets") or {}).values():
+            edges = net.get("edges") or {}
+            segs = {}
+            for k, v in edges.items():
+                try:
+                    segs[k] = [(float(v[0]["x"]), float(v[0]["y"])),
+                               (float(v[1]["x"]), float(v[1]["y"]))]
+                except (KeyError, IndexError, TypeError, ValueError):
+                    continue
+            if not segs:
+                continue
+            # 一、端点吸附
+            for k, s in segs.items():
+                new = []
+                for pt in s:
+                    best = None
+                    for q in pts:
+                        dd = math.hypot(q[0] - pt[0], q[1] - pt[1])
+                        if dd <= _lf_r and (best is None or dd < best[0]):
+                            best = (dd, q[0], q[1])
+                    if best is None:
+                        new.append(pt)
+                    else:
+                        new.append((best[1], best[2]))
+                        n_snap += 1
+                segs[k] = new
+            # 二、完全重复的边（无序端点，0.5px 内）
+            keep = {}
+            for k, s in segs.items():
+                sig = None
+                for k2, s2 in keep.items():
+                    if (math.hypot(s[0][0] - s2[0][0], s[0][1] - s2[0][1]) <= 0.5 and
+                            math.hypot(s[1][0] - s2[1][0], s[1][1] - s2[1][1]) <= 0.5) or \
+                       (math.hypot(s[0][0] - s2[1][0], s[0][1] - s2[1][1]) <= 0.5 and
+                            math.hypot(s[1][0] - s2[0][0], s[1][1] - s2[0][1]) <= 0.5):
+                        sig = k2
+                        break
+                if sig is None:
+                    keep[k] = s
+                else:
+                    n_dup += 1
+            segs = keep
+            # 三、被同网更长边覆盖的残段
+            drop = []
+            for k, s in segs.items():
+                ln = math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1])
+                if ln >= _lf_maxlen:
+                    continue
+                for k2, s2 in segs.items():
+                    if k2 == k:
+                        continue
+                    if math.hypot(s2[1][0] - s2[0][0], s2[1][1] - s2[0][1]) <= ln:
+                        continue
+                    if (_pt_seg(s[0], s2[0], s2[1]) <= _lf_tol and
+                            _pt_seg(s[1], s2[0], s2[1]) <= _lf_tol):
+                        drop.append(k)
+                        break
+            for k in drop:
+                segs.pop(k, None)
+            n_stub += len(drop)
+            if len(segs) != len(edges) or n_snap or n_stub:
+                net["edges"] = {"edge_%d" % (i + 1): [
+                    {"x": round(a[0], 2), "y": round(a[1], 2)},
+                    {"x": round(b[0], 2), "y": round(b[1], 2)}]
+                    for i, (a, b) in enumerate(segs.values())}
+        if not (n_snap or n_dup or n_stub):
+            return
+        _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
+        _log(fp, "  %-28s 线段修正：吸附 %d、重复 %d、残段 %d"
+             % (cid, n_snap, n_dup, n_stub))
 
     def _pinname_step(cid, png):
         """在**已经落盘**的 `<cid>_Pred.json` 上补一层引脚名复读；失败一律不影响导出。"""
@@ -2058,6 +2208,8 @@ def _run(a) -> int:
                     _pinkey_step(cid)
                     _symshift_step(cid)
                     _gndfill_step(cid, _p)
+                    _holetype_step(cid)
+                    _linefix_step(cid)
                     _degeom_step(cid)
                     continue
             except Exception as exc:                        # noqa: BLE001
@@ -2073,6 +2225,8 @@ def _run(a) -> int:
         _pinkey_step(cid)
         _symshift_step(cid)
         _gndfill_step(cid, _p)
+        _holetype_step(cid)
+        _linefix_step(cid)
         _degeom_step(cid)
         if _broke and not (_valread_on or _pinname_on):
             _reread_skipped.append((cid, _p))
