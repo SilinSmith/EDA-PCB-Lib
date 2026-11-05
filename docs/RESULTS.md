@@ -43362,3 +43362,53 @@ python -X utf8 work\_line_probe.py lmJoin 13        # 病证复现
 python -X utf8 work\_line_join.py lmIter            # 接边 oracle（L 扫描）
 ```
 
+## 5.583 sym16 gnd 补充转正（`STAGE2_GND_FILL` 默认 1，13 页 87.0061）
+
+### 5.583.1 为什么翻回来
+
+`STAGE2_GND_FILL` 是 2026-11-05 白天那次会话落的（`_gndfill_step`：sym16 小符号模型出 gnd 候选，
+只在与任何既有件中心距 ≥20px 处追加 `p9NN`，件体带 `value="GND"`）。当时按池门禁「开 29.6265 /
+关 29.6292」判否、默认留 0。**那组读数作废**：同一预测把 `p9NN` 摘掉自己就是 29.6292，而当天
+「关档整档」记的 29.8482 事后被证明**用它自己的 commit 也复现不出来**（§5.576），−0.22 是基线
+口径漂移，不是补充造成的。
+
+### 5.583.2 当前代码下的读数
+
+`work\_gndfill_now.py lmJoin`（离线按同一判据插 30 个候选，thr 0.10~0.20、gap 20）：
+
+| thr | gap | mean13 | Δ | 逐案 |
+|---:|---:|---:|---:|---|
+| 0.15 | 20 | **87.0061** | **+0.0729** | 只有 case1 **+0.95** |
+| 0.15 | 16 | 86.9667 | +0.0335 | 1 +0.95、12 −0.51（把 case12 的一颗重复件插了进去） |
+| 0.10 / 0.20 | 20 | 87.0061 | +0.0729 | 同 0.15/20 |
+
+管线实测 `work\_onoff13.py "gnd1=STAGE2_GND_FILL=1"` = **87.0061 / 85.4734 / 83.2254**（+0.0729），
+与离线逐位一致；补的三颗就是 case1 的真漏检 `∅323 / ∅458 / ∅193`（conf 0.152 / 0.146 / 0.126 附近）。
+
+### 5.583.3 池门禁
+
+| tag | 配置 | 池分 | 参考 |
+|---|---|---:|---|
+| `lmJoin` | 上一档 | 29.6428 | — |
+| `lmJoinG` | + gnd 补充（默认 1） | 29.6406 | lmJoin |
+
+### 5.583.4 判据回顾（为什么只能补 gnd、且必须带 20px 中心距闸）
+
+- 外观多族匹配全部判否：`tools/gnd/gnd_modes.py` 的 k=10 模式核召回 0.948 但精度 0.005（1916.9 FP/页）；
+  从自家检测聚 6 族、从训练集聚 12 族做 `matchTemplate` 都抓不到这几颗（`work\_gndk.py` / `work\_gndgal.py`）；
+  `work\_gndfeat.py` 的 12 个候选特征 AUC 全部 <0.55。
+- 能用的只有「sym16 候选 + 中心距闸」：gap 16 会把「已被既有件配上对的同一颗符号」再追加一次
+  （sym16 是整颗框、43 类模型是内框，中心差 12~19px），gap 20 是拐点。
+- 追加件必须写 `value="GND"`：official 尺对非 IC 件严格比 `value`（`_cv._official_text_ok`），
+  缺了它会 local +0.9982 而 official −0.041。
+- `STAGE1_SYM16` 整臂仍默认 0（86.27，−0.19：它插在引脚装配之前会抢 IC 的脚）；这里只用它的 `raw_dets`，
+  在导出后追加，不碰 pins/nets。
+
+### 5.583.5 复现命令
+
+```
+python -X utf8 work\_gndfill_now.py lmJoin                    # 离线 oracle（L/gap 扫描）
+python -X utf8 work\_onoff13.py "gnd1=STAGE2_GND_FILL=1"       # 13 页单臂
+python -X utf8 work\_poolgate.py lmJoinG --pool-ref lmJoin    # 池门禁（POOL_DEVICE=cuda）
+```
+
