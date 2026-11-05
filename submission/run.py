@@ -2081,6 +2081,111 @@ def _run(a) -> int:
         _log(fp, "  %-28s 线段修正：吸附 %d、重复 %d、残段 %d"
              % (cid, n_snap, n_dup, n_stub))
 
+    # ★ `STAGE2_LINE_MERGE`（默认 1 = 开）：把同网**共线**碎段并回一条，但**接缝处有分支就保留**
+    #   （判据：接缝 5px 内没有第三条边的端点）。
+    #   病（case13 `net_3` vs GT `net_1`）：GT 竖线只有一条 `(607,560)-(607,328)`，我们切成 4 段
+    #   `384-418 / 413-562 / 327-360 / 356-388`（互相还重叠）⇒ 4 条里最多 1 条能配上，其余全 fp+fn。
+    #   读数（`work\_line_junc.py defLT`，base 86.5500）：jun=3 +0.0302、**jun=5 +0.0869**、jun=6 +0.0867、
+    #   jun=8 +0.0801、jun=10 +0.0494；jun=5 逐案 1+0.20 3+0.04 4+0.19 5+0.05 7+0.06 9+0.09 10+0.09
+    #   12+0.48 13+0.09，只有 6 −0.06。
+    #   对照判否：**不看分支点**的共线合并 −0.47（gap0）/ −2.01（gap5），只合并重叠段也 −0.12~−0.29
+    #   ⇒ GT 的切分点是「真分支处」，盲合并会丢 tp。
+    #   管线读数：merge1 = 86.6369 / 85.2709 / 82.8675（+0.0869 vs defLT 86.5500）；
+    #   池门禁 mergeline（GPU，30 案，--pool-ref holine）= 29.6381 vs holine 29.6346（+0.0035，噪声内）
+    #   ⇒ 13 页有增益、池上中性，默认翻 1。
+    _line_merge = os.environ.get("STAGE2_LINE_MERGE", "1").strip().lower() not in (
+        "", "0", "off", "false")
+    _lm_perp, _lm_jun = 2.0, 5.0
+
+    def _linemerge_step(cid):
+        if not _line_merge:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            doc = json.loads(dst_j.read_text(encoding="utf-8"))
+        except Exception:                                       # noqa: BLE001
+            return
+        n_merge = 0
+        for net in (doc.get("nets") or {}).values():
+            edges = net.get("edges") or {}
+            segs = {}
+            for k, v in edges.items():
+                try:
+                    segs[k] = [(float(v[0]["x"]), float(v[0]["y"])),
+                               (float(v[1]["x"]), float(v[1]["y"]))]
+                except (KeyError, IndexError, TypeError, ValueError):
+                    continue
+            if len(segs) < 2:
+                continue
+            ends = []
+            for k, s in segs.items():
+                ends.append((k, s[0]))
+                ends.append((k, s[1]))
+
+            def _branch(pt, ka, kb):
+                for k2, e2 in ends:
+                    if k2 in (ka, kb):
+                        continue
+                    if math.hypot(e2[0] - pt[0], e2[1] - pt[1]) <= _lm_jun:
+                        return True
+                return False
+
+            groups = []
+            for k, s in segs.items():
+                dx, dy = s[1][0] - s[0][0], s[1][1] - s[0][1]
+                if math.hypot(dx, dy) < 1e-6:
+                    continue
+                horiz = abs(dx) >= abs(dy)
+                if horiz and abs(dy) > _lm_perp + 1e-9:
+                    continue
+                if (not horiz) and abs(dx) > _lm_perp + 1e-9:
+                    continue
+                off = (s[0][1] + s[1][1]) / 2.0 if horiz else (s[0][0] + s[1][0]) / 2.0
+                t0 = min(s[0][0], s[1][0]) if horiz else min(s[0][1], s[1][1])
+                t1 = max(s[0][0], s[1][0]) if horiz else max(s[0][1], s[1][1])
+                for g in groups:
+                    if g["axis"] != horiz or abs(g["off"] - off) > _lm_perp:
+                        continue
+                    lo, hi = max(g["t0"], t0), min(g["t1"], t1)
+                    if t0 > g["t1"] + 1e-9 or t1 < g["t0"] - 1e-9:
+                        continue                     # 有间隙：不并（GT 在此处是真断开）
+                    seam = (lo + hi) / 2.0
+                    pt = (seam, off) if horiz else (off, seam)
+                    if _branch(pt, g["keys"][0], k):
+                        continue
+                    g["t0"] = min(g["t0"], t0)
+                    g["t1"] = max(g["t1"], t1)
+                    g["off"] = (g["off"] * g["n"] + off) / (g["n"] + 1)
+                    g["n"] += 1
+                    g["keys"].append(k)
+                    break
+                else:
+                    groups.append({"axis": horiz, "off": off, "t0": t0, "t1": t1,
+                                   "n": 1, "keys": [k]})
+            if not any(len(g["keys"]) > 1 for g in groups):
+                continue
+            out = []
+            used = set()
+            for g in groups:
+                if g["keys"] and len(g["keys"]) > 1:
+                    n_merge += len(g["keys"]) - 1
+                if g["axis"]:
+                    out.append([(g["t0"], g["off"]), (g["t1"], g["off"])])
+                else:
+                    out.append([(g["off"], g["t0"]), (g["off"], g["t1"])])
+                used.update(g["keys"])
+            for k, s in segs.items():
+                if k not in used:
+                    out.append(s)
+            net["edges"] = {"edge_%d" % (i + 1): [
+                {"x": round(a[0], 2), "y": round(a[1], 2)},
+                {"x": round(b[0], 2), "y": round(b[1], 2)}]
+                for i, (a, b) in enumerate(out)}
+        if not n_merge:
+            return
+        _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
+        _log(fp, "  %-28s 共线合并 %d" % (cid, n_merge))
+
     def _pinname_step(cid, png):
         """在**已经落盘**的 `<cid>_Pred.json` 上补一层引脚名复读；失败一律不影响导出。"""
         if not _pinname_on:
@@ -2211,6 +2316,7 @@ def _run(a) -> int:
                     _holetype_step(cid)
                     _linefix_step(cid)
                     _degeom_step(cid)
+                    _linemerge_step(cid)
                     continue
             except Exception as exc:                        # noqa: BLE001
                 _log(fp, "  ⚠️ %s 引脚名重读失败：%s: %s" % (cid, type(exc).__name__, exc))
@@ -2228,6 +2334,7 @@ def _run(a) -> int:
         _holetype_step(cid)
         _linefix_step(cid)
         _degeom_step(cid)
+        _linemerge_step(cid)
         if _broke and not (_valread_on or _pinname_on):
             _reread_skipped.append((cid, _p))
     _log(fp, "导出 %d 份 <case>_Pred.json%s"
