@@ -177,6 +177,7 @@ def rescue(doc, a, reads, bgr, *, gap=30.0, min_conf=0.80, win=140.0,
         if ty is None:
             out["no_type"] += 1
             continue
+        ty, wd = hit
         if conf < min_conf:
             out["low_conf"] += 1
             continue
@@ -242,4 +243,159 @@ def rescue(doc, a, reads, bgr, *, gap=30.0, min_conf=0.80, win=140.0,
                              "bbox": [round(float(bb[0] - pad), 2), round(float(h - bb[3] - pad), 2),
                                       round(float(bb[2] + pad), 2), round(float(h - bb[1] + pad), 2)],
                              "score": round(conf, 4), "d": round(dmin, 1)})
+    return out
+
+# ---------------------------------------------------------------------------
+# 「文字 → 类型 → 导线末端/墨迹 → 按类型先验补件」（`STAGE2_TEXT_WORDS`，默认关）
+# 与上面的位号锚定同一动机，但覆盖**没有位号**的符号：GND / VCC / VIN / VOUT 这类网标
+# 文字读得到，符号却检不出（case11 的两颗竖排 GND：`('GNDGND', 0.994)`、离最近元件 96px）。
+# 位号锚定靠「文字周围的红色墨迹」定框，这里必须换锚点：实测最近悬空导线末端会把框放到
+# 21.5px 外（`work/_wireorc.py`，case11 −0.95），所以取「导线末端 → 附近暗墨迹块 → 按类型
+# 先验取并集」，并要求文字与既有件 ≥30px（否则那是连接器里的引脚名，池 0050 的 `SW1`）。
+WORD_TYPES = (
+    ("VOUT", "net_output"),
+    ("GND", "gnd"),
+    ("VSS", "gnd"),
+    ("VIN", "net_input"),
+    ("VCC", "v"),
+    ("VDD", "v"),
+    ("3V3", "v"),
+)
+WORD_SIZE = {"gnd": (26.0, 34.0), "v": (22.0, 26.0),
+             "net_input": (54.0, 20.0), "net_output": (54.0, 20.0)}
+
+
+def _word_type(text):
+    # 竖排整条读出来的串带 OCR 噪声：case11 那串真值是 `GND GND`，读出 `NDGND`
+    # （首字被邻字吃掉了），所以用**包含**而不是 startswith。
+    t = re.sub(r"[^0-9A-Za-z]", "", (text or "").upper())
+    if len(t) < 2:
+        return None
+    for w, ty in WORD_TYPES:
+        if w in t:
+            return ty, w
+    return None
+
+
+def _dark_mask(bgr):
+    """红色墨迹 ∪ 暗墨迹：GND 这类符号的笔画大半是黑色，只取红色会漏（case11 只剩 2x49 竖杆）。"""
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    return ((gray < 110).astype(np.uint8) | _sym_mask(bgr))
+
+
+def _seg_ends(doc):
+    out = []
+    for s in ((doc.get("wire_detail") or {}).get("segments") or []):
+        try:
+            out.append((float(s[0][0]), float(s[0][1])))
+            out.append((float(s[1][0]), float(s[1][1])))
+        except (TypeError, IndexError, ValueError):
+            continue
+    return out
+
+
+def anchor_box(doc, box, kind, mask, *, win=45.0, lim=45.0, min_area=60):
+    """文字框 → 锚点 → 按类型先验定框。
+
+    顺序是**墨迹优先、导线末端兜底**（实测：反过来的话 case11 会落到 21.5px 外的
+    悬空末端上，框中心离 GT 33px，只算 fp，−0.95）。符号的笔画常常是一根细杆
+    （GND 的竖杆 2x49），所以细杆只取它的中心、尺寸用类型先验；块状墨迹才直接用外框。
+    """
+    cx, cy = (box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0
+    w, hh = WORD_SIZE.get(kind, (26.0, 30.0))
+    # 文字本身也是墨迹：先把文字框从掩膜里挖掉，否则最近的"墨迹块"就是这行字自己
+    # （case11 实测会得到 d=0.5 的自命中，框把文字和符号一起圈进去）。
+    m = mask
+    if mask is not None:
+        m = mask.copy()
+        tx0, ty0, tx1, ty1 = [int(round(v)) for v in box]
+        m[max(0, ty0 - 1):ty1 + 2, max(0, tx0 - 1):tx1 + 2] = 0
+    ink = _ink_box(m, cx, cy, win, min_area=min_area)
+    if ink and ink[0] <= win:
+        d, ib, _a = ink
+        gx, gy = (ib[0] + ib[2]) / 2.0, (ib[1] + ib[3]) / 2.0
+        bw, bh = ib[2] - ib[0], ib[3] - ib[1]
+        if bw < w * 0.6 or bh < hh * 0.6:
+            return [gx - w / 2.0, gy - hh / 2.0, gx + w / 2.0, gy + hh / 2.0], d, "ink"
+        return [min(ib[0], gx - w / 2.0), min(ib[1], gy - hh / 2.0),
+                max(ib[2], gx + w / 2.0), max(ib[3], gy + hh / 2.0)], d, "inkbox"
+    best = None
+    for p in _seg_ends(doc):
+        d = ((p[0] - cx) ** 2 + (p[1] - cy) ** 2) ** 0.5
+        if best is None or d < best[0]:
+            best = (d, p)
+    if best is None or best[0] > lim:
+        return None, None, None
+    dw, (ex, ey) = best
+    return [ex - w / 2.0, ey - hh / 2.0, ex + w / 2.0, ey + hh / 2.0], dw, "wire"
+
+
+def rescue_words(doc, a, reads, bgr, *, gap=30.0, min_conf=0.60, lim=45.0,
+                 pad=2.0, max_side=260.0, min_side=8.0):
+    """网标词（GND/VCC/VIN/VOUT/3V3）→ 类型 → 导线末端锚定补件。键用 `p9NN`（判题按几何配）。"""
+    out = {"added": [], "near": 0, "low_conf": 0, "no_wire": 0, "bad_size": 0,
+           "overlap": 0, "no_type": 0}
+    comps = doc.get("components") or []
+    boxes = [c.get("bbox_img") for c in comps if c.get("bbox_img")]
+    mask = None
+    n = 0
+    for r in reads:
+        box = r.get("bbox")
+        if not box or len(box) != 4:
+            continue
+        text, conf, _ch = _pick_read(r.get("reads") or {})
+        if not text:
+            continue
+        hit = _word_type(text)
+        if hit is None:
+            out["no_type"] += 1
+            continue
+        ty, wd = hit
+        if conf < min_conf:
+            out["low_conf"] += 1
+            continue
+        dmin = min((_rect_dist(box, bb) for bb in boxes), default=1e9)
+        if dmin < gap:
+            out["near"] += 1
+            continue
+        if mask is None:
+            mask = _dark_mask(bgr)
+        bb, dw, how = anchor_box(doc, box, ty, mask, lim=lim)
+        if bb is None:
+            out["no_wire"] += 1
+            continue
+        bw, bh = bb[2] - bb[0], bb[3] - bb[1]
+        if bw < min_side or bh < min_side or bw > max_side or bh > max_side:
+            out["bad_size"] += 1
+            continue
+        if any(_overlap(bb, cbb) > 0.25 for cbb in boxes):
+            out["overlap"] += 1
+            continue
+        n += 1
+        key = "p9%02d" % n
+        cid = "txt%03d" % (len(comps) + 1)
+        h = bgr.shape[0]
+        comps.append({
+            "id": cid, "type": ty, "proposal": ty, "score": round(conf, 4),
+            "source": "textwords", "subtype": None,
+            "bbox_img": [float(bb[0] - pad), float(bb[1] - pad),
+                         float(bb[2] + pad), float(bb[3] + pad)],
+            "bbox_json": [float(bb[0] - pad), float(h - bb[3] - pad),
+                          float(bb[2] + pad), float(h - bb[1] + pad)],
+            "bbox_raw_img": [float(v) for v in bb],
+            "center_img": [float((bb[0] + bb[2]) / 2.0), float((bb[1] + bb[3]) / 2.0)],
+            "key": key, "n_alts": 1, "pending": False, "dual_fine": 0.0,
+        })
+        a.setdefault("comps", {})[cid] = {"designator": None, "partname": None,
+                                          "value": {"text": wd, "conf": round(conf, 4)},
+                                          "pins": {}}
+        doc.setdefault("pins", {})[cid] = []
+        boxes.append([float(bb[0] - pad), float(bb[1] - pad),
+                      float(bb[2] + pad), float(bb[3] + pad)])
+        out["added"].append({"key": key, "type": ty, "cid": cid, "value": wd,
+                             "box": [round(float(v), 1) for v in bb],
+                             "bbox": [round(float(bb[0] - pad), 2), round(float(h - bb[3] - pad), 2),
+                                      round(float(bb[2] + pad), 2), round(float(h - bb[1] - pad), 2)],
+                             "score": round(conf, 4), "d": round(dmin, 1),
+                             "word": text, "wire": round(dw, 1), "how": how})
     return out

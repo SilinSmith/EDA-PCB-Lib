@@ -1828,7 +1828,9 @@ def _run(a) -> int:
     #   只放 `l` / `switch` 两类：13 页的上限里它们分别值 +0.33 / +1.27；其余类型在池门禁上
     #   是负的（`anchor` 全开 = 29.5997，逐案 0001 −0.55 全是 5 颗 `TP*`、0011 −0.44 是 3 颗 `D*`；
     #   离线摘掉非 `l/switch` 后回到 29.6344，与 `mergeline` 29.6381 的差在噪声内）。
-    _anchor_types = ("l", "switch")
+    # 网标词锚定（STAGE2_TEXT_WORDS）补的 gnd/v/net_input/net_output 也走这条旁路：
+    # 键是 p9NN（判题按几何配），框由「导线末端 -> 暗墨迹 -> 类型先验」定，不是模板框。
+    _anchor_types = ("l", "switch", "gnd", "v", "net_input", "net_output")
 
     def _anchor_step(cid):
         if not _anchor_on:

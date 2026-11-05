@@ -177,6 +177,19 @@ DESIG_ROWS = env_on("STAGE2_DESIG_ROWS", "0")
 #   （mergeline 29.6381，差 −0.0036 在噪声 0.0072 内）；全类型版 `anchor` 是 29.5997
 #   （0001 五颗 `TP*` −0.55、0011 三颗 `D*` −0.44）⇒ 交付层只放 `l/switch`。
 TEXT_ANCHOR = env_on("STAGE2_TEXT_ANCHOR", "1")
+TEXT_WORDS = env_on("STAGE2_TEXT_WORDS", "0")
+#   实测（13 页，STAGE2_VTEXT=1 STAGE2_TEXT_WORDS=1）：local 87.294 / official 85.605 /
+#   judge 83.543（基线 87.2413 / 85.7086 / 83.4913）；逐案只 case11 **+1.19**
+#   （竖排 GNDGND → 暗墨迹细杆定位，框中心离 GT ∅695 7.5px ⇒ tp）、case12 **−0.51**
+#   （VIN/GND 竖排网标锚到的墨迹是导线端头，多一颗 fp）。把词写进 alue 后 case11 反而
+#   −1.28（文本比对把件配到别的 GT 上）⇒ 先不带 value。净收益在噪声内，默认仍关，
+#   待「只补该页确实缺的符号」的判别再开。
+# ★ 网标词锚定（`STAGE2_TEXT_WORDS`，默认 **0=关**；`stage2/text_anchor.py: rescue_words`）：
+#   「文字 → 类型 → 导线末端/暗墨迹 → 按类型先验补件」，覆盖**没有位号**的符号（GND/VCC/
+#   VIN/VOUT/3V3）。动机：case11 的两颗竖排 GND（`('GNDGND', 0.994)`、离最近元件 96px）
+#   检测器只给 `c 0.015`；case12 有 6 条竖排网标（VIN×2、GND×4，conf 0.99~1.00）。
+#   锚点不能只用导线末端（`work/_wireorc.py`：最近末端 21.5px 外，case11 −0.95），
+#   要「末端 → 附近暗墨迹块 → 与类型先验取并集」；墨迹掩膜也从纯红改成「红 ∪ 暗」。
 # ★ 位号回填（`STAGE2_DESIG_FILL`，默认 **0=关**；`stage2/text_anchor.fill_designators`）：
 #   容灾——「件在、位号没读到」时不要整颗丢键，把 12px 内、类型前缀一致的**孤立位号文字**
 #   回填成 `designator`。只改 `a["comps"][cid]["designator"]`，不动几何、不增删件。
@@ -874,6 +887,12 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         try:
             from . import text_anchor as _ta
             _tres = _ta.rescue(doc, a, reads, bgr)
+            if TEXT_WORDS:
+                _wres = _ta.rescue_words(doc, a, reads, bgr)
+                print("[stage2] 网标锚定：补 %d 颗 / 近距 %d、低置信 %d、无末端 %d、尺寸 %d、重叠 %d、非网标 %d"
+                      % (len(_wres["added"]), _wres["near"], _wres["low_conf"],
+                         _wres["no_wire"], _wres["bad_size"], _wres["overlap"], _wres["no_type"]))
+                _tres["added"].extend(_wres["added"])
             print("[stage2] 文字锚定：补 %d 颗 / 近距跳过 %d、低置信 %d、无墨迹 %d、尺寸 %d、重键 %d、非位号 %d"
                   % (len(_tres["added"]), _tres["near"], _tres["low_conf"], _tres["no_ink"],
                      _tres["bad_size"], _tres["dup"], _tres["no_type"]))
