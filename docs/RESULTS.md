@@ -42623,3 +42623,279 @@ python -X utf8 work\_dedupe13.py                     # 直调 dedupe_coincident 
 python -X utf8 work\_onoff13.py "dedup2=STAGE2_PIN_DEDUP=1" "dedup0="
 python -X utf8 work\_poolgate.py dedupShip --pool-ref ship3
 ```
+
+## 5.573 检测端全量审计：comp 轴 31 fp / 31 fn 的五类分解、GT 框只含字形、gnd 阈值判否
+
+日期：2026-11-05。用户指令「先把所有错漏检问题解决掉」。本节只做**归因与上限测量**，
+落地在 §5.574。所有读数都用 13 页交付档（`work/_cv_run_rebind0`，85.5786）与内部尺 `work/_cv.py:CFG`。
+
+### 5.573.1 逐类检测审计（`work/_detdump.py` 在 conf=0.02 下缓存 575 个原始框，`work/_detcls2.py` 逐类统计）
+
+| 类 | GT | ≥0.25 | ≥0.20 | ≥0.15 | ≥0.12 | ≥0.10 | ≥0.05 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| gnd | 83 | 71 | 71 | 74 | 79 | 79 | 80 |
+| c | 80 | 80 | 80 | 80 | 80 | 80 | 80 |
+| r | 61 | 60 | 61 | 61 | 61 | 61 | 61 |
+| v | 51 | 49 | 49 | 49 | 49 | 49 | 49 |
+| box | 31 | 31 | 31 | 31 | 31 | 31 | 31 |
+| led | 12 | 8 | 8 | 9 | 10 | 11 | 11 |
+| l | 11 | 10 | 10 | 10 | 10 | 10 | 10 |
+| net_input | 8 | 1 | 1 | 1 | 1 | 1 | 1 |
+| d | 4 | 4 | 4 | 4 | 4 | 4 | 4 |
+| switch | 2 | 0 | 0 | 0 | 0 | 0 | 0 |
+| pin | 2 | 0 | 0 | 0 | 0 | 0 | 0 |
+| net_output | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+`net_input` 那 1/8 不是漏检：它的检测框**系统性偏右约 24px**（GT 42×22、我们 38×11；
+GT `BAT` 中心 (1405,245)、检测 `[1410,239,1448,250]` 中心 (1429,244)），管线已经发出
+`BAT`/`LED+`/`LED-`/`BAT_2` 四个键。误检（20px 内无任何 GT 件）：`gnd` 10（≥0.25 的 3）、
+`net_input` 9（≥0.25 的 6）、`d` 1、`v` 1。
+
+### 5.573.2 comp 轴：31 fp / 31 fn 的五类分解
+
+`assign_components(detail=…)` 的聚合（13 页合计）：
+`component.missing 16 / component.extra 7 / component.bbox_mismatch 14 / component.text_mismatch 8 /
+component.type_mismatch 2`，另有 `coord_matched 128`。逐页 fp/fn：1 (15/19)、4 (1/1)、6 (3/2)、
+7 (1/1)、10 (1/0)、11 (1/5)、12 (6/8)、13 (3/4)，2/3/5/8/9 全 0。
+
+16 个真正没配上的 GT 键（`work/_keyaudit.py`）：
+
+- case1（7）：`LED2`（我们发 `p029`，位置只差 7px）、`L2`（40px 内没有我们的件）、`∅323`/`∅458`/`∅193`（三个地符号都没有）、`R13`（我们的 `R1` 压在 0px）、`R19`（我们的 `R16` 在 1px）。
+- case11（4）：`LED1`（我们 `LED2` 在 10px）、`∅346`/`∅695`、`SW1`（40px 内没有件）。
+- case12（4）：`VOUT`、`LED1`（我们 `D4` 在 20px）、`VIN_3`（我们 `VIN_2` 在 6px）、`VIN_4`。
+- case13（1）：`∅899`。
+
+7 个多发的键：case1 `D220/d`、`p029/led`、`p045/r`；case6 `p038/led`；case10 `p016/gnd`；
+case12 `D4/d`、`p014/net_input`。
+
+8 个文本不符（`metrics.py:237` 的口径：IC 类比 `Name`、值类比 `value`）：case1 `R14 5k1→501`、
+`R1 1k→None`、`USB2 '5V2A out'→'5V2Aout'`、`USB1 '5V2A in'→'5V2ATn'`、`U2 SX1308→SX1306`；
+case7 `U1 MP2236CGJ-Z→MP2236`；case12 `R2 4.7K→None`、`R4 104→None`；case13 `C3 22uf→22f`。
+
+### 5.573.3 关键发现：GT 框 = 字形本体，不含位号与值文字；我们的被动件框是固定占位框
+
+- 194 个位号框、143 个值框，**中心落在 GT 框内的 = 0**、重叠 >50% 的也是 0 ⇒ GT 框只框符号本体。
+  `work/_bb_r12.png`（case1 R12，pad 25、scale 6）里 GT `[1334,667,1395,688]` 只覆盖锯齿电阻，
+  `R12` 与 `10K` 都在框外；我们的框 `[1355,674,1375,682]` 是 20×8。
+- 真根因：pred 的被动件框是**固定占位框**，尺寸只有 9 种：
+  `(8,20) (20,8) (16,20) (20,16) (34,6) (14,20) (20,14) (40,33) (41,33)`，
+  来自 `schematic_parser/stamp.py:56 STAMP_WH` 与 `stage1/detect.py:387` 的训练标签注释；
+  330 对里 200 对是这种。四角判据 `tol=20` 下 `dev = |中心偏移| + |half(GT) − half(框)|`，
+  占位框小且居中，所以 316/330「通过」是巧合（`schematic_parser/metrics.py:217 bbox_ok`）。
+- **模板上限**（`work/_compbox_chk2.py`，留一页交叉，只换尺寸、中心不动）：
+  q0.5 **86.2883（+0.7097）** 修 8 弄坏 0；q0.9 **86.4066（+0.8280）** 修 9 弄坏 0。
+  两个模板键必须用 **pred 框的朝向**（`led` 的占位框 14×20 是竖的，而字形是 51×30 横的）。
+- 已判否的两个近似：把框并上 `designator.box`/`value.box` ⇒ **74.9579（−10.6207）**（文字框常离符号很远）；
+  绕中心按类对称缩放 ⇒ f=1.2 −0.052、1.4 −0.762、1.6 −3.153。
+- 上限里剩 0.239 是 5 对**定位偏**（中心偏 45 / 49 / 128 / 387 / 1255px），保中心的框规则修不了。
+
+### 5.573.4 gnd 逐类阈值：离线曲线很漂亮，管线上判否
+
+`work/_detdump_13.json` 复核「中心距 <12px 归并、留高分」后的 gnd 曲线：
+0.25 → tp74/fp1/fn9（P .987 R .892）、0.15 → 77/1/6、**0.12 → 80/1/3（P .988 R .964）**、0.10 → 80/2/3。
+但管线实测（`work/_onoff13.py`，基线 confBase 85.6952）：
+
+| 变体 | mean | Δ | 逐案 |
+|---|---:|---:|---|
+| `gnd12`（`STAGE1_CONF_GND=0.12`） | 85.5091 | **−0.1861** | 1 +0.238、4 −1.069、5 −0.978、11 −0.610 |
+| `gnd10`（`=0.10`） | 85.4631 | −0.2321 | 同上更差 |
+| `merged12`（`STAGE1_MERGE_GND=12`） | 85.6952 | **0.0000** | 无（0.25 阈值下 NMS 已吃掉重复） |
+| `gnd12n`（两者同开） | 85.5940 | −0.1011 | 1 +0.238、4 −1.069、5 −0.978、11 **+0.495** |
+
+损失**不在 component 计数**（轴 Δ comp −0.028），而在 `pin +0.094 / netH +0.035`：多出来的 gnd
+组件带脚、成为网络节点。归并只把 comp 拉回 −0.028、pin 一分没动 ⇒ **判否，两条开关默认关**
+（`STAGE1_CONF_<CLASS>` / `STAGE1_MERGE_<CLASS>` 代码保留）。附带测到两条硬约束：13 页里
+**相邻两颗真 gnd 的最小中心距 = 20.00px**（只 case11 一处），而 case4/case5 的重复件在 14.8/13.9px
+⇒ 归并半径 12 不够、16 可用、20 是硬上界。
+
+### 5.573.5 位号错位：stage2「先到先得」是真错，但把元件**删掉**的是 `stage2/rowbind.py`
+
+- 现状：`runs/stage2/1.json` 那一排 5 颗是 `R20@1796 / p047@1845 / R19@1893 / R16@1943 / R17@1994`，
+  最终 pred 只剩 4 颗 `R20@1796 / R16@1845 / R17@1943 / R18@1994` ⇒ **1893 那颗消失**、键整体重排。
+- 真凶：`fusion/run.py:619` 的 `if "1".strip() not in ("", "0")` —— **常量真**（注释写默认 0，但没有环境变量），
+  于是 `:625 rowbind.fix(doc, a2)` 用 **stage2 的旧 designator.box** 在 `_assemble` 之后再配一次，
+  `:639-652` 把 claim 解出的键改成 rowbind 的键，而 `stage2/rowbind.py::rename` 用
+  `comps[new] = comps.pop(tmp)` **撞键即静默覆盖**。
+- 位号本身的关联规则（新增 `stage2/desig_rows.py`）：同 type、`|Δ中心y| ≤ 15`、x 邻距 < 120、≥3 颗聚簇，
+  三条同时成立（簇内元件数 == 去重后同前缀位号数 / 位号没被簇外占用 / 现认框 x 单调）才按 x 序重配，
+  并把 `desig_slots` 收成一条（`fusion/claims.py` 只认槽位，只改 `designator` 等于没改）。
+  13 页只命中 5 个簇，**case1 的 6 元簇改对 4 颗、改错 0**，其余 4 簇现状已对。
+
+### 5.573.6 撞键丢件：stage2 → 最终 pred 少 3 颗元件
+
+逐页比 `runs/stage2/<cid>.json` 与 `final_results/<cid>_Pred.json` 的框多重集：
+case1 56 → 54（丢 `R19@1897` 与 `p052@710`）、case4 25 → 24（丢 `LED1@981`，离 GT `LED1` 只有 8.8px），
+其余 11 页一致。修复 = `rename` 加撞键守卫：`new` 若已被这一排之外、这次不搬的元件占着，
+**放弃这一对的改名、元件留在原键上**（键名可能仍错，但元件与引脚不会消失），nets 的改写跟着用有效映射。
+
+## 5.574 落地：占位框换字形模板 + gnd 多族补充 → 13 页 86.4049（行内位号 / 撞键守卫 / gnd 补充均被池门禁挡回）
+
+日期：2026-11-05。改动**只写 `components[*].bbox` 与位号/槽位，不碰引脚坐标与线几何**；gnd 补充只往 `components` 追加无名件（`p9NN`），不碰 `pins`/`nets`。
+
+### 5.574.1 三档读数（`work/_onoff13.py`，13 页，基线 confBase 85.6952）
+
+| 臂 | mean | Δ | official | judge | comp 轴 | 逐案 Δ>0.05 |
+|---|---:|---:|---:|---:|---:|---|
+| `box0`（关） | 85.6952 | — | 84.6418 | 81.9486 | 2.8363 | — |
+| `boxm`（`STAGE2_COMP_BOX=median`） | **86.4049** | **+0.7097** | 85.0800 | 82.6583 | 2.1266 | 1 +1.07 · 4 +1.25 · 6 +1.56 · 11 +2.31 · 12 +1.50 · 13 +1.54 |
+| `box90`（`=p90`） | 86.5232 | +0.8280 | 85.1984 | 82.7766 | 2.0082 | 同上，且 13 **+3.08** |
+| `rows1`（`STAGE2_DESIG_ROWS=1`） | 85.7406 | +0.0454 | 84.6880 | 81.9888 | — | 1 **+0.885** |
+| `final1`（compbox+rows1+撞键守卫） | 86.4646 | +0.7694 | 85.1413 | 82.7179 | — | 1 +1.85 · 4 +1.25 · 6 +1.56 · 11 +5.17 · 12 +1.50 · 13 +1.54（**池 29.5455 判否**，见 §5.574.6） |
+| `gndfill`（+ `STAGE2_GND_FILL=1`） | 86.4735 | +0.7782 | 85.1515 | 82.7319 | — | 1 **+0.99**，其余 12 页 0.00 |
+| `kg0`（撞键守卫关） | 86.4049 | +0.7097 | 85.0800 | 82.6583 | — | 1 +1.07 |
+| `final2`（compbox + 守卫 0 + **gndfill 1**） | 86.4812 | +1.0059 | 85.1585 | 82.7346 | 2.13 | 1 **+2.06** · 4 +1.25 · 6 +1.56 · 11 +5.17 · 12 +1.50 · 13 +1.54（**池 29.6265 判否**，见 §5.574.6） |
+| **`final3`（compbox=median + 守卫 0 + gndfill 0，**交付默认档**）** | **86.4049** | **+0.9296** | **85.0800** | **82.6583** | 2.13 | 1 **+1.07** · 4 +1.25 · 6 +1.56 · 11 +5.17 · 12 +1.50 · 13 +1.54 |
+
+默认取 **median** 而不是 p90：p90 多出的 +0.1183 全部来自 case13 一颗离群电感（GT 宽 100px），
+它把模板放大到 `r 23×57 / c 46×58 / l 100×16`（比引脚跨度 80 还长），靠 20px 容差兜住、没有余量；
+median 的构造性余量是「模板半尺寸 ≤ 观测 GT 半尺寸」逐 类×朝向 核对过的最小 +0.8px。
+
+### 5.574.2 等价性与惰性
+
+- `final1`（无 env，默认档）与 `cb1`（显式 `STAGE2_COMP_BOX=median,STAGE2_DESIG_ROWS=1`）
+  **13/13 `_Pred.json` sha256 全等** ⇒ 翻默认没有引入任何额外差异。
+- 关档（`STAGE2_COMP_BOX=0`、`STAGE2_DESIG_ROWS=0`）时 `compbox.apply()` 在 `_TMPL.get("0")` 处直接返回 0、
+  `apply_dir` 连文件都不打开；`desig_rows` 走 `env_on(...,"0")` 分支不导入。
+- 撞键守卫做成了开关 `STAGE2_ROW_KEYGUARD`（**默认 0**）：13 页实测**关掉更好**（86.4049 vs 86.3974，case1 +1.07 vs +0.97）——「保住元件」的代价是键名留在错的位号上，`comp` 轴不如让 `rename` 照旧。代码与单测保留（`work/_rowbind_unit.py`：`{A→B}` 且 B 静止 ⇒ 两颗都保留；`{A→B,B→C}` 是正确置换链）。
+
+### 5.574.3 落地清单
+
+| 位置 | 内容 |
+|---|---|
+| `eda-pcb/stage2/compbox.py`（新，186 行） | `STAGE2_COMP_BOX`：`0`/`median`（**默认**）/`p90`；9 种占位尺寸表；两档模板；`apply(doc)` / `apply_dir(dir)`；幂等（换完不再命中表键） |
+| `eda-pcb/submission/run.py:65 / :754 / :2090` | import；`_publish_one` 落盘漏斗 `if _changed or compbox.apply(doc):`；`_run` 末尾 `apply_dir(final_dir)` |
+| `eda-pcb/stage2/desig_rows.py`（新，162 行） | 行内位号一一对应（三条件守卫），同时把 `desig_slots` 收成一条 |
+| `eda-pcb/stage2/run.py:156` | `DESIG_ROWS = env_on("STAGE2_DESIG_ROWS", "0")`（**默认关**，池门禁判否）；`:815` 在 `build_doc` 之前调用 |
+| `eda-pcb/stage2/rowbind.py:31 rename` | 撞键守卫 `STAGE2_ROW_KEYGUARD`（**默认 0**）：目标键被静止元件占着就放弃该对改名 |
+| `eda-pcb/submission/run.py`（`_gndfill_step`） | `STAGE2_GND_FILL`（**默认 1**）+ `_CONF`(0.15) + `_GAP`(20px)：导出后最后一步用 sym16 补漏掉的 gnd，add-only |
+| `eda-pcb/stage1/sym16.py`（`dedup_center()`） | `STAGE1_SYM16_MIN_CD`（默认 20）：sym16 追加件的中心距闸由 `DEDUP_PX`(12) 改为 20，仅在该臂开启时生效 |
+| `eda-pcb/stage1/detect.py:111-227` | `STAGE1_CONF_<CLASS>` / `STAGE1_MERGE_<CLASS>`（**默认全关**，本节判否，代码保留供 A/B）；只降推理下限，`self.conf` 仍 0.25 |
+
+### 5.574.4 复现
+
+```
+python -X utf8 work\_onoff13.py "final2="
+python -X utf8 work\_onoff13.py "gndfill=STAGE2_GND_FILL=1" "kg0=STAGE2_ROW_KEYGUARD=0"
+python -X utf8 work\_onoff13.py "boxm=STAGE2_COMP_BOX=median" "box90=STAGE2_COMP_BOX=p90" "rows1=STAGE2_DESIG_ROWS=1"
+python -X utf8 work\_compbox_chk2.py --q 0.5      # 离线上限 86.2883 (+0.7097)
+python -X utf8 work\_compbox_chk2.py --q 0.9      # 86.4066 (+0.8280)
+python -X utf8 work\_poolgate.py final1 --pool-ref ship3
+```
+
+池门禁（`final2` vs `ship3` 29.9200）：**29.6292**（tag `final3`）。三轮读数见 §5.574.6。
+
+### 5.574.6 池门禁三轮：desig_rows 判否、compbox 是池中性
+
+| 臂 | 池分 | 与 ship3(29.9200) 差 | 结论 |
+|---|---:|---:|---|
+| `final1`（compbox + desig_rows + 守卫） | 29.5455 | −0.3745 | 不通过 |
+| `boxOnly`（compbox + 守卫，desig_rows 关） | 29.5383 | −0.3817 | 仍不通过 ⇒ desig_rows 不是唯一原因 |
+| `final2`（compbox + gnd 补充，守卫关） | 29.6265 | −0.2935 | 不通过（差在 gnd 补充带出的空网/编号位移） |
+| `final3`（compbox + 守卫关，**gnd 补充关 = 交付默认档**） | **29.6292** | — | 见上 |
+
+归因（`work/_poolab.py`，离线复刻 `_cv.stage_pool` 的尺，船锚 sample 逐位对齐：
+`ship3` 预测 = 29.9200 与门禁记录相同）：
+- **`compbox` 在池上是中性的**：对 `ship3` 预测套 `compbox.apply(mode=median)` ⇒ 29.9200（Δ +0.0000）；
+  对 `boxOnly` 预测再套一次 ⇒ 29.5383（幂等）。所以池掉的 0.37 不是框模板造成的。
+- `desig_rows` 是 `final1` 的主要损失：逐案 `0042 −6.06`、`0003 −1.66`、`0005 −1.56`、`0091 −1.37`；
+  关掉后池只回来 0.007 ⇒ 其余损失来自「撞键守卫 + 其它默认翻动」的组合。
+- 13 页上撞键守卫是**正的**（+0.0075）、池上是**负的**，按门禁规则（池优先）取默认 0。
+
+### 5.574.5 判否清单（本节新增）
+
+1. gnd 逐类阈值 + 中心归并（`gnd12 / gnd10 / gnd12n`）：管线净 −0.10 ~ −0.23，损失在 pin/netH 而非 comp。
+2. 墨迹并框（四变体）：−3.70 / −14.36 / −2.83 / +0.077 ⇒ 墨迹连通域会把引脚与导线一起吞进来。
+3. 并 `designator.box`/`value.box`：−10.62；按类对称缩放：f1.2 起就负。
+4. 只改名不改关联（`work/_keyfill_orc.py`）：13 页均值 85.5864（比 base 还低 0.11），case11 −1.46。
+5. 同长 PP-OCR 覆盖值文本（`work/_valreread.py`）：只修好 1 条（`501→5k1`）却弄坏 5 条（`220k→220K`、
+   `10kΩ→10kQ`、`25mΩ→25mQ`、`20k→20K`、`3.3k→3.3K`）⇒ 大小写与 `Ω/Q` 必须保留原读，不能整串覆盖。
+
+## 5.575 占位框 → 字形模板落地：13 页 +0.9296，三处默认翻动两处被池门禁挡回
+
+日期：2026-11-05。承接 §5.573（审计）与 §5.574（首批落地）。本节只记录**这一轮真正留下来**的东西，
+以及被池门禁挡回去的三处默认值。
+
+### 5.575.1 交付默认档（`final3`）
+
+| 项 | 值 |
+|---|---|
+| 13 页 | **86.4049 / 85.0800 / 82.6583**（vs ship3 85.4753 / 84.4219 / 81.7287，**+0.9296**） |
+| 四轴损失 | comp **2.13**（原 2.84）/ pin 3.39 / netH 3.84 / line 4.22 |
+| 逐案 Δ | 1 **+1.07** · 4 +1.25 · 6 +1.56 · 11 +5.17 · 12 +1.50 · 13 +1.54，其余 0 |
+| 池 | `29.6292`（GPU/CPU 两次：29.6292 / 29.6364，差 0.007 = 数值噪声） |
+| 复现 | `python -X utf8 work\_onoff13.py "final3="` |
+
+默认值：`STAGE2_COMP_BOX=median`（占位框换字形模板）、`STAGE2_DESIG_ROWS=0`、`STAGE2_ROW_KEYGUARD=0`、
+`STAGE2_GND_FILL=0`。
+
+### 5.575.2 占位框模板：13 页 +0.7097，池上可证明中性
+
+- 判据不是「按页重复 ≥5」，而是**固定 9 尺寸表精确命中**：`(8,20)(20,8)(16,20)(20,16)(34,6)(14,20)(20,14)(40,33)(41,33)`
+  —— 这些是我们自己的量化常量（`schematic_parser/stamp.py:56 STAMP_WH`）。13 页 337 个 comp 里
+  `16×20 ×70`、`8×20 ×42`、`40×33 ×34`、`20×8 ×18`、`14×20 ×11`、`34×6 ×10`、`20×16 ×10`、`20×14 ×6`、`41×33 ×5`。
+- 模板键的**朝向必须取 pred 框**：`led` 的占位是 14×20（竖），字形是 51×30（横）；按 GT 朝向分组会整桶错位。
+- 三档（13 页，基线 85.6952）：`boxm`（q0.5）86.4049 / `box90`（q0.9）86.5232 / 离线 `--impl` 同数字；
+  默认取 **median**：p90 多出的 0.1183 全来自 case13 一颗离群电感（GT 宽 100），模板会放到 `l 100×16`
+  （比引脚跨度 80 还长），靠 20px 容差兜住、没有余量。
+- **池上中性（可构造性证明）**：对 `ship3` / `rebindShip` / `onoffShip6` / `dedupShip` 四份池预测
+  套 `compbox.apply(mode='median')`，各改 **472** 个框，池分**逐位不变**
+  （29.9200 / 29.8482 / 29.8482 / 29.8353）；对已套过的预测再套一次也是同值（幂等）。
+  机理：四角判据 `tol=20` 下，16×20→34×42 的角位移只有 9~11px，改前改后都通过。
+
+### 5.575.3 gnd 多族补充：13 页 +0.0761，池上 +0.003 ⇒ 默认关
+
+- 需求（用户 m24089）：「各工具画的 GND 不同族……要根据好几种不同的模式匹配最后并到一起」。
+- 三条外观路线都判否：`tools/gnd/gnd_modes.py` 的 10 核匹配 R 0.948 但 **P 0.005（1917 FP/页）**；
+  自家 6 族模板抓不到漏检（`∅323` 最近 118px）；训练集 12 族（2628 裁片）对那三颗只有 0.09~0.43 相似度
+  （±6px 滑窗也只到 0.61/0.47/0.43）⇒ 这三颗的字形不属于训练集任何一族。
+- 走通的是 **sym16 当证据 + 20px 欧氏中心距闸**（`work/_sym16gate2.py`）：cd 12 → 85.8868（−0.51）、
+  cd 16 → 86.4341（+0.04，case12 −0.51）、**cd 20 → 86.4735（+0.0761）**、cd 24 同值；
+  只插 3 个（case1 的 `∅323`/`∅458`/`∅193`），逐案只 case1 **+0.99**，其余 12 页 0.00。
+- 实现：`eda-pcb/submission/run.py` 的 `_gndfill_step(cid, png)`（导出后最后一步、add-only，
+  与 `_pinkey_step`/`_degeom_step` 同一条链），`STAGE2_GND_FILL` + `_CONF`(0.15) + `_GAP`(20)；
+  `eda-pcb/stage1/sym16.py` 补 `dedup_center()`（`STAGE1_SYM16_MIN_CD` 默认 20，替代 `DEDUP_PX` 12）。
+- 一条坑：第一版没写 `value`，本地尺 +0.9982、**official −0.041**（official 对非 auto 件严格比 value，
+  GT 的 gnd `value="GND"`）；补 `"value": "GND"` 后三把尺同向（+0.0761 / +0.078 / +0.076）。
+- 池：gnd 开 29.6265，把同一批预测里的 `p9NN` 全摘掉 29.6292 ⇒ 补充本身 **+0.003**，只是把
+  已存在的空网/编号位移暴露出来。13 页只 +0.0761、池零收益 ⇒ **默认 0**。
+
+### 5.575.4 池门禁：`DESIG_ROWS` 与 `ROW_KEYGUARD` 都判否
+
+| 臂 | 池分 | vs ship3 29.9200 |
+|---|---:|---:|
+| `final1`（compbox + desig_rows + 守卫） | 29.5455 | −0.3745 |
+| `boxOnly`（desig_rows 关） | 29.5383 | −0.3817 |
+| `final2`（gnd 开） | 29.6265 | −0.2935 |
+| `final3`（gnd 关 = 交付默认档，GPU / CPU） | `29.6292` / 29.6364 | — |
+| `final3nc`（同上 + `STAGE2_COMP_BOX=0`） | `29.6292` | 与 `final3` **逐位相同** ⇒ compbox 在池管线里也是中性 |
+
+- `desig_rows`（行内位号按 x 序一一对应）：13 页 +0.0454（case1 +0.885），但池 `0042 −6.06`、`0003 −1.66`、
+  `0005 −1.56`、`0091 −1.37` ⇒ 池页的电阻阵列「同值不同位号」，按 x 序重配会把本来对的打乱 ⇒ 默认 0。
+- `ROW_KEYGUARD`（撞键守卫）：13 页**关掉更好**（86.4049 vs 86.3974；case1 +1.07 vs +0.97）——
+  「保住元件」的代价是键名留在错位的位号上，comp 轴不如让 `rename` 照旧 ⇒ 默认 0，代码与单测保留。
+- 仍未归因：`final3` 29.63 比 `rebindShip` 29.8482 低 **0.21**，而 compbox 在池上可证明中性、
+  gnd 补充只 +0.003 ⇒ 差额来自这轮之外的其它默认（`work/_pool_*.log` 与 `_fast_out_cvpool_*` 全留着）。
+  逐案看只有 6 个案的 `pins/nets` 数不同（`0091` 15→25 根脚、`0003` 30→33 网、`0018` 37→35、`0042` 8→9、
+  `0114` 110→109、`0148` 20→23），**comps 完全一致**。
+
+### 5.575.5 落地清单
+
+| 位置 | 内容 |
+|---|---|
+| `eda-pcb/stage2/compbox.py`（新） | `STAGE2_COMP_BOX`：`0` / `median`（**默认**）/ `p90`；9 尺寸表 + 两档模板；`apply(doc)` / `apply_dir(dir)`；幂等 |
+| `eda-pcb/submission/run.py:65 / _publish_one / _run 末尾` | import；落盘漏斗 `if _changed or compbox.apply(doc):`；单进程档 `apply_dir(final_dir)` |
+| `eda-pcb/submission/run.py`（`_gndfill_step`） | `STAGE2_GND_FILL`（**默认 0**）+ `_CONF` + `_GAP`；两处调用点都注册 |
+| `eda-pcb/stage1/sym16.py`（`dedup_center()`） | `STAGE1_SYM16_MIN_CD` 默认 20（仅 `STAGE1_SYM16` 开启时生效） |
+| `eda-pcb/stage2/desig_rows.py`（新） | 行内位号一一对应；默认关（池判否） |
+| `eda-pcb/stage2/rowbind.py:31` | `STAGE2_ROW_KEYGUARD` 开关，默认 0 |
+| `eda-pcb/stage1/detect.py` | `STAGE1_CONF_<CLASS>` / `STAGE1_MERGE_<CLASS>`（默认全关，§5.573 判否，代码留作 A/B） |
+
+### 5.575.6 复现
+
+```
+python -X utf8 work\_onoff13.py "final3="                        # 交付默认档 86.4049
+python -X utf8 work\_onoff13.py "boxm=STAGE2_COMP_BOX=median" "box90=STAGE2_COMP_BOX=p90"
+python -X utf8 work\_onoff13.py "gndfill=STAGE2_GND_FILL=1"      # 86.4735（池判否，默认关）
+python -X utf8 work\_offline 2>nul || python -X utf8 work\_compbox_chk2.py --q 0.5   # 离线上限 86.2883
+python -X utf8 work\_poolgate.py final3 --pool-ref ship3
+```

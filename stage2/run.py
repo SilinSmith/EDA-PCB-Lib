@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """第二阶段端到端 CLI：stage1 产物 -> 文字识别 -> 角色分配 -> 官方格式 JSON。
 
     cd Y:\\workspace\\EDA\\eda-pcb
@@ -144,6 +144,24 @@ PIN_NAME_REBIND = env_on("STAGE2_PIN_NAME_REBIND", "1")
 #   U3.pin_5`，该页 **+0.2957**（不改网引用是 +0.2277）、均值 **+0.0227**，其余 12 页
 #   逐位不变。默认关，先离线口径。
 PIN_DEDUP = env_on("STAGE2_PIN_DEDUP", "0")
+# ★ 行内位号按 x 序一一对应（`STAGE2_DESIG_ROWS`，默认 **0=关**；`stage2/desig_rows.py`）：
+#   同 type、y 差 ≤15px、x 邻距 <120px 的一排元件里，位号印在各自右侧时「逐颗捡最近
+#   文字框」会整体右偏一颗（左邻框系统性近 ~3px），且 `assign` 先到先得。三条同时成立
+#   （簇内元件数 == 可用位号数 / 位号没被簇外占用 / 现认框的 x 单调）才按 x 序重配，
+#   并把该元件的 `desig_slots` 收成一条（否则 fusion 的全局解按旧候选表再解一遍，
+#   改 `designator` 等于没改）。离线 13 页只命中 5 个簇，case1 的 6 元簇改对 4 颗、
+#   改错 0，其余 4 个簇现状已对（不动）。
+#   2026-11 取证：最终键由 `stage2/rowbind.py`（经 `fusion/run.py:619` 常开调用）
+#   用 stage2 的错配框再改一次，配合本开关后该排 `labels == bodies`，rowbind 自己跳过。
+#   2026-11-05 管线 A/B（`work/_onoff13.py`）：13 页 85.6952 → 85.7406（+0.0454），
+#   official 84.6418 → 84.6880、judge 81.9486 → 81.9888；逐案只有 case1 **+0.885**
+#   （1897 那颗回来，最终 pred 与 GT 该排完全一致），其余 12 页 0.00。
+#   ⚠ 2026-11-05 池门禁判否：`work/_poolgate.py final1 --pool-ref ship3` ⇒ **29.5455
+#   （−0.3027）**；离线归因（`work/_poolab.py`）把 compbox 关掉重算仍是 29.9200（=ship3，
+#   零影响），所以 -0.37 全来自本开关，最大单案 `0042` **−6.06**、`0003` −1.66、
+#   `0005` −1.56、`0091` −1.37。池页的「一排同 type 元件」常是**同值不同位号**的
+#   电阻阵列，按 x 序重配会把本来对的位号打乱 ⇒ **默认回 0**，代码保留给 13 页档用。
+DESIG_ROWS = env_on("STAGE2_DESIG_ROWS", "0")
 # ★ box 件「型号名文字框」重读（`STAGE2_PARTNAME_OCR`，§本次，默认 **0=关**；
 #   `stage2/partname_ocr.py`）：把 `partname.box` 那颗文字框单独重裁一次送 PP-OCR，
 #   在 `assemble.build_doc` 的 `Name` 最终成型处按档位覆盖：
@@ -801,6 +819,18 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
                                                    for d in _rb["details"])))
         except Exception as _e:                      # noqa: BLE001
             print("[stage2] 缺口首位重绑失败：%s" % (_e,))
+    # ★ 行内位号按 x 序一一对应（见常量处注释；默认关）。
+    if DESIG_ROWS:
+        try:
+            from . import desig_rows as _dr
+            _rs = _dr.fix(doc, a)
+            if _rs["changed"]:
+                print("[stage2] 行内位号重配：%d 簇 / %d 颗（%s）"
+                      % (len(_rs["details"]), _rs["changed"],
+                         "；".join("%s x%.0f %s->%s" % (d["cid"], d["x"], d["old"], d["new"])
+                                   for g in _rs["details"] for d in g["fix"])))
+        except Exception as _e:                       # noqa: BLE001
+            print("[stage2] 行内位号重配失败：%s" % (_e,))
     pred = build_doc(doc, a, case)
     pin_index = pred.pop("__pin_index", None)
     # ★ 同点同名重复脚去重（见文件头常量处注释）：只丢号更大的那颗，网引用同步改写。

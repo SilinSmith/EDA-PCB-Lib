@@ -108,6 +108,78 @@ DROP_TYPES = frozenset(t.strip().lower() for t in _STAGE1_DROP_ENV.split(",") if
 _CV_WIN_ENV = env_str("STAGE1_CV_WIN", "off").lower()
 CV_WIN = _CV_WIN_ENV not in ("", "0", "off", "false", "none", "no")
 
+# ★ 逐类 conf 阈值（默认**关闭**：一个 `STAGE1_CONF_<CLASS>` 都不设时，行为与
+#   以前全类统一 `conf=0.25` 逐字节相同）。
+#   为什么需要：全类统一切 0.25 时 `gnd` 的低分正样本被一刀砍掉。13 页 open_GT 的
+#   conf=0.02 原始检测（`work\_detdump_13.json`，审计脚本 `work\_detcls2.py`）逐类
+#   GT 命中数（阈值 0.25/0.20/0.15/0.12/0.10/0.05）：
+#       gnd  83 71 71 74 79 79 80   ← 0.12 比 0.25 多 9 颗，唯一有大空间
+#       led  12  8  8  9 10 11 11   ← 0.10 多 1 颗
+#       c 80/80  r 61/60  v 51/49  box 31  l 11/10  d 4 —— 0.25 附近已饱和
+#       net_input 8→1、switch/pin/net_output 在 0.25 就是 0
+#   误检（20px 内无任何 GT 件）：gnd 10 个（其中 conf>=0.25 的 3 个）、
+#   net_input 9 个（>=0.25 的 6 个）、d 1、v 1 —— 所以只有 gnd 值得单独降。
+#   把 4 个低分 gnd（0.152/0.146/0.126/0.077）补回预测，13 页 **+0.256**
+#   （case1 +0.69、case11 +2.64）；这是**离线**账。⚠ 实测这笔账在真实管线上**不成立**：
+#   13 页实跑 `STAGE1_CONF_GND=0.12` ⇒ 85.5091（base 85.6952，**−0.1861**），
+#   `=0.10` ⇒ 85.4631（−0.2321）——多出来的低分 gnd 多半是「该颗已被检出」的重复件
+#   （case4 离已有 gnd 14.8px、case5 13.9px），所以**默认必须关**，只有配合归并才有得谈
+#   （见下面 `MERGE_PX` 块：加 12px 归并仍 −0.1012）。
+#   ★ 实现要点（两个坑）：
+#   1) 光在 `raw()` 之后过滤**不生效** —— 那 4 个框分数 <0.25，`model.predict`
+#      根本不会吐出来。所以 `detect()` 里另算一个**推理下限**
+#      `min(conf, 各逐类阈值)`，只降下限不动 `self.conf`（`self.conf` 仍是交付档
+#      的 0.25，`Detector` 构造参数与 `pipeline.DET` 的复用判据都不受影响）。
+#      低分框进 NMS 池**不会挪动**高分结果：`nms()` 按分数降序贪心，低分框只排在
+#      高分框后面被裁，`>= conf` 那批的存活集合与不降下限时逐一相同。
+#   2) 过滤放在 NMS **之后**、贴章**之前**：贴章后的第二次 NMS、CV 去重、`c%04d`
+#      编号全部只看过滤后的列表 ⇒ 关掉时逐字节不变；开着时少了几个框，其后各类的
+#      `c%04d` 编号整体前移（id 只是键名，评测按几何匹配，不吃亏）。
+#   ⚠ 形态必须「一类一个 env」（`STAGE1_CONF_GND=0.12,STAGE1_CONF_LED=0.10`）：
+#   `work\_onoff13.py` 的 env 串是**按逗号切分**的，`STAGE1_CONF_MAP="gnd=0.12,…"`
+#   那种写法在那边会被切成两个非法 env，传不进来。
+_CONF_PREFIX = "STAGE1_CONF_"
+CONF_PER_CLASS: dict[str, float] = {}
+for _k, _v in os.environ.items():                     # 键名小写化后与 `d["name"]` 对齐
+    if not _k.upper().startswith(_CONF_PREFIX) or len(_k) <= len(_CONF_PREFIX):
+        continue
+    try:
+        _t = float(_v)
+    except (TypeError, ValueError):
+        continue
+    if 0.0 < _t < 1.0:                               # 非法值静默忽略，绝不改默认行为
+        CONF_PER_CLASS[_k[len(_CONF_PREFIX):].lower()] = _t
+
+# ★ 逐类中心距归并（默认**关闭**：`STAGE1_MERGE_<CLASS>` 一个都不设时不改任何行为）。
+#   为什么需要：`gnd` 的重复检出是真实存在的。13 页 conf=0.02 原始检测
+#   （`work\_detdump_13.json`）按「同类中心距 <12px 归并、留高分」重算：case5 33→10、
+#   case1 36→20、case11 15→6、case13 4→1。
+#   ⚠ 但它在 conf=0.25 档**零效果**（`merged12` 与 base 逐案同分、四轴全 0）：那些 1~9px
+#   的重复在第一次 `nms(raw, NMS_IOU=0.5)` 里就被 IoU 抑制，进不到这里。真正要吃的重复是
+#   **降阈值之后**新冒出来的低分件：case11 距已有 gnd 6.9px（归并后 case11 从 −0.61 回到
+#   +0.49）、case4 14.8px、case5 13.9px（12px 半径吃不到，这两页 −1.07 / −0.98 纹丝不动）。
+#   ⇒ 半径要 >14.8 才够用；硬上界来自 GT：13 页里相邻两颗真 gnd 的最小中心距 **20.00px**
+#   （只有 case11 一处，其余页最小 96.8px），故 16 可用、20 是上限。
+#   不归并就降逐类阈值的代价（13 页实跑，base 85.6952）：`STAGE1_CONF_GND=0.12` ⇒ 85.5091
+#   （−0.1861）、`=0.10` ⇒ 85.4631（−0.2321）；加 12px 归并 ⇒ 85.5940（−0.1012）。
+#   归并后的逐类曲线（13 页 gnd，20px 一对一匹配）：conf 0.25 ⇒ tp74/fp1；0.15 ⇒ 77/1；
+#   0.12 ⇒ 80/1（precision 0.988 / recall 0.964）；0.10 ⇒ 80/2。
+#   ★ 顺序：**先归并、再卡阈值** —— 先把同一颗的重复折成一个（留高分），再按类卡分。
+#   ⚠ 阈值是**中心距**（欧氏，px），不是 IoU：同一颗被反复检出时平移只有 3px、框大小却
+#   随贴章/朝向变，IoU 在这种情形上不给区分度。保留的是**高分那个的原始框**（不重算、不融合）。
+#   写法同逐类阈值：`STAGE1_MERGE_GND=12`（设 0 表示该类显式关闭）。
+_MERGE_PREFIX = "STAGE1_MERGE_"
+MERGE_PX: dict[str, float] = {}
+for _k, _v in os.environ.items():
+    if not _k.upper().startswith(_MERGE_PREFIX) or len(_k) <= len(_MERGE_PREFIX):
+        continue
+    try:
+        _t = float(_v)
+    except (TypeError, ValueError):
+        continue
+    if _t > 0.0:
+        MERGE_PX[_k[len(_MERGE_PREFIX):].lower()] = _t
+
 
 def to_json_box(b, H: int):
     """图像框（左上原点）→ 赛题框（左下原点）。"""
@@ -134,6 +206,32 @@ def nms(dets, iou_thr: float = 0.6):
             keep.append(best)
             grp = [d for d in grp if _iou(best["box"], d["box"]) <= iou_thr]
     return keep
+
+
+def merge_close(dets, px: dict):
+    """同类中心距 < px[class] 的重复检出归并，只留 score 最高的那个。
+
+    `px` 形如 `{"gnd": 12.0}`（见文件顶 `MERGE_PX`）；空 dict 时原样返回。
+    返回列表**保持入参顺序**（只删不排）：`detect()` 里 `d["_i"]` / `c%04d`
+    编号依赖这个顺序，重排会让"没被归并的类"也换 id。
+    """
+    if not px:
+        return dets
+    keep, seen = set(), {}
+    for d in sorted(dets, key=lambda d: -d["score"]):
+        k = str(d["name"]).lower()
+        t = px.get(k)
+        if t is None:
+            keep.add(id(d))
+            continue
+        b = d["box"]
+        c = ((b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5)
+        got = seen.setdefault(k, [])
+        if any((c[0] - q[0]) ** 2 + (c[1] - q[1]) ** 2 < t * t for q in got):
+            continue
+        got.append(c)
+        keep.add(id(d))
+    return [d for d in dets if id(d) in keep]
 
 
 class Detector:
@@ -183,6 +281,10 @@ class Detector:
         （谁、输给谁、差多少、按哪条规则），供 `stage1/pipeline.py` 落盘。
         """
         H, W = bgr.shape[:2]
+        # ★ 逐类阈值（见文件顶 `CONF_PER_CLASS`）：没设任何 env 时 `_floor is _conf`、
+        #   下面那段过滤整块跳过 ⇒ 与旧的 `conf=0.25` 档逐字节相同。
+        _conf = self.conf if conf is None else conf
+        _floor = min([_conf] + list(CONF_PER_CLASS.values())) if CONF_PER_CLASS else _conf
         t0 = time.time()
         if tiler:
             tile, ov = tiler
@@ -196,14 +298,23 @@ class Detector:
                     sub = bgr[y1_:y2, x1_:x2]
                     if sub.size == 0:
                         continue
-                    for d in self.raw(sub, conf):
+                    for d in self.raw(sub, _floor):
                         b = d["box"]
                         d["box"] = [b[0]+x1_, b[1]+y1_, b[2]+x1_, b[3]+y1_]
                         raw.append(d)
             raw = nms(raw, NMS_IOU)
         else:
-            raw = nms(self.raw(bgr, conf), NMS_IOU)
+            raw = nms(self.raw(bgr, _floor), NMS_IOU)
         t_yolo = time.time() - t0
+
+        # ★ 逐类中心距归并 / 逐类 conf 后过滤（都放在两次 NMS 之间、贴章之前）：
+        #   先归并（同颗重复折成一个、留最高分），再按类卡分。
+        #   每类阈值 `CONF_PER_CLASS[name]`，无该类的项就回落到 `_conf`（=0.25）。
+        if MERGE_PX:
+            raw = merge_close(raw, MERGE_PX)
+        if CONF_PER_CLASS:
+            raw = [d for d in raw
+                   if d["score"] >= CONF_PER_CLASS.get(str(d["name"]).lower(), _conf)]
 
         # 贴图章
         #   ★ 2026-10-07 改动：图章由**正方形**换成 **每类一个长方形 + 轴向**

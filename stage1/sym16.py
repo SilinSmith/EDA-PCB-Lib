@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """sym16 小符号检测器的两条**默认关**臂：S1 新增提案（add-only）／S2 已有件精修（refine）。
 
     · `STAGE1_SYM16=1`     —— S1：把 sym16 在页面上检出、且与既有件都不重复的符号框
@@ -86,6 +86,25 @@ def dedup_iou() -> float:
     的默认实参，不另立常数（两臂共用同一个数，改一处两边同步）。"""
     from stage1 import bigic as _bigic
     return float(inspect.signature(_bigic.add_components).parameters["iou_skip"].default)
+
+
+def dedup_center() -> float:
+    """sym16 追加件的中心距闸（px）。默认 20.0，可用 `STAGE1_SYM16_MIN_CD` 覆盖。
+
+    **为什么是 20 而不是 `DEDUP_PX`（12.0）**：sym16 的 gnd 框是「整颗」，yolo 的是内框，
+    同一颗符号两框中心可差 12~19px。离线扫（13 页，欧氏中心距闸，插入 `_Pred.json` 后重打分，
+    基線 86.3974）：
+      cd 12 → 85.8868（−0.51，插 12 个，page5 −3.70 / page11 −1.81 / page12 −1.47）
+      cd 16 → 86.4341（+0.04，插 4 个，page12 −0.51）
+      cd 20 → **86.4735（+0.0761，只插 3 个，全是 case1 的真漏检 ∅323/∅458/∅193，别页 0 损伤）**
+      cd 24 → 同 cd 20
+    ⇒ 12px 会把「已被既有件配上对的同一颗符号」再追加一次（只换 `component.extra`），20px 才干净。
+    """
+    try:
+        v = float(os.environ.get("STAGE1_SYM16_MIN_CD", "20") or 20)
+    except ValueError:
+        v = 20.0
+    return v if v > 0 else 0.0
 
 
 # ------------------------------------------------------------------ 推理
@@ -188,7 +207,7 @@ def add_components(bgr, comps, hyps, conf=None, imgsz=None, dets=None) -> dict:
         # 于是 IoU 门几乎不设防 ⇒ 追加出来的全是「已被既有件配上对的同一颗符号」，
         # 只换来 `component.extra`。`DEDUP_PX`（`stage1/detect.py:54`，12.0）本来就是
         # 既有跨来源「同一个东西」的中心距判据，直接引用，不另立常数。
-        if _bc < DEDUP_PX:
+        if _bc < dedup_center():
             skip["near"] = skip.get("near", 0) + 1
             rec["take"] = "near"
             considered.append(rec)

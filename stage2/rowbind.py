@@ -45,8 +45,20 @@ def rename(doc: dict, mapping: Dict[str, str]) -> dict:
         comps[tk] = comps.pop(old)
         if old in pins:
             pins[tk] = pins.pop(old)
-        tmp[tk] = new
-    for tk, new in tmp.items():
+        tmp[tk] = (old, new)
+    # 撞键守卫：`new` 若已被**这一排之外、这次不搬**的元件占着，直接写会把它静默覆盖掉
+    # （2026-11-05 实测：stage2 有 56 颗的 case1 在最终 pred 里只剩 54 颗、case4 少 1 颗，
+    # 且 case4 那颗离 GT `LED1` 只有 8.8px）。撞上就放弃这一对的改名，元件留在原键上——
+    # 键名可能仍旧是错的，但元件与它的引脚不会凭空消失。
+    eff = dict(mapping)
+    _guard = env_on("STAGE2_ROW_KEYGUARD", "0")
+    for tk, (old, new) in tmp.items():
+        if _guard and new in comps:
+            comps[old] = comps.pop(tk)
+            if tk in pins:
+                pins[old] = pins.pop(tk)
+            eff[old] = old
+            continue
         comps[new] = comps.pop(tk)
         if tk in pins:
             pins[new] = pins.pop(tk)
@@ -58,7 +70,7 @@ def rename(doc: dict, mapping: Dict[str, str]) -> dict:
         for t in [x.strip() for x in hg[1:-1].split(",") if x.strip()]:
             if "." in t:
                 a, b = t.rsplit(".", 1)
-                parts.append("%s.%s" % (mapping.get(a, a), b))
+                parts.append("%s.%s" % (eff.get(a, a), b))
             else:
                 parts.append(t)
         v["hyperGraph"] = "(" + ",".join(parts) + ")"

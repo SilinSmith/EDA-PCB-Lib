@@ -62,6 +62,7 @@ if str(ROOT) not in sys.path:
 
 import assets                                    # noqa: E402
 from schematic_parser.data import Case           # noqa: E402
+from stage2 import compbox                       # noqa: E402  `STAGE2_COMP_BOX`（占位框→字形模板，默认 median，见 compbox 头注释）
 
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
 
@@ -749,7 +750,8 @@ def _publish_one(lane_file: Path, dst: Path, state: dict, stage_dir: Path) -> bo
         data = lane_file.read_bytes()
         doc = json.loads(data.decode("utf-8"))
         doc, _changed = _sanitize_pred(doc)
-        if _changed:
+        # `STAGE2_COMP_BOX`：占位框换成字形模板（幂等，关档时返回 0 且逐字节不变）
+        if _changed or compbox.apply(doc):
             data = json.dumps(doc, ensure_ascii=False).encode("utf-8")
     except Exception:                                               # noqa: BLE001
         return False                    # 还在写 / 写坏了 ⇒ 下一轮再看
@@ -1725,6 +1727,92 @@ def _run(a) -> int:
     _geo_tol = float(os.environ.get("FUSION_DESEG_TOL", "4.0") or 4.0)
     _geo_min = float(os.environ.get("FUSION_DESEG_MINLEN", "6.0") or 6.0)
 
+    # ★ `STAGE2_GND_FILL`（默认 **0 = 关**）：sym16 多族 GND 补充。**只补、不改**。
+    #   病：43 类 yolo 对 gnd 的召回在这批图上是 0.892（83 颗漏 9 颗），漏掉的多是
+    #   其它工具画的「另一族」符号（细三横 + 竖杆），yolo 给 0.07~0.15 的分数被 0.25 切掉。
+    #   16 类小符号模型（`stage1/sym16.py`，imgsz 1280）能看到它们，但直接开 `STAGE1_SYM16`
+    #   只有 86.2712（−0.19）：它插在**引脚装配之前**，多出来的 gnd 会把 IC 的脚抢走。
+    #   所以放在导出后的**最后一步**（引脚/网都已定稿），只往 `components` 里追加无名 gnd。
+    #   闸门与读数（13 页，基線 86.3974；离线扫 = 把候选插进 `_Pred.json` 再打分）：
+    #     中心距 12px → 85.8868（−0.51，插 12 个，page5 −3.70 / page11 −1.81 / page12 −1.47）
+    #     中心距 16px → 86.4341（+0.04，插 4 个，page12 −0.51）
+    #     中心距 20px → **86.4735（+0.0761）**：只插 3 个（case1 的真漏检 ∅323/∅458/∅193），
+    #                    逐案只有 case1 +0.99，其余 12 页一分不动；24px 同值。
+    #   ⇒ 默认 20px。conf 0.15~0.25 三档同值，取 0.15。
+    #   **池门禁判否（2026-11-05）**：开这一臂后池 29.6265（关档同预测摘掉 p9NN 后 29.6292，即补充本身 +0.003），但关档整档是 29.8482——差 0.22 来自插进去的 gnd 带出的空网/编号位移，净的是负的；13 页只 +0.0761。⇒ **默认 0**（代码与读数保留，`STAGE2_GND_FILL=1` 可复现 86.4735）。
+    _gnd_fill = os.environ.get("STAGE2_GND_FILL", "0").strip().lower() not in (
+        "", "0", "false", "off", "none")
+    _gnd_conf = float(os.environ.get("STAGE2_GND_FILL_CONF", "0.15") or 0.15)
+    _gnd_gap = float(os.environ.get("STAGE2_GND_FILL_GAP", "20") or 20.0)
+
+    def _gndfill_step(cid, png):
+        """用 sym16 补漏掉的 gnd（add-only：不动任何既有件、不碰 pins/nets）。"""
+        if not _gnd_fill:
+            return
+        dst_j = final_dir / ("%s_Pred.json" % cid)
+        try:
+            doc = json.loads(dst_j.read_text(encoding="utf-8"))
+        except Exception:                                       # noqa: BLE001
+            return
+        try:
+            import cv2                                        # noqa: PLC0415
+            from stage1 import sym16                           # noqa: PLC0415
+        except Exception:                                       # noqa: BLE001
+            return
+        bgr = cv2.imread(str(png))
+        if bgr is None:
+            return
+        H = int(bgr.shape[0])
+        comps = doc.get("components")
+        if not isinstance(comps, dict):
+            return
+        centers = []
+        for _k, v in comps.items():
+            b = v.get("bbox") if isinstance(v, dict) else None
+            if isinstance(b, (list, tuple)) and len(b) == 4:
+                centers.append(((float(b[0]) + float(b[2])) / 2.0,
+                                H - (float(b[1]) + float(b[3])) / 2.0))
+        try:
+            dets = sym16.raw_dets(bgr, conf=_gnd_conf)
+        except Exception as exc:                                # noqa: BLE001
+            _log(fp, "  ⚠️ %s gnd 补充失败：%s: %s" % (cid, type(exc).__name__, exc))
+            return
+        cands = []
+        for d in dets:
+            if d.get("cls") != "gnd" or float(d.get("score") or 0) < _gnd_conf:
+                continue
+            box = [float(t) for t in (d.get("box_img") or [])]
+            if len(box) != 4 or box[2] <= box[0] or box[3] <= box[1]:
+                continue
+            cx, cy = (box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0
+            if any(math.hypot(cx - x, cy - y) < _gnd_gap for x, y in centers):
+                continue
+            cands.append((float(d["score"]), box))
+        cands.sort(key=lambda t: -t[0])
+        keep = []
+        for sc, box in cands:
+            cx, cy = (box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0
+            if all(math.hypot(cx - (k[0] + k[2]) / 2.0, cy - (k[1] + k[3]) / 2.0) >= _gnd_gap
+                   for _s, k in keep):
+                keep.append((sc, box))
+        if not keep:
+            return
+        added, i = [], 0
+        for sc, box in keep:
+            key = "p9%02d" % i
+            while key in comps:
+                key += "x"
+            i += 1
+            comps[key] = {"Name": key, "type": "gnd", "value": "GND",
+                          "bbox": [round(box[0], 2), round(H - box[3], 2),
+                                   round(box[2], 2), round(H - box[1], 2)],
+                          "score": round(sc, 4), "source": "sym16:gnd"}
+            added.append(key)
+        if added:
+            doc["components"] = comps
+            _atomic_write_text(dst_j, json.dumps(doc, ensure_ascii=False))
+            _log(fp, "  %-28s gnd 补充 %d（%s）" % (cid, len(added), "、".join(added[:6])))
+
     def _degeom_step(cid):
         """线段层两步清理（§5.283）：去掉「来回重描」、在真结点处把长线切开。"""
         if not _geo_on:
@@ -1969,6 +2057,7 @@ def _run(a) -> int:
                     _edgecal_step(cid)
                     _pinkey_step(cid)
                     _symshift_step(cid)
+                    _gndfill_step(cid, _p)
                     _degeom_step(cid)
                     continue
             except Exception as exc:                        # noqa: BLE001
@@ -1983,6 +2072,7 @@ def _run(a) -> int:
         _edgecal_step(cid)
         _pinkey_step(cid)
         _symshift_step(cid)
+        _gndfill_step(cid, _p)
         _degeom_step(cid)
         if _broke and not (_valread_on or _pinname_on):
             _reread_skipped.append((cid, _p))
@@ -2084,6 +2174,10 @@ def _run(a) -> int:
             except Exception as _e:                                   # noqa: BLE001
                 _log(fp, "  %-28s 坐标还原失败（%s）⇒ 该图保持归一化坐标" % (_cid, _e))
         _log(fp, "尺度还原：%d 份 <case>_Pred.json 的坐标乘回原尺寸" % _nsc)
+    # `STAGE2_COMP_BOX`（单进程档的漏斗；lane 档由 `_publish_one` 兜住，两处都幂等）
+    if compbox.mode() != compbox.OFF:
+        _log(fp, "框模板（%s=%s）：%d 个占位框换成字形模板"
+             % (compbox.ENV, compbox.mode(), compbox.apply_dir(final_dir)))
     _log(fp, "全部完成，墙钟 %.1fs（%.2f s/张）" % (wall, wall / max(1, len(items))))
     fp.close()
 
