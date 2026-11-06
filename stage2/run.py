@@ -813,6 +813,16 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         _pr = _pinrot.fix(bgr, doc, a, engine)
     except Exception as _e:                      # noqa: BLE001
         _pr = {"on": True, "error": "%s: %s" % (type(_e).__name__, _e)}
+    # ★ 脚号/脚名多口径投票重读（`stage2/pinvote.py`，`STAGE2_PINVOTE` 默认关）：
+    #   存下来的槽框是**单字紧框**（`GND` 只框到 `G`、`SWT` 只框到 `T`），在它上面加
+    #   padding/放大都读不回整串（`work/_pinscale2.py` 实测）。这里按**条带重定框**
+    #   （体内读名、体外读号），再用 `{原样, 2×, 反色}` 三口径投票，≥2 路一致且
+    #   conf ≥ 0.90 才覆盖；「有号无名」的槽一律不写号（判分器 name_mismatch 是 fp+fn）。
+    try:
+        from . import pinvote as _pinvote
+        _pv = _pinvote.fix(bgr, doc, a, engine)
+    except Exception as _e:                      # noqa: BLE001
+        _pv = {"on": True, "error": "%s: %s" % (type(_e).__name__, _e)}
     # ★ 脚名「事后」重读（`stage2/pinnamereread.py`，`STAGE2_PINNAME_REREAD` 默认关；§5.467）：
     #   §5.466 把补读塞在 `TextEngine.read()` 里，读数一变 `assign` 的角色就重排
     #   （case8 `slot1` 的号 11→15），名字更对了反而掉 2.46。这里等 `assign` 把角色与号
@@ -1024,6 +1034,7 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
         "labels_merged": sum(1 for v in pred["nets"].values() if v.get("label")),
         "pinname_rescue": _pn,
         "pinrot": _pr,
+        "pinvote": _pv,
         "t_read": round(t2 - t1, 2), "t_assign": round(t3 - t2, 2),
         "t_total": round(t3 - t0, 2),
     }

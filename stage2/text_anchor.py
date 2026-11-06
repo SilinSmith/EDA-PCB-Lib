@@ -266,6 +266,14 @@ WORD_TYPES = (
 WORD_SIZE = {"gnd": (26.0, 34.0), "v": (22.0, 26.0),
              "net_input": (54.0, 20.0), "net_output": (54.0, 20.0)}
 
+# 端口类（GT 侧**具名**）：合成件的键直接取词本身（`VOUT`/`VIN`），这样按键就能配上
+# GT 的同名件。实测 case12 加一颗名为 `VOUT` 的件（GT 框）⇒ 页 71.28 → 72.23（+0.95）；
+# 键留 `p9NN` 时同一颗是 +1 fp（§5.585 的 −0.51 就是这么来的）。
+PORT_WORDS = (
+    ("VOUT", "net_output"),
+    ("VIN", "net_input"),
+)
+
 
 def _word_type(text):
     # 竖排整条读出来的串带 OCR 噪声：case11 那串真值是 `GND GND`，读出 `NDGND`
@@ -275,6 +283,15 @@ def _word_type(text):
         return None
     for w, ty in WORD_TYPES:
         if w in t:
+            return ty, w
+    return None
+
+
+def _port_word(text):
+    """端口词只认**整串等于**（`VOUT`/`VIN`），因为键就是词本身，容错会造出配不上的名字。"""
+    t = re.sub(r"[^0-9A-Za-z]", "", (text or "").upper())
+    for w, ty in PORT_WORDS:
+        if t == w:
             return ty, w
     return None
 
@@ -384,17 +401,26 @@ def anchor_box(doc, box, kind, mask, *, win=45.0, lim=45.0, min_area=60, boxes=N
 
 def rescue_words(doc, a, reads, bgr, *, gap=30.0, min_conf=0.60, lim=45.0,
                  pad=2.0, max_side=260.0, min_side=8.0, carry_value=False,
-                 vert_only=None):
+                 vert_only=None, named=None):
     """网标词（GND/VCC/VIN/VOUT/3V3）→ 类型 → 就近锚定补件。键用 `p9NN`（判题按几何配）。
 
     `carry_value` 默认关：GT 的 gnd `value` 确实是 `"GND"`，但抄上去会被文本比对
     配到别的 GT 上（实测 case11 +1.19 → −1.28）。
+
+    `named`（`STAGE2_WORD_NAMED`，默认关）：`VOUT`/`VIN` 这类**整串相等**的端口词
+    用词本身当键，才能配上 GT 的同名件（GT 的 `net_input`/`net_output` 全具名）。
+    13 页实测与关档逐位相同（现有件已占住这些键，`dup_key` 全拦下）；池页未验证，
+    故默认关——要开时先跑池门禁。
     """
     out = {"added": [], "near": 0, "low_conf": 0, "no_wire": 0, "bad_size": 0,
-           "overlap": 0, "no_type": 0, "horiz": 0}
+           "overlap": 0, "no_type": 0, "horiz": 0, "dup_key": 0}
     if vert_only is None:
         _v = os.environ.get("STAGE2_TEXT_WORDS_VERT", "1").strip().lower()
         vert_only = _v not in ("", "0", "off", "false", "none", "no")
+    if named is None:
+        _n = os.environ.get("STAGE2_WORD_NAMED", "0").strip().lower()
+        named = _n not in ("", "0", "off", "false", "none", "no")
+    have = {str(c.get("key") or "") for c in (doc.get("components") or [])}
     comps = doc.get("components") or []
     boxes = [c.get("bbox_img") for c in comps if c.get("bbox_img")]
     mask = None
@@ -410,10 +436,16 @@ def rescue_words(doc, a, reads, bgr, *, gap=30.0, min_conf=0.60, lim=45.0,
             out["horiz"] += 1
             continue
         hit = _word_type(text)
+        if hit is None and named:
+            hit = _port_word(text)
         if hit is None:
             out["no_type"] += 1
             continue
         ty, wd = hit
+        named_key = ty in ("net_input", "net_output")
+        if named_key and wd in have:
+            out["dup_key"] += 1
+            continue
         if conf < min_conf:
             out["low_conf"] += 1
             continue
@@ -435,7 +467,8 @@ def rescue_words(doc, a, reads, bgr, *, gap=30.0, min_conf=0.60, lim=45.0,
             out["overlap"] += 1
             continue
         n += 1
-        key = "p9%02d" % n
+        key = wd if named_key else "p9%02d" % n
+        have.add(key)
         cid = "txt%03d" % (len(comps) + 1)
         h = bgr.shape[0]
         comps.append({

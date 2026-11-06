@@ -43791,3 +43791,92 @@ python -X utf8 work\_namnull_orc.py gt1106           # case13 H1 的单件边际
 
 `work/_cv.py` 的 `GT_ROOT` 默认已切到 `work/_new2026/open_GT-1106`（env 仍可覆盖）。
 
+## 5.589 脚名条带重读投票 + 库键前缀兜底（判题机尺 83.6650 → 84.0174）
+
+本节两件事都是「脚」这一侧的读数修复：一件把**已经检出的脚点**上的名字读回来，
+一件把**型号名带后缀**时整条库通道失效的问题补上。两件都只影响 `pin`（以及由脚
+成员决定的 `netH`），不碰线。
+
+### 5.589.1 交付档表（新 GT `open_GT-1106`，判题机尺 = `EvalConfig()` 默认）
+
+| 档 | 本地尺 | official | 判题机尺 | 相对上一档 |
+|---|---:|---:|---:|---:|
+| `nn2`（§5.588 交付档） | 87.4150 | 85.6901 | 83.6650 | — |
+| `pv`（+ 脚名投票） | 87.5789 | 85.8540 | 83.8364 | +0.1714 |
+| `libpfx`（+ 库键前缀兜底） | 87.7599 | 86.0350 | 84.0174 | +0.1810 |
+
+逐案（vs `nn2`）：`pv` 只有 case11 **+1.65**、case6 **+0.39**，其余 11 页逐位不变；
+`libpfx` 只有 case7 **+2.36**（−0.63 → +1.73），其余 12 页逐位不变。
+
+### 5.589.2 脚名条带重读（`stage2/pinvote.py`，`STAGE2_PINVOTE` 默认 1）
+
+病：`assign` 存下来的槽框是**单字紧框**——`GND` 只框到 `G`、`SWT` 只框到 `T`、
+`LED1` 只读到 `E`/`1`，在它上面加 padding/放大都读不回整串（`work/_pinscale2.py`
+在 case11 `U1` 上 pad 0/2/4 × scale 1..4 × 反色逐档实测）。
+
+法：按**条带**重定框，不用旧框——
+1. 每颗 `type=="box"` 件按边算 pitch，`half = clamp(pitch*0.68, 7, 26) * 1.1`；
+2. 体内条带（`pinname._strip_box`，深 46px）读**名**，体外条带（`pinrot._out_box`，深 34px）读**号**；
+3. `pinname._tight_ink_grp` 把条带收紧到墨迹；
+4. 三个口径各读一次 `{pad3, pad3+2×, pad3+反色}`，`_vote` 要求**≥2 路文本一致且 conf ≥ 0.90**；
+5. 四道闸：同名去重（同件里已有同名脚就不再写，`dup_name`）、名字等于号则弃、号不合法则弃、
+   **「号与名都空」的槽绝不写号**（判分器里 `name_mismatch` 是 fp+fn 双扣，宁可不发）。
+
+★ **只改名字、不改号**（`STAGE2_PINVOTE_NUM` 默认 0）。改号会把脚从 `pin_<旧号>` 键
+搬到 `pin_<新号>`，`assemble` 的迟到 need-name 闸门随后会把别的槽一起丢掉：case4 实测
+改号档页分 92.56 → 86.93（pin_f1 1.000 → 0.833，`U2` 的 `pin_1/pin_3` 被整体搬走）。
+只改名后 case4 逐位不变，case11 反而更好（+1.75 > 改号档的 +1.29）。
+
+读数（case11）：槽 25 / 改号 0 / 改名 3；判题机尺 64.35 → 66.10，pin_f1 0.545 → 0.647。
+
+### 5.589.3 库键前缀兜底（`stage2/libpins.py:315 key_for`，`STAGE2_LIB_KEY_PREFIX` 默认 1）
+
+病：型号名常带封装/等级后缀（图上印 `MP2236CGJ-Z`，库键只收主干 `MP2236`）。
+`key_for` 的三档（精确 → 归一化 → 模糊）全都命中不了，于是**整条库通道失效**：
+规则 A 的「按引脚名补号」与规则 B 的「按库名覆盖」都拿不到数据，case7 `U1` 的
+`IN/SW/GND` 三条补名全部丢失（`pn2` 档 comp 靠型号名拿满分，pin 反而 1.000 → 0.9333）。
+
+法：精确/归一化/模糊都落空时，按**归一化后的前缀由长到短**（最短 4 字符）在
+`by_norm` 里找库键，命中即用；`STAGE2_LIB_KEY_PREFIX=0` 时逐位等于原行为。
+实测 `key_for("MP2236CGJ-Z")` → `MP2236`，脚名表 `[None, IN, SW, GND]` 恢复。
+
+### 5.589.4 判否清单（都在本节基线上量，判题机尺）
+
+| 尝试 | 读数 | 结论 |
+|---|---:|---|
+| 值文本按「最近的 value 通道读数」补读（只补空值） | 87.5789 → 87.5789（sets=2） | 无增量：目标值根本没被读成文本 |
+| 同上但允许覆盖已有 value | 87.5789 → 87.1887（−0.39） | 判否：case13 −3.08、case12 −1.50 |
+| 元件框贴合框内墨迹（IoU ≥0.6 才动，270 个框） | 87.5789 → 87.2520（−0.33） | 判否：case4 −1.25、case12 −3.00 |
+| `STAGE2_PIN_SOLVE=1/2`、`STAGE2_PIN_SNAP=1/2`、`STAGE2_PINNUM_ALNUM=1.0`、`STAGE2_VTEXT_LABELS=1` | 见 §5.587/§5.588 | 均负 |
+| `STAGE2_PIN_FILL_ELIM=1`（丢「补出来的」脚） | 87.7599 → 87.6456（−0.11） | 判否：case1 −0.68、case5 −0.81 |
+| `STAGE2_PINNUM_LIBNUM=1`（库序号填号） | 87.7599 → 87.7470（−0.01） | 判否：case11 −0.46 |
+| `STAGE2_PINNAME_INBOX_FILL=1`（框内名补名） | 87.7599 → 87.7599（±0.00） | 惰性：13 页无槽命中，默认保持 0 |
+| `STAGE2_WORD_NAMED=1`（`VOUT`/`VIN` 用词本身当键） | 87.7599 → 87.7599（±0.00） | 惰性：现有件已占住这些键（`dup_key` 全拦），默认保持 0 |
+
+### 5.589.5 工程修正：大核绑定要在 spawn 之前
+
+「任务绑大核」此前只绑到了外壳进程：Windows 子进程在**创建时复制**父进程亲和性，
+而 `Start-Process` 之后隔 2 秒再设掩码时，`_onoff13.py` 已经 spawn 了 `_cv.py` →
+`submission/run.py`，真正吃 CPU 的层仍在 24 个逻辑核上（12:32 起的池门禁就这样跑了
+93 分钟）。另有一个 ctypes 坑：`GetCurrentProcess` 默认 `restype=c_int` 会把 64 位
+伪句柄 `-1` 截断成 `0xFFFFFFFF`，`SetProcessAffinityMask` 返回 0 却 `err=0`（静默失败）。
+
+修法：新增 `work/_bigcore.py`（显式声明 `argtypes/restype`，掩码 `0xFFFF` = 逻辑核 0–15
+= 8 个 P 核超线程），并在 `work/_cv.py`、`work/_onoff13.py`、`work/_poolgate.py` 开头
+调用 `bind()`——进程一启动就设掩码，之后 spawn 的整棵进程树全部继承。
+
+### 5.589.6 池门禁
+
+`POOL_DEVICE=cuda`、绑 0–15 大核、ref `pnprune`（30.4228）：**待测（ref pnprune 30.4228）**。
+
+### 5.589.7 复现命令
+
+```
+python -X utf8 work\_onoff13.py "pv6=STAGE2_PINVOTE=1"          # 脚名投票
+python -X utf8 work\_onoff13.py libpfx                          # 库键前缀兜底
+python -X utf8 work\_rescore.py nn2 pv6 libpfx                  # 两把尺子同时看
+python -X utf8 work\_value_orc.py dfPV 30 0.5                   # 判否：值文本补读
+python -X utf8 work\_bboxsnap_orc.py dfPV 4 0.6                 # 判否：框贴合墨迹
+python -X utf8 work\_poolgate.py pvpool --pool-ref pnprune      # 池门禁
+```
+

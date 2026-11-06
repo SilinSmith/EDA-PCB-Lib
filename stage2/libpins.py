@@ -341,6 +341,18 @@ class LibCtx:
         hits = difflib.get_close_matches(nt, list((self._index or {}).get("by_norm", {})),
                                         n=1, cutoff=cutoff)
         if not hits:
+            # ★ 型号后缀档（`STAGE2_LIB_KEY_PREFIX`，默认 1）：型号名常带封装/等级后缀
+            #   （`MP2236CGJ-Z`），库键只收录主干（`MP2236`）。这类名字 fuzzy 也命中不了，
+            #   早先就整条库通道失效（case7 `U1` 的 `IN/SW/GND` 补名全部丢掉，pin 1.0→0.933）。
+            #   这里按「归一化后的前缀、由长到短」找库键，最短 4 字符，命中即用；
+            #   只在精确/归一化/模糊都落空时兜底，关档时逐位等于原行为。
+            if (os.environ.get("STAGE2_LIB_KEY_PREFIX", "1") or "0").strip().lower() \
+                    not in ("", "0", "off", "false", "no", "none", "disable", "disabled"):
+                by_norm = (self._index or {}).get("by_norm", {}) or {}
+                for _n in range(len(nt) - 1, 3, -1):
+                    _c = by_norm.get(nt[:_n])
+                    if _c:
+                        return _c[0]
             return None
         return (self._index or {})["by_norm"][hits[0]][0]
 

@@ -1406,10 +1406,14 @@ def fit_partname(text: str) -> float:
     return base * (1.0 - 0.6 * fragment_score(text))
 
 
+#: `STAGE2_PINNUM_ALNUM`：字母+数字脚号（`A9`/`B12`）的 fit 权重，默认 **0.7**。
+#: 纯数字恒为 1.0；调高会让字母号在与「脚名」的竞争里胜出（GT 里 6 根字母号全在 case11 USB1）。
+_PINNUM_ALNUM = float(os.environ.get("STAGE2_PINNUM_ALNUM", "0.7") or 0.7)
+
 def fit_pinnum(text: str) -> float:
     if not PINNUM_RE.match(text):
         return 0.0
-    return 1.0 if text.isdigit() else 0.7
+    return 1.0 if text.isdigit() else _PINNUM_ALNUM
 
 
 def fit_pinname(text: str) -> float:
