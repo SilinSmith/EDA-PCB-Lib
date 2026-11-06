@@ -33,6 +33,47 @@
 对照两条上游外推开关（同一批、`work/_extany0.log` / `work/_extfree5.log`）：
 `STAGE2_EDGE_EXT_ANY=0` **82.78**、`STAGE2_EDGE_EXT_FREE=5` **82.91**
 ⇒ 外推规则本身是赚的，但它留下了**向外 ~1px 的系统偏置**，本校正正好抵消。
+
+## §T 型接点伸长（`FUSION_EDGECAL_JUNC`，默认 **12 px**；设 0 关闭）
+
+病（`work/_line_diag13.py` + `work/_line_anchor.py`，13 页 `open_GT-1106`，基线导线 F1
+0.6258 = tp 492 / fp 316 / fn 252）：252 条未命中 GT 边里 **75 条只差 5~12px**、
+51 条差 12~28px，且这些边的**法向残差 p50 只有 0.3px、95.2% ≤ 2px** —— 线是对的，
+错的只有**沿线方向的弧长**；其中 **61.9% 是我们停短了**。形态是「我们的一条边停在
+同网另一条边**近旁几像素处**，而 GT 那条边一直画到交点（T 型接点）为止」。
+
+药：把端点沿**自身线方向**伸长到它与**本网另一条边**的最近交点，条件是交点落在
+他边**线段内部**（`s∈[0,L]`）、距离 `≤ JUNC` px、两线夹角 `|sin| ≥ JUNC_PERP`。
+只伸长、不缩短（oracle 拆分：伸长 +0.0782 / 缩短 +0.0120）。只动端点坐标 ⇒
+元件/引脚/netH 三轴不变（`net_pin_set` 只读 `hyperGraph`）。
+
+离线裁定（`work/_line_proto.py`，13 页、官方 `evaluate_case` + `CFG`，基线 0.6258）：
+| 规则 | mean line | Δ | tp/fp/fn |
+|---|---|---|---|
+| 同网交点、只伸长，r=8/10/12 | 0.6302 | **+0.00438** | 496/312/248 |
+| 同上 r=15 / r=18 | 0.6313 | **+0.00552** | 497/311/247 |
+| 同上 r=20 | 0.6303 | +0.00452 | 496/312/248 |
+| 同上 r=25（悬崖，勿用） | 0.5958 | −0.02996 | — |
+| 放宽到「交点可落在线段外 4px」 | — | +0.00035 | ⇒ `s∈[0,L]` 是承重约束 |
+| 要求对方线**自身端点**在交点 ≤2px（真 T） | 0.6301 | +0.00431 | 略低于上者 |
+| 允许跨网交点 | — | 与同网**逐键相同** ⇒ 有用的交点全在同网内 |
+| 单用 `dedup`(tol=5) / `minlen`(L=12) | — | +0.0011 / +0.0014 | 另一机制，未启用 |
+
+判死（同一批实测，勿重跑）：引脚吸附 −0.0060~−0.0196、沿自身线到引脚 ≈0、
+沿自身线到元件框边 −0.0368、同网共线填缝 −0.0009、删被包含子段 −0.0023。
+
+门闸实测（13 页 `work/_cv`，同一棵树，`linej12off5.json` → `linej12t2.json`）：
+`JUNC=12`（`JUNC_STUB` 取默认 2）= line 0.6258→**0.6297(+0.00394)**、mean 88.047→88.086、
+official 86.322→86.361、judge 84.304→84.344；comp/pin/netH **逐位不变**；逐页只有
+1/6/11 上升（+0.0061 / +0.0118 / +0.0333），**无任何页面下降**、无任何页增加/删除边。
+另一棵上游树（`linej12off2` → `linej12t`）复现同一 +0.00394。
+
+`JUNC_STUB=0`（不要求真 T）实测 line **+0.00534**，但 case 5 −0.0052：伸长把一对原本重合
+的边扰开后，上游去重逻辑多留了一条假边（`net_2`，66→67 条）；case 1 的 +0.0296 里也含
+同样机制的「复活边」。⇒ 想要更大收益可设 0，但要接受这种偶发假边；保守用默认 2。
+
+**默认仍是 0 = 关**（本篇只改端点、不改开关默认），推荐值 **12**（离线 +0.00438、
+门闸 +0.00394，距 r=25 悬崖 13px）；追离线 +0.0055 可试 15（门闸未验）。
 """
 from __future__ import annotations
 
@@ -66,6 +107,14 @@ ON = _env_on("FUSION_EDGECAL", "1")
 TRIM = _env_float("FUSION_EDGECAL_TRIM", 1.0)          # 普通端点内收 px
 TRIM_NEAR = _env_float("FUSION_EDGECAL_TRIM_NEAR", 4.0)  # 贴着同网他边的端点内收 px
 NEAR2 = _env_float("FUSION_EDGECAL_NEAR", 3.5)          # 「贴着」判定半径 px
+# ★ 2026-11-07：`FUSION_EDGECAL_JUNC`（端点沿自身线伸长到**同网 T 型交点**的半径 px，
+#   **默认 12 px**；设 0 关闭）。依据见文件顶注「§T 型接点伸长」。为 0 时 `extend_doc` 直接早退，
+#   本文件输出与改动前逐键相同。
+JUNC = _env_float("FUSION_EDGECAL_JUNC", 12.0)
+JUNC_PERP = _env_float("FUSION_EDGECAL_JUNC_PERP", 0.05)  # 交点处 |sin(夹角)| 下限
+# 只认**真 T 型接点**：交点必须落在他边**端点** `JUNC_STUB` px 内（`0` = 不设此约束）。
+# 原理图里「一条线从另一条线中腰穿过」不成接点（无 junction 点），GT 也不会在那里收笔。
+JUNC_STUB = _env_float("FUSION_EDGECAL_JUNC_STUB", 2.0)
 
 
 def _pt(p):
@@ -101,6 +150,91 @@ def _dist_to_other(pt, k, segs):
         if d < best:
             best = d
     return best
+
+
+def _unit(a, b):
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    L = (dx * dx + dy * dy) ** 0.5
+    if L <= 1e-6:
+        return None
+    return dx / L, dy / L
+
+
+def _cross_t(d, e, a, b, perp):
+    """直线 `e + t*d` 与线段 `a..b` 的交点参数 t（交点须落在段内）；不交返回 None。
+
+    同交给交点到他边**近端**的距离 `min(s, L-s)`（判「真 T 型」用）。
+    """
+    u = _unit(a, b)
+    if u is None:
+        return None
+    den = d[0] * u[1] - d[1] * u[0]
+    if abs(den) < perp:                                   # 近平行：不是交点
+        return None
+    wx, wy = a[0] - e[0], a[1] - e[1]
+    t = (wx * u[1] - wy * u[0]) / den
+    s = (wx * d[1] - wy * d[0]) / den
+    L = ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) ** 0.5
+    if s < 0.0 or s > L:
+        return None
+    return t, min(s, L - s)
+
+
+def extend_doc(doc: dict, r: float = None, perp: float = None,
+               stub: float = None) -> dict:
+    """把端点沿**自身线方向**伸长到与本网其它边的最近交点（T 型接点）。
+
+    只伸长不缩短；交点必须落在**他边线段内部**（`s∈[0,L]`）、距他边近端 `≤ stub` px
+    （`stub=0` 关掉该限制）、半径 `r` px 内取最近。
+    返回 {"extended": 边数, ...}；只改端点坐标 ⇒ 元件/引脚/netH 三通道不变。
+    """
+    rr = JUNC if r is None else float(r)
+    pp = JUNC_PERP if perp is None else float(perp)
+    sb = JUNC_STUB if stub is None else float(stub)
+    out = {"extended": 0, "junc": round(rr, 3), "stub": round(sb, 3), "trace": []}
+    if rr <= 0:
+        return out
+    for net_id, net in (doc.get("nets") or {}).items():
+        edges = net.get("edges") or {}
+        segs = {}
+        for k, seg in edges.items():
+            if isinstance(seg, list) and len(seg) == 2:
+                segs[k] = (_pt(seg[0]), _pt(seg[1]))
+        if len(segs) < 2:                                 # 单边网没有「他边」
+            continue
+        for k, seg in list(edges.items()):
+            if k not in segs:
+                continue
+            p0, p1 = segs[k]
+            cur = [p0, p1]
+            for end in (0, 1):
+                e, o = cur[end], cur[1 - end]
+                d = _unit(o, e)
+                if d is None:
+                    continue
+                best = None
+                for k2, (a, b) in segs.items():
+                    if k2 == k:
+                        continue
+                    hit = _cross_t(d, e, a, b, pp)
+                    if hit is None:
+                        continue
+                    t, near = hit
+                    if t <= 0.0 or t > rr:
+                        continue
+                    if sb > 0 and near > sb:              # 不是真 T 型接点（他边只是穿过）
+                        continue
+                    if best is None or t < best:
+                        best = t
+                if best is not None:
+                    cur[end] = (e[0] + best * d[0], e[1] + best * d[1])
+            if cur[0] != p0 or cur[1] != p1:
+                edges[k] = [_out(seg[0], cur[0][0], cur[0][1]),
+                            _out(seg[1], cur[1][0], cur[1][1])]
+                out["extended"] += 1
+                if len(out["trace"]) < 40:
+                    out["trace"].append({"net": net_id, "edge": k})
+    return out
 
 
 def trim_doc(doc: dict, trim: float = None, trim_near: float = None,
@@ -143,12 +277,16 @@ def trim_doc(doc: dict, trim: float = None, trim_near: float = None,
     return {"moved": n, "trim": round(t0, 3), "trim_near": round(t1, 3), "trace": trace}
 
 
-def apply_file(src, dst, trim: float = None) -> dict:
-    """在**已经落盘**的 pred JSON 上内收端点；无改动则不重写。写盘是原子的。"""
+def apply_file(src, dst, trim: float = None, junc: float = None) -> dict:
+    """在**已经落盘**的 pred JSON 上内收端点（+ 可选 T 型接点伸长）；无改动则不重写。"""
     src_p, dst_p = Path(src), Path(dst)
     doc = json.loads(src_p.read_text(encoding="utf-8"))
     st = trim_doc(doc, trim)
-    if not st.get("moved"):
+    ex = extend_doc(doc, junc)                            # 必须在内收**之后**：伸长位置以收完的线为准
+    if ex.get("extended"):
+        st["extended"] = ex["extended"]
+        st["junc"] = ex["junc"]
+    if not st.get("moved") and not ex.get("extended"):
         return st
     tmp = dst_p.with_name(dst_p.name + ".tmp")
     tmp.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
