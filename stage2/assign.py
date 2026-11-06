@@ -763,6 +763,23 @@ _VALUE_TAIL = "FHV\u03a9AWRJ"
 if os.environ.get("STAGE2_VALUE_TAILRE", "1") not in ("0", "", "off"):
     _VALUE_TAIL += "fhvr"
 VALUE_RE = re.compile(r"^[+-]?(\d+(\.\d+)?|\.\d+)\s*[pnu\u00b5\u03bcmkKMGR]?[" + _VALUE_TAIL + r"]?$")
+# ★ `STAGE2_VALUE_RNOTE`（默认 **1 = 开**；实测 13 页 comp .9516→.9569）：**R 记法**（乘子夹在数字中间）`5k1` / `2k2` / `4R7`。
+#   病（13 页实测，2026-11）：`VALUE_RE` 只认「数字 + 乘子 + 可选尾字母」，`5k1` 中间那个
+#   `1` 让整串失配 ⇒ `fit_value` 恒为 0 ⇒ 这个框**连值候选都不是**。case1 `R14` 的值框
+#   `[298,380,318,390]` 同一裁片有五种读法，其中 `value='5k1'`(0.653) 与
+#   `pin_name='5k1'`(0.981) 才是对的（GT `5k1`），fit=0 把它们一并排除，只剩
+#   `pin_number='501'`(0.999) 以 0.75 分顶上 ⇒ 输出值 `501`（失配）。补上这一种形状后
+#   `5k1` 得 1.0 分直接赢回来（`_score` 项 0.757 > 0.637）。
+#   **只加形状，不动 `VALUE_RE` 本体**：默认关时逐位不变（`STAGE2_VALUE_RNOTE=0`）。
+#   取 `conv` 时额外把 `2k2` **转写**成 `2.2k`（13 页 GT 里 `5k1` 原样出现 2 次，故默认不转写）。
+VALUE_RNOTE_ON = env_on("STAGE2_VALUE_RNOTE", "1")
+VALUE_RNOTE_CONV = (os.environ.get("STAGE2_VALUE_RNOTE", "") or "").strip().lower() == "conv"
+#   **乘子只收电阻那一档**（`R r k K M G`），不收 `p n u µ μ m`：13 页实测 case13 的
+#   `C2`/`C7` 值框里 `pin_number='22u1'`(0.925) 就是 OCR 把 `22uf` 读错，若把 `u` 也当
+#   中间乘子，它得 1.0 分后 `0.85*(0.3+0.7*0.925)=0.805` 反超真读 `value='22uf'`(0.574，
+#   0.702) ⇒ 两颗电容的值被改错（comp 0.8718→0.8205）。电阻上的 `2k2`/`4R7` 是真写法，
+#   电容上的 `22u1` 既不是标称值、实测又是误读，所以形状只开到电阻这一档。
+VALUE_RNOTE_RE = re.compile(r"^[+-]?\d+[RrKkMG]\d+$")
 # ★ 区间值（默认 0 = 关）：`10-100uF` 这类「下限-上限」写法在 GT 里
 #   确实存在（case12 的 `C2`/`C3` 都是 `10-100uF`），但 `VALUE_RE` 只认单个数 ⇒ 整条读法
 #   被评 0，值槽空着/被截断的 `100uF` 顶替。只加一条「区间形状」并给满分，不动其它分支。
@@ -1261,6 +1278,9 @@ def canon_value(text: str) -> str:
     t = (text or "").strip()
     if VALUE_RE.match(t):
         return t
+    if VALUE_RNOTE_ON and VALUE_RNOTE_RE.match(t):
+        # R 记法（`5k1`）：原样保留 —— 再往下削会削成 `5k`，把对的改成错的。
+        return rnote_value(t)
     for cut in range(1, 4):
         if len(t) - cut < 2:
             break
@@ -1268,6 +1288,43 @@ def canon_value(text: str) -> str:
         if VALUE_RE.match(p):
             return p
     return ""
+
+
+def rnote_value(text: str) -> str:
+    """R 记法串的**可选取值**：默认原样返回；`STAGE2_VALUE_RNOTE=conv` 时转写成十进制。
+
+    转写只为「和 `2.2k` 写法的 GT 对齐」这一种场景准备：13 页 GT 里 `5k1` 是原样写法
+    （case1 的 `R13`/`R14`），所以 `conv` **不是**推荐档；它存在的意义是把这条路走通
+    并留下证据（`work/_val_selftest.py`）。
+    """
+    t = (text or "").strip()
+    if not VALUE_RNOTE_CONV or not VALUE_RNOTE_RE.match(t):
+        return t
+    m = re.match(r"^([+-]?)(\d+)([RrKkMG])(\d+)$", t)
+    if not m:
+        return t
+    sign, whole, mult, frac = m.group(1), m.group(2), m.group(3), m.group(4)
+    val = "%s.%s" % (whole, frac)
+    if frac.strip("0") == "":
+        val = whole
+    return "%s%s%s" % (sign, val, mult)
+
+
+#: ★ `STAGE2_VALUE_UNITFIX`（默认 **1 = 开**）：尾字母 `f/F` 前丢了 `u` 的读法补回单位。
+#   病（13 页实测，2026-11）：case13 `C3` 的值框 `[1202,580,1242,595]` GT 是 `22uf`，
+#   同一裁片五种读法里 `pin_name='22f'`(0.998) 分最高（`value='220n'` 只有 0.747），
+#   于是值写成 `22f` —— 与 GT 只差一个被吞掉的 `u`。判据只认「数字 + 单个 f/F」这一种
+#   形状（GT 13 页 141 个值里没有一条是 `^\\d+[fF]$`，所以不会把对的改错）。
+VALUE_UNITFIX_ON = env_on("STAGE2_VALUE_UNITFIX", "1")
+_VALUE_UNITFIX_RE = re.compile(r"^([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*([fF])$")
+
+
+def unit_fix_value(text: str) -> str:
+    """`22f` -> `22uf`、`22F` -> `22uF`（只补单位，不动数值与大小写）。不适用返回 `""`。"""
+    m = _VALUE_UNITFIX_RE.match((text or "").strip())
+    if not m:
+        return ""
+    return "%su%s" % (m.group(1), m.group(2))
 
 
 def fit_value(text: str) -> float:
@@ -1284,6 +1341,10 @@ def fit_value(text: str) -> float:
             return VALUE_DIGIT_FIT
         return 0.0
     if VALUE_RE.match(text):
+        return 1.0
+    if VALUE_RNOTE_ON and VALUE_RNOTE_RE.match(text):
+        # R 记法（`5k1`）：与 `100nF` 同等「就是值」。这一条只影响「能不能当值」，
+        # 输出文本由 `canon_value` / `rnote_value` 决定（默认原样）。
         return 1.0
     if VALUE_RANGE_ON and VALUE_RANGE_RE.match(text):
         # 区间值（`10-100uF`）：GT 里它就是一个值串，给满分参与竞争。
@@ -2702,6 +2763,12 @@ def assign(components: Sequence[dict], pins: Dict[str, List], texts: Sequence[di
             _txt = best[1]
             if want == "value" and VALUE_TRIM_ON:
                 _txt = canon_value(_txt) or _txt
+            if want == "value" and VALUE_RNOTE_ON:
+                # `conv` 档才会真的改写（`2k2` -> `2.2k`）；默认档是恒等，逐位不变。
+                _txt = rnote_value(_txt)
+            if want == "value" and VALUE_UNITFIX_ON:
+                # 单位补回（`22f` -> `22uf`）：与 TRIM 互不依赖。
+                _txt = unit_fix_value(_txt) or _txt
             rec[want] = {"text": _txt, "conf": best[2],
                          "box": list(best[3]["bbox"]), "d": best[3]["d"]}
         if _dbg_want(cid):
