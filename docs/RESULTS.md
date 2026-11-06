@@ -44246,3 +44246,64 @@ python -X utf8 work\_mktpl.py work\_mtpl\case_0001
 python -X utf8 work\_rendcase2.py work\_mtpl\case_0001.json work\_mtpl\case_0001.png
 python -X utf8 work\_report_update.py            # 技术报告数字更新到 87.8881/86.1632/84.1456
 ```
+
+## 5.594 交付物组装修复（第三方审查 P0/P1）
+
+外部审查报告（`261106\审查报告_项目本体.md`）判定代码本体无阻断缺陷、**问题全在交付物组装**，
+并给出两条 P0：包结构不对会直接 0 分。本节记录四条修复与证据。
+
+### 5.594.1 结论表
+
+| 项 | 修复前 | 修复后 | 证据 |
+|---|---|---|---|
+| 上传包顶层 | 仅 `eda-pcb-main/`（构建必失败） | 5 项：`eda-pcb-main/` + `run.sh` + `Dockerfile` + `verify_imports.py` + `install_deps.py` + `metadata` | `work\_mkpkg.py` → `work\_pkg_upload.zip`（74.07 MB / 220 条） |
+| 包内技术报告 | `docs/技术报告-赛题六.docx` 69,171 B（旧） | 1,158,180 B（= `261106\技术报告_PCB原理图自动解析.docx`） | commit `cbc784f` |
+| 报告口径 | 3 处按旧版（框中心 20 px、IC 只比 Name、阻容只比 value） | 按《评测要求》：bbox 四坐标各 20 px、IC 比 name+type、其余比 type+name+value | `work\_doc_report.py:242-262` + `work\_report.txt:21/22/41` |
+| 输出多余字段 | `__pin_index` / `_pin_stubs` 随 Pred 导出 | 出口清理，只留 `case/components/pins/nets` | commit `5d63e95`（`_strip_internal_keys`） |
+
+### 5.594.2 为什么必须是根级 5 项
+
+平台实际接收并**构建成功**的第 32 次提交包 `261105\提交第三十二次\prediction_result (27).zip`
+（67,976,905 B）顶层正是 `eda-pcb-main/`(206 条) + `run.sh`(5,152 B) + `Dockerfile`(16,246 B) +
+`verify_imports.py`(4,758 B) + `install_deps.py`(14,871 B) + `metadata`(84 B)。而
+`eda-pcb\packaging\Dockerfile:206/214/221/222` 的 `COPY` 全部以 **build context 根** 为基准写裸文件名
+（`COPY install_deps.py` / `verify_imports.py` / `eda-pcb-main` / `run.sh`）⇒ 顶层只有 `eda-pcb-main/`
+的包在 `COPY` 阶段就失败。`metadata` 是平台回填的回执（四行 `*: null`），打包时按同形补上。
+
+打包器同时**裁剪到运行期文件集**（与第 32 次包一致）：保留
+`pipeline/stage1/stage2/stage3/fusion/textrec/cvparts/vlm/schematic_parser/synth/packaging/data/submission/weights`
++ 仓库根级 `*.py` 与 `requirements*.txt`，剔除 `tools/`(818 条) `yolo_part/`(476 条) `tests/` 与
+`docs/` 其余 103 条 ⇒ 条目 1,653 → 220、字节 113.4 MB → 74.1 MB（`docs/` 只留技术报告）。
+运行期无一处 import 这些目录（`yolo_part` 只在 `config.py:26-33` 的训练默认路径里出现）。
+
+### 5.594.3 报告的单一真源
+
+此前 `work\_report_update.py` 是**对 docx 做 run 级替换**（数字 + 追加收口说明），
+于是「重新生成 docx」会把替换结果整段丢掉（实测：重新 build 后 87.8881 → 87.7599 复现、
+收口说明消失）。本次把 MAP 里的 5 个数字与收口说明段**并进 `work\_doc_report.py` 源码**，
+改为「改源码 → 重新 build」，docx 只是产物。复核：段落 88 / 表 5 / 图 4，
+`87.8881`×3、`86.1632`×3、`84.1456`×4、`30.6784`×2、`+0.2559`×1、收口说明×1，与替换后的旧档逐项一致。
+
+### 5.594.4 去掉 `__pin_index` / `_pin_stubs`
+
+两者是装配/融合阶段的中间索引（`submission/run.py:658-659` 的坐标缩放会顺带处理它们），
+官方 GT 里没有这两个键；本地官方尺解析器忽略未知键，但严格解析器可能直接报错。
+新增 `_strip_internal_keys()`，在 `_run()` 与 `_run_fanout()` 的**全部改写之后**扫一遍
+`final_results/*_Pred.json`，只删这两个顶层键（开关 `PRED_STRIP_INTERNAL=0` 可保留，A/B 用）。
+
+- 单案：`work\_strip_out\final_results\1_Pred.json` 顶层恰为 `case/components/pins/nets`，
+  三节与基线 `work\_fast_out_defchk` **逐键相同**（57 元件 / 120 脚 / 38 网）。
+- 13 页：`work\_cv.py o13strip --run` ⇒ **87.89 / 86.16 / 84.15**、`contract: 13/13 files clean`、
+  `VERDICT: PASS`，与基线逐页相同。
+
+### 5.594.5 复现命令
+
+```
+python -X utf8 work\_doc_report.py                       # 重新生成技术报告 docx（源码即真源）
+python -X utf8 work\_mkpkg.py                            # 造上传包 work\_pkg_upload.zip
+python -X utf8 work\_pkgcheck.py work\_pkg_upload.zip     # 必须 VERDICT: current
+python -X utf8 -c "import zipfile; zipfile.ZipFile(r'work\_pkg_upload.zip').extractall(r'work\_pkgup_test')"
+$env:PYTHONHASHSEED="0"; python -X utf8 work\_pkgup_test\eda-pcb-main\submission\run.py `
+    -input work\_new2026\open_GT-1106 -output work\_pkgup_out2 -device cuda -cases 1
+$env:PYTHONHASHSEED="0"; python -X utf8 work\_cv.py o13strip --run
+```
