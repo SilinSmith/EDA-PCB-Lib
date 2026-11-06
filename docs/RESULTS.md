@@ -44307,3 +44307,83 @@ $env:PYTHONHASHSEED="0"; python -X utf8 work\_pkgup_test\eda-pcb-main\submission
     -input work\_new2026\open_GT-1106 -output work\_pkgup_out2 -device cuda -cases 1
 $env:PYTHONHASHSEED="0"; python -X utf8 work\_cv.py o13strip --run
 ```
+
+## 5.595 数据贡献线：33 案五拓扑自制数据集
+
+数据贡献线的目标不是提分而是**拿满 10 分**：`FinalScore_Data = 10 × Q_i / Q_max`，
+但质量闸门是硬门槛——「连接关系（net 级）微平均 F1 ≥ 95% 且任一单案 ≥ 85%」，未达标整批 0 分。
+本节记录最终批次的构成、读数与打包结构。
+
+### 5.595.1 最终批次与读数
+
+`work\_dsf33\dataset`（33 案），用本仓库同一套管线回读（`work\_dsscore_all.py`）：
+
+| 指标 | 值 |
+|---|---|
+| 案数 | 33（≥20 要求满足） |
+| 微平均总分 | **96.35** |
+| 单案最低 / 最高 | **94.90** / 97.31（无 < 85 的案例） |
+| comp / pin / netH | 全部 1.000（除 `case_0014` 的 comp 0.875，见 5.595.4） |
+| line | 0.490 ~ 0.731 |
+| 与官方 200 训练集重复 | 0（`_mkdspkg.py` 按网表签名折叠无源件脚号后比对 13 个官方 GT，`dup_with_official=0`） |
+
+### 5.595.2 五套拓扑骨架（拓扑本质不同，不是同图换标注）
+
+| 骨架 | 电路 | 件数 / 网数 | 型号 |
+|---|---|---|---|
+| A | 运放同相放大（反馈网络 + 去耦） | 7 / 5~6 | LM358 系列 8 型号 |
+| B | 运放比较器（分压基准 + 正反馈） | 7 / 5~6 | 同上 |
+| C | 同相放大 + 电容与 Rf 并联 | 7 / 5 | 同上 |
+| D | LM555 无稳态多谐振荡（R1/R2/C1 + 限流电阻 + LED） | 8 / 7 | LM555 |
+| E | 精密半波整流 + 峰值保持（两只二极管 + 峰值电容） | 7 / 5 | 同上 |
+
+A/B/C/E 各 8 组标注变体（型号名 / 8 条脚名 / 脚号置换 / 阻容值 / 位号前缀），
+脚号置换使**引脚级网表两两不同**；D 只出一案——同一拓扑的多套标注不算拓扑差异，
+而 555 家族的其它型号名在回读中不稳定（见 5.595.4）。
+
+### 5.595.3 坐标系声明（最容易整批 0 分的一项）
+
+《赛题Q&A1013》表格第 11 问裁定：赛题/评测/赛题数据集/golden 测试案例/自行收集数据集的坐标系
+**一致为「左下角为原点、x 向右、y 向上」**，并说明《数据收集指南》已按此统一。
+`赛题资料\数据收集指南0915.docx` 正文仍写「左上角原点、y 向下」，是被该裁定取代的旧文。
+
+本仓库的 GT 本来就是 y-up，无需翻转；实证：取 `work\_new2026\open_GT-1106\13\13.json`
+地符号 bbox `[217,57,275,112]`（图 1370×797），按 y-up 裁出的正是 GND 符号、按 y-down 裁出的是电感。
+`dataset_description.docx` 第 1 节因此显式声明 y-up 并引用该 Q&A，同时说明 PNG 是
+`image_y = H_image - y_up` 的翻折显示（避免评审把「图看着是 y-down」当成矛盾）。
+
+### 5.595.4 自制数据的四条可复现教训
+
+1. **值文本写法**：本管线不接受「数字-字母-数字」的 R 记法（`2k2`/`3k3`/`1K2` 一律读成空、`2.2k` 丢点变 `2k`）；
+   `2k`/`2200`/`16k` 正常。官方 13 页 GT 的 346 件里 R 记法值 0 条 ⇒ 只改自制数据，不动管线。
+2. **文字与导线净空**：竖放无源件的值文字（`work\_rendcase2.py:139`，`RVVALD` 默认 26）与设计号合并成高文本框后
+   会擦掉脚引线 ⇒ 网表掉；并联支路的间距必须 ≥ 值文本宽度 + 26 px，否则闭合成矩形（见 3）。
+3. **闭合导线围出的矩形会被当成 IC**：E 的 C 与 R 并联在两条横线之间，两条引线 + 两条横线必然闭环，
+   值文字落在环内 ⇒ 框检测把「文字 + 四边」读成一个 `type=box` 的假件（Name 读成 `220nl`），comp 掉档。
+   修法是**加大两支路间距**（R2 由 x=1292 移到 1340，净空 26 px），不是破环（并联支路破不了环）。
+4. **型号名的可读性有黑名单**：`NE555`/`SE555`/`SA555`/`NA555` 被读成 `555`（pin 0.571、comp 掉档），
+   `LM555`/`LM555CN`/`TLC555CP` 正常；运放侧 `LM2902`/`LM2904`/`LM358B` 会被读成 `LM2941`/`LM385`，
+   `LM1458`/`LM1558` 正常。自制数据只用实测可读的型号名。
+
+### 5.595.5 打包结构
+
+`team_eda2606b9_result_dataset.zip`（1,451,168 B / 67 条）：
+
+```
+dataset/                 case_0001..case_0033 的 .png + .json（66 个文件）
+dataset_description.docx 说明文档（坐标系/命名/字段/来源与许可/回读表/有效性声明/复现命令）
+```
+
+`work\_mkdspkg.py` 在打包前逐项校验：案数 ≥20、同名 png/json、case_id 仅 ASCII、顶层键恰为
+`case/components/pins/nets`、坐标全整数、每案 ≥1 个可核验 IC 且使用脚数 ≥ max(3, ceil(0.2N))、
+有效元件 ≥5、唯一网 ≥5、案例间网表两两不同、与官方训练集无重复 ⇒ `VALIDATION: PASS`。
+
+### 5.595.6 复现命令
+
+```
+python -X utf8 work\_dsgen_all.py work\_dsf33\dataset --with-de
+$env:PYTHONHASHSEED="0"; python -X utf8 eda-pcb\submission\run.py -input work\_dsf33\dataset -output work\_fast_out_dsf33 -device cuda
+python -X utf8 work\_dsscore_all.py work\_fast_out_dsf33\final_results work\_dsf33\dataset
+python -X utf8 work\_dsdesc.py work\_dsf33\dataset work\_fast_out_dsf33\final_results work\_dsf33\dataset_description.docx
+python -X utf8 work\_mkdspkg.py work\_dsf33\dataset work\_dsf33\dataset_description.docx work\_dsf33\team_eda2606b9_result_dataset.zip
+```
