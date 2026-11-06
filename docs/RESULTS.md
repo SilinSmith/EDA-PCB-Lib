@@ -43485,3 +43485,94 @@ python -X utf8 work\_poolgate.py dfill --pool-ref shape1 STAGE2_DESIG_FILL=1
 python -X utf8 work\_desigfill_orc.py shape1 12 0.8      # 上限 oracle（+0.0398）
 ```
 
+## 5.585 网标词锚定跑通：修死代码、闭合轮廓定框、类型收窄 gnd/v、只认竖排
+
+### 5.585.1 读数
+
+| 档 | 13 页 mean | official | judge | 说明 |
+|---|---:|---:|---:|---|
+| 基线 `dfillDef` | 87.2413 | 85.7086 | 83.4913 | 形状闸门 + 位号回填 |
+| `wf1`（含 net_input/net_output） | 87.2935 | 85.7697 | 83.5435 | case11 +1.19、case12 −0.51 |
+| `wf2`（只收 gnd/v） | 87.3329 | 85.8063 | 83.5829 | 只 case11 +1.19 |
+| `wf3`（+ 只认竖排） | 87.3329 | 85.8063 | 83.5829 | 与 wf2 逐位相同 |
+| `wf4`（+ 竖排读不并入通用 reads） | **87.3329** | **85.8063** | **83.5829** | 同上 |
+
+池门禁（30 案，ref `dfill` 29.6510，噪声 0.0072）：
+
+| tag | 配置 | 池分 | Δ |
+|---|---|---:|---:|
+| `wf2pool` | 不过滤竖排、竖排读并入 reads | 29.5502 | **−0.1008** |
+| `wf3pool` | 只认竖排 | 29.6442 | −0.0068 |
+| `wf4pool` | 只认竖排 + 竖排读隔离 | **29.6510** | vs `29.6510` |
+
+### 5.585.2 这条路径此前是死的（`NameError`）
+
+`stage2/text_anchor.py` 的 `rescue()` 里残留一行 `ty, wd = hit`（`hit` 从未定义），
+`STAGE2_TEXT_WORDS=1` 时先抛 `NameError`，被 `stage2/run.py` 的 `except Exception` 吞掉
+（lane 模式下这行 stdout 也看不到）。后果两层：词表锚定**从来没生效**；连 `rescue()` 已经
+产出的 `SW1` 也一起丢（那几次跑 case11 少一颗 SW1、13 页低 1.29）。
+
+教训：`except Exception` 包住的旁路必须有一条**可见的成功计数**（现在两处都打印「补 N 颗」）。
+同样的坑在这一步里又出现一次：调试期手工改代码时 `rescue_words` 的返回统计一度缺失。
+
+### 5.585.3 闭合轮廓优先（`_contour_box`）
+
+「墨迹块中心 + 类型先验尺寸」对**闭合多边形**符号会框到局部：
+
+| 例 | 真实符号 | 先验框 | 结果 |
+|---|---|---|---|
+| case12 `VIN_4`（GT `[456,293,484,374]`） | 箭头五边形 25x75 | 54x20 ⇒ 只框到下面那根横条，中心差 **37px** | fp（−0.51） |
+| case11 `∅695`（GT `[1193,350,1212,392]`） | GND 竖杆+横杠（不闭合） | 26x34 ⇒ 回落先验框 | tp（+1.19） |
+
+规则：墨迹质心 90px 内找既有轮廓，要求 12≤边长≤140、面积≥300、中心距≤45、长宽比与先验
+（或转置）相差 ≤1.8 倍；**与既有件重叠 >0.25 的轮廓丢弃**（否则 case11 会选中 LED2 的
+外框 109x65，把 GND 锚到 21px 外）。顺序：闭合轮廓 > 墨迹 > 导线末端。
+
+### 5.585.4 类型收窄到 `gnd`/`v`（判分器的键规则）
+
+13 页 GT 的键命名：`gnd` 83 颗、`v` 51 颗**全是 `∅NNN` 无名件**；`net_input` 8 颗、
+`net_output` 1 颗**全具名**（`VIN`/`BAT`/`VOUT`）。`metrics.assign_components()` 在
+`unkeyed_match='gt'` 下只把 GT 的无名件放进配对池 → 我们造的无名合成件只能配无名件，
+所以补 `net_input`/`net_output` **结构上必亏**（case12 的框已压在 GT `VIN_4` 上仍只记 +1 fp）。
+
+### 5.585.5 池门禁判否 → 「只认竖排」+「竖排读隔离」
+
+`wf2pool` 30 案 **29.5502**（−0.1008）。逐页 delta：
+
+| 池页 | delta | 新增件 |
+|---|---:|---|
+| 0018 | **−1.95** | 8 颗：`VCC`×5、`GND`×3，`d` 44~70px，全是**水平**读出的词 |
+| 0022 | −0.52 | 1 颗 `GND`（该页 GT 只有 13 颗 switch、没有任何 gnd） |
+| 0181 | −0.22 | 0 颗锚定件（来自 `STAGE2_VTEXT` 改写了位号回填候选） |
+| 0046 | −0.20 | 2 颗 `3V3D`/`DVDD` 被当成 `v` |
+| 0123 | −0.15 | 1 颗 `AVcc` 被当成 `v` |
+| 0165 | +0.02 | 同上一条路径 |
+
+机制：池页上的 `VCC/GND/DVDD/AVcc` 大多是**元件体内的引脚名**，旁边没有独立符号；
+按墨迹锚定必然落空（`距既有pred` 30~86px、`距 GT` 50~560px）⇒ 每颗都是 `component.extra`。
+0018 一页 8 颗就把该页从 35.62 压到 33.67。
+
+两条修正：
+
+1. **只认竖排**：`rescue_words(..., vert_only=True)`（`STAGE2_TEXT_WORDS_VERT`，默认 1）只接受
+   `read_vertical` 产出的 `vertical: True` 读数。依据是 case11 那颗真例来自竖排整条 `NDGND`
+   （conf 0.95），而池上被打负的 12 颗全是水平单字词。单页复核
+   （`submission/run.py -input work\_fast_in -output work\_chk0018 -cases 0018`）：
+   `[stage2] 网标锚定：补 0 颗`（此前 8 颗），13 页仍是 87.3329。
+2. **竖排读隔离**：`read_vertical` 的结果不再并入通用 `reads`，只作为 `rescue_words` 的输入。
+   并入时会改写 `desig_candidates(reads)`（池 0181 −0.22、0165 +0.02），隔离后池上回到中性。
+
+### 5.585.6 值不要抄
+
+把词写进合成件 `value`：13 页 87.1194 / 85.7565 / 83.3690，case11 **−1.28** —— 文本比对
+会把件配到别的 GT 上。默认 `carry_value=False`。
+
+### 5.585.7 复现命令
+
+```
+python -X utf8 work\_onoff13.py "wf4=STAGE2_TEXT_WORDS=1,STAGE2_VTEXT=1"
+python -X utf8 work\_poolgate.py wf4pool --pool-ref dfill STAGE2_TEXT_WORDS=1 STAGE2_VTEXT=1
+python -X utf8 work\_anchcmp.py 0018 0022 0046 0123      # 池页新增件 vs GT 对照
+python -X utf8 eda-pcb\submission\run.py -input work\_fast_in -output work\_chk0018 -device cuda -cases 0018 -offline
+```
+

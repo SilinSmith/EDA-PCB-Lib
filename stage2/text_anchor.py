@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 
 import cv2
@@ -382,14 +383,18 @@ def anchor_box(doc, box, kind, mask, *, win=45.0, lim=45.0, min_area=60, boxes=N
 
 
 def rescue_words(doc, a, reads, bgr, *, gap=30.0, min_conf=0.60, lim=45.0,
-                 pad=2.0, max_side=260.0, min_side=8.0, carry_value=False):
+                 pad=2.0, max_side=260.0, min_side=8.0, carry_value=False,
+                 vert_only=None):
     """网标词（GND/VCC/VIN/VOUT/3V3）→ 类型 → 就近锚定补件。键用 `p9NN`（判题按几何配）。
 
     `carry_value` 默认关：GT 的 gnd `value` 确实是 `"GND"`，但抄上去会被文本比对
     配到别的 GT 上（实测 case11 +1.19 → −1.28）。
     """
     out = {"added": [], "near": 0, "low_conf": 0, "no_wire": 0, "bad_size": 0,
-           "overlap": 0, "no_type": 0}
+           "overlap": 0, "no_type": 0, "horiz": 0}
+    if vert_only is None:
+        _v = os.environ.get("STAGE2_TEXT_WORDS_VERT", "1").strip().lower()
+        vert_only = _v not in ("", "0", "off", "false", "none", "no")
     comps = doc.get("components") or []
     boxes = [c.get("bbox_img") for c in comps if c.get("bbox_img")]
     mask = None
@@ -400,6 +405,9 @@ def rescue_words(doc, a, reads, bgr, *, gap=30.0, min_conf=0.60, lim=45.0,
             continue
         text, conf, _ch = _pick_read(r.get("reads") or {})
         if not text:
+            continue
+        if vert_only and not r.get("vertical"):
+            out["horiz"] += 1
             continue
         hit = _word_type(text)
         if hit is None:
@@ -453,5 +461,6 @@ def rescue_words(doc, a, reads, bgr, *, gap=30.0, min_conf=0.60, lim=45.0,
                              "bbox": [round(float(bb[0] - pad), 2), round(float(h - bb[3] - pad), 2),
                                       round(float(bb[2] + pad), 2), round(float(h - bb[1] - pad), 2)],
                              "score": round(conf, 4), "d": round(dmin, 1),
-                             "word": text, "wire": round(dw, 1), "how": how})
+                             "word": text, "wire": round(dw, 1), "how": how,
+                             "vert": bool(r.get("vertical"))})
     return out

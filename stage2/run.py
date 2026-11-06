@@ -177,7 +177,10 @@ DESIG_ROWS = env_on("STAGE2_DESIG_ROWS", "0")
 #   （mergeline 29.6381，差 −0.0036 在噪声 0.0072 内）；全类型版 `anchor` 是 29.5997
 #   （0001 五颗 `TP*` −0.55、0011 三颗 `D*` −0.44）⇒ 交付层只放 `l/switch`。
 TEXT_ANCHOR = env_on("STAGE2_TEXT_ANCHOR", "1")
-TEXT_WORDS = env_on("STAGE2_TEXT_WORDS", "0")
+#   默认 1：池门禁 `wf4pool` = 29.6510，与 `dfill` 29.6510 **30 案逐位相同**（可证中性）。
+#   未加「只认竖排」闸门时是 29.5502（−0.1008）：池页 0018 补了 8 颗水平读出的 `VCC/GND`
+#   （那页 GT 只有 10 颗 gnd、3 颗 v，候选全是元件体内的引脚名）⇒ 每颗都是 extra。
+TEXT_WORDS = env_on("STAGE2_TEXT_WORDS", "1")
 #   实测（13 页，STAGE2_VTEXT=1 STAGE2_TEXT_WORDS=1）：local **87.3329** / official
 #   **85.8063** / judge **83.5829**（基线 87.2413 / 85.7086 / 83.4913）；逐案只 case11
 #   **+1.19**（竖排 `NDGND` → 暗墨迹细杆定位，框中心离 GT ∅695 7.5px ⇒ tp），其余 12 页逐位不变。
@@ -205,7 +208,10 @@ DESIG_FILL = env_on("STAGE2_DESIG_FILL", "1")
 #   里是 x≈1219 的一列 `C/2/Q/D`）。把竖长框聚成一列、整体转 90° 再读：`('GND GND', 0.93)`；
 #   反向对照横排 `GND` 正读 0.9996、转 90° 读空 ⇒ 只在竖长框上补试旋转是安全的。
 #   case12 顺带量到 6 条竖排网标全丢（`VIN`×2、`GND`×4，conf 0.99~1.00，见 `work/_vcol_audit.py`）。
-VTEXT = env_on("STAGE2_VTEXT", "0")
+#   默认 1（与 `TEXT_WORDS` 配套）：竖排读法**只**作为网标词锚定的输入，不并入通用
+#   `reads`（并入会改写 `desig_candidates`：池 0181 −0.22、0165 +0.02）。隔离后池上与不挂
+#   这条臂逐位相同（`wf4pool` 29.6510 = `dfill` 29.6510，30 案逐位同）。
+VTEXT = env_on("STAGE2_VTEXT", "1")
 # ★ box 件「型号名文字框」重读（`STAGE2_PARTNAME_OCR`，§本次，默认 **0=关**；
 #   `stage2/partname_ocr.py`）：把 `partname.box` 那颗文字框单独重裁一次送 PP-OCR，
 #   在 `assemble.build_doc` 的 `Name` 最终成型处按档位覆盖：
@@ -521,8 +527,8 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
             _vreads = read_vertical(bgr, engine, boxes)
         except Exception:
             _vreads = []
-        if _vreads:
-            reads = list(reads) + list(_vreads)
+        # 只交给网标词锚定用（见下方 `rescue_words`）：并入通用 `reads` 会改写
+        # 位号回填候选（池 0181 −0.22、0165 +0.02），使这条臂在池上不可证中性。
 
     # ★ 小字放大重读（`STAGE2_ZOOM_READ`，默认关）：见文件头该开关的注释。
     #   只对**已检出的元件**做局部放大，把新增读数并入候选池；坐标一律除回原尺度，
@@ -891,7 +897,7 @@ def process(case: str, stage1_dir: Path, out_dir: Path, engine: TextEngine,
             from . import text_anchor as _ta
             _tres = _ta.rescue(doc, a, reads, bgr)
             if TEXT_WORDS:
-                _wres = _ta.rescue_words(doc, a, reads, bgr)
+                _wres = _ta.rescue_words(doc, a, list(reads) + list(_vreads), bgr)
                 print("[stage2] 网标锚定：补 %d 颗 / 近距 %d、低置信 %d、无末端 %d、尺寸 %d、重叠 %d、非网标 %d"
                       % (len(_wres["added"]), _wres["near"], _wres["low_conf"],
                          _wres["no_wire"], _wres["bad_size"], _wres["overlap"], _wres["no_type"]))
