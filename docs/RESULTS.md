@@ -44741,7 +44741,7 @@ python -X utf8 work\_cv.py leadpol3 --run        # judge mean 84.9027 / contract
 | `261106\pkg_upload.zip`（模型包） | 74,075,398 B | 221 | `eda-pcb-main/` + `run.sh` `Dockerfile` `verify_imports.py` `install_deps.py` `metadata` | `work/_pkgcheck.py` ⇒ `VERDICT: current` |
 | `261106\team_eda2606b9_result_dataset.zip`（数据包） | 1,451,168 B | 67 | `dataset/`（66 文件）+ `dataset_description.docx` | `work/_mkdspkg.py … --check` ⇒ `VALIDATION: PASS`（33 案 / 与官方 13 案网表零重复） |
 
-模型包 sha256 = `D3CD1DC194B3B35970EB53804064A39671EE27FDEA24F8852254E337D238AFD8`。
+模型包 sha256 = `98433DA0F0F76BADFC58875B640FAAED161CD251EF57D5EEECBADD831B344A82`。
 包内报告 `eda-pcb-main/docs/技术报告-赛题六.docx` = 1,160,529 B（= 仓库 `HEAD` 版本）。
 
 ### 5.601.2 可复现性（这次修掉了一个坑）
@@ -44749,7 +44749,7 @@ python -X utf8 work\_cv.py leadpol3 --run        # judge mean 84.9027 / contract
 同一条 `HEAD` 连打两次，sha256 原本对不上：`work/_mkpkg.py` 里 `zipfile.writestr(name, data)`
 会写入**当前时间**，被这样写进去的有目录条目 + 根级四个文件 + `metadata` 共 22 条（其余条目走
 `git archive` 的 `ZipInfo`，时间来自提交时间）。修法：所有条目统一改由 `_norm()` 生成
-`ZipInfo`——时间钉到 `git log -1 --format=%ct HEAD`、权限钉成 `0644`（目录 `0755`）。修完
+`ZipInfo`——时间钉成常量 `2026-11-06 00:00:00`、权限钉成 `0644`（目录 `0755`）。时间没有钉在 `HEAD` 的提交时间上：那样一次纯文档提交就会让同一个包换哈希，钉常量后「包」与「提交」解耦——内容不变，字节就不变。修完
 两次打包**逐字节相同**（同一 sha256），且 221 个条目的 CRC 与修前**完全一致**（只动元数据）。
 
 ### 5.601.3 干净树自检
