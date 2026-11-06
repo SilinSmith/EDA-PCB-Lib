@@ -718,6 +718,35 @@ def _sanitize_pred(doc):
     return doc, changed
 
 
+def _strip_internal_keys(final_dir: Path, fp=None) -> int:
+    """导出档去掉内部字段：判题机只认 `components/pins/nets`（评审 O-3）。
+
+    `__pin_index` / `_pin_stubs` 是装配与融合阶段的中间索引，官方 GT 里没有这两个键。
+    本地官方尺解析器忽略未知键，但严格解析器可能直接报错——出口只留官方三节 + `case`。
+    环境开关 `PRED_STRIP_INTERNAL=0` 可保留（A/B 用）。
+    """
+    if os.environ.get("PRED_STRIP_INTERNAL", "1") == "0":
+        return 0
+    n = 0
+    for f in sorted(final_dir.glob("*_Pred.json")):
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:                                            # noqa: BLE001
+            continue
+        hit = [k for k in ("__pin_index", "_pin_stubs") if k in doc]
+        if not hit:
+            continue
+        for k in hit:
+            doc.pop(k, None)
+        try:
+            _atomic_write_text(f, json.dumps(doc, ensure_ascii=False))
+            n += 1
+        except Exception as _e:                                      # noqa: BLE001
+            if fp is not None:
+                _log(fp, "  %-28s 内部字段清理失败（%s）" % (f.name, _e))
+    return n
+
+
 def _publish_one(lane_file: Path, dst: Path, state: dict, stage_dir: Path) -> bool:
     """把 lane 里的一份 `<case>_Pred.json` **升级**进主输出目录（§5.54）。
 
@@ -969,6 +998,9 @@ def _run_fanout(a) -> int:
     _log(fp, "合并 lane 产物 %d 份；导出 %d 份 <case>_Pred.json%s"
          % (n_merge, n_export,
             ("（另有 %d 份空壳兜底）" % n_shell_here) if n_shell_here else ""))
+    _n_strip = _strip_internal_keys(final_dir, fp)
+    if _n_strip:
+        _log(fp, "内部字段清理：%d 份 <case>_Pred.json 去掉 __pin_index/_pin_stubs" % _n_strip)
 
     lane_log = []
     for lane in lanes:
@@ -2789,6 +2821,9 @@ def _run(a) -> int:
     if compbox.mode() != compbox.OFF:
         _log(fp, "框模板（%s=%s）：%d 个占位框换成字形模板"
              % (compbox.ENV, compbox.mode(), compbox.apply_dir(final_dir)))
+    _n_strip = _strip_internal_keys(final_dir, fp)
+    if _n_strip:
+        _log(fp, "内部字段清理：%d 份 <case>_Pred.json 去掉 __pin_index/_pin_stubs" % _n_strip)
     _log(fp, "全部完成，墙钟 %.1fs（%.2f s/张）" % (wall, wall / max(1, len(items))))
     fp.close()
 
