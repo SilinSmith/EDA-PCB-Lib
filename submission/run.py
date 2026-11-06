@@ -1761,6 +1761,36 @@ def _run(a) -> int:
                     "led", "switch", "testpoint", "box", "ic", "boxic", "box_ic"}
     _prune_re = re.compile(r"^(p\d+|txt\d+)$")
 
+    _pinfill_on = os.environ.get("STAGE2_PINFILL", "1").strip().lower() not in (
+        "", "0", "off", "false", "no", "none", "disable", "disabled")
+
+    def _pinfill_step(cid):
+        """库表补脚（`stage2/pinfill.py`，§5.591）：库能查到的 IC/盒体件，按格点补漏检的脚。
+
+        必须在**导出之后**做：stage2 的 `build_doc` 按 stage1 槽点重建 pins，fusion/仲裁
+        之后还会再装配一次，所以在 stage2 里补会被覆盖（实测 case6 `U3 pin_1` 补上后又被丢）。
+        只增脚，不动 components / nets；无名不补（`name_mismatch` 是 fp+fn 双扣）。
+        """
+        if not _pinfill_on:
+            return
+        path = final_dir / ("%s_Pred.json" % cid)
+        if not path.exists():
+            return
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:                                       # noqa: BLE001
+            return
+        try:
+            from stage2 import pinfill as _pfm
+            st = _pfm.fill(doc)
+        except Exception as e:                                  # noqa: BLE001
+            _log(fp, "%s 库表补脚失败：%s" % (cid, e))
+            return
+        if not st.get("added"):
+            return
+        _atomic_write_text(path, json.dumps(doc, ensure_ascii=False))
+        _log(fp, "库表补脚 %d（库命中 %d 件）" % (st["added"], st.get("keys", 0)))
+
     def _prune_step(cid):
         if not _prune_on:
             return
@@ -2626,6 +2656,7 @@ def _run(a) -> int:
                     _linemerge_step(cid)
                     _linejoin_step(cid)
                     _prune_step(cid)
+                    _pinfill_step(cid)
                     continue
             except Exception as exc:                        # noqa: BLE001
                 _log(fp, "  ⚠️ %s 引脚名重读失败：%s: %s" % (cid, type(exc).__name__, exc))
@@ -2648,6 +2679,7 @@ def _run(a) -> int:
         _linemerge_step(cid)
         _linejoin_step(cid)
         _prune_step(cid)
+        _pinfill_step(cid)
         if _broke and not (_valread_on or _pinname_on):
             _reread_skipped.append((cid, _p))
     _log(fp, "导出 %d 份 <case>_Pred.json%s"
