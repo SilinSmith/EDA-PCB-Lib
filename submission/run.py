@@ -747,6 +747,95 @@ def _strip_internal_keys(final_dir: Path, fp=None) -> int:
     return n
 
 
+def _leadpol_caps(final_dir: Path, items, fp=None) -> int:
+    """导出档纠正电容 1/2 号朝向：靠**引线不对称**读图（`stage2/passivepol.py`）。
+
+    两脚无源件的号由 `stage2/assemble.py` 的 `PIN_STAMP` 按「−SPAN 一侧是 1」发，
+    这一条已吃满官方 GT 的多数口径（`r` 52/59、`c` 59/80、`l` 10/10）；剩下翻面的
+    电容在图上有微小手性：极板到框上/下边的引线长度不等（差约 3 px，翻面件下引线更长）。
+    `d = 下引线 - 上引线 > 1.0` ⇒ 该件翻面 ⇒ 把 `pin_1`/`pin_2` 的点位与网表引用对调。
+    13 页读数（判题机尺，不折叠非 box 脚号）：84.344 → **84.903（+0.560）**，
+    case1 +2.81 / case9 +5.14 / case6 −0.66；本地折叠尺恒 +0.000（看不见这笔账）。
+    环境开关 `PRED_LEADPOL_CAP=0` 关闭；阈值 `PRED_LEADPOL_CAP_D` 默认 1.0。
+    """
+    if os.environ.get("PRED_LEADPOL_CAP", "1") in ("0", "", "false", "False"):
+        return 0
+    if os.environ.get("EDA_LANE_CHILD", "") == "1":
+        return 0   # lane 跳过：父进程合并后统一换向前，翻两次会翻回原状（净零）
+    try:
+        min_d = float(os.environ.get("PRED_LEADPOL_CAP_D", "1.0"))
+    except Exception:                                                # noqa: BLE001
+        min_d = 1.0
+    try:
+        import numpy as _np
+        from PIL import Image as _Image
+        from stage2 import passivepol as _ppol
+    except Exception:                                                # noqa: BLE001
+        return 0
+    paths = {}
+    for cid, ipath in items or []:
+        if ipath is None:
+            continue
+        p = Path(str(ipath))
+        if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"):
+            paths[str(cid)] = p
+    n = 0
+    for f in sorted(final_dir.glob("*_Pred.json")):
+        cid = f.name[:-len("_Pred.json")]
+        ip = paths.get(cid)
+        if ip is None or not ip.exists():
+            continue
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+            rgb = _np.asarray(_Image.open(ip).convert("RGB"))
+        except Exception:                                            # noqa: BLE001
+            continue
+        mask = _ppol.red_mask(rgb)
+        H = float(rgb.shape[0])
+        comps = doc.get("components") or {}
+        pins = doc.get("pins") or {}
+        nets = doc.get("nets") or {}
+        nflip = 0
+        for k, c in comps.items():
+            if str(c.get("type") or "").strip().lower() != "c":
+                continue
+            bb = c.get("bbox") or []
+            pp = pins.get(k) or {}
+            if len(bb) != 4 or not (pp.get("pin_1") and pp.get("pin_2")):
+                continue
+            x1, y1, x2, y2 = [float(v) for v in bb]
+            tall = (y2 - y1) > (x2 - x1)
+            bb_img = [x1, H - y2, x2, H - y1]
+            if not _ppol.flip_cap(mask, bb_img, tall, min_d):
+                continue
+            p1 = pp["pin_1"]
+            p2 = pp["pin_2"]
+            p1["point"], p2["point"] = p2["point"], p1["point"]
+            a, b = "%s.1" % k, "%s.2" % k
+            for rec in nets.values():
+                hg = rec.get("hyperGraph") or ""
+                if a in hg or b in hg:
+                    rec["hyperGraph"] = hg.replace(a, "\x00").replace(b, a).replace("\x00", b)
+                refs = rec.get("_refs")
+                if isinstance(refs, list):
+                    for r in refs:
+                        if isinstance(r, list) and len(r) == 2 and r[0] == k:
+                            if r[1] == "1":
+                                r[1] = "2"
+                            elif r[1] == "2":
+                                r[1] = "1"
+            nflip += 1
+        if not nflip:
+            continue
+        try:
+            _atomic_write_text(f, json.dumps(doc, ensure_ascii=False))
+            n += nflip
+        except Exception as _e:                                      # noqa: BLE001
+            if fp is not None:
+                _log(fp, "  %-28s 电容换向失败（%s）" % (f.name, _e))
+    return n
+
+
 def _drop_phantom_boxes(final_dir: Path, fp=None) -> int:
     """导出档剔除「零脚 box」：没有任何引脚的 IC 框是闭合导线围出的假件。
 
@@ -931,6 +1020,7 @@ def _run_fanout(a) -> int:
     child_vw, child_s1 = _child_concurrency(a, n_lanes)
     ncpu = os.cpu_count() or 4
     child_env = dict(os.environ)
+    child_env["EDA_LANE_CHILD"] = "1"
     nthr = str(max(1, ncpu // n_lanes))
     for k in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENCV_FOR_THREADS_NUM"):
         child_env[k] = nthr
@@ -1041,6 +1131,9 @@ def _run_fanout(a) -> int:
     _n_phantom = _drop_phantom_boxes(final_dir, fp)
     if _n_phantom:
         _log(fp, "零脚 box 清理：%d 个无引脚 IC 框" % _n_phantom)
+    _n_lead = _leadpol_caps(final_dir, items, fp)
+    if _n_lead:
+        _log(fp, "电容换向：%d 个电容按引线不对称改 pin_1/pin_2" % _n_lead)
     _n_strip = _strip_internal_keys(final_dir, fp)
     if _n_strip:
         _log(fp, "内部字段清理：%d 份 <case>_Pred.json 去掉 __pin_index/_pin_stubs" % _n_strip)
@@ -2867,6 +2960,9 @@ def _run(a) -> int:
     _n_phantom = _drop_phantom_boxes(final_dir, fp)
     if _n_phantom:
         _log(fp, "零脚 box 清理：%d 个无引脚 IC 框" % _n_phantom)
+    _n_lead = _leadpol_caps(final_dir, items, fp)
+    if _n_lead:
+        _log(fp, "电容换向：%d 个电容按引线不对称改 pin_1/pin_2" % _n_lead)
     _n_strip = _strip_internal_keys(final_dir, fp)
     if _n_strip:
         _log(fp, "内部字段清理：%d 份 <case>_Pred.json 去掉 __pin_index/_pin_stubs" % _n_strip)
