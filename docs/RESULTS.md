@@ -44430,3 +44430,104 @@ python -X utf8 work\_emptybox_ab.py work\_fast_out_cvpool_pv589\final_results --
 $env:PYTHONHASHSEED="0"; python -X utf8 eda-pcb\submission\run.py -input work\_cv\_in13 -output work\_fast_out_o13ph -device cuda
 python -X utf8 work\_cv.py o13ph --run
 ```
+
+## 5.597 值 / pin / line 三轴攻坚与评分公式取证（第 33 次交付前）
+
+13 页交付集在第 32 次之后的基线是 comp .9516 / pin .8793 / netH .9062 / line .6258
+（mean 87.888）。本节记录随后三条轴线各自攻到哪、哪条被证否、以及从赛题 PDF 里
+取回的评分公式口径。结论：**值线 +0.159、line 线 +0.039、pin 线的两个猜想全被证否**。
+
+### 5.597.1 评分公式（`赛题资料\赛题六…Rev1.pdf` 原文抽取）
+
+- `FinalScore_Accuracy = 0.95 × Score_Accuracy + 0.05 × (m/M) × Score_Token`
+- **`m` = 该队完成的测试例数量、`M` = 总打分案例数** —— 不是 token 用量（`m/M` 是完成率）；
+- `Score_Token` 按**总 token 消耗量排序**赋分：消耗最多排第 1、最少排第 N，分 K 区间，
+  赋分 `n×100/K` ⇒ **零外部 LLM 调用即最低消耗、拿最高档**；
+- 单案四轴权重（PDF 表格）：ComponentF1 **0.3** / PinF1 **0.25** /
+  NetHypergraphF1 **0.35** / NetLineF1 **0.1**；
+- 因此**任何一例跑失败**会同时扣准确度与 `m/M`，双重惩罚 —— 健壮性优先于极限分。
+
+### 5.597.2 值线（comp 轴）：R 记法与丢单位尾缀，+0.159
+
+`VALUE_RE`（`stage2/assign.py:765`）只认「数字 + 乘子 + 可选尾字母」，`5k1` / `2k2`
+这类**数字-字母-数字**的 R 记法整串失配 ⇒ `fit_value=0` ⇒ 该文字框连值候选都不是
+（case1 R14 直接丢值，输出 `501`）。新增两个开关（默认开）：
+
+- `STAGE2_VALUE_RNOTE=1`：`VALUE_RNOTE_RE = ^[+-]?\d+[RrKkMG]\d+$`，命中后按
+  `值 = 前段 + 乘子 + 后段` 解释，`fit_value` 返回 1.0，发射钩子在 `:2764`。
+  **形状只收电阻档乘子**：若收全集 `[pnuµμmkKMGR]`，case13 的 `pin_number='22u1'`
+  （实为 `22uf` 误读，相似度 0.925）会以 `0.85×(0.3+0.7×0.925)=0.805` 反超真读
+  `value='22uf'`（0.574→0.702），comp 反而掉到 .949。
+- `STAGE2_VALUE_UNITFIX=1`：`^([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*([fF])$` ⇒ 补乘子 `u`，
+  `22f` → `22uf`。
+
+13 页（`work/_cv.py valdef --run`）：comp .9516→**.9569**（comp 轴失分 1.45→1.29）、
+mean 87.888→**88.047**、official 86.163→86.322、judge 84.146→84.304；pin / netH / line
+逐位不变；`contract: 13/13 files clean`、`VERDICT: PASS`。逐页只有 case1 73.06→73.58、
+case13 84.32→85.85。不可修的边界：case12 R2 的 GT `4.7K` 在 70px 内没有值文字框
+（检测缺口）；case12 R4 的 GT `104` 被 OCR 吞掉首位读成 `04`，且纯数字会被
+`stage2/assemble.py:2176` 的 `VALUE_LIKE` 丢成 null。
+
+### 5.597.3 pin 线：两个猜想全被证否，零改动
+
+42 条失败脚逐条归因（`work\_pin_diag\report.txt`）：**22 条「压根没有触点槽」**
+（11 条最近触点在 18–22px，另 11 条 12px 内什么都没有）、14 条断在 `assign.py` 的
+文字框→槽绑定、5 条号名都读到却被装配丢掉、1 条点偏 3.9px。
+
+- **猜想一（触点被合并 ⇒ 在 assemble 里做号/名互补）**：三组实验全负 ——
+  DUP_MERGE 宽 case1 73.06→71.35；DUP_MERGE 窄 mean **87.2868（−0.60）**；
+  `PIN_FILL_ELIM=1` **87.7738（−0.11）**。根因：19.5px 脚距下「同一根脚的两个触点」
+  与「两根相邻脚」几何不可区分，页面上 44 个已正确脚落在多触点簇里。
+- **猜想二（stage1 漏检 ⇒ 按同侧等间距补槽）**：`STAGE1_PIN_LATTICE=1` ⇒
+  mean **87.1390**、pin **.8510（−0.028）**；case9 只多补 2 个槽就让 pin 从 1.0000
+  掉到 0.5455 —— stage2 是**按槽序列编号**的，中间插一个槽会把后面所有号整体后移。
+  这条对一切「增删 stage1 槽」的方案都是硬约束。
+- 真实机制（`STAGE1_PIN_DBG` 逐级快照）：case1 U3 右列 3 脚里中间那根
+  （image y=561）在**导线触点**与**框外墨桩**两条通道上都没有任何证据；不是合并，
+  是**整根缺失**。`_snap_to_wire_end`（`stage1/pins.py:930`）随后把本来对的
+  两个点拖走 32/33px（单点最大位移 38px），这才是「最近触点 19.4px」的来源；
+  但关掉/收紧它在 pin 轴上是零和（43→42）。
+
+**方法论教训**：stage1 级代理分（GT 脚↔最近槽 ≤5px）在 `LATTICE=1` 时报 +1，
+真实 pin 轴却是 −0.028 —— 它看不见「按号绑定」这层耦合。**stage1 槽集合的改动
+必须走 `work/_cv.py` 全门闸**。本线最终零改动（`stage2/assemble.py` 已还原为
+345,234 B / 5836 行，13 页与基线逐键全等）。
+
+### 5.597.4 line 线（NetLineF1）：端点伸长到同网 T 型交点，+0.039
+
+252 条未命中 GT 边里 126 条只差 5~28px，而这些边的**法向残差 p50 只有 0.3px、
+95.2% ≤ 2px** ⇒ 线是对的，错的只有沿线弧长，其中 61.9% 是我们停短了。形态是
+「我们的一条边停在同一网另一条边近旁几像素，GT 一直画到交点（T 型接点）」。
+
+`fusion/edgecal.py` 新增 `FUSION_EDGECAL_JUNC`（默认 **12 px**，0 关闭）：
+`extend_doc` 把端点沿**自身线方向**推到**同网他边线段内部**（`s∈[0,L]`）的交点，
+要求距离 ≤ JUNC、两线夹角 `|sin| ≥ JUNC_PERP`(0.05)、且交点落在他边**端点**
+`JUNC_STUB`(2px) 内（真 T 型；原理图里「一条线从另一条线中腰穿过」不成接点）。
+只伸长不缩短、只在本网内找。
+
+13 页：line .625770→**.629705**、mean 88.047→**88.086**、official 86.322→86.361、
+judge 84.304→84.344，comp / pin / netH **逐位相同**；逐页只有 case1 +0.0061、
+case6 +0.0118、case11 +0.0333，**无页面下降**、13/13 页边数不变；另一棵上游树
+复现同一 +0.003935。`JUNC=0` 时 `extend_doc` 早退，输出与改动前逐键相同。
+
+判死（勿重跑）：引脚吸附 −0.006~−0.020、沿自身线到 bbox 边 −0.0368、同网共线填缝
+−0.0009、删被包含子段 −0.0023、无差别盲伸 c=2 −0.0434、**r=25 −0.030（悬崖，
+上限 ≤15）**；`JUNC_STUB=0` 可到 +0.0053，但会把一对**重合**的边扰开、令上游去重
+多留一条假边（case5 −0.0052），属副作用，不采用。切分口径分歧在本 13 页只剩 2 条
+（0.8%）⇒ `_tpsync` 判死成立，切分路线正式关闭。
+
+### 5.597.5 合入后的交付口径与复现
+
+- 13 页：**mean 88.086 / official 86.361 / judge 84.344 / comp .9569 / pin .8793 /
+  netH .9062 / line .6297**，`contract: 13/13 files clean`、`VERDICT: PASS`。
+- 数据线 33 案（`work\_dsf33\dataset`）在新管线下复算：mean **96.35** / min **94.90** /
+  max 97.31、无 <85（与合入前逐位相同），说明三条改动对自制案例无副作用。
+
+```
+$env:PYTHONHASHSEED="0"; python -X utf8 work\_cv.py valdef --run
+$env:PYTHONHASHSEED="0"; python -X utf8 work\_cv.py juncdef2 --run
+python -X utf8 work\_pin2_s1run.py <case...>          # 只跑 stage1（~6s/张）
+python -X utf8 work\_line_diag13.py <pred_dir>        # 未命中边归类
+python -X utf8 eda-pcb\submission\run.py -input work\_dsf33\dataset -output work\_fast_out_dsf33c -device cuda
+python -X utf8 work\_dsscore_all.py work\_fast_out_dsf33c\final_results work\_dsf33\dataset
+```
