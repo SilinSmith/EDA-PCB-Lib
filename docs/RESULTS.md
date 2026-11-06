@@ -44387,3 +44387,46 @@ python -X utf8 work\_dsscore_all.py work\_fast_out_dsf33\final_results work\_dsf
 python -X utf8 work\_dsdesc.py work\_dsf33\dataset work\_fast_out_dsf33\final_results work\_dsf33\dataset_description.docx
 python -X utf8 work\_mkdspkg.py work\_dsf33\dataset work\_dsf33\dataset_description.docx work\_dsf33\team_eda2606b9_result_dataset.zip
 ```
+
+## 5.596 导出档剔除零脚 box（假 IC 框的正常化）
+
+数据贡献线排布案例时遇到一类失败：`C` 与 `R` 并联的两条引线 + 两条横线闭合出矩形，
+检测器把它报成一个 `type=="box"` 的 IC 框，`Name` 还是框内值文字的残片（`220nl`）。
+当时的规避手段是加大支路间距，让矩形不闭合——那是**在数据上躲**，不是修管线。
+本节记录把它正常化的判据、离线 A/B 与交付影响。
+
+### 5.596.1 判据：IC 框的成立条件是「框边上有引脚」
+
+`type=="box"` 的件若 `pins[comp]` 为空，说明框内没有任何引脚证据（没有脚点、没有脚名、
+没有脚号），它满足不了任何 IC 特征。`_drop_phantom_boxes()`（`submission/run.py`）
+在导出前扫 `*_Pred.json`，删掉零脚且未被任何 net 引用的 box；开关 `PRED_DROP_EMPTY_BOX=0`。
+
+### 5.596.2 离线 A/B（不重跑管线，直接重打分）
+
+`work/_emptybox_ab.py <pred_dir> [--drop] [--minpins N]`，口径同 `tools/eval/fast.py`
+的 protocol4（`bbox_tol=20 / pin_tol=5 / line_tol=5 / net_pin_collapse_nonbox=True`）：
+
+| 数据 | 零脚 box | 原样 | 删除后 | Δ |
+|---|---|---|---|---|
+| 池回归 30 张（`work\_fast_out_cvpool_pv589`） | 24 | 30.44 | 30.53（comp 0.5619→0.5646） | **+0.09** |
+| 13 页交付（`work\_fast_out_defchk`） | 0 | 87.89 / 86.16 / 84.15 | 同 | 0 |
+
+阈值再抬高（`--minpins 2/3/4`）在池上还能到 30.61 / 30.70 / 30.69，但 13 页有 1 个
+只检出 2 脚的 box，交付口径会被误删 ⇒ **交付默认只删零脚**（`minpins=1`）。
+
+### 5.596.3 交付复核
+
+- 缺陷案例（`work\_dsall\dataset\case_0016`，五拓扑 E 变体）：重跑日志出现
+  `零脚 box 清理：1 个无引脚 IC 框`，pred 件数回到 7（= GT 7），假件 `U1 "220nl"` 消失，
+  该案 88.25 → **89.97**（comp 0.857 / pin 1.000 / netH 0.960）。
+- 13 页回归（`work\_cv.py o13ph --run`）：mean **87.89**、official **86.16**、judge **84.15**、
+  `contract: 13/13 files clean`、`VERDICT: PASS`（与基线逐位相同，因为交付集零脚件为 0）。
+
+### 5.596.4 复现命令
+
+```
+python -X utf8 work\_emptybox_ab.py work\_fast_out_cvpool_pv589\final_results
+python -X utf8 work\_emptybox_ab.py work\_fast_out_cvpool_pv589\final_results --drop
+$env:PYTHONHASHSEED="0"; python -X utf8 eda-pcb\submission\run.py -input work\_cv\_in13 -output work\_fast_out_o13ph -device cuda
+python -X utf8 work\_cv.py o13ph --run
+```

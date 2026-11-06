@@ -747,6 +747,46 @@ def _strip_internal_keys(final_dir: Path, fp=None) -> int:
     return n
 
 
+def _drop_phantom_boxes(final_dir: Path, fp=None) -> int:
+    """导出档剔除「零脚 box」：没有任何引脚的 IC 框是闭合导线围出的假件。
+
+    IC 框的判定特征是「框边上有引脚」；一个 `type=="box"` 的件若 `pins[comp]` 为空，
+    说明框内没有任何引脚证据，只是被网线围出来的矩形（自制数据里 `C` 与 `R` 并联的
+    引线闭环就曾派生出 `U1 Name="220nl"` 这种件）。GT 侧不存在零脚 IC：13 页交付预测
+    31 个 box 里零脚 0 个，另 30 张池回归预测里 24 个零脚件删掉后 comp F1 +0.0027。
+    环境开关 `PRED_DROP_EMPTY_BOX=0` 关闭（A/B 用）。
+    """
+    if os.environ.get("PRED_DROP_EMPTY_BOX", "1") == "0":
+        return 0
+    n = 0
+    for f in sorted(final_dir.glob("*_Pred.json")):
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:                                            # noqa: BLE001
+            continue
+        comps = doc.get("components") or {}
+        pins = doc.get("pins") or {}
+        used = set()
+        for rec in (doc.get("nets") or {}).values():
+            for item in (rec.get("hyperGraph") or "").strip("()").split(","):
+                if "." in item:
+                    used.add(item.split(".", 1)[0])
+        gone = [k for k, c in comps.items()
+                if str(c.get("type") or "").lower() == "box"
+                and not (pins.get(k) or {}) and k not in used]
+        if not gone:
+            continue
+        for k in gone:
+            comps.pop(k, None)
+        n += len(gone)
+        try:
+            _atomic_write_text(f, json.dumps(doc, ensure_ascii=False))
+        except Exception as _e:                                      # noqa: BLE001
+            if fp is not None:
+                _log(fp, "  %-28s 零脚 box 清理失败（%s）" % (f.name, _e))
+    return n
+
+
 def _publish_one(lane_file: Path, dst: Path, state: dict, stage_dir: Path) -> bool:
     """把 lane 里的一份 `<case>_Pred.json` **升级**进主输出目录（§5.54）。
 
@@ -998,6 +1038,9 @@ def _run_fanout(a) -> int:
     _log(fp, "合并 lane 产物 %d 份；导出 %d 份 <case>_Pred.json%s"
          % (n_merge, n_export,
             ("（另有 %d 份空壳兜底）" % n_shell_here) if n_shell_here else ""))
+    _n_phantom = _drop_phantom_boxes(final_dir, fp)
+    if _n_phantom:
+        _log(fp, "零脚 box 清理：%d 个无引脚 IC 框" % _n_phantom)
     _n_strip = _strip_internal_keys(final_dir, fp)
     if _n_strip:
         _log(fp, "内部字段清理：%d 份 <case>_Pred.json 去掉 __pin_index/_pin_stubs" % _n_strip)
@@ -2821,6 +2864,9 @@ def _run(a) -> int:
     if compbox.mode() != compbox.OFF:
         _log(fp, "框模板（%s=%s）：%d 个占位框换成字形模板"
              % (compbox.ENV, compbox.mode(), compbox.apply_dir(final_dir)))
+    _n_phantom = _drop_phantom_boxes(final_dir, fp)
+    if _n_phantom:
+        _log(fp, "零脚 box 清理：%d 个无引脚 IC 框" % _n_phantom)
     _n_strip = _strip_internal_keys(final_dir, fp)
     if _n_strip:
         _log(fp, "内部字段清理：%d 份 <case>_Pred.json 去掉 __pin_index/_pin_stubs" % _n_strip)
