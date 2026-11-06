@@ -43576,3 +43576,60 @@ python -X utf8 work\_anchcmp.py 0018 0022 0046 0123      # 池页新增件 vs GT
 python -X utf8 eda-pcb\submission\run.py -input work\_fast_in -output work\_chk0018 -device cuda -cases 0018 -offline
 ```
 
+## 5.586 交付包自检：干净 clone 里 `STAGE2_GND_FILL` 曾经是死的
+
+### 5.586.1 用 `git archive` 造包再自检
+
+```
+cd eda-pcb
+git archive --prefix=eda-pcb-main/ --format=zip -o ..\work\_pkg_head.zip HEAD
+cd ..
+python -X utf8 work\_pkgcheck.py work\_pkg_head.zip
+```
+
+`_pkgcheck.py` 这一轮扩到四类检查：
+
+| 类别 | 检查项 |
+|---|---|
+| 模块 | `stage2/{compbox,desig_rows,text,text_anchor,desig_fill}.py` |
+| 开关 | `submission/run.py` 里 `STAGE2_{COMP_BOX,HOLE_TYPE,LINE_FIX,LINE_MERGE,LINE_JOIN,GND_FILL,TEXT_ANCHOR,DESIG_FILL}` |
+| 默认值 | `stage2/run.py` 的 `STAGE2_TEXT_WORDS`/`STAGE2_VTEXT` 为 `"1"`；`submission/run.py` 的五条 `os.environ.get(..., "1")` |
+| 权重 | `weights/pcb43_v2_from_best.pt`、`weights/sym16_1280_best.pt` |
+
+读数：HEAD 造的包 **VERDICT current**（rc=0）；第 32 次提交的旧包 **STALE (19 gap)**（rc=1，
+`submission/run.py` 只有 102,882 字符、`stage2/run.py` 48,344 字符）。
+
+### 5.586.2 干净树实测：gnd 补充静默失效
+
+把包解到 `work\_pkgtest`，用包内源码跑 case1（`-input work\_new2026\open_GT-1020\open_GT -cases 1`）：
+
+| | 元件数 | gnd |
+|---|---:|---:|
+| 包（缺 sym16 权重） | 55 | **14** |
+| 仓库内 | 58 | **17** |
+
+原因：`STAGE2_GND_FILL`（默认 1）走 `stage1/sym16.raw_dets`，而 `assets.sym16_weights()` 在
+干净 clone 里找不到 `weights/sym16_1280_best.pt`（`.gitignore` 挡 `*.pt`，2026-11-04 历史重写
+按 >4MB 剔除过，见 §5.579 附近）。异常被 `submission/run.py` 的 `except` 捕获后只写一行
+`⚠️ <cid> gnd 补充失败：FileNotFoundError`，**跑完仍然是 58 分口径的 55 颗** ⇒ 13 页平均
+低 **0.073**（case1 的 +0.95 那部分），而且没有任何非零退出码。
+
+### 5.586.3 修法（已落地）
+
+1. `weights/sym16_1280_best.pt`（5,535,685 B，就是 `yolo_part/runs/detect/sym16_1280/weights/best.pt`）
+   入库，`.gitignore` 末尾加 `!weights/sym16_1280_best.pt`；
+2. `_pkgcheck.py` 增加权重与默认值两项检查（见上表），打包前一条命令就能拦住这类缺失；
+3. 复验：重造的包 **VERDICT current**，干净树跑 case1 打印 `gnd 补充 3（p900、p901、p902）`、
+   元件 **58 颗 / gnd 17**，与仓库内逐位一致。
+
+### 5.586.4 复现命令
+
+```
+cd eda-pcb; git archive --prefix=eda-pcb-main/ --format=zip -o ..\work\_pkg_head2.zip HEAD
+cd ..; Expand-Archive work\_pkg_head2.zip work\_pkgtest2 -Force
+$env:PYTHONPATH="Y:\workspace\EDA\work\_pkgtest2\eda-pcb-main"
+$env:FUSION_LLM="0"; $env:FUSION_ITERATE="0"
+python -X utf8 work\_pkgtest2\eda-pcb-main\submission\run.py -input work\_new2026\open_GT-1020\open_GT -output work\_pkgtest2_c1 -device cuda -cases 1 -offline
+python -X utf8 work\_pkgcheck.py work\_pkg_head2.zip
+```
+
