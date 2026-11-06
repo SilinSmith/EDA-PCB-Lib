@@ -283,3 +283,5 @@ eda_yolo/
 /yolo_part/training_data_ovl2/images/
 /yolo_part/training_data_ovl2/labels/
 !weights/sym16_1280_best.pt
+
+yolo_part/symds/

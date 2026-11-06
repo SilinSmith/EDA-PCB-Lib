@@ -44109,3 +44109,79 @@ python -X utf8 work\_pinadd_liborc.py final589 lib            # 上限：库表�
 python -X utf8 work\_onoff13.py "pfOn=" "pfOff=STAGE2_PINFILL=0"   # 13 页 +0.1282 / 关档惰性
 ```
 
+## 5.592 交付默认档改零外部调用（`-vlm off`）+ 新标准四档口径 + 数据贡献探路
+
+### 5.592.1 结论表
+
+| 项 | 改动前 | 改动后 | 说明 |
+|---|---|---|---|
+| `-vlm` 默认值 | `auto`（会连本地端点） | **`off`** | 实测 VLM 全链 −3.06 / −3.10，且吃 token |
+| 默认档 13 页（无参、零外部调用） | 87.8881 / 86.1632 / 84.1456（带 `-offline`） | **87.89 / 86.16 / 84.15（逐位相同）** | `work\_cv.py defchk` 复核 |
+| 最新标准分（赛题 Rev1 + QA1013） | 87.89（comp .952 pin .879 net .889 line .626） | 同 | `work/_latest_eval.py` 四档对比 |
+| 同名 GND/VCC 预合并 | — | **不做** | 最新口径下并网 0.846 < 不并 0.889 |
+
+### 5.592.2 为什么关 VLM
+
+`work\_cv.py vlmOn --run --vlm on`（端点 = 本地 LM Studio，`probe(5.0)=True`）13 页墙钟 346.7 s
+（26.67 s/张），逐案 1 77.23 / 2 90.50 / 3 98.17 / 4 95.33 / 5 86.14 / 6 91.64 / 7 96.24 /
+**8 65.72（pin 0.143）** / 9 97.47 / 10 91.10 / 11 67.13 / **12 67.48（comp 0.750）** / 13 78.64，
+均值 local 84.83 / official 83.06 / judge 81.10 ⇒ 相对交付基线 87.8881 / 86.1632 **−3.06 / −3.10**。
+再叠上 `FinalScore_Accuracy = 0.95 × Score_Accuracy + 0.05 × (m/M) × Score_Token`
+（按总 token 排名赋分，越少越高）与「总评测时长 < 2 h」，VLM 通道在交付里没有任何正收益。
+
+### 5.592.3 改了什么
+
+1. `eda-pcb/submission/run.py:148`：`ap.add_argument("-vlm", ...)` 的 `default="auto"` → **`"off"`**
+   （help 里写实测数字）。
+2. `_apply_offline()` 的早退条件：`if not (offline or str(vlm).lower() == "off"): return`
+   ⇒ 默认档（不带 `-offline`）也套用 `FUSION_LLM=0 / FUSION_ITERATE=0 / STAGE1_WIRE_COLOUR=confirm`
+   的完整离线环境。
+3. 补丁脚本 `work/_patch_vlm_default.py`（两处精确替换 + `ast.parse` 校验）；
+   `python -m compileall -q submission` rc=0。
+
+验收（无参跑 13 页）：日志首行 `[run] 离线档：-vlm off｜FUSION_LLM=0｜FUSION_ITERATE=0｜
+STAGE1_WIRE_COLOUR=confirm｜STAGE2_PINROT=(默认 1)（零外部调用…）`；产物 13 份，
+`python -X utf8 work\_cv.py defchk` = **87.89 / 86.16 / 84.15**，与带 `-offline` 的交付档逐位相同。
+
+### 5.592.4 最新标准四档（`work/_latest_eval.py`）
+
+| 口径 | comp | pin | net | line | 总分 |
+|---|---:|---:|---:|---:|---:|
+| 老尺子（不折叠、全部脚） | 0.952 | 0.539 | 0.799 | 0.566 | 75.65 |
+| 官方实测口径（+ coord_center/gate 20） | 0.952 | 0.539 | 0.799 | 0.566 | 75.65 |
+| **最新-折叠**（`net_pin_collapse_nonbox` + `pin_box_only`） | 0.952 | **0.879** | **0.889** | 0.626 | **87.89** |
+| 最新-折叠 + 同名 GND/VCC 两侧并网 | 0.952 | 0.879 | 0.846 | 0.618 | 86.31 |
+
+第三行与 `work/_cv.py` 的 `CFG` 逐位吻合 ⇒ 我们一直报的 87.8881 就是最新标准分。
+`work/_frame3.py`（346 个元件框比墨迹密度：原样 0.0357 / 翻转 0.1609，原样更高仅 5.2%）
+确认 GT 与预测同为**左下原点 y-up**，与 QA1013 一致。
+
+### 5.592.5 数据贡献探路（`FinalScore_Data` 10 分）
+
+指南要点（`work/_guide.txt`，出自 `赛题资料\数据收集指南0915.docx`）：提交 `dataset/` +
+`dataset_description.pdf|docx`，≥20 个案例，`case_0001.png` + `case_0001.json` 同名；
+有效案例需 ≥1 个可核验 IC（实际使用的 pin 全标）、有效元件 ≥5、有效网 ≥5；
+质量门槛 **批次微平均 F1 ≥ 95% 且任一单案 ≥85%**，否则整批不计分；截止 2026-11-08 23:00。
+
+探路结论（本轮）：
+- 格式侧没问题：生成器 `work/_mkcase_v6.py` 的输出能被 `schematic_parser.metrics.evaluate_case`
+  正常解析（`work/_mkcase_score.py` 可打分）。
+- **门槛侧是硬瓶颈**：把官方 case7 的 GT 按 10GT 观感重绘（`work/_rendcase.py`，2× 绘制后
+  LANCZOS 降采样到 2px 笔画 + 真实图元字形），再用自家管线读回，得分 **49.66**
+  （comp 0.714 / pin 0.308 / netH 0.445 / line 0.496）——离单案 ≥85% 还差得远。
+  纯 PIL 手绘（矩形 + 文字，无图元字形）时 comp 只有 0.056。
+- ⇒ 真要做 20 个案例，必须先把渲染器做到「自家管线回读 ≥85%」，这是数小时级的图元级复刻
+  （电容双板、二极管三角、GND 三横杠、引脚号位置、位号/值右置），不是本轮能顺带完成的。
+
+### 5.592.6 复现命令
+
+```
+python -X utf8 work\_cv.py vlmOn --run --vlm on --device cuda        # VLM 全链 −3.06 / −3.10
+python -X utf8 work\_patch_vlm_default.py                           # 默认 off + 离线环境
+python -X utf8 eda-pcb\submission\run.py -input work\_new2026\open_GT-1106 -output work\_fast_out_defchk -device cuda
+python -X utf8 work\_cv.py defchk                                   # 87.89 / 86.16 / 84.15
+python -X utf8 work\_latest_eval.py pfOn                            # 四档口径对比
+python -X utf8 work\_frame3.py                                      # GT 坐标 y-up 实证
+python -X utf8 work\_rendcase.py work\_new2026\open_GT-1106\7\7.json work\_mkcase_in2\7\7.png
+python -X utf8 work\_mkcase_score.py work\_fast_out_mk7\final_results\7_Pred.json work\_new2026\open_GT-1106\7\7.json
+```

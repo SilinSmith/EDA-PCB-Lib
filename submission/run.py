@@ -145,10 +145,13 @@ def main(argv=None) -> int:
                          "而 llm 要 161.7 s/张（220 张 ~10 小时，顶穿 2 小时预算）。"
                          "详见 stage3/arbitrate.py 的 arbitrate() docstring。")
     ap.add_argument("-llm-batch", "--llm-batch", dest="llm_batch", type=int, default=8)
-    ap.add_argument("-vlm", "--vlm", dest="vlm", default="auto",
+    ap.add_argument("-vlm", "--vlm", dest="vlm", default="off",
                     choices=("auto", "on", "off"),
                     help="阶段二之后的 VLM 补强（读 IC 位号 + 引脚号/名）。"
-                         "auto = 先探一次端点收不收图；需要视觉模型。实测 +0.565。")
+                         "**默认 off（2026-11-06，§5.592）**：本地端点把 VLM 全链打开"
+                         "实测 13 页 84.83 / official 83.06，比离线档 87.8881 / 86.1632"
+                         "低 3.06 / 3.10 分，还要吃 token（Score_Token 按总消耗排名赋分）；"
+                         "auto = 先探一次端点收不收图再决定。")
     ap.add_argument("-vlm-workers", "--vlm-workers", dest="vlm_workers", type=int,
                     default=2, help="VLM 并发数。**默认 2**（2026-10-13，§5.229）："
                                     "40 张批上 1 并发与 2 并发**逐案逐位相同**（10GT 83.64），"
@@ -332,7 +335,9 @@ def _apply_offline(a) -> None:
     这 19 次值 **+1.11** 分（71.15 → 70.04 少的就是它），所以不能无条件砍掉 ——
     只有显式要「离线档」时才关。已在环境里设过的值不覆盖（便于单独做 A/B）。
     """
-    if not getattr(a, "offline", False):
+    # 默认档（`-vlm off`）也走这里：交付默认必须与实测口径一致 —— §5.592 实测 VLM
+    # 全链 −3.06 / −3.10 分且额外吃 token，评测机上只要探到端点就会掉分。
+    if not (getattr(a, "offline", False) or str(getattr(a, "vlm", "")).lower() == "off"):
         return
     a.vlm = "off"
     # ★ 只关 LLM 轮，**不关融合层**：融合层里的确定性节点（先验 + 解）本身不发请求，
