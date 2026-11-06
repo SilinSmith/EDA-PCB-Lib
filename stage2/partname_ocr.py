@@ -87,7 +87,7 @@ _LIB_KEYS: Optional[dict] = None
 
 def level() -> int:
     """`STAGE2_PARTNAME_OCR` 的档位；空值/非法值一律按 `0`（关）处理。"""
-    raw = os.environ.get("STAGE2_PARTNAME_OCR", "1").strip().lower()
+    raw = os.environ.get("STAGE2_PARTNAME_OCR", "2").strip().lower()
     if raw == "1":
         return 1
     if raw == "2":

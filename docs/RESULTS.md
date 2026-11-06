@@ -43633,3 +43633,76 @@ python -X utf8 work\_pkgtest2\eda-pcb-main\submission\run.py -input work\_new202
 python -X utf8 work\_pkgcheck.py work\_pkg_head2.zip
 ```
 
+## 5.587 型号名重读档 2（+0.0345）与无名具名型预测件剪除（+0.0466）
+
+### 5.587.1 交付档
+
+| tag | 配置 | local | official | judge | 相对 `defW2` |
+|---|---|---:|---:|---:|---:|
+| `defW2` | 上一档默认 | 87.3329 | 85.8063 | 83.5829 | — |
+| `pn2` | `STAGE2_PARTNAME_OCR=2` | 87.3674 | 85.8408 | 83.6174 | +0.0345 |
+| `all1` | `PARTNAME_OCR=2` + `STAGE2_PRUNE_UNKEYED=1` | **87.4150** | **85.8858** | **83.6650** | **+0.0821** |
+
+逐案（vs ship3 85.4753）：`[1 +6.51 2 +0.94 3 +0.26 4 +1.44 5 +0.15 6 +1.97 7 −0.63 9 +0.80 10 +0.48 11 +7.64 12 +3.19 13 +2.46]`。
+
+### 5.587.2 型号名重读档 2 的收益与代价（同一处开关）
+
+`partname_ocr.level()` 的默认本来就是 **1**（§5.564 转过），所以 `STAGE2_PARTNAME_OCR=1`
+与基线**逐位相同**（实测 87.3329）。档 2 的「进取」判据救回三颗 box 件的型号名：
+
+| 页 | 件 | 档 1 | 档 2 | GT |
+|---|---|---|---|---|
+| case1 | `U2` | `SX1306` | `SX1308` | `SX1308` |
+| case1 | `USB1` | `5V2ATn` | `5V2A in` | `5V2A in` |
+| case1 | `USB2` | `5V2Aout` | `5V2A out` | `5V2A out` |
+| case7 | `U1` | `MP2236` | `MP2236CGJ-Z` | `MP2236CGJ-Z` |
+
+case1 comp 0.8276 → **0.8793**（+1.55 页分）。但 case7 掉 1.11：`Name` 改成正确串后，
+**库引脚补全按新名查表**，把这颗 IC 原本 1.0 的脚表改坏（comp 0.9583→1.0 白赚，
+pin 1.0→0.9333、netH 0.8846→0.8692 亏回去）。
+
+试过「库补全仍用旧名」（`work/_patch_libname.py`：在 `_pp_hit` 采用处记 `_lib_name`，
+`assemble.py` 的 `_libpins.complete_pins(_lib_name, ...)` 用它）——**无效**：
+`pn3` 与 `pn2` 逐位相同（87.3674），说明脚表改写不走 `complete_pins` 那条路
+（`_LIB_CTX.key_for(name)` 与规则 B 的库名覆盖还在别处）。该补丁已 `git checkout` 撤回。
+
+### 5.587.3 无名具名型预测件剪除（结构上必亏的 fp）
+
+判分器的坐标匹配只发生在**无名 GT ↔ 任意预测件**之间（`schematic_parser/metrics.py:349-355`：
+`left_g = [k for k in gc if k not in gt_used and is_unkeyed(k)]`），而 GT 里会无名的只有
+「符号件」——13 页：`gnd` 83 颗、`v` 51 颗全是 `∅NNN`；`net_input` 8 颗、`net_output` 1 颗
+**全部具名**。池 30 案更多：`gnd` 2136、`v` 1092、`net_input` **322**、`net_short` 163、
+`net_output` 72、`other` 66 等。
+
+⇒ `r/c/l/d/led/switch/testpoint/box` 的无名预测件**不可能配上任何 GT**，只是白送
+`component.extra`。实现：`submission/run.py:1749` 起的 `_prune_step(cid)`
+（`STAGE2_PRUNE_UNKEYED`，默认 1），在 `_linejoin_step` 之后按 `^(p\d+|txt\d+)$` 键 +
+类型表剪除，并同时删 `pins`/`nets` 里的同名段。**保留** `gnd/v/net_input/net_output`
+（池里确有 322 颗无名 `net_input`，剪了就亏）。
+
+13 页实测只剪 2 颗（case1 一颗无名 `r`、case6 一颗无名 `led`），judge 尺
+83.5829 → **83.6295**（+0.0466），pin / netH 两轴逐位不变；与档 2 叠加后
+`all1` = 87.4150（+0.0821，几乎等于两项之和）。
+
+### 5.587.4 本轮判否清单（都有 oracle 读数）
+
+| 开关 | 读数 | 结论 |
+|---|---|---|
+| `STAGE2_PIN_SOLVE=1` / `=2` | 86.9477（−0.385）/ 86.8875（−0.445） | 判否：case4 `U1` 整体重编号、case12 `U1 pin_2` 位移，几根脚经「网成员」放大成整网丢分 |
+| `STAGE2_PIN_SNAP=1` / 只在重行时动 | 86.8589（−0.474）/ 87.1012（−0.232） | 判否：挪脚点会把已配上的线/网拆散 |
+| `STAGE2_VTEXT_LABELS=1`（竖排网标并入 net_labels） | 87.1339（−0.199） | 判否：case2 −2.35 过度合并，case12 逐位不变 |
+| `STAGE2_PARTNAME_OCR=1` | 87.3329（逐位同基线） | 默认本来就是 1 |
+
+### 5.587.5 复现命令
+
+```
+cd Y:\workspace\EDA
+$env:FUSION_LLM="0"; $env:FUSION_ITERATE="0"
+python -X utf8 work\_onoff13.py "pn2=STAGE2_PARTNAME_OCR=2"
+python -X utf8 work\_onoff13.py "all1=STAGE2_PARTNAME_OCR=2,STAGE2_PRUNE_UNKEYED=1"
+python -X utf8 work\_onoff13.py "defNew="
+```
+
+离线 oracle：`python -X utf8 work\_pruneorc.py defW2`（剪除前后的 judge 尺对比）。
+池门禁：`python -X utf8 work\_poolgate.py all1pool --pool-ref dfill` ⇒ 待测。
+
