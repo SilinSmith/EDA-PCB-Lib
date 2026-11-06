@@ -43706,3 +43706,88 @@ python -X utf8 work\_onoff13.py "defNew="
 离线 oracle：`python -X utf8 work\_pruneorc.py defW2`（剪除前后的 judge 尺对比）。
 池门禁：`python -X utf8 work\_poolgate.py all1pool --pool-ref dfill` ⇒ 待测。
 
+## 5.588 评测基准换成 `open-gt1106`：Name 兜底与端口 value 两条口径
+
+### 5.588.1 新 GT 与旧 GT 的差异（只看 json，图完全没变）
+
+`Y:\workspace\EDA\open-gt1106.zip`（4,194,917 B）解到 `work\_new2026\open_GT-1106`，
+13 个案子 `cid/cid.json` + `cid/cid.png`。**13 张 png 与 `open_GT-1020` 的 MD5 全同**，
+json 只有 4 页 17 处差异（`work/_gtdiff1106.py` 逐键对比）：
+
+| 页 | 处数 | 内容 |
+|---|---:|---|
+| case1 | 9 | `net_input` 的 `value` 置 null（`BAT`/`BAT_2`/`LED+`/`LED-`）；`Name` 置 null（`LED1..LED4`、`SW2`） |
+| case11 | 1 | `SW1` 的 `Name` 改成型号名 `TS665CJ` |
+| case12 | 6 | `net_input`/`net_output` 的 `value` 置 null（`VIN`/`VIN_2`/`VIN_3`/`VIN_4`/`VOUT`）；`LED1` 的 `Name` 置 null |
+| case13 | 1 | `H1` 的 `Name` 置 null（box，型号名未知） |
+
+全 13 页的 `value` 分布（新 GT）：只有 `c`(80)/`gnd`(83)/`l`(11)/`r`(61)/`v`(51) 有值；
+`box`(31)/`d`(4)/`led`(12)/`net_input`(8)/`net_output`(1)/`pin`(2)/`switch`(2) 一律 null。
+
+### 5.588.2 影响：只有 case13 掉在**本地尺**上
+
+本地尺（`schematic_parser.metrics.component_text_ok`）只对 `IC_TYPES`（box/ic）比 `Name`、
+对 `VALUE_TYPES`（r/c）比 `value`，其余类型不比 ⇒ 上表 17 处里只有 `case13 H1`
+（box，GT `Name=null` vs 我们发位号 `"H1"`）会丢分：
+
+| 档 | local | official | judge |
+|---|---:|---:|---:|
+| 旧 GT（`open_GT-1020`） | 87.4150 | 85.8858 | 83.6650 |
+| 新 GT（`open_GT-1106`），未改码 | 87.2967 | 85.5316 | 83.5466 |
+
+逐案只有 case13 变：+2.46 → **+0.93**（−1.53），其余 12 页逐位相同。
+
+### 5.588.3 修法一：box/IC 没读到型号名时 `Name` 发 null（`STAGE2_BOX_NAME_NULL`，默认 1）
+
+`stage2/assemble.py` 里 `name` 的初值是**位号**（`name = key`），读到型号名才被覆盖；
+新 GT 的约定是「型号名未知就 null」，所以这里补一条：`name == key` 且 `ctype in
+("box","ic","boxic","box_ic")` ⇒ `name = None`（`:568` 的开关、`:3283` 的判定）。
+
+读数：新 GT 下 local 回到 **87.4150**、judge 回到 **83.6650**（case13 回到 +2.46），
+official 85.5316 → **85.6099**。
+
+### 5.588.4 修法二：端口符号不发 `value`（`STAGE2_PORT_VALUE`，默认 0）
+
+官方口径（`work/_cv.py:157 _official_text_ok`）对非 IC 件**无条件比 `value`**：
+旧 GT 的端口 `value` 是网名（我们发 `"VIN"` 正好），新 GT 全置 null ⇒ 9 颗端口全记文本不符。
+`assemble.py:3220` 的电源值分支加上 `and (PORT_VALUE or ctype not in PORT_TYPES)`
+（`PORT_TYPES` 在 `:738`：`net_input`/`net_output`/`net_short`/`net_bidirection`）。
+
+读数：local/judge 不动（本地不比这两类的 value），official **85.6099 → 85.6901（+0.080）**。
+
+### 5.588.5 交付档与残余差
+
+| 档 | local | official | judge |
+|---|---:|---:|---:|
+| 默认（新 GT，两条修法都在） | **87.4150** | **85.6901** | **83.6650** |
+
+相对旧 GT 的 official 85.8858 还差 **0.196**，全部来自「新 GT 把文本置 null 后我们仍在发」的那批件：
+
+| 页 | 件 | GT | 我们 |
+|---|---|---|---|
+| case1 | `R1` / `R14` | `value 1k` / `5k1` | None / `501` |
+| case1 | `BAT_2` | `Name BAT_2` | `Name BAT`（同页重名没加后缀） |
+| case12 | `R2` / `R4` / `L1` | `4.7K` / `104` / `2.2uH` | 三个都是 None |
+| case12 | `VIN_2` | `Name VIN_2` | `Name VIN` |
+| case12 | `VIN` | `value null` | `value "IN"` |
+| case13 | `C3` | `22uf` | `22f` |
+| case11 | `SW1` | `Name TS665CJ`、`value null` | `Name SW1`、`value 10kΩ` |
+| case1 | `H1` / `H2` | `pin`，`Name H1`/`H2` | `Name BAT+` / None |
+
+前四条是值/名读得不准（OCR 层），`BAT_2`/`VIN_2` 是**同页重名要加 `_2` 后缀**，
+`SW1` 是「位号 vs 型号名」的角色选择，`H1/H2` 是 pin 件的 Name 该不该发位号。
+
+### 5.588.6 复现命令
+
+```
+cd Y:\workspace\EDA
+$env:FUSION_LLM="0"; $env:FUSION_ITERATE="0"; $env:GT_ROOT="Y:\workspace\EDA\work\_new2026\open_GT-1106"
+python -X utf8 work\_onoff13.py "gt1106="            # 未改码：87.2967 / 85.5316 / 83.5466
+python -X utf8 work\_onoff13.py "nn1="               # + Name 兜底
+python -X utf8 work\_onoff13.py "nn2="               # + 端口不发 value
+python -X utf8 work\_gtdiff1106.py                   # 新旧 GT 逐键差异
+python -X utf8 work\_namnull_orc.py gt1106           # case13 H1 的单件边际（±1.54）
+```
+
+`work/_cv.py` 的 `GT_ROOT` 默认已切到 `work/_new2026/open_GT-1106`（env 仍可覆盖）。
+

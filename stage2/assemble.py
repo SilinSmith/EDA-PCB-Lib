@@ -565,6 +565,17 @@ BOX_PIN_NEED_NAME_LATE = _BOX_NEED_NAME_MODE in ("2", "late", "lib", "after",
 #   `net.soft_tp` 124.59→**124.92**（真成员确实进来了），但**总分 79.1526→78.9533（−0.1993）**
 #   —— 引脚通道 `name_mismatch`=fp+fn（与「不发」同值再加一个 fp），且多出 1 张 pred 网
 #   本身就是纯 fp。⇒ **默认仍是 `2`，模式 3 只作为已量过的备选留档**（别再默认打开）。
+#: `STAGE2_BOX_NAME_NULL`：box/IC 件没读到型号名时 `Name` 发 null（默认 **1**）。
+#: 依据：open_GT-1106 case13 `H1`（GT null vs 我们 `"H1"`）单页 −1.54、均值 −0.1183。
+#: `STAGE2_PORT_VALUE`：端口符号（`net_input`/`net_output`）是否发 `value`（默认 **0**）。
+#: 依据：open_GT-1106 的 13 页里端口 9 颗 `value` 全为 null（旧 GT 是网名），
+#: 官方口径无条件比 `value` ⇒ 发 `"VIN"` 这 9 颗全记 text 不符（本地口径不比）。
+PORT_VALUE = os.environ.get("STAGE2_PORT_VALUE", "0").strip().lower() not in (
+    "", "0", "off", "false", "no", "none", "disable", "disabled")
+
+_BOX_NAME_NULL = os.environ.get("STAGE2_BOX_NAME_NULL", "1").strip().lower() not in (
+    "", "0", "off", "false", "no", "none", "disable", "disabled")
+
 _BOX_NEED_NAME_KEEPREAD = _BOX_NEED_NAME_MODE in ("3", "kept", "readnum")
 
 # ★ 官方元器件库（`cpntLibrary`）引脚先验的**总闸**：**默认 `1`（开）**。
@@ -3206,7 +3217,7 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
             vv = (info.get("value") or {}).get("text")
             if vv and VALUE_LIKE.search(vv):
                 val = vv
-        elif POWER_VALUE and ctype in POWER_TYPES:
+        elif POWER_VALUE and ctype in POWER_TYPES and (PORT_VALUE or ctype not in PORT_TYPES):
             # ★ 电源/地符号在官方 GT 里**都带 `value`**：`10GT` 的 gnd 59 / v 49 全有、
             #   `open_GT-1020` 的 gnd 83 / v 51 / net_input 8 / net_output 1 全有。地符号
             #   恒为字面 `GND`；电源符号是印在符号旁的网名（`+5V` / `VCC` / `3.3V`），
@@ -3275,6 +3286,12 @@ def build_doc(stage1: dict, assigned: dict, case_id: str = "") -> dict:
                              "read": _st_hit.get("read", "")}
                 name = _st_hit["text"]
                 partname_ocr.carry(info, _st_hit)
+        # ★ `Name` 兜底（`STAGE2_BOX_NAME_NULL`，默认 1）：box/IC 件的 GT `Name` 是**型号名**，
+        #   型号名没读到时 GT 是 `null`（open_GT-1106 case13 `H1`：GT null，我们发位号 `"H1"`
+        #   ⇒ IC 分支的 `pred["Name"] == gt["Name"]` 失败，case13 −1.54、13 页均值 −0.1183）。
+        #   所以这里只对「没读到型号名、Name 还停在位号」的 box/IC 件发 null；读到型号名的照旧。
+        if _BOX_NAME_NULL and name == key and ctype in ("box", "ic", "boxic", "box_ic"):
+            name = None
         components[key] = {"Name": name, "type": ctype, "value": val,
                            "bbox": [round(float(x), 2) for x in bbox]}
         if _pp_audit is not None:
