@@ -44729,3 +44729,42 @@ d > 1.0 ⇒ 该件翻面（GT 的 pin_1 在 +SPAN 一侧）
 python -X utf8 work\_caprule_sim.py work\_fast_out_juncdef2\final_results --apply --min-d 1.0
 python -X utf8 work\_cv.py leadpol3 --run        # judge mean 84.9027 / contract 13/13
 ```
+
+## 5.601 第 34 次交付包：成品清单与可复现性
+
+§5.600 的电容换向合入后重新打的两个包，以及它们各自的自检证据。
+
+### 5.601.1 成品
+
+| 交付物 | 大小 | 条目 | 顶层 | 门槛 |
+|---|---:|---:|---|---|
+| `261106\pkg_upload.zip`（模型包） | 74,075,398 B | 221 | `eda-pcb-main/` + `run.sh` `Dockerfile` `verify_imports.py` `install_deps.py` `metadata` | `work/_pkgcheck.py` ⇒ `VERDICT: current` |
+| `261106\team_eda2606b9_result_dataset.zip`（数据包） | 1,451,168 B | 67 | `dataset/`（66 文件）+ `dataset_description.docx` | `work/_mkdspkg.py … --check` ⇒ `VALIDATION: PASS`（33 案 / 与官方 13 案网表零重复） |
+
+模型包 sha256 = `D3CD1DC194B3B35970EB53804064A39671EE27FDEA24F8852254E337D238AFD8`。
+包内报告 `eda-pcb-main/docs/技术报告-赛题六.docx` = 1,160,529 B（= 仓库 `HEAD` 版本）。
+
+### 5.601.2 可复现性（这次修掉了一个坑）
+
+同一条 `HEAD` 连打两次，sha256 原本对不上：`work/_mkpkg.py` 里 `zipfile.writestr(name, data)`
+会写入**当前时间**，被这样写进去的有目录条目 + 根级四个文件 + `metadata` 共 22 条（其余条目走
+`git archive` 的 `ZipInfo`，时间来自提交时间）。修法：所有条目统一改由 `_norm()` 生成
+`ZipInfo`——时间钉到 `git log -1 --format=%ct HEAD`、权限钉成 `0644`（目录 `0755`）。修完
+两次打包**逐字节相同**（同一 sha256），且 221 个条目的 CRC 与修前**完全一致**（只动元数据）。
+
+### 5.601.3 干净树自检
+
+把包解到 `work/_pkgup_test5`，用**包内**的 `submission/run.py` 跑官方 case1（25.9 s）：
+
+* 日志出现「电容换向：5 个电容按引线不对称改 pin_1/pin_2」⇒ 新逻辑在包里生效；
+* 与工作树产物 `work/_leadpol_p1/final_results/1_Pred.json` 逐叶子比 **1595/1595，diff 0**；
+* 57 元件 / 52 脚 / 38 网，与 13 页基线同形。
+
+复现：
+
+```
+python -X utf8 work\_mkpkg.py Y:\workspace\EDA\261106\pkg_upload.zip
+python -X utf8 work\_pkgcheck.py 261106\pkg_upload.zip
+python -X utf8 work\_mkdspkg.py work\_dsf33\dataset 261106\dataset_description.docx ^
+       261106\team_eda2606b9_result_dataset.zip --check
+```
