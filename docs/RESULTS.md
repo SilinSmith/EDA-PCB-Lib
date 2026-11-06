@@ -44185,3 +44185,64 @@ python -X utf8 work\_frame3.py                                      # GT 坐标 
 python -X utf8 work\_rendcase.py work\_new2026\open_GT-1106\7\7.json work\_mkcase_in2\7\7.png
 python -X utf8 work\_mkcase_score.py work\_fast_out_mk7\final_results\7_Pred.json work\_new2026\open_GT-1106\7\7.json
 ```
+
+## 5.593 交付硬化与数据贡献线的现状
+
+### 5.593.1 结论表
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 打包自检 | **VERDICT: current（rc=0）** | `git archive` 造包 + `work/_pkgcheck.py`，8 个默认开关全 ON、2 个权重存在 |
+| 干净树一致性 | case1 包内产物与仓库产物**逐键相同**（57 元件 / 120 脚） | `work\_fast_out_pkgfinal\final_results\1_Pred.json` vs `work\_fast_out_defchk\...` |
+| 默认档零外部调用 | 13 页 **87.89 / 86.16 / 84.15**，与带 `-offline` 逐位相同 | 无参跑 `work\_fast_out_defchk` + `work\_cv.py defchk` |
+| 池口径 | 固定 `PYTHONHASHSEED=0` 后 **30.6784**（不固定会 29.21~30.68 抖动） | 同代码三目录复算 |
+| 数据贡献（10 分） | 官方 case7 的 GT 重绘回读 **86.10**；自制模板案例 **72.97** | `work/_rendcase2.py` + `work\_mkcase_score.py` |
+
+### 5.593.2 打包自检与干净树
+
+`cd eda-pcb; git archive --prefix=eda-pcb-main/ --format=zip -o ..\work\_pkg_final.zip HEAD`
+后用 `work\_pkgcheck.py` 检查四类：必须存在的模块（`stage2/{compbox,desig_rows,text,text_anchor,desig_fill}.py`）、
+必须出现的开关名（8 个 `STAGE2_*`）、默认值（stage2 侧 `env_on(...,"1")` 与交付层
+`os.environ.get(...,"1")` 分开查）、权重文件（`pcb43_v2_from_best.pt`、`sym16_1280_best.pt`）。
+解到 `work\_pkgfinal_test` 用包内源码跑 case1，产出与仓库内跑出的 `1_Pred.json` 逐键相同
+⇒ 提交包与工作树没有漂移。
+
+### 5.593.3 池门禁的可复现性
+
+同一份代码在不同进程里 `work/_poolscore.py` 曾给出 29.2086 与 30.6784 两个值，而
+`work\_fast_out_cvpool_pinfill` 与 `..._pinOff` 只差补脚过的 `0002/0114` 两页（其余逐字节相同）。
+根因是 Python 字符串哈希随机化影响集合/字典序，进而影响判分器里匈牙利分配的平手裁决。
+固定 `$env:PYTHONHASHSEED="0"` 后三个目录分别 30.6784 / 30.6784 / 30.4425（同代码两目录逐案一致）。
+**此后池门禁一律固定该变量**，历史池分带 ±0.2 级不可复现噪声。
+
+### 5.593.4 数据贡献线（`FinalScore_Data`，满分 10）
+
+- 指南要求：`team_<id>_result_dataset.zip`，顶层 `dataset/` + `dataset_description.docx`，
+  每案 `case_0001.png` + `case_0001.json`，**≥20 案**且不得与 200 训练集重复；
+  有效案例需 ≥1 个可核验 IC（用到的脚全标）、有效元件 ≥5、唯一电气网 ≥5；
+  抽检批次微平均 F1 ≥95% 且任一单案 ≥85%，否则整批 0 分；截止 2026-11-08 23:00。
+- **坐标系**：数据收集指南 0915 写「左上角原点、y 向下」，QA1013 说已统一为「左下角、y 向上」；
+  按用户决定采用最新标准（y-up），提交文档必须显式声明。GT 实证（`work/_frame3.py`，346 个样本：
+  原样墨迹密度 0.0357、翻转 0.1609、原样更高仅 5.2%）与之一致。
+- 渲染器标定（把官方 GT 重绘再用自家管线回读）：纯矩形 16.62 → 修坐标 36.77 →
+  加真实图元字形 49.66 → 朝向感知图元 + 结点圆点 68.17 → 补画 IC 型号名 **77.08 → 86.10**
+  （comp .889 / pin .875 / netH .859 / line .748）⇒ **CAD 式版面下 ≥85 门槛可达**。
+- 自制案例：自动布线版受「导线贴边/压字、位号与值被读错」拖累，回读只有 38~51；
+  手摆模板（显式坐标 + 显式折线）到 **72.97**（comp .714 / pin .875 / netH .736 / line .389），
+  剩余缺口是 1 个漏检无源件、1 个「电池」误判与 IC 型号名被读成脚名。
+- 结论：数据线**未完成**（未生成 20 案、未写 `dataset_description.docx`）。下一步按「手摆模板
+  逐套验到 ≥85 再批量变体」推进；若时间不够，本项按 0 分处理，交付分不受影响。
+
+### 5.593.5 复现命令
+
+```
+cd eda-pcb && git archive --prefix=eda-pcb-main/ --format=zip -o ..\work\_pkg_final.zip HEAD
+python -X utf8 work\_pkgcheck.py work\_pkg_final.zip
+$env:PYTHONHASHSEED="0"; python -X utf8 work\_poolscore.py work\_fast_out_cvpool_pv589\final_results
+python -X utf8 work\_rendcase2.py work\_rr7\7.json work\_rr7\7.png
+python -X utf8 eda-pcb\submission\run.py -input work\_rr7 -output work\_fast_out_rr7 -device cuda -cases 7
+python -X utf8 work\_mkcase_score.py work\_fast_out_rr7\final_results\7_Pred.json work\_rr7\7.json
+python -X utf8 work\_mktpl.py work\_mtpl\case_0001
+python -X utf8 work\_rendcase2.py work\_mtpl\case_0001.json work\_mtpl\case_0001.png
+python -X utf8 work\_report_update.py            # 技术报告数字更新到 87.8881/86.1632/84.1456
+```
