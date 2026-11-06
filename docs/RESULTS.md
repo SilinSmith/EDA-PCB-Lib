@@ -44531,3 +44531,87 @@ python -X utf8 work\_line_diag13.py <pred_dir>        # 未命中边归类
 python -X utf8 eda-pcb\submission\run.py -input work\_dsf33\dataset -output work\_fast_out_dsf33c -device cuda
 python -X utf8 work\_dsscore_all.py work\_fast_out_dsf33c\final_results work\_dsf33\dataset
 ```
+
+## 5.598 交付冻结前的四轴残差归因
+
+第 33 次交付后 13 页定格在 mean 88.0860 / official 86.3611 / judge 84.3435。
+本节把**判题机尺**的剩余失分（合计 203.53 分、均值 84.3435）拆到四轴与每一条具体失配，
+用来回答「还剩什么能做、什么到此为止」。结论：**没有结构性增量了** ——
+comp 剩余上限约 +1.0，pin / netH / line 的残余都已逐条归因且修复尝试两次为负。
+
+### 5.598.1 逐轴残差分解
+
+| 轴 | 权重 | 13 页均值 | 轴失分（mean） | 主导页面 |
+|---|---:|---:|---:|---|
+| ComponentF1 | 0.30 | .9569 | **1.29** | case12 .7000、case13 .9231、case11 .9286、case1 .9043 |
+| PinF1 | 0.25 | .8793 | **3.02** | case1 .6286、case11 .6471 |
+| NetHypergraphF1 | 0.35 | .8886 | **3.90** | case1 .5523、case11 .4783、case9 .6173 |
+| NetLineF1 | 0.10 | .6297 | **3.70** | case9 .289、case12 .382、case1 .424 |
+
+逐案加权损失（合计 203.53）：case1 **33.59**、case11 **33.57**、case12 **28.72**、
+case9 20.52、case10 16.84、case8 16.70，其余 ≤13.6；case2/3/4/5/6/7/8 的 comp 已是 1.0000。
+⇒ 提升空间高度集中在 case1/case11/case12 三页，而这三页恰是**元件最密、总线/多脚开关最多**
+的页（40 网 / 128 脚）。
+
+### 5.598.2 元件轴：21 处失配，上限 +1.0
+
+用官方计数器（`schematic_parser/metrics.py:394-411` 的 `component.missing/extra/bbox_mismatch/
+text_mismatch`）逐页复算，13 页合计 `missing 9 / extra 4 / bbox_mismatch 6 / text_mismatch 2`：
+
+- case1（.9043）：缺 `R13`（bbox 40×16）、`R19`（15×40）两个小件，多 1 件，4 件框不符；
+- case10（.9831）：多 1 件；
+- case11（.9286）：缺 `LED1`（led，51×51）与 `∅695`（gnd）；
+- case12（.7000）：缺 `VOUT`/`VIN_3`/`VIN_4`/`LED1`、多 2 件、`R2`(4.7K)/`R4`(104) 值缺、1 件框不符；
+- case13（.9231）：缺 `∅899`（v）。
+
+**注意 `component_text_ok`（`metrics.py:237`）只比 IC 的 Name 与 `VALUE_TYPES` 的 value**
+⇒ GT 里 `∅NNN` 无名件的 Name 与 `net_input`/`switch` 的 value **不参评**。
+据此实测两条「看起来能捡」的路都是零收益：
+（a）在导出侧抑制 `net_input`/`net_output`/`switch` 的 value（GT 13 页里这 9 件全是 None）
+—— 离线 A/B 13 页 comp 均值 .9568 → .9568，**+0.0000**（不参评，白改）；
+（b）给 `∅NNN` 件改名 —— 走无名件坐标匹配，Name 不参评。
+竖排文字（`VIN_2`/`VIN_4` 这类 28×81 的标号）13 页 GT 里只有 2 件，匹配 1 件 ⇒ 也不成线。
+
+### 5.598.3 netH：最大可识别残差是两根脚被动件的 1/2 号朝向
+
+`work/_netclass.py` 逐网分类（case1：GT 40 网 / 我们 38 网，`exact 5 / superset 1 /
+partial 33 / none 1`）显示：绝大多数「部分命中」是**同一批件、脚号 1↔2 互换**
+（`C12.1↔C12.2`、`C10.1↔C10.2`、`R1.1↔R1.2`、`LED2.2↔LED1.2` …），不是拓扑错。
+
+- 折叠量化（`work/_netflip.py`，把非 box 脚号折成通配）：netH 均值 **.6260 → .6966（+0.0706）**，
+  逐页最大 case9 +0.1892 / case1 +0.1844 / case10 +0.1370 / case7 +0.1154；
+- 一致率（`work/_pinflip.py`，我们 pin_1 是否离 GT pin_1 更近）：**131/162 = .809**
+  （竖 .783 / 横 .881），case9 **2/9 = .222**、case10 .611、case1 .652、case11 .600，
+  其余 8 页 ≥ .75（其中 5 页 1.000）；
+- 判题机**不折叠**脚号（`EvalConfig.net_pin_collapse_nonbox` 默认 False），所以这 +0.0706
+  是真实失分；但「按页推断朝向」（用少数可信件投票）与「按类型分类器」两条历史路线
+  （LOPO +0.0065、回灌全负）都被证否，且页面内同一件的旋转是**按实例**的（不是全页统一），
+  没有可观测量能定位 ⇒ **记为不可修**，不再投入。
+
+### 5.598.4 已判否清单（勿重跑）
+
+| 路线 | 读数 | 结论 |
+|---|---|---|
+| 折叠/统一非 box 脚号后重排 net | 判题机不折叠 | 只能当诊断口径 |
+| 按页推断被动件朝向 | case9 2/9 与 case1 15/23 无共同规律 | 不可修 |
+| 触点合并 / 同侧补槽（pin） | −0.60 / −0.028 | 见 §5.597.3 |
+| 抑制 net_input/net_output/switch 的 value | ±0.0000 | 该字段不参评 |
+| 竖排标号旋转 OCR | GT 仅 2 件、已在 1 件上成功 | 上限 +1 件 |
+| 引脚吸附 / 沿线到框边 / 共线填缝（line） | −0.006~−0.0368 | 见 §5.597.4 |
+
+### 5.598.5 冻结口径与复现
+
+- 交付档：`261106\pkg_upload.zip`（74,073,966 B / 220 条 / 顶层 6 项，`work/_pkgcheck.py`
+  ⇒ `VERDICT: current`）；数据档：`261106\team_eda2606b9_result_dataset.zip`
+  （1,451,168 B / 67 条 / 33 案，微平均 96.35、单案最低 94.90）。
+- 本轮改动**只在文档**（技术报告补两段「评分公式复核」「剩余空间量化」），代码零改动，
+  所以 13 页与 33 案读数逐位不变。
+
+```
+python -X utf8 work\_comperr2.py work\_fast_out_juncdef2\final_results work\_new2026\open_GT-1106
+python -X utf8 work\_netclass.py work\_fast_out_juncdef2\final_results work\_new2026\open_GT-1106 1 11 12
+python -X utf8 work\_netflip.py  work\_fast_out_juncdef2\final_results work\_new2026\open_GT-1106
+python -X utf8 work\_pinflip.py  work\_fast_out_juncdef2\final_results work\_new2026\open_GT-1106
+python -X utf8 work\_doc_report.py            # 技术报告（唯一真源）
+python -X utf8 work\_mkpkg.py "Y:\workspace\EDA\261106\pkg_upload.zip"   # 输出必须绝对路径
+```
