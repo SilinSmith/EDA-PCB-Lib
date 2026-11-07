@@ -44738,10 +44738,10 @@ python -X utf8 work\_cv.py leadpol3 --run        # judge mean 84.9027 / contract
 
 | 交付物 | 大小 | 条目 | 顶层 | 门槛 |
 |---|---:|---:|---|---|
-| `261106\pkg_upload.zip`（模型包） | 74,075,398 B | 221 | `eda-pcb-main/` + `run.sh` `Dockerfile` `verify_imports.py` `install_deps.py` `metadata` | `work/_pkgcheck.py` ⇒ `VERDICT: current` |
+| `261106\pkg_upload.zip`（模型包） | 74,076,450 B | 221 | `eda-pcb-main/` + `run.sh` `Dockerfile` `verify_imports.py` `install_deps.py` `metadata` | `work/_pkgcheck.py` ⇒ `VERDICT: current` |
 | `261106\team_eda2606b9_result_dataset.zip`（数据包） | 1,451,168 B | 67 | `dataset/`（66 文件）+ `dataset_description.docx` | `work/_mkdspkg.py … --check` ⇒ `VALIDATION: PASS`（33 案 / 与官方 13 案网表零重复） |
 
-模型包 sha256 = `98433DA0F0F76BADFC58875B640FAAED161CD251EF57D5EEECBADD831B344A82`。
+模型包 sha256 = `2FAD6C5EF0F76BADFC58875B640FAAED161CD251EF57D5EEECBADD831B344A82`。
 包内报告 `eda-pcb-main/docs/技术报告-赛题六.docx` = 1,160,529 B（= 仓库 `HEAD` 版本）。
 
 ### 5.601.2 可复现性（这次修掉了一个坑）
@@ -44751,6 +44751,16 @@ python -X utf8 work\_cv.py leadpol3 --run        # judge mean 84.9027 / contract
 `git archive` 的 `ZipInfo`，时间来自提交时间）。修法：所有条目统一改由 `_norm()` 生成
 `ZipInfo`——时间钉成常量 `2026-11-06 00:00:00`、权限钉成 `0644`（目录 `0755`）。时间没有钉在 `HEAD` 的提交时间上：那样一次纯文档提交就会让同一个包换哈希，钉常量后「包」与「提交」解耦——内容不变，字节就不变。修完
 两次打包**逐字节相同**（同一 sha256），且 221 个条目的 CRC 与修前**完全一致**（只动元数据）。
+
+### 5.601.4 仓库根目录的技术报告与 README
+
+技术报告除了随包进 `docs/技术报告-赛题六.docx`，另在**仓库根目录**放了一份同字节副本
+（`技术报告-赛题六.docx`，1,160,529 B）供 GitHub 直接阅读；`work/_mkpkg.py` 的
+`SKIP_ROOT_EXT`（`.docx/.pdf/.zip`）把它排除在提交包外，包内只保留 `docs/` 那一份。
+README 同步刷新到本交付档：13 页三把尺 88.09 / 86.36 / **84.90**、30 案池 30.6784、
+四轴损失 1.29 / 3.02 / 3.90 / 3.70、新增 §1.5 自制数据集（33 案 96.35 / 94.90）与
+§4.3 提交包说明（74,076,450 B / 221 条 / 逐字节可复现）。README 在包内，
+所以它的改动会改包哈希——这是预期行为，重新打包即可。
 
 ### 5.601.3 干净树自检
 
